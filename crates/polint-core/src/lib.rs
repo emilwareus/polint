@@ -1013,7 +1013,7 @@ mod tests {
         db.push_coverage(CoverageFact {
             branch,
             covered: Some(true),
-            source: "placeholder".to_string(),
+            source: "synthetic-coverage".to_string(),
         });
         db.push_ts_component(TsComponentFact {
             file,
