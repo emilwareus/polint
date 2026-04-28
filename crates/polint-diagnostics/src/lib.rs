@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -45,29 +46,36 @@ impl TextRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Label {
     pub range: TextRange,
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Suggestion {
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Fix {
     pub message: String,
     pub replacement: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Evidence {
     pub label: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Construct diagnostics with `Diagnostic::new`, `Diagnostic::error`,
+/// `Diagnostic::warning`, `Diagnostic::info`, and the fluent helpers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct Diagnostic {
     pub rule_id: String,
     pub severity: Severity,
@@ -80,6 +88,55 @@ pub struct Diagnostic {
     pub suggestions: Vec<Suggestion>,
     pub fix: Option<Fix>,
     pub stable_fingerprint: String,
+}
+
+#[derive(Deserialize)]
+struct DiagnosticWire {
+    rule_id: String,
+    severity: Severity,
+    file: String,
+    range: TextRange,
+    message: String,
+    #[serde(default)]
+    labels: Vec<Label>,
+    #[serde(default)]
+    help: Option<String>,
+    #[serde(default)]
+    evidence: Vec<Evidence>,
+    #[serde(default)]
+    suggestions: Vec<Suggestion>,
+    #[serde(default)]
+    fix: Option<Fix>,
+    #[serde(default)]
+    stable_fingerprint: String,
+}
+
+impl<'de> Deserialize<'de> for Diagnostic {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = DiagnosticWire::deserialize(deserializer)?;
+        let stable_fingerprint = if wire.stable_fingerprint.is_empty() {
+            diagnostic_fingerprint(&wire.rule_id, &wire.file, wire.range, &wire.message)
+        } else {
+            wire.stable_fingerprint
+        };
+
+        Ok(Self {
+            rule_id: wire.rule_id,
+            severity: wire.severity,
+            file: wire.file,
+            range: wire.range,
+            message: wire.message,
+            labels: wire.labels,
+            help: wire.help,
+            evidence: wire.evidence,
+            suggestions: wire.suggestions,
+            fix: wire.fix,
+            stable_fingerprint,
+        })
+    }
 }
 
 impl Diagnostic {
@@ -209,8 +266,11 @@ pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
 pub fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
     let mut diagnostics = diagnostics;
     sort_diagnostics(&mut diagnostics);
-    diagnostics.dedup_by(|a, b| a.stable_fingerprint == b.stable_fingerprint);
+    let mut seen = BTreeSet::new();
     diagnostics
+        .into_iter()
+        .filter(|diagnostic| seen.insert(diagnostic.stable_fingerprint.clone()))
+        .collect()
 }
 
 pub fn render(format: OutputFormat, diagnostics: &[Diagnostic]) -> String {
@@ -468,6 +528,47 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_deserializes_missing_phase3_fields_with_computed_fingerprint() {
+        let diagnostic: Diagnostic = serde_json::from_str(
+            r#"{
+                "rule_id": "project/rule",
+                "severity": "warn",
+                "file": "src/lib.rs",
+                "range": {
+                    "start_line": 4,
+                    "start_col": 2,
+                    "end_line": 4,
+                    "end_col": 9
+                },
+                "message": "policy failed"
+            }"#,
+        )
+        .unwrap();
+
+        let range = TextRange {
+            start_line: 4,
+            start_col: 2,
+            end_line: 4,
+            end_col: 9,
+        };
+
+        assert_eq!(diagnostic.rule_id, "project/rule");
+        assert_eq!(diagnostic.severity, Severity::Warn);
+        assert_eq!(diagnostic.file, "src/lib.rs");
+        assert_eq!(diagnostic.range, range);
+        assert_eq!(diagnostic.message, "policy failed");
+        assert!(diagnostic.labels.is_empty());
+        assert!(diagnostic.help.is_none());
+        assert!(diagnostic.evidence.is_empty());
+        assert!(diagnostic.suggestions.is_empty());
+        assert!(diagnostic.fix.is_none());
+        assert_eq!(
+            diagnostic.stable_fingerprint,
+            diagnostic_fingerprint("project/rule", "src/lib.rs", range, "policy failed")
+        );
+    }
+
+    #[test]
     fn render_empty_human_output_is_stable() {
         assert_eq!(render(OutputFormat::Human, &[]), "No diagnostics.\n");
     }
@@ -627,6 +728,24 @@ mod tests {
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0].stable_fingerprint, unique.stable_fingerprint);
         assert_eq!(diagnostics[1].file, "b.go");
+    }
+
+    #[test]
+    fn dedupe_diagnostics_removes_non_adjacent_duplicate_fingerprints() {
+        let first =
+            Diagnostic::warning("rule/a", "a.go", TextRange::point(1, 1), "first duplicate")
+                .with_fingerprint("same-fingerprint");
+        let unique = Diagnostic::warning("rule/b", "b.go", TextRange::point(1, 1), "unique")
+            .with_fingerprint("unique-fingerprint");
+        let second =
+            Diagnostic::warning("rule/c", "c.go", TextRange::point(1, 1), "second duplicate")
+                .with_fingerprint("same-fingerprint");
+
+        let diagnostics = dedupe_diagnostics(vec![second, unique.clone(), first.clone()]);
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0], first);
+        assert_eq!(diagnostics[1], unique);
     }
 
     fn diagnostic_from_index(index: usize) -> Diagnostic {

@@ -544,7 +544,16 @@ pub fn run_rules(
     parallel: bool,
 ) -> Vec<Diagnostic> {
     let run_one = |rule: &Arc<dyn Rule>| {
-        let meta = rule.meta();
+        let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
+            Ok(meta) => meta,
+            Err(_) => {
+                return vec![internal_rule_error_for_id(
+                    db,
+                    "unknown",
+                    "rule metadata panicked".to_string(),
+                )];
+            }
+        };
         if !enabled.is_empty()
             && !enabled
                 .iter()
@@ -578,6 +587,10 @@ pub fn run_rules(
 }
 
 fn internal_rule_error(db: &AnalysisDb, meta: &RuleMeta, message: String) -> Diagnostic {
+    internal_rule_error_for_id(db, &meta.id, message)
+}
+
+fn internal_rule_error_for_id(db: &AnalysisDb, rule_id: &str, message: String) -> Diagnostic {
     let (file, range) = db
         .files()
         .first()
@@ -585,10 +598,10 @@ fn internal_rule_error(db: &AnalysisDb, meta: &RuleMeta, message: String) -> Dia
         .unwrap_or_else(|| ("<workspace>".to_string(), DiagnosticRange::point(1, 1)));
 
     Diagnostic::error(
-        format!("internal/{}", meta.id),
+        format!("internal/{rule_id}"),
         file,
         range,
-        format!("Rule `{}` failed: {message}", meta.id),
+        format!("Rule `{rule_id}` failed: {message}"),
     )
 }
 
@@ -655,6 +668,7 @@ mod tests {
         Report,
         Error,
         Panic,
+        MetaPanic,
     }
 
     struct TestRule {
@@ -718,10 +732,26 @@ mod tests {
                 behavior: TestRuleBehavior::Panic,
             }
         }
+
+        fn meta_panic() -> Self {
+            Self {
+                id: "examples/meta-panic",
+                capabilities: Capabilities::new(),
+                severity: Severity::Error,
+                message: "metadata panicked",
+                fingerprint: "meta-panic",
+                delay: Duration::ZERO,
+                behavior: TestRuleBehavior::MetaPanic,
+            }
+        }
     }
 
     impl Rule for TestRule {
         fn meta(&self) -> RuleMeta {
+            if matches!(self.behavior, TestRuleBehavior::MetaPanic) {
+                panic!("intentional metadata panic");
+            }
+
             RuleMeta {
                 id: self.id.to_string(),
                 description: format!("Test rule {}", self.id),
@@ -754,6 +784,7 @@ mod tests {
                 }
                 TestRuleBehavior::Error => Err(anyhow!("intentional rule error")),
                 TestRuleBehavior::Panic => panic!("intentional rule panic"),
+                TestRuleBehavior::MetaPanic => panic!("intentional metadata panic"),
             }
         }
     }
@@ -867,6 +898,19 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("rule panicked"))
         );
+    }
+
+    #[test]
+    fn run_rules_contains_meta_panics() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(TestRule::meta_panic())];
+
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "internal/unknown");
+        assert_eq!(diagnostics[0].file, "<workspace>");
+        assert!(diagnostics[0].message.contains("rule metadata panicked"));
     }
 
     #[test]
