@@ -640,6 +640,34 @@ pub fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::sync::Arc;
+
+    fn test_span(file: FileId, line: u32) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 1,
+            start_line: line,
+            start_col: 1,
+            end_line: line,
+            end_col: 2,
+        }
+    }
+
+    fn diagnostic_range(
+        start_line: u32,
+        start_col: u32,
+        end_line: u32,
+        end_col: u32,
+    ) -> DiagnosticRange {
+        DiagnosticRange {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        }
+    }
 
     #[test]
     fn line_col_counts_utf8_boundaries() {
@@ -647,8 +675,186 @@ mod tests {
     }
 
     #[test]
+    fn analysis_db_assigns_deterministic_ids_and_preserves_shared_source() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\n".to_string(),
+        );
+        let span = test_span(file, 1);
+
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "main".to_string(),
+            span: span.clone(),
+            language: Language::Go,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "fmt".to_string(),
+            span: span.clone(),
+            language: Language::Go,
+        });
+        let branch = db.push_branch(BranchObligation {
+            id: BranchId(99),
+            function: Some(function),
+            file,
+            decision_span: span,
+            condition_text: "err != nil".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: true,
+            stable_fingerprint: "branch".to_string(),
+        });
+
+        assert_eq!(file, FileId(0));
+        assert_eq!(function, FunctionId(0));
+        assert_eq!(import, ImportId(0));
+        assert_eq!(branch, BranchId(0));
+
+        let stored = db.file(file).expect("source file exists");
+        let shared: Arc<str> = Arc::clone(&stored.source);
+        assert_eq!(&*shared, "package main\n");
+    }
+
+    #[test]
+    fn analysis_db_exposes_all_phase3_fact_families() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export function Button() { return <button aria-label=\"Save\" /> }\n".to_string(),
+        );
+        let span = test_span(file, 1);
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "Button".to_string(),
+            span: span.clone(),
+            language: Language::Tsx,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: vec!["render".to_string()],
+        });
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: Some("react".to_string()),
+            path: "react".to_string(),
+            span: span.clone(),
+            language: Language::Tsx,
+        });
+        let branch = db.push_branch(BranchObligation {
+            id: BranchId(99),
+            function: Some(function),
+            file,
+            decision_span: span.clone(),
+            condition_text: "enabled".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: false,
+            stable_fingerprint: "branch".to_string(),
+        });
+        db.push_test(TestFact {
+            file,
+            function: Some(function),
+            name: "Button test".to_string(),
+            span: span.clone(),
+            evidence_terms: vec!["render".to_string()],
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+        db.push_coverage(CoverageFact {
+            branch,
+            covered: Some(true),
+            source: "placeholder".to_string(),
+        });
+        db.push_ts_component(TsComponentFact {
+            file,
+            function: Some(function),
+            name: "Button".to_string(),
+            span: span.clone(),
+        });
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "Save".to_string(),
+            span: span.clone(),
+            language: Language::Tsx,
+        });
+        db.push_jsx_attribute(JsxAttributeFact {
+            file,
+            name: "aria-label".to_string(),
+            value: Some("Save".to_string()),
+            span,
+        });
+
+        assert_eq!(db.files()[0].id, file);
+        assert_eq!(db.functions()[0].id, function);
+        assert_eq!(db.imports()[0].id, import);
+        assert_eq!(db.branches()[0].id, branch);
+        assert_eq!(db.tests()[0].name, "Button test");
+        assert_eq!(db.coverage()[0].covered, Some(true));
+        assert_eq!(db.ts_components()[0].name, "Button");
+        assert_eq!(db.string_literals()[0].value, "Save");
+        assert_eq!(db.jsx_attributes()[0].name, "aria-label");
+    }
+
+    #[test]
+    fn span_from_byte_range_handles_utf8_newlines_and_empty_ranges() {
+        let source = "aé\nβ\n";
+        let file = FileId(7);
+
+        let utf8 = span_from_byte_range(file, source, 1, 3);
+        assert_eq!(utf8.diagnostic_range(), diagnostic_range(1, 2, 1, 3));
+
+        let newline = span_from_byte_range(file, source, 3, 4);
+        assert_eq!(
+            newline.diagnostic_range(),
+            diagnostic_range(1, 3, 2, 1)
+        );
+
+        let empty = span_from_byte_range(file, source, 4, 4);
+        assert_eq!(empty.diagnostic_range(), diagnostic_range(2, 1, 2, 1));
+
+        let clamped = span_from_byte_range(file, source, source.len() + 10, source.len() + 20);
+        assert_eq!(clamped.start_byte as usize, source.len());
+        assert_eq!(clamped.end_byte as usize, source.len());
+        assert_eq!(
+            clamped.diagnostic_range(),
+            diagnostic_range(3, 1, 3, 1)
+        );
+    }
+
+    #[test]
     fn rule_pattern_matches_prefix() {
         assert!(rule_id_matches("examples/*", "examples/ts-no-raw-colors"));
         assert!(!rule_id_matches("custom/*", "examples/ts-no-raw-colors"));
+    }
+
+    proptest! {
+        #[test]
+        fn span_from_byte_range_is_monotonic_for_char_boundaries(source in "\\PC*") {
+            let mut offsets: Vec<usize> = source.char_indices().map(|(idx, _)| idx).collect();
+            offsets.push(source.len());
+
+            for start in &offsets {
+                for end in offsets.iter().filter(|end| *end >= start) {
+                    let span = span_from_byte_range(FileId(0), &source, *start, *end);
+                    let range = span.diagnostic_range();
+                    prop_assert!(
+                        (range.end_line, range.end_col) >= (range.start_line, range.start_col),
+                        "range {range:?} from offsets {start}..{end} in {source:?}"
+                    );
+                }
+            }
+        }
     }
 }

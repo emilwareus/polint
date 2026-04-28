@@ -12,3 +12,6 @@ polint-diagnostics = { path = "../polint-diagnostics" }
 rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
