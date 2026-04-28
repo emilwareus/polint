@@ -7,8 +7,8 @@
 
 ### Foundation
 
-- [ ] **FND-01**: The repository contains a Rust 2024 workspace with crates for CLI, config, diagnostics, filesystem, cache, core, SDK, Go adapter, TS adapter, graph helpers, rules, and plugin skeleton.
-- [ ] **FND-02**: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are available as CI-friendly commands.
+- [x] **FND-01**: The repository contains a Rust 2024 workspace with crates for CLI, config, diagnostics, filesystem, cache, core, SDK, Go adapter, TS adapter, graph helpers, rules, and plugin skeleton.
+- [x] **FND-02**: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are available as CI-friendly commands.
 - [ ] **FND-03**: The README explains the goal, non-goals, quickstart, custom rule authoring, CI usage, and roadmap.
 
 ### CLI
@@ -101,8 +101,8 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FND-01 | Phase 1 | Pending |
-| FND-02 | Phase 1 | Pending |
+| FND-01 | Phase 1 | Complete |
+| FND-02 | Phase 1 | Complete |
 | FND-03 | Phase 10 | Pending |
 | CLI-01 | Phase 2 | Pending |
 | CLI-02 | Phase 2 | Pending |
@@ -140,7 +140,7 @@
 | PERF-03 | Phase 7 | Pending |
 | PLUG-01 | Phase 9 | Pending |
 | PLUG-02 | Phase 9 | Pending |
-| TEST-01 | Phase 1-9 | Pending |
+| TEST-01 | Phase 1-9 | In Progress - Phase 1 workspace tests verified; broader coverage remains scheduled in later phases |
 | TEST-02 | Phase 2-8 | Pending |
 | TEST-03 | Phase 3-8 | Pending |
 | TEST-04 | Phase 3-7 | Pending |
