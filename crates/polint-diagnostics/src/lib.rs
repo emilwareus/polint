@@ -346,6 +346,107 @@ mod tests {
         assert_eq!(diagnostics[1].file, "b.go");
     }
 
+    fn contract_diagnostic() -> Diagnostic {
+        Diagnostic::error(
+            "project/rule",
+            "src/lib.rs",
+            TextRange {
+                start_line: 10,
+                start_col: 4,
+                end_line: 10,
+                end_col: 12,
+            },
+            "policy failed",
+        )
+        .with_label(
+            TextRange {
+                start_line: 11,
+                start_col: 2,
+                end_line: 11,
+                end_col: 8,
+            },
+            "related expression",
+        )
+        .with_evidence("symbol", "unsafe_api")
+        .with_suggestion("Prefer safe_api here")
+        .with_fix("Replace unsafe_api", Some("safe_api()".to_string()))
+        .with_help("Use the safe wrapper before crossing this boundary.")
+        .with_fingerprint("fingerprint-123")
+    }
+
+    #[test]
+    fn render_human_snapshot_includes_contract_fields() {
+        insta::assert_snapshot!(render(OutputFormat::Human, &[contract_diagnostic()]), @r###"
+        src/lib.rs:10:4-10:12 error project/rule
+          policy failed
+          label 11:2-11:8: related expression
+          evidence symbol: unsafe_api
+          suggestion: Prefer safe_api here
+          fix: Replace unsafe_api
+            replacement: safe_api()
+          help: Use the safe wrapper before crossing this boundary.
+          fingerprint: fingerprint-123
+
+        "###);
+    }
+
+    #[test]
+    fn render_json_snapshot_is_stable() {
+        let rendered = render(OutputFormat::Json, &[contract_diagnostic()]);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let stable_json = serde_json::to_string_pretty(&parsed).unwrap();
+
+        insta::assert_snapshot!(stable_json, @r###"
+        [
+          {
+            "evidence": [
+              {
+                "label": "symbol",
+                "value": "unsafe_api"
+              }
+            ],
+            "file": "src/lib.rs",
+            "fix": {
+              "message": "Replace unsafe_api",
+              "replacement": "safe_api()"
+            },
+            "help": "Use the safe wrapper before crossing this boundary.",
+            "labels": [
+              {
+                "message": "related expression",
+                "range": {
+                  "end_col": 8,
+                  "end_line": 11,
+                  "start_col": 2,
+                  "start_line": 11
+                }
+              }
+            ],
+            "message": "policy failed",
+            "range": {
+              "end_col": 12,
+              "end_line": 10,
+              "start_col": 4,
+              "start_line": 10
+            },
+            "rule_id": "project/rule",
+            "severity": "error",
+            "stable_fingerprint": "fingerprint-123",
+            "suggestions": [
+              {
+                "message": "Prefer safe_api here"
+              }
+            ]
+          }
+        ]
+        "###);
+    }
+
+    #[test]
+    fn render_empty_human_output_is_stable() {
+        assert_eq!(render(OutputFormat::Human, &[]), "No diagnostics.\n");
+    }
+
     #[test]
     fn diagnostic_builders_cover_labels_suggestions_fixes_evidence_and_help() {
         let range = TextRange {
