@@ -1,3 +1,17 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-04-28T06:47:49.479Z"
+progress:
+  total_phases: 10
+  completed_phases: 0
+  total_plans: 1
+  completed_plans: 0
+  percent: 0
+---
+
 # State: exlint
 
 ## Project Reference
@@ -6,7 +20,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 2+ hardening after initial working implementation on `main`
+**Current focus:** Phase 01 — workspace-foundation
 
 ## Current Status
 
