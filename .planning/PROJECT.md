@@ -14,11 +14,10 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 
 ### Validated
 
-(None yet - ship to validate)
+- [x] Create a compiling Rust 2024 workspace with clear crate boundaries for CLI, config, diagnostics, filesystem, cache, core analysis, SDK, Go, TS, graph, rules, and plugin support. Validated in Phase 1: Workspace Foundation.
 
 ### Active
 
-- [ ] Create a compiling Rust 2024 workspace with clear crate boundaries for CLI, config, diagnostics, filesystem, cache, core analysis, SDK, Go, TS, graph, rules, and plugin support.
 - [ ] Provide a CLI centered on custom rules: `polint init`, `polint new-rule`, `polint check`, `polint test-rules`, `polint profile-rules`, `polint explain`, and graph export commands.
 - [ ] Load `.polint.toml` with include/exclude globs, profiles, rule paths, severity overrides, language settings, and sane defaults when config is missing.
 - [ ] Discover files quickly with `.gitignore` support and deterministic ordering.
@@ -51,6 +50,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - The initial project prompt lives at `docs/INITIAL_PROMPT.md`.
 - The source repository and GSD planning both live at `/Users/emilwareus/Development/exlint` on branch `main`.
 - The suggested project name in the prompt is `polint`, so the binary and crate names use `polint-*` while the repository remains `exlint`.
+- Phase 1 completed on 2026-04-28 through GSD plan execution and verification on `main`.
 
 ## Constraints
 
@@ -66,11 +66,11 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Use `polint` as the binary/crate prefix inside the `exlint` repository | The prompt explicitly suggests `polint`; keeping the repo as `exlint` preserves the GitHub repository name already created. | - Pending |
+| Use `polint` as the binary/crate prefix inside the `exlint` repository | The prompt explicitly suggests `polint`; keeping the repo as `exlint` preserves the GitHub repository name already created. | Accepted in Phase 1 |
 | Build a smaller complete v1 instead of shallow full breadth | The prompt explicitly prefers working, tested functionality over fake or broad shallow features. | - Pending |
 | Start with a hash-based cache, not Salsa | The prompt allows Salsa to remain behind an abstraction if it slows delivery. A content/config/rule hash cache is simpler to ship safely. | - Pending |
 | Treat repo-local rule auto-compilation as future/experimental | The prompt requires SDK and scaffolding first, with Wasm skeleton acceptable for the first implementation. | - Pending |
-| Use in-repo GSD planning on `main` | The user wants to use GSD directly in `/Users/emilwareus/Development/exlint` and avoid worktrees. | - Pending |
+| Use in-repo GSD planning on `main` | The user wants to use GSD directly in `/Users/emilwareus/Development/exlint` and avoid worktrees. | Accepted in Phase 1 |
 
 ## Evolution
 
@@ -90,4 +90,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-28 after initialization*
+*Last updated: 2026-04-28 after Phase 1 completion*
