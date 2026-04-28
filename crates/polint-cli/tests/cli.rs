@@ -423,6 +423,51 @@ fn discovery_respects_default_excludes() {
 }
 
 #[test]
+fn check_json_output_is_deterministic_across_repeated_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join(".gitignore"), "src/ignored.ts\n").unwrap();
+    fs::write(
+        temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = ["src/excluded.ts"]
+
+[profiles.phase3]
+rules = ["examples/ts-no-raw-colors"]
+"#,
+    )
+    .unwrap();
+    write_file(
+        &temp.path().join("src/z.tsx"),
+        "export function Button() { return <div style={{ color: \"#ffffff\" }} />; }",
+    );
+    write_file(
+        &temp.path().join("src/excluded.ts"),
+        "export const excluded = \"#333333\";",
+    );
+    write_file(
+        &temp.path().join("src/ignored.ts"),
+        "export const ignored = \"#444444\";",
+    );
+    write_file(
+        &temp.path().join("src/a.ts"),
+        "export const accent = \"#111111\";",
+    );
+
+    let first = phase3_check_json(temp.path());
+    let second = phase3_check_json(temp.path());
+    let third = phase3_check_json(temp.path());
+
+    assert_eq!(second, first);
+    assert_eq!(third, first);
+    assert_eq!(
+        diagnostic_files(&first, "examples/ts-no-raw-colors"),
+        ["src/a.ts", "src/z.tsx"]
+    );
+}
+
+#[test]
 fn check_clean_repo_succeeds() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
@@ -444,4 +489,23 @@ fn check_clean_repo_succeeds() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No diagnostics"));
+}
+
+fn phase3_check_json(root: &Path) -> serde_json::Value {
+    stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(root)
+            .args([
+                "check",
+                "--profile",
+                "phase3",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    )
 }
