@@ -24,13 +24,13 @@
 - [x] **CFG-01**: `.polint.toml` supports include/exclude globs, profiles, rule paths, severity overrides, and language settings.
 - [x] **CFG-02**: `polint check` runs a minimal default when config is missing and suggests `polint init`.
 - [x] **FS-01**: File discovery respects `.gitignore`, include globs, exclude globs, and detects Go, TS, TSX, JS, and JSX files.
-- [ ] **FS-02**: File discovery output is deterministic.
+- [x] **FS-02**: File discovery output is deterministic.
 
 ### Core and Diagnostics
 
-- [ ] **CORE-01**: Core defines stable IDs and models for files, spans, functions, imports, branch obligations, tests, coverage placeholders, and analysis database.
-- [ ] **CORE-02**: Core runs rules through a registry, honors capability declarations, deduplicates diagnostics, catches rule panics where practical, and sorts diagnostics deterministically.
-- [ ] **DIAG-01**: Diagnostics support severity, labels, suggestions/fixes, evidence, stable fingerprints, and human output.
+- [x] **CORE-01**: Core defines stable IDs and models for files, spans, functions, imports, branch obligations, tests, coverage placeholders, and analysis database.
+- [x] **CORE-02**: Core runs rules through a registry, honors capability declarations, deduplicates diagnostics, catches rule panics where practical, and sorts diagnostics deterministically.
+- [x] **DIAG-01**: Diagnostics support severity, labels, suggestions/fixes, evidence, stable fingerprints, and human output.
 - [x] **DIAG-02**: Diagnostics render as JSON.
 - [ ] **DIAG-03**: Diagnostics render as SARIF-like output for CI.
 
@@ -112,10 +112,10 @@
 | CFG-01 | Phase 2 | Complete |
 | CFG-02 | Phase 2 | Complete |
 | FS-01 | Phase 2 | Complete |
-| FS-02 | Phase 3 | Pending |
-| CORE-01 | Phase 3 | Pending |
-| CORE-02 | Phase 3 | Pending |
-| DIAG-01 | Phase 3 | Pending |
+| FS-02 | Phase 3 | Complete |
+| CORE-01 | Phase 3 | Complete |
+| CORE-02 | Phase 3 | Complete |
+| DIAG-01 | Phase 3 | Complete |
 | DIAG-02 | Phase 2 | Complete |
 | DIAG-03 | Phase 8 | Pending |
 | GO-01 | Phase 4 | Pending |
@@ -140,10 +140,10 @@
 | PERF-03 | Phase 7 | Pending |
 | PLUG-01 | Phase 9 | Pending |
 | PLUG-02 | Phase 9 | Pending |
-| TEST-01 | Phase 1-9 | In Progress - Phase 1 workspace tests verified; broader coverage remains scheduled in later phases |
+| TEST-01 | Phase 1-9 | In Progress - Phase 1 workspace tests and Phase 3 core, diagnostics, discovery, runner, and CLI determinism unit/integration coverage verified; Go/TS extraction, rule logic, cache, and later command coverage remain scheduled |
 | TEST-02 | Phase 2-8 | In Progress - Phase 2 CLI/config/discovery integration tests verified; broader command and CI coverage remains scheduled in later phases |
-| TEST-03 | Phase 3-8 | Pending |
-| TEST-04 | Phase 3-7 | Pending |
+| TEST-03 | Phase 3-8 | In Progress - Phase 3 human and JSON diagnostic snapshots verified; SARIF-like and broader rule snapshots remain scheduled for later phases |
+| TEST-04 | Phase 3-7 | In Progress - Phase 3 span, diagnostic sorting, and discovery include/exclude property tests verified; cache/performance property scope remains scheduled |
 
 **Coverage:**
 - v1 requirements: 43 total
@@ -152,4 +152,4 @@
 
 ---
 *Requirements defined: 2026-04-28*
-*Last updated: 2026-04-28 after Phase 2 verification*
+*Last updated: 2026-04-28 after Phase 3 verification*

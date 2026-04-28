@@ -88,3 +88,32 @@ Source fixes were needed during Plan 02-01 before this closure verification:
 ## Result
 
 Passed. Phase 2 closure verified `polint init`, `polint new-rule`, `polint check`, config loading, missing-config defaults, discovery filtering, JSON output, SARIF smoke output, profiles, `--no-cache`, and `--fail-on` behavior without overclaiming later CLI, cache, SARIF-hardening, snapshot, or property-test requirements.
+
+## Phase 3 Closure Verification
+
+**Date:** 2026-04-28
+**Verified source commit:** `c29dd82` on `main`
+**Worktree policy:** Executed directly in `/Users/emilwareus/Development/exlint` on `main`; no GSD worktree was created or used per D-03.
+
+## Commands Run
+
+- `cargo fmt -- --check` - PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- `cargo test --workspace` - PASS after the blocking snapshot test fix below
+- `cargo test -p polint-fs --lib discovery_order_is_root_relative_and_stable_with_nested_files` - PASS
+- `cargo test -p polint-fs --lib discovery_filters_before_sorting` - PASS
+- `cargo test -p polint-fs --lib load_analysis_files_preserves_discovery_order_in_file_ids` - PASS
+- `cargo test -p polint-fs --lib discovery_include_exclude_decision_is_stable` - PASS
+- `cargo test -p polint-cli --test cli check_json_output_is_deterministic_across_repeated_runs` - PASS
+- `cargo test -p polint-diagnostics --lib render_json_snapshot_is_stable` - PASS
+
+## Source Fixes
+
+- Added focused `polint-fs` tests proving sorted normalized root-relative discovery output after filtering and deterministic `AnalysisDb` file ID insertion.
+- Added a pure include/exclude decision helper used by discovery so property tests can prove deterministic exclude precedence without changing public discovery semantics.
+- Added a CLI integration test that runs `polint check --profile phase3 --format json --fail-on none` three times over one mixed temp repo and asserts parsed JSON diagnostics plus `src/a.ts` before `src/z.tsx`.
+- Stabilized the diagnostic JSON snapshot test by parsing rendered JSON for validity while snapshotting renderer output directly, avoiding workspace feature-dependent `serde_json::Value` key reserialization order.
+
+## Result
+
+Passed. Phase 3 closes deterministic discovery, core fact/runner determinism, and the Phase 3 diagnostic contract. `FS-02`, `CORE-01`, `CORE-02`, and `DIAG-01` are complete. `TEST-01`, `TEST-03`, and `TEST-04` have verified Phase 3 evidence but remain in progress for later Go/TS extraction, cache/performance, SARIF-like CI snapshots, broad rule snapshots, and command hardening.

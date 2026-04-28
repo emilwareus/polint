@@ -63,6 +63,13 @@ Plans:
 
 **Requirements:** FS-02, CORE-01, CORE-02, DIAG-01, TEST-01, TEST-03, TEST-04
 
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 03-01-PLAN.md - Harden core fact models, spans, rule registry, and deterministic runner behavior.
+- [x] 03-02-PLAN.md - Harden diagnostic identity, full contract fields, human rendering, JSON snapshots, sort, and dedupe.
+- [x] 03-03-PLAN.md - Prove deterministic discovery and repeated CLI JSON output, then reconcile Phase 3 status.
+
 **Success criteria:**
 1. Core IDs, source files, spans, functions, imports, branch obligations, tests, coverage placeholders, and analysis DB compile and are tested.
 2. Rule registry and runner execute rules with capability declarations and panic containment where practical.
@@ -166,4 +173,4 @@ Plans:
 - Unmapped requirements: 0
 
 ---
-*Roadmap created: 2026-04-28*
+*Roadmap created: 2026-04-28; last updated after Phase 3 verification*
