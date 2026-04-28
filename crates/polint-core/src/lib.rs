@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FileId(pub u32);
@@ -563,15 +563,13 @@ pub fn run_rules(
     };
 
     let diagnostics = if parallel {
-        let diagnostics = Mutex::new(Vec::new());
-        rules.par_iter().for_each(|rule| {
-            let mut rule_diagnostics = run_one(rule);
-            diagnostics
-                .lock()
-                .expect("diagnostic mutex")
-                .append(&mut rule_diagnostics);
-        });
-        diagnostics.into_inner().unwrap_or_default()
+        rules
+            .par_iter()
+            .map(run_one)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flatten()
+            .collect()
     } else {
         rules.iter().flat_map(run_one).collect()
     };
