@@ -646,8 +646,119 @@ pub fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use proptest::prelude::*;
     use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[derive(Clone, Copy)]
+    enum TestRuleBehavior {
+        Report,
+        Error,
+        Panic,
+    }
+
+    struct TestRule {
+        id: &'static str,
+        capabilities: Capabilities,
+        severity: Severity,
+        message: &'static str,
+        fingerprint: &'static str,
+        delay: Duration,
+        behavior: TestRuleBehavior,
+    }
+
+    impl TestRule {
+        fn report(id: &'static str, severity: Severity, fingerprint: &'static str) -> Self {
+            Self {
+                id,
+                capabilities: Capabilities::new().syntax(),
+                severity,
+                message: "test diagnostic",
+                fingerprint,
+                delay: Duration::ZERO,
+                behavior: TestRuleBehavior::Report,
+            }
+        }
+
+        fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+            self.capabilities = capabilities;
+            self
+        }
+
+        fn with_message(mut self, message: &'static str) -> Self {
+            self.message = message;
+            self
+        }
+
+        fn with_delay(mut self, delay: Duration) -> Self {
+            self.delay = delay;
+            self
+        }
+
+        fn error(id: &'static str) -> Self {
+            Self {
+                id,
+                capabilities: Capabilities::new(),
+                severity: Severity::Error,
+                message: "rule returned an error",
+                fingerprint: "error",
+                delay: Duration::ZERO,
+                behavior: TestRuleBehavior::Error,
+            }
+        }
+
+        fn panic(id: &'static str) -> Self {
+            Self {
+                id,
+                capabilities: Capabilities::new(),
+                severity: Severity::Error,
+                message: "rule panicked",
+                fingerprint: "panic",
+                delay: Duration::ZERO,
+                behavior: TestRuleBehavior::Panic,
+            }
+        }
+    }
+
+    impl Rule for TestRule {
+        fn meta(&self) -> RuleMeta {
+            RuleMeta {
+                id: self.id.to_string(),
+                description: format!("Test rule {}", self.id),
+                severity: self.severity,
+            }
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.capabilities
+        }
+
+        fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+            if !self.delay.is_zero() {
+                thread::sleep(self.delay);
+            }
+
+            match self.behavior {
+                TestRuleBehavior::Report => {
+                    ctx.report(
+                        Diagnostic::new(
+                            self.id,
+                            self.severity,
+                            "src/main.go",
+                            DiagnosticRange::point(1, 1),
+                            self.message,
+                        )
+                        .with_fingerprint(self.fingerprint),
+                    );
+                    Ok(())
+                }
+                TestRuleBehavior::Error => Err(anyhow!("intentional rule error")),
+                TestRuleBehavior::Panic => panic!("intentional rule panic"),
+            }
+        }
+    }
 
     fn test_span(file: FileId, line: u32) -> Span {
         Span {
@@ -678,6 +789,125 @@ mod tests {
     #[test]
     fn line_col_counts_utf8_boundaries() {
         assert_eq!(line_col("a\nbc", 3), (2, 2));
+    }
+
+    #[test]
+    fn registry_exposes_capability_declarations() {
+        let mut registry = RuleRegistry::new();
+        registry.register(
+            TestRule::report("examples/capabilities", Severity::Warn, "capabilities")
+                .with_capabilities(Capabilities::new().imports().coverage_facts()),
+        );
+
+        let capabilities = registry.rules()[0].capabilities();
+        assert!(capabilities.imports);
+        assert!(capabilities.coverage_facts);
+        assert!(!capabilities.jsx_attributes);
+    }
+
+    #[test]
+    fn run_rules_filters_enabled_patterns_and_applies_severity_override() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![
+            Arc::new(TestRule::report(
+                "examples/allowed",
+                Severity::Warn,
+                "allowed",
+            )),
+            Arc::new(TestRule::report(
+                "custom/blocked",
+                Severity::Error,
+                "blocked",
+            )),
+        ];
+        let mut options = BTreeMap::new();
+        options.insert(
+            "examples/allowed".to_string(),
+            RuleOptions {
+                severity: Some(Severity::Error),
+                ..RuleOptions::default()
+            },
+        );
+        let enabled = BTreeSet::from(["examples/*".to_string()]);
+
+        let diagnostics = run_rules(&db, &rules, &options, &enabled, false);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "examples/allowed");
+        assert_eq!(diagnostics[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn run_rules_contains_rule_errors_and_panics() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![
+            Arc::new(TestRule::error("examples/error")),
+            Arc::new(TestRule::panic("examples/panic")),
+        ];
+
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.rule_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["internal/examples/error", "internal/examples/panic"]
+        );
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.file == "<workspace>"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("intentional rule error"))
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("rule panicked"))
+        );
+    }
+
+    #[test]
+    fn run_rules_parallel_matches_sequential() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![
+            Arc::new(
+                TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
+                    .with_message("same diagnostic")
+                    .with_delay(Duration::from_millis(50)),
+            ),
+            Arc::new(
+                TestRule::report("examples/duplicate", Severity::Error, "duplicate")
+                    .with_message("same diagnostic"),
+            ),
+        ];
+
+        let sequential = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+        let parallel = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), true);
+
+        assert_eq!(parallel, sequential);
+    }
+
+    #[test]
+    fn run_rules_dedupes_duplicate_fingerprints() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![
+            Arc::new(TestRule::report(
+                "examples/duplicate-a",
+                Severity::Warn,
+                "same-fingerprint",
+            )),
+            Arc::new(TestRule::report(
+                "examples/duplicate-b",
+                Severity::Error,
+                "same-fingerprint",
+            )),
+        ];
+
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].stable_fingerprint, "same-fingerprint");
     }
 
     #[test]
