@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-04-28T06:47:49.479Z"
+status: Ready to plan
+last_updated: "2026-04-28T06:58:51.544Z"
 progress:
   total_phases: 10
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 1
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 100
 ---
 
 # State: exlint
@@ -20,7 +20,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 01 — workspace-foundation
+**Current focus:** Phase 2 — CLI, Config, and Discovery
 
 ## Current Status
 
@@ -30,7 +30,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Requirements and roadmap created.
 - Source implementation committed on `main` as `7828215` (`Implement initial polint workspace`).
 - Verification passed: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
-- Next action: harden the deeper v1 gaps around cache persistence, custom rule loading, richer fixtures/snapshots, and parser fact precision.
+- Phase 1 has been closed through GSD plan execution and verification.
+- Next action: discuss/plan Phase 2 hardening for CLI, config, file discovery, and diagnostic output behavior on `main`.
 
 ## Phase Progress
 
