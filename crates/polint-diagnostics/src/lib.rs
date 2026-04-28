@@ -419,49 +419,49 @@ mod tests {
     fn render_json_snapshot_is_stable() {
         let rendered = render(OutputFormat::Json, &[contract_diagnostic()]);
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        let stable_json = serde_json::to_string_pretty(&parsed).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
 
-        insta::assert_snapshot!(stable_json, @r###"
+        insta::assert_snapshot!(rendered, @r###"
         [
           {
+            "rule_id": "project/rule",
+            "severity": "error",
+            "file": "src/lib.rs",
+            "range": {
+              "start_line": 10,
+              "start_col": 4,
+              "end_line": 10,
+              "end_col": 12
+            },
+            "message": "policy failed",
+            "labels": [
+              {
+                "range": {
+                  "start_line": 11,
+                  "start_col": 2,
+                  "end_line": 11,
+                  "end_col": 8
+                },
+                "message": "related expression"
+              }
+            ],
+            "help": "Use the safe wrapper before crossing this boundary.",
             "evidence": [
               {
                 "label": "symbol",
                 "value": "unsafe_api"
               }
             ],
-            "file": "src/lib.rs",
-            "fix": {
-              "message": "Replace unsafe_api",
-              "replacement": "safe_api()"
-            },
-            "help": "Use the safe wrapper before crossing this boundary.",
-            "labels": [
-              {
-                "message": "related expression",
-                "range": {
-                  "end_col": 8,
-                  "end_line": 11,
-                  "start_col": 2,
-                  "start_line": 11
-                }
-              }
-            ],
-            "message": "policy failed",
-            "range": {
-              "end_col": 12,
-              "end_line": 10,
-              "start_col": 4,
-              "start_line": 10
-            },
-            "rule_id": "project/rule",
-            "severity": "error",
-            "stable_fingerprint": "fingerprint-123",
             "suggestions": [
               {
                 "message": "Prefer safe_api here"
               }
-            ]
+            ],
+            "fix": {
+              "message": "Replace unsafe_api",
+              "replacement": "safe_api()"
+            },
+            "stable_fingerprint": "fingerprint-123"
           }
         ]
         "###);
