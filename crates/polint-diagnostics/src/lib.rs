@@ -231,28 +231,53 @@ pub fn render_human(diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();
     for diagnostic in diagnostics {
         out.push_str(&format!(
-            "{}:{}:{} {} {}\n\n{}\n",
+            "{}:{} {} {}\n  {}\n",
             diagnostic.file,
-            diagnostic.range.start_line,
-            diagnostic.range.start_col,
+            format_range(diagnostic.range),
             diagnostic.severity,
             diagnostic.rule_id,
             diagnostic.message
         ));
+        for label in &diagnostic.labels {
+            out.push_str(&format!(
+                "  label {}: {}\n",
+                format_range(label.range),
+                label.message
+            ));
+        }
         if !diagnostic.evidence.is_empty() {
-            out.push_str("\nEvidence:\n");
             for evidence in &diagnostic.evidence {
-                out.push_str(&format!("  {}: {}\n", evidence.label, evidence.value));
+                out.push_str(&format!(
+                    "  evidence {}: {}\n",
+                    evidence.label, evidence.value
+                ));
+            }
+        }
+        for suggestion in &diagnostic.suggestions {
+            out.push_str(&format!("  suggestion: {}\n", suggestion.message));
+        }
+        if let Some(fix) = &diagnostic.fix {
+            out.push_str(&format!("  fix: {}\n", fix.message));
+            if let Some(replacement) = &fix.replacement {
+                out.push_str(&format!("    replacement: {replacement}\n"));
             }
         }
         if let Some(help) = &diagnostic.help {
-            out.push_str("\nSuggested action:\n  ");
-            out.push_str(help);
-            out.push('\n');
+            out.push_str(&format!("  help: {help}\n"));
         }
-        out.push('\n');
+        out.push_str(&format!(
+            "  fingerprint: {}\n\n",
+            diagnostic.stable_fingerprint
+        ));
     }
     out
+}
+
+fn format_range(range: TextRange) -> String {
+    format!(
+        "{}:{}-{}:{}",
+        range.start_line, range.start_col, range.end_line, range.end_col
+    )
 }
 
 pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
