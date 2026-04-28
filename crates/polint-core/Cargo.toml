@@ -1,0 +1,14 @@
+[package]
+name = "polint-core"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+polint-diagnostics = { path = "../polint-diagnostics" }
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true

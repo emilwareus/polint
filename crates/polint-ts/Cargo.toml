@@ -1,0 +1,18 @@
+[package]
+name = "polint-ts"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_resolver.workspace = true
+oxc_semantic.workspace = true
+oxc_span.workspace = true
+polint-core = { path = "../polint-core" }
+polint-diagnostics = { path = "../polint-diagnostics" }

@@ -1,0 +1,20 @@
+package polint:rule;
+
+interface host {
+  type file-id = u32;
+  type function-id = u64;
+  type branch-id = u64;
+
+  get-file-path: func(file: file-id) -> string;
+  get-function-name: func(function: function-id) -> string;
+  get-branch-condition: func(branch: branch-id) -> string;
+  report: func(rule-id: string, file: file-id, start-line: u32, start-col: u32, message: string);
+}
+
+world rule {
+  import host;
+
+  export metadata: func() -> string;
+  export capabilities: func() -> list<string>;
+  export run: func();
+}

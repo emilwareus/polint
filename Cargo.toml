@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/polint-cache",
+    "crates/polint-cli",
+    "crates/polint-config",
+    "crates/polint-core",
+    "crates/polint-diagnostics",
+    "crates/polint-fs",
+    "crates/polint-go",
+    "crates/polint-graph",
+    "crates/polint-plugin",
+    "crates/polint-rules",
+    "crates/polint-sdk",
+    "crates/polint-ts",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/emilwareus/exlint"
+rust-version = "1.94"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+assert_cmd = "2.2.1"
+clap = { version = "4.6.1", features = ["derive"] }
+globset = "0.4.18"
+ignore = "0.4.25"
+insta = "1.47.2"
+oxc_allocator = "0.128.0"
+oxc_ast = "0.128.0"
+oxc_parser = "0.128.0"
+oxc_resolver = "11.19.1"
+oxc_semantic = "0.128.0"
+oxc_span = "0.128.0"
+petgraph = "0.8.3"
+predicates = "3.1.4"
+pretty_assertions = "1.4.1"
+proptest = "1.11.0"
+rayon = "1.12.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+toml = "1.1.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+tree-sitter = "0.26.8"
+tree-sitter-go = "0.25.0"
+wasmtime = "44.0.0"
+wit-bindgen = "0.57.1"

@@ -1,0 +1,18 @@
+[package]
+name = "polint-fs"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+globset.workspace = true
+ignore.workspace = true
+polint-config = { path = "../polint-config" }
+polint-core = { path = "../polint-core" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

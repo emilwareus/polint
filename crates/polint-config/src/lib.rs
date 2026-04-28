@@ -1,0 +1,258 @@
+use anyhow::{Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("invalid glob `{glob}`: {source}")]
+    InvalidGlob {
+        glob: String,
+        source: globset::Error,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolintConfig {
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
+    #[serde(default)]
+    pub rules: RuleSection,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, ProfileConfig>,
+    #[serde(default)]
+    pub languages: LanguageConfig,
+}
+
+impl Default for PolintConfig {
+    fn default() -> Self {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "fast".to_string(),
+            ProfileConfig {
+                rules: vec![
+                    "custom/*".to_string(),
+                    "examples/ts-no-raw-colors".to_string(),
+                    "examples/config-query-no-literal".to_string(),
+                ],
+            },
+        );
+        profiles.insert(
+            "full".to_string(),
+            ProfileConfig {
+                rules: vec!["custom/*".to_string(), "examples/*".to_string()],
+            },
+        );
+        Self {
+            workspace: WorkspaceConfig::default(),
+            rules: RuleSection::default(),
+            profiles,
+            languages: LanguageConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfig {
+    #[serde(default = "default_include")]
+    pub include: Vec<String>,
+    #[serde(default = "default_exclude")]
+    pub exclude: Vec<String>,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            include: default_include(),
+            exclude: default_exclude(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuleSection {
+    #[serde(default = "default_rule_paths")]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub config: Vec<RuleConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleConfig {
+    pub id: String,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub allow_files: Vec<String>,
+    #[serde(default)]
+    pub max: Option<u32>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub forbidden_imports: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProfileConfig {
+    #[serde(default)]
+    pub rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LanguageConfig {
+    #[serde(default)]
+    pub go: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    pub ts: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+    pub root: PathBuf,
+    pub path: Option<PathBuf>,
+    pub config: PolintConfig,
+    pub missing: bool,
+}
+
+impl LoadedConfig {
+    pub fn profile_rules(&self, profile: &str) -> Vec<String> {
+        self.config
+            .profiles
+            .get(profile)
+            .or_else(|| self.config.profiles.get("fast"))
+            .map(|profile| profile.rules.clone())
+            .unwrap_or_else(|| vec!["custom/*".to_string(), "examples/*".to_string()])
+    }
+
+    pub fn rule_config(&self, id: &str) -> Option<&RuleConfig> {
+        self.config.rules.config.iter().find(|rule| rule.id == id)
+    }
+
+    pub fn include_set(&self) -> Result<GlobSet> {
+        build_glob_set(&self.config.workspace.include)
+    }
+
+    pub fn exclude_set(&self) -> Result<GlobSet> {
+        build_glob_set(&self.config.workspace.exclude)
+    }
+}
+
+pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
+    let root = root.as_ref().to_path_buf();
+    let path = root.join(".polint.toml");
+    if !path.exists() {
+        return Ok(LoadedConfig {
+            root,
+            path: None,
+            config: PolintConfig::default(),
+            missing: true,
+        });
+    }
+
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read config {}", path.display()))?;
+    let config: PolintConfig = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse config {}", path.display()))?;
+    Ok(LoadedConfig {
+        root,
+        path: Some(path),
+        config,
+        missing: false,
+    })
+}
+
+pub fn default_config_toml() -> &'static str {
+    r#"# polint is for repo-local engineering policy as code.
+
+[workspace]
+include = ["**/*"]
+exclude = ["**/vendor/**", "**/node_modules/**", "**/.git/**", "**/target/**", "**/*.pb.go"]
+
+[rules]
+paths = [".polint/rules"]
+
+[profiles.fast]
+rules = [
+  "custom/*",
+  "examples/ts-no-raw-colors",
+  "examples/config-query-no-literal",
+]
+
+[profiles.full]
+rules = [
+  "custom/*",
+  "examples/*",
+]
+
+[[rules.config]]
+id = "examples/go-cyclomatic-complexity"
+severity = "warn"
+max = 12
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+severity = "warn"
+max = 12
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+severity = "error"
+files = ["**/*.{ts,tsx,js,jsx}"]
+allow_files = ["**/theme/**", "**/design-tokens/**"]
+"#
+}
+
+pub fn build_glob_set(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    if patterns.is_empty() {
+        builder.add(
+            Glob::new("**/*").map_err(|source| ConfigError::InvalidGlob {
+                glob: "**/*".to_string(),
+                source,
+            })?,
+        );
+    }
+    for pattern in patterns {
+        builder.add(
+            Glob::new(pattern).map_err(|source| ConfigError::InvalidGlob {
+                glob: pattern.clone(),
+                source,
+            })?,
+        );
+    }
+    Ok(builder.build()?)
+}
+
+fn default_include() -> Vec<String> {
+    vec!["**/*".to_string()]
+}
+
+fn default_exclude() -> Vec<String> {
+    vec![
+        "**/vendor/**".to_string(),
+        "**/node_modules/**".to_string(),
+        "**/.git/**".to_string(),
+        "**/target/**".to_string(),
+        "**/*.pb.go".to_string(),
+    ]
+}
+
+fn default_rule_paths() -> Vec<String> {
+    vec![".polint/rules".to_string()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_parses() {
+        let config: PolintConfig = toml::from_str(default_config_toml()).unwrap();
+        assert!(config.profiles.contains_key("fast"));
+    }
+}

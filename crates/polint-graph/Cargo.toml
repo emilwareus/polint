@@ -1,0 +1,11 @@
+[package]
+name = "polint-graph"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+petgraph.workspace = true
+polint-core = { path = "../polint-core" }
