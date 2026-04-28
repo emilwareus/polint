@@ -43,6 +43,7 @@ All formatting, linting, tests, and smoke checks passed after fixing a TS import
 
 **Date:** 2026-04-28
 **Verified commit:** `ab74408` on `main`
+**Post-finalization rerun:** `16a54e0` on `main`
 
 ## Commands Run
 
@@ -57,3 +58,5 @@ No source fixes were needed.
 ## Result
 
 Passed. Phase 1 closure verified the existing Rust 2024 workspace foundation on `main`; the workspace crate set, dependency baseline, formatting, clippy, and tests all matched the Phase 1 plan.
+
+The same three cargo commands were rerun successfully at `16a54e0` after doc-only summary finalization.

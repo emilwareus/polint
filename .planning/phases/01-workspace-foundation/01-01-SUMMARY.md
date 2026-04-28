@@ -67,7 +67,7 @@ Phase 1 closure verified the existing workspace foundation on main.
 
 ## Result
 
-Passed. The cargo verification commands ran at `ab74408`; the Phase 1 closure records were committed in `063a722`. No source fixes were needed.
+Passed. The cargo verification commands ran at `ab74408` and were rerun successfully at `16a54e0`; the Phase 1 closure records were committed in `063a722`. No source fixes were needed.
 
 ## Changes
 
