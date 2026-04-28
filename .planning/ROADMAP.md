@@ -27,6 +27,11 @@
 
 **Requirements:** FND-01, FND-02, TEST-01
 
+**Plans:** 1 plan
+
+Plans:
+- [ ] 01-01-PLAN.md - Verify and reconcile the existing workspace foundation without recreating it.
+
 **Success criteria:**
 1. `Cargo.toml` defines a Rust 2024 workspace with all requested crates.
 2. Every crate has a compiling minimal public API and internal tests where useful.
