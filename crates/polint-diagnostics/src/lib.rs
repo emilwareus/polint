@@ -293,6 +293,7 @@ pub fn fingerprint(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn sorting_is_deterministic() {
@@ -305,5 +306,205 @@ mod tests {
 
         assert_eq!(diagnostics[0].file, "a.go");
         assert_eq!(diagnostics[1].file, "b.go");
+    }
+
+    #[test]
+    fn diagnostic_builders_cover_labels_suggestions_fixes_evidence_and_help() {
+        let range = TextRange {
+            start_line: 10,
+            start_col: 4,
+            end_line: 10,
+            end_col: 12,
+        };
+        let label_range = TextRange {
+            start_line: 11,
+            start_col: 2,
+            end_line: 11,
+            end_col: 8,
+        };
+
+        let diagnostic = Diagnostic::error("project/rule", "src/lib.rs", range, "policy failed")
+            .with_label(label_range, "related expression")
+            .with_evidence("symbol", "unsafe_api")
+            .with_suggestion("Prefer safe_api here")
+            .with_fix("Replace unsafe_api", Some("safe_api".to_string()))
+            .with_help("Use the safe wrapper before crossing this boundary.");
+
+        assert_eq!(diagnostic.rule_id, "project/rule");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert_eq!(diagnostic.file, "src/lib.rs");
+        assert_eq!(diagnostic.range, range);
+        assert_eq!(diagnostic.message, "policy failed");
+        assert_eq!(
+            diagnostic.labels,
+            vec![Label {
+                range: label_range,
+                message: "related expression".to_string()
+            }]
+        );
+        assert_eq!(
+            diagnostic.evidence,
+            vec![Evidence {
+                label: "symbol".to_string(),
+                value: "unsafe_api".to_string()
+            }]
+        );
+        assert_eq!(
+            diagnostic.suggestions,
+            vec![Suggestion {
+                message: "Prefer safe_api here".to_string()
+            }]
+        );
+        assert_eq!(
+            diagnostic.fix,
+            Some(Fix {
+                message: "Replace unsafe_api".to_string(),
+                replacement: Some("safe_api".to_string())
+            })
+        );
+        assert_eq!(
+            diagnostic.help,
+            Some("Use the safe wrapper before crossing this boundary.".to_string())
+        );
+        assert!(!diagnostic.stable_fingerprint.is_empty());
+    }
+
+    #[test]
+    fn fingerprint_includes_rule_file_full_range_and_message() {
+        let range = TextRange {
+            start_line: 4,
+            start_col: 2,
+            end_line: 4,
+            end_col: 9,
+        };
+        let baseline =
+            Diagnostic::warning("project/rule", "src/lib.rs", range, "policy failed")
+                .stable_fingerprint;
+
+        let changed_start_line = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange {
+                start_line: 5,
+                ..range
+            },
+            "policy failed",
+        )
+        .stable_fingerprint;
+        let changed_start_col = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange {
+                start_col: 3,
+                ..range
+            },
+            "policy failed",
+        )
+        .stable_fingerprint;
+        let changed_end_line = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange {
+                end_line: 5,
+                ..range
+            },
+            "policy failed",
+        )
+        .stable_fingerprint;
+        let changed_end_col = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange {
+                end_col: 10,
+                ..range
+            },
+            "policy failed",
+        )
+        .stable_fingerprint;
+        let changed_file =
+            Diagnostic::warning("project/rule", "src/main.rs", range, "policy failed")
+                .stable_fingerprint;
+        let changed_rule = Diagnostic::warning("project/other", "src/lib.rs", range, "policy failed")
+            .stable_fingerprint;
+        let changed_message =
+            Diagnostic::warning("project/rule", "src/lib.rs", range, "different message")
+                .stable_fingerprint;
+
+        for changed in [
+            changed_start_line,
+            changed_start_col,
+            changed_end_line,
+            changed_end_col,
+            changed_file,
+            changed_rule,
+            changed_message,
+        ] {
+            assert_ne!(baseline, changed);
+        }
+
+        let changed_non_identity_fields =
+            Diagnostic::error("project/rule", "src/lib.rs", range, "policy failed")
+                .with_evidence("name", "value")
+                .with_help("extra context")
+                .with_fingerprint(baseline.clone());
+
+        assert_eq!(baseline, changed_non_identity_fields.stable_fingerprint);
+    }
+
+    #[test]
+    fn dedupe_diagnostics_collapses_same_fingerprint_after_sorting() {
+        let duplicate = Diagnostic::warning("project/rule", "b.go", TextRange::point(2, 1), "b");
+        let unique = Diagnostic::warning("project/rule", "a.go", TextRange::point(1, 1), "a");
+
+        let diagnostics = dedupe_diagnostics(vec![duplicate.clone(), unique.clone(), duplicate]);
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].stable_fingerprint, unique.stable_fingerprint);
+        assert_eq!(diagnostics[1].file, "b.go");
+    }
+
+    fn diagnostic_from_index(index: usize) -> Diagnostic {
+        let file = format!("src/{:02}.rs", index % 5);
+        let rule_id = format!("rule/{:02}", index % 7);
+        let line = (index % 11) as u32 + 1;
+        let col = (index % 13) as u32 + 1;
+        Diagnostic::warning(
+            rule_id,
+            file,
+            TextRange {
+                start_line: line,
+                start_col: col,
+                end_line: line + ((index % 3) as u32),
+                end_col: col + ((index % 5) as u32),
+            },
+            format!("message {index:02}"),
+        )
+    }
+
+    fn sorted_keys(diagnostics: &mut [Diagnostic]) -> Vec<(String, u32, u32, String, String, String)> {
+        sort_diagnostics(diagnostics);
+        diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.file.clone(),
+                    diagnostic.range.start_line,
+                    diagnostic.range.start_col,
+                    diagnostic.rule_id.clone(),
+                    diagnostic.message.clone(),
+                    diagnostic.stable_fingerprint.clone(),
+                )
+            })
+            .collect()
+    }
+
+    proptest! {
+        #[test]
+        fn sort_diagnostics_is_input_order_independent(order in proptest::collection::vec(0usize..30, 1..80)) {
+            let mut first: Vec<_> = order.iter().copied().map(diagnostic_from_index).collect();
+            let mut second: Vec<_> = order.iter().rev().copied().map(diagnostic_from_index).collect();
+
+            prop_assert_eq!(sorted_keys(&mut first), sorted_keys(&mut second));
+        }
     }
 }
