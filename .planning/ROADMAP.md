@@ -44,6 +44,11 @@ Plans:
 
 **Requirements:** CLI-01, CLI-02, CLI-03, CFG-01, CFG-02, FS-01, DIAG-02, TEST-02
 
+**Plans:** 1 plan
+
+Plans:
+- [ ] 02-01-PLAN.md - Verify and harden the existing CLI, config, discovery, and JSON output loop.
+
 **Success criteria:**
 1. `polint init` creates `.polint.toml` and `.polint/rules/`.
 2. `polint new-rule go name` and `polint new-rule ts name` create compilable-looking rule skeletons.
