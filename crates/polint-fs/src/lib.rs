@@ -90,6 +90,7 @@ fn relative_path(root: &Path, path: &Path) -> Result<String> {
 mod tests {
     use super::*;
     use polint_config::load_config;
+    use proptest::prelude::*;
 
     #[test]
     fn detects_language_from_path() {
@@ -106,5 +107,107 @@ mod tests {
         let files = discover_files(&config).unwrap();
         assert_eq!(files[0].relative_path, "a.go");
         assert_eq!(files[1].relative_path, "b.go");
+    }
+
+    #[test]
+    fn discovery_order_is_root_relative_and_stable_with_nested_files() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path().join("src/z.tsx"), "export const z = 1;");
+        write_file(temp.path().join("cmd/main.go"), "package main\n");
+        write_file(temp.path().join("src/a.ts"), "export const a = 1;");
+        write_file(temp.path().join("lib/b.js"), "export const b = 1;");
+
+        let config = load_config(temp.path()).unwrap();
+        let files = discover_files(&config).unwrap();
+
+        assert_eq!(
+            relative_paths(&files),
+            ["cmd/main.go", "lib/b.js", "src/a.ts", "src/z.tsx"]
+        );
+    }
+
+    #[test]
+    fn discovery_filters_before_sorting() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(".gitignore"), "src/ignored.tsx\n").unwrap();
+        fs::write(
+            temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["src/**"]
+exclude = ["src/excluded.tsx", "src/vendor/**"]
+"#,
+        )
+        .unwrap();
+
+        write_file(temp.path().join("src/nested/component.tsx"), "export const z = '#fff';");
+        write_file(temp.path().join("src/included.js"), "export const a = '#fff';");
+        write_file(temp.path().join("src/excluded.tsx"), "export const excluded = '#fff';");
+        write_file(temp.path().join("src/vendor/generated.ts"), "export const vendor = '#fff';");
+        write_file(temp.path().join("src/ignored.tsx"), "export const ignored = '#fff';");
+        write_file(temp.path().join("src/notes.txt"), "#fff\n");
+        write_file(temp.path().join("outside.ts"), "export const outside = '#fff';");
+
+        let config = load_config(temp.path()).unwrap();
+        let files = discover_files(&config).unwrap();
+
+        assert_eq!(
+            relative_paths(&files),
+            ["src/included.js", "src/nested/component.tsx"]
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn discovery_include_exclude_decision_is_stable(
+            dir in "[a-z]{1,8}",
+            name in "[a-z]{1,8}",
+            ext in "(go|ts|tsx|js|jsx)",
+        ) {
+            let relative_path = format!("{dir}/{name}.{ext}");
+            let include = polint_config::build_glob_set(&[format!("{dir}/**")]).unwrap();
+            let exclude = polint_config::build_glob_set(std::slice::from_ref(&relative_path)).unwrap();
+            let empty_exclude = polint_config::build_glob_set(&[]).unwrap();
+
+            prop_assert!(!should_include_relative_path(&include, &exclude, &relative_path));
+            let first = should_include_relative_path(&include, &empty_exclude, &relative_path);
+            let second = should_include_relative_path(&include, &empty_exclude, &relative_path);
+            prop_assert_eq!(first, second);
+            prop_assert!(first);
+        }
+    }
+
+    #[test]
+    fn load_analysis_files_preserves_discovery_order_in_file_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path().join("src/z.tsx"), "export const z = 1;");
+        write_file(temp.path().join("src/a.ts"), "export const a = 1;");
+        write_file(temp.path().join("cmd/main.go"), "package main\n");
+
+        let config = load_config(temp.path()).unwrap();
+        let db = load_analysis_files(&config).unwrap();
+        let files = db.files();
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].relative_path, "cmd/main.go");
+        assert_eq!(files[0].id.0, 0);
+        assert_eq!(files[1].relative_path, "src/a.ts");
+        assert_eq!(files[1].id.0, 1);
+        assert_eq!(files[2].relative_path, "src/z.tsx");
+        assert_eq!(files[2].id.0, 2);
+    }
+
+    fn write_file(path: impl AsRef<Path>, contents: &str) {
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    fn relative_paths(files: &[DiscoveredFile]) -> Vec<&str> {
+        files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect()
     }
 }

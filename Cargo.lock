@@ -1707,6 +1707,7 @@ dependencies = [
  "ignore",
  "polint-config",
  "polint-core",
+ "proptest",
  "tempfile",
  "thiserror 2.0.18",
 ]
