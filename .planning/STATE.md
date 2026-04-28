@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 02
-last_updated: "2026-04-28T08:55:51.541Z"
+status: Ready to plan
+last_updated: "2026-04-28T09:14:29.930Z"
 progress:
   total_phases: 10
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 3
+  percent: 100
 ---
 
 # State: exlint
@@ -20,7 +20,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 02 — cli-config-and-discovery
+**Current focus:** Phase 03 — core-facts-and-diagnostics
 
 ## Current Status
 
@@ -31,15 +31,16 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Source implementation committed on `main` as `7828215` (`Implement initial polint workspace`).
 - Verification passed: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 - Phase 1 has been closed through GSD plan execution and verification.
-- Next action: discuss/plan Phase 2 hardening for CLI, config, file discovery, and diagnostic output behavior on `main`.
+- Phase 2 has been closed through GSD plan execution and verification.
+- Next action: discuss/plan Phase 3 core facts, diagnostics, deterministic output, and SDK-facing primitives on `main`.
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1 | Complete | Rust workspace foundation committed and verified |
-| 2 | In Progress | CLI, config, and discovery have working initial implementation |
-| 3 | In Progress | Core facts and diagnostics have working initial implementation |
+| 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
+| 3 | Ready to plan | Core facts and diagnostics have working initial implementation |
 | 4 | In Progress | Go adapter parses with tree-sitter-go and extracts practical syntax facts |
 | 5 | In Progress | TypeScript adapter parses with Oxc and extracts practical syntax facts |
 | 6 | In Progress | SDK and requested example rules have working initial implementation |
