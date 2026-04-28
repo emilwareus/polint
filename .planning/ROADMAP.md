@@ -47,7 +47,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md - Add focused tests and narrow fixes for the existing CLI/config/discovery loop.
+- [x] 02-01-PLAN.md - Add focused tests and narrow fixes for the existing CLI/config/discovery loop.
 - [ ] 02-02-PLAN.md - Run full verification and reconcile Phase 2 status records.
 
 **Success criteria:**

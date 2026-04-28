@@ -60,3 +60,31 @@ No source fixes were needed.
 Passed. Phase 1 closure verified the existing Rust 2024 workspace foundation on `main`; the workspace crate set, dependency baseline, formatting, clippy, and tests all matched the Phase 1 plan.
 
 The same three cargo commands were rerun successfully at `16a54e0` after doc-only summary finalization.
+
+## Phase 2 Closure Verification
+
+**Date:** 2026-04-28
+**Verified commit:** `daa3bb7` on `main`
+
+## Commands Run
+
+- `cargo fmt -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p polint-cli -- check --format json --fail-on none > /tmp/exlint-phase2-check.json`
+- `cargo run -q -p polint-cli -- check --profile full --format human --fail-on none > /tmp/exlint-phase2-check-human.txt`
+- `cargo run -q -p polint-cli -- check --help > /tmp/exlint-phase2-check-help.txt`
+- `python3 -m json.tool /tmp/exlint-phase2-check.json > /tmp/exlint-phase2-check.pretty.json`
+- `rg -n -- '--profile|--format|--no-cache|--fail-on' /tmp/exlint-phase2-check-help.txt`
+
+## Source Fixes
+
+Source fixes were needed during Plan 02-01 before this closure verification:
+
+- Explicit empty workspace excludes now mean no excludes instead of matching every file.
+- Trailing `/**` include patterns now cover direct child files.
+- File discovery now honors `.gitignore` in non-git temporary roots.
+
+## Result
+
+Passed. Phase 2 closure verified `polint init`, `polint new-rule`, `polint check`, config loading, missing-config defaults, discovery filtering, JSON output, SARIF smoke output, profiles, `--no-cache`, and `--fail-on` behavior without overclaiming later CLI, cache, SARIF-hardening, snapshot, or property-test requirements.

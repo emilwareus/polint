@@ -15,12 +15,15 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 ### Validated
 
 - [x] Create a compiling Rust 2024 workspace with clear crate boundaries for CLI, config, diagnostics, filesystem, cache, core analysis, SDK, Go, TS, graph, rules, and plugin support. Validated in Phase 1: Workspace Foundation.
+- [x] Provide the first CLI loop for `polint init`, `polint new-rule`, and `polint check` with profiles, output formats, cache disabling, and fail thresholds. Validated in Phase 2: CLI, Config, and Discovery.
+- [x] Load `.polint.toml` with include/exclude globs, profiles, rule paths, severity overrides, language settings, and sane defaults when config is missing. Validated in Phase 2: CLI, Config, and Discovery.
+- [x] Discover Go, TS, TSX, JS, and JSX files with `.gitignore`, include glob, and exclude glob support. Validated in Phase 2: CLI, Config, and Discovery.
+- [x] Render `polint check` diagnostics as parseable JSON. Validated in Phase 2: CLI, Config, and Discovery.
 
 ### Active
 
-- [ ] Provide a CLI centered on custom rules: `polint init`, `polint new-rule`, `polint check`, `polint test-rules`, `polint profile-rules`, `polint explain`, and graph export commands.
-- [ ] Load `.polint.toml` with include/exclude globs, profiles, rule paths, severity overrides, language settings, and sane defaults when config is missing.
-- [ ] Discover files quickly with `.gitignore` support and deterministic ordering.
+- [ ] Finish the remaining CLI surface for custom rules: `polint test-rules`, `polint profile-rules`, `polint explain`, graph export commands, and final exit-code semantics.
+- [ ] Make file discovery output deterministic and keep discovery scalable for large repositories.
 - [ ] Define stable analysis facts and IDs for files, spans, functions, imports, branches, tests, coverage, graphs, and rule execution.
 - [ ] Provide ergonomic diagnostics with human, JSON, and SARIF-like renderers, deterministic sorting, fingerprints, labels, evidence, and suggested fixes.
 - [ ] Implement Go analysis with tree-sitter-go: packages, imports, functions, methods, tests, branch obligations, import graph, CFG basics, and cyclomatic complexity.
@@ -51,6 +54,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - The source repository and GSD planning both live at `/Users/emilwareus/Development/exlint` on branch `main`.
 - The suggested project name in the prompt is `polint`, so the binary and crate names use `polint-*` while the repository remains `exlint`.
 - Phase 1 completed on 2026-04-28 through GSD plan execution and verification on `main`.
+- Phase 2 completed on 2026-04-28 through GSD plan execution and verification on `main`.
 
 ## Constraints
 
@@ -71,6 +75,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 | Start with a hash-based cache, not Salsa | The prompt allows Salsa to remain behind an abstraction if it slows delivery. A content/config/rule hash cache is simpler to ship safely. | - Pending |
 | Treat repo-local rule auto-compilation as future/experimental | The prompt requires SDK and scaffolding first, with Wasm skeleton acceptable for the first implementation. | - Pending |
 | Use in-repo GSD planning on `main` | The user wants to use GSD directly in `/Users/emilwareus/Development/exlint` and avoid worktrees. | Accepted in Phase 1 |
+| Close Phase 2 around the first usable CLI loop without overclaiming later commands | `init`, `new-rule`, `check`, config loading, discovery, and JSON output are verified, while explain/test/profile/graph command hardening remains scheduled later. | Accepted in Phase 2 |
 
 ## Evolution
 
@@ -90,4 +95,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-28 after Phase 1 completion*
+*Last updated: 2026-04-28 after Phase 2 verification*
