@@ -30,7 +30,7 @@
 **Plans:** 1 plan
 
 Plans:
-- [ ] 01-01-PLAN.md - Verify and reconcile the existing workspace foundation without recreating it.
+- [x] 01-01-PLAN.md - Verify and reconcile the existing workspace foundation without recreating it.
 
 **Success criteria:**
 1. `Cargo.toml` defines a Rust 2024 workspace with all requested crates.

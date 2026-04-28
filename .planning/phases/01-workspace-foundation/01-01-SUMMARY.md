@@ -67,7 +67,7 @@ Phase 1 closure verified the existing workspace foundation on main.
 
 ## Result
 
-Passed at verified commit `ab74408`. No source fixes were needed.
+Passed. The cargo verification commands ran at `ab74408`; the Phase 1 closure records were committed in `063a722`. No source fixes were needed.
 
 ## Changes
 
@@ -80,7 +80,7 @@ Passed at verified commit `ab74408`. No source fixes were needed.
 
 1. **Task 1: Audit the existing workspace foundation** - no commit; verification-only task changed no files.
 2. **Task 2: Run Phase 1 verification and fix only real foundation failures** - no commit; verification-only task changed no files.
-3. **Task 3: Reconcile Phase 1 GSD status records** - pending task commit.
+3. **Task 3: Reconcile Phase 1 GSD status records** - `063a722` (docs)
 
 ## Files Created/Modified
 
@@ -108,6 +108,12 @@ None - no external service configuration required.
 ## Next Phase Readiness
 
 Phase 1 is closed. Later phases can build on the verified workspace foundation while continuing the scheduled v1 work for cache persistence, custom rule loading, parser precision, snapshots, and property coverage.
+
+## Self-Check: PASSED
+
+- Required workspace audit checks passed.
+- Required cargo verification commands passed.
+- Phase 1 GSD status records were reconciled without source changes.
 
 ---
 *Phase: 01-workspace-foundation*
