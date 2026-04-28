@@ -44,10 +44,11 @@ Plans:
 
 **Requirements:** CLI-01, CLI-02, CLI-03, CFG-01, CFG-02, FS-01, DIAG-02, TEST-02
 
-**Plans:** 1 plan
+**Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md - Verify and harden the existing CLI, config, discovery, and JSON output loop.
+- [ ] 02-01-PLAN.md - Add focused tests and narrow fixes for the existing CLI/config/discovery loop.
+- [ ] 02-02-PLAN.md - Run full verification and reconcile Phase 2 status records.
 
 **Success criteria:**
 1. `polint init` creates `.polint.toml` and `.polint/rules/`.
