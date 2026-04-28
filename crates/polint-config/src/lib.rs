@@ -134,7 +134,11 @@ impl LoadedConfig {
     }
 
     pub fn include_set(&self) -> Result<GlobSet> {
-        build_glob_set(&self.config.workspace.include)
+        if self.config.workspace.include.is_empty() {
+            build_glob_set(&["**/*".to_string()])
+        } else {
+            build_glob_set(&self.config.workspace.include)
+        }
     }
 
     pub fn exclude_set(&self) -> Result<GlobSet> {
@@ -209,23 +213,24 @@ allow_files = ["**/theme/**", "**/design-tokens/**"]
 
 pub fn build_glob_set(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
-    if patterns.is_empty() {
-        builder.add(
-            Glob::new("**/*").map_err(|source| ConfigError::InvalidGlob {
-                glob: "**/*".to_string(),
-                source,
-            })?,
-        );
-    }
     for pattern in patterns {
-        builder.add(
-            Glob::new(pattern).map_err(|source| ConfigError::InvalidGlob {
-                glob: pattern.clone(),
-                source,
-            })?,
-        );
+        add_glob(&mut builder, pattern)?;
+        if let Some(prefix) = pattern.strip_suffix("/**") {
+            add_glob(&mut builder, &format!("{prefix}/*"))?;
+            add_glob(&mut builder, &format!("{prefix}/**/*"))?;
+        }
     }
     Ok(builder.build()?)
+}
+
+fn add_glob(builder: &mut GlobSetBuilder, pattern: &str) -> Result<()> {
+    builder.add(
+        Glob::new(pattern).map_err(|source| ConfigError::InvalidGlob {
+            glob: pattern.to_string(),
+            source,
+        })?,
+    );
+    Ok(())
 }
 
 fn default_include() -> Vec<String> {

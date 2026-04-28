@@ -12,9 +12,8 @@ fn write_file(path: &Path, contents: &str) {
 
 fn stdout_json(assert: assert_cmd::assert::Assert) -> serde_json::Value {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    serde_json::from_str(&stdout).unwrap_or_else(|error| {
-        panic!("stdout was not parseable JSON: {error}\nstdout:\n{stdout}")
-    })
+    serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("stdout was not parseable JSON: {error}\nstdout:\n{stdout}"))
 }
 
 fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
@@ -160,9 +159,12 @@ fn check_json_without_config_is_parseable() {
         .stdout(predicate::str::contains("Config not found").not());
     let json = stdout_json(assert);
 
-    assert!(json.as_array().unwrap().iter().any(|diagnostic| {
-        diagnostic["rule_id"] == "examples/ts-no-raw-colors"
-    }));
+    assert!(
+        json.as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| { diagnostic["rule_id"] == "examples/ts-no-raw-colors" })
+    );
 }
 
 #[test]
@@ -293,17 +295,18 @@ rules = ["examples/ts-no-raw-colors"]
 
 [[rules.config]]
 id = "examples/ts-no-raw-colors"
-files = ["**/*.{ts,tsx,js,jsx}"]
+severity = "error"
+files = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
 "#,
     )
     .unwrap();
     for path in ["src/a.ts", "src/b.tsx", "src/c.js", "src/d.jsx"] {
-        write_file(
-            &temp.path().join(path),
-            "export const color = \"#ff00aa\";",
-        );
+        write_file(&temp.path().join(path), "export const color = \"#ff00aa\";");
     }
-    write_file(&temp.path().join("src/main.go"), "package main\nfunc main() {}\n");
+    write_file(
+        &temp.path().join("src/main.go"),
+        "package main\nfunc main() {}\n",
+    );
 
     let json = stdout_json(
         Command::cargo_bin("polint")
@@ -399,10 +402,7 @@ fn discovery_respects_default_excludes() {
         "target/generated.tsx",
         "src/generated.pb.go",
     ] {
-        write_file(
-            &temp.path().join(path),
-            "export const color = \"#ff00aa\";",
-        );
+        write_file(&temp.path().join(path), "export const color = \"#ff00aa\";");
     }
 
     let json = stdout_json(

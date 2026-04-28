@@ -22,6 +22,7 @@ pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
         .hidden(false)
         .git_ignore(true)
         .git_exclude(true)
+        .require_git(false)
         .parents(true)
         .build();
 
