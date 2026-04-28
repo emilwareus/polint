@@ -291,6 +291,10 @@ impl AnalysisDb {
         &self.tests
     }
 
+    pub fn coverage(&self) -> &[CoverageFact] {
+        &self.coverage
+    }
+
     pub fn ts_components(&self) -> &[TsComponentFact] {
         &self.ts_components
     }
@@ -606,6 +610,8 @@ pub fn span_from_byte_range(
     start_byte: usize,
     end_byte: usize,
 ) -> Span {
+    let start_byte = start_byte.min(source.len());
+    let end_byte = end_byte.min(source.len()).max(start_byte);
     let (start_line, start_col) = line_col(source, start_byte);
     let (end_line, end_col) = line_col(source, end_byte);
     Span {
