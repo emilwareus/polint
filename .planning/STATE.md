@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 03
-last_updated: "2026-04-28T11:29:32.379Z"
+status: Ready to discuss Phase 04
+last_updated: "2026-04-28T12:12:05.668Z"
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 3
-  percent: 50
+  completed_plans: 6
+  percent: 100
 ---
 
 # State: exlint
@@ -20,7 +20,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 03 — core-facts-and-diagnostics
+**Current focus:** Phase 04 — go-adapter
 
 ## Current Status
 
@@ -32,7 +32,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Verification passed: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 - Phase 1 has been closed through GSD plan execution and verification.
 - Phase 2 has been closed through GSD plan execution and verification.
-- Next action: discuss/plan Phase 3 core facts, diagnostics, deterministic output, and SDK-facing primitives on `main`.
+- Phase 3 has been closed through GSD plan execution, advisory review fixes, and verification.
+- Next action: discuss/plan Phase 4 Go adapter work on `main`.
 
 ## Phase Progress
 
@@ -40,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 |-------|--------|-------|
 | 1 | Complete | Rust workspace foundation committed and verified |
 | 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
-| 3 | Ready to plan | Core facts and diagnostics have working initial implementation |
-| 4 | In Progress | Go adapter parses with tree-sitter-go and extracts practical syntax facts |
+| 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
+| 4 | Ready to plan | Go adapter parses with tree-sitter-go and has initial practical syntax facts to harden |
 | 5 | In Progress | TypeScript adapter parses with Oxc and extracts practical syntax facts |
 | 6 | In Progress | SDK and requested example rules have working initial implementation |
 | 7 | In Progress | Cache crate exists; deeper parse/fact persistence remains |

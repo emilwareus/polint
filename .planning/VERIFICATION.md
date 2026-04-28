@@ -93,6 +93,7 @@ Passed. Phase 2 closure verified `polint init`, `polint new-rule`, `polint check
 
 **Date:** 2026-04-28
 **Verified source commit:** `c29dd82` on `main`
+**Post-review verified commit:** `72d049d` on `main`
 **Worktree policy:** Executed directly in `/Users/emilwareus/Development/exlint` on `main`; no GSD worktree was created or used per D-03.
 
 ## Commands Run
@@ -106,6 +107,19 @@ Passed. Phase 2 closure verified `polint init`, `polint new-rule`, `polint check
 - `cargo test -p polint-fs --lib discovery_include_exclude_decision_is_stable` - PASS
 - `cargo test -p polint-cli --test cli check_json_output_is_deterministic_across_repeated_runs` - PASS
 - `cargo test -p polint-diagnostics --lib render_json_snapshot_is_stable` - PASS
+- `node /Users/emilwareus/.codex/get-shit-done/bin/gsd-tools.cjs verify schema-drift 03` - PASS (`drift_detected: false`)
+
+## Post-Review Commands Run
+
+- `cargo fmt -- --check` - PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- `cargo test --workspace` - PASS
+- `cargo test -p polint-core --lib run_rules_contains_meta_panics` - PASS
+- `cargo test -p polint-core --lib run_rules_contains_rule_errors_and_panics` - PASS
+- `cargo test -p polint-core --lib` - PASS
+- `cargo test -p polint-diagnostics --lib dedupe_diagnostics_removes_non_adjacent_duplicate_fingerprints` - PASS
+- `cargo test -p polint-diagnostics --lib diagnostic_deserializes_missing_phase3_fields_with_computed_fingerprint` - PASS
+- `cargo test -p polint-diagnostics --lib` - PASS
 
 ## Source Fixes
 
@@ -113,7 +127,8 @@ Passed. Phase 2 closure verified `polint init`, `polint new-rule`, `polint check
 - Added a pure include/exclude decision helper used by discovery so property tests can prove deterministic exclude precedence without changing public discovery semantics.
 - Added a CLI integration test that runs `polint check --profile phase3 --format json --fail-on none` three times over one mixed temp repo and asserts parsed JSON diagnostics plus `src/a.ts` before `src/z.tsx`.
 - Stabilized the diagnostic JSON snapshot test by parsing rendered JSON for validity while snapshotting renderer output directly, avoiding workspace feature-dependent `serde_json::Value` key reserialization order.
+- Fixed the Phase 3 code review warnings: `Rule::meta()` panics are contained as internal diagnostics, fingerprint dedupe removes non-adjacent duplicate fingerprints globally, and diagnostic deserialization now defaults additive fields while recomputing missing fingerprints.
 
 ## Result
 
-Passed. Phase 3 closes deterministic discovery, core fact/runner determinism, and the Phase 3 diagnostic contract. `FS-02`, `CORE-01`, `CORE-02`, and `DIAG-01` are complete. `TEST-01`, `TEST-03`, and `TEST-04` have verified Phase 3 evidence but remain in progress for later Go/TS extraction, cache/performance, SARIF-like CI snapshots, broad rule snapshots, and command hardening.
+Passed. Phase 3 closes deterministic discovery, core fact/runner determinism, metadata/runtime panic containment, stable diagnostic identity, global diagnostic dedupe, JSON compatibility for older diagnostics, and the Phase 3 diagnostic contract. `FS-02`, `CORE-01`, `CORE-02`, and `DIAG-01` are complete. `TEST-01`, `TEST-03`, and `TEST-04` have verified Phase 3 evidence but remain in progress for later Go/TS extraction, cache/performance, SARIF-like CI snapshots, broad rule snapshots, and command hardening.
