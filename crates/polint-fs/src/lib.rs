@@ -40,7 +40,7 @@ pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
             continue;
         }
         let relative = relative_path(&config.root, path)?;
-        if !matches_any(&include, &relative) || matches_any(&exclude, &relative) {
+        if !should_include_relative_path(&include, &exclude, &relative) {
             continue;
         }
         files.push(DiscoveredFile {
@@ -77,6 +77,14 @@ pub struct DiscoveredFile {
 
 fn matches_any(globs: &GlobSet, relative_path: &str) -> bool {
     globs.is_match(relative_path) || globs.is_match(format!("./{relative_path}"))
+}
+
+pub(crate) fn should_include_relative_path(
+    include: &GlobSet,
+    exclude: &GlobSet,
+    relative_path: &str,
+) -> bool {
+    matches_any(include, relative_path) && !matches_any(exclude, relative_path)
 }
 
 fn relative_path(root: &Path, path: &Path) -> Result<String> {
@@ -140,13 +148,31 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
         )
         .unwrap();
 
-        write_file(temp.path().join("src/nested/component.tsx"), "export const z = '#fff';");
-        write_file(temp.path().join("src/included.js"), "export const a = '#fff';");
-        write_file(temp.path().join("src/excluded.tsx"), "export const excluded = '#fff';");
-        write_file(temp.path().join("src/vendor/generated.ts"), "export const vendor = '#fff';");
-        write_file(temp.path().join("src/ignored.tsx"), "export const ignored = '#fff';");
+        write_file(
+            temp.path().join("src/nested/component.tsx"),
+            "export const z = '#fff';",
+        );
+        write_file(
+            temp.path().join("src/included.js"),
+            "export const a = '#fff';",
+        );
+        write_file(
+            temp.path().join("src/excluded.tsx"),
+            "export const excluded = '#fff';",
+        );
+        write_file(
+            temp.path().join("src/vendor/generated.ts"),
+            "export const vendor = '#fff';",
+        );
+        write_file(
+            temp.path().join("src/ignored.tsx"),
+            "export const ignored = '#fff';",
+        );
         write_file(temp.path().join("src/notes.txt"), "#fff\n");
-        write_file(temp.path().join("outside.ts"), "export const outside = '#fff';");
+        write_file(
+            temp.path().join("outside.ts"),
+            "export const outside = '#fff';",
+        );
 
         let config = load_config(temp.path()).unwrap();
         let files = discover_files(&config).unwrap();
