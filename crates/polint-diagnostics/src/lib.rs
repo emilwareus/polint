@@ -93,8 +93,7 @@ impl Diagnostic {
         let rule_id = rule_id.into();
         let file = file.into();
         let message = message.into();
-        let stable_fingerprint =
-            fingerprint(&[&rule_id, &file, &message, &range.start_line.to_string()]);
+        let stable_fingerprint = diagnostic_fingerprint(&rule_id, &file, range, &message);
         Self {
             rule_id,
             severity,
@@ -137,6 +136,14 @@ impl Diagnostic {
         Self::new(rule_id, Severity::Info, file, range, message)
     }
 
+    pub fn with_label(mut self, range: TextRange, message: impl Into<String>) -> Self {
+        self.labels.push(Label {
+            range,
+            message: message.into(),
+        });
+        self
+    }
+
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
@@ -146,6 +153,21 @@ impl Diagnostic {
         self.evidence.push(Evidence {
             label: label.into(),
             value: value.into(),
+        });
+        self
+    }
+
+    pub fn with_suggestion(mut self, message: impl Into<String>) -> Self {
+        self.suggestions.push(Suggestion {
+            message: message.into(),
+        });
+        self
+    }
+
+    pub fn with_fix(mut self, message: impl Into<String>, replacement: Option<String>) -> Self {
+        self.fix = Some(Fix {
+            message: message.into(),
+            replacement,
         });
         self
     }
@@ -290,6 +312,22 @@ pub fn fingerprint(parts: &[&str]) -> String {
     format!("{hash:016x}")
 }
 
+fn diagnostic_fingerprint(rule_id: &str, file: &str, range: TextRange, message: &str) -> String {
+    let start_line = range.start_line.to_string();
+    let start_col = range.start_col.to_string();
+    let end_line = range.end_line.to_string();
+    let end_col = range.end_col.to_string();
+    fingerprint(&[
+        rule_id,
+        file,
+        &start_line,
+        &start_col,
+        &end_line,
+        &end_col,
+        message,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,9 +415,8 @@ mod tests {
             end_line: 4,
             end_col: 9,
         };
-        let baseline =
-            Diagnostic::warning("project/rule", "src/lib.rs", range, "policy failed")
-                .stable_fingerprint;
+        let baseline = Diagnostic::warning("project/rule", "src/lib.rs", range, "policy failed")
+            .stable_fingerprint;
 
         let changed_start_line = Diagnostic::warning(
             "project/rule",
@@ -424,8 +461,9 @@ mod tests {
         let changed_file =
             Diagnostic::warning("project/rule", "src/main.rs", range, "policy failed")
                 .stable_fingerprint;
-        let changed_rule = Diagnostic::warning("project/other", "src/lib.rs", range, "policy failed")
-            .stable_fingerprint;
+        let changed_rule =
+            Diagnostic::warning("project/other", "src/lib.rs", range, "policy failed")
+                .stable_fingerprint;
         let changed_message =
             Diagnostic::warning("project/rule", "src/lib.rs", range, "different message")
                 .stable_fingerprint;
@@ -444,9 +482,11 @@ mod tests {
 
         let changed_non_identity_fields =
             Diagnostic::error("project/rule", "src/lib.rs", range, "policy failed")
+                .with_label(range, "related")
                 .with_evidence("name", "value")
-                .with_help("extra context")
-                .with_fingerprint(baseline.clone());
+                .with_suggestion("try another expression")
+                .with_fix("replace it", Some("replacement".to_string()))
+                .with_help("extra context");
 
         assert_eq!(baseline, changed_non_identity_fields.stable_fingerprint);
     }
@@ -481,7 +521,9 @@ mod tests {
         )
     }
 
-    fn sorted_keys(diagnostics: &mut [Diagnostic]) -> Vec<(String, u32, u32, String, String, String)> {
+    fn sorted_keys(
+        diagnostics: &mut [Diagnostic],
+    ) -> Vec<(String, u32, u32, String, String, String)> {
         sort_diagnostics(diagnostics);
         diagnostics
             .iter()
