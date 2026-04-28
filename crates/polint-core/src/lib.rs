@@ -852,7 +852,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["internal/examples/error", "internal/examples/panic"]
         );
-        assert!(diagnostics.iter().all(|diagnostic| diagnostic.file == "<workspace>"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.file == "<workspace>")
+        );
         assert!(
             diagnostics
                 .iter()
@@ -1050,10 +1054,7 @@ mod tests {
         assert_eq!(utf8.diagnostic_range(), diagnostic_range(1, 2, 1, 3));
 
         let newline = span_from_byte_range(file, source, 3, 4);
-        assert_eq!(
-            newline.diagnostic_range(),
-            diagnostic_range(1, 3, 2, 1)
-        );
+        assert_eq!(newline.diagnostic_range(), diagnostic_range(1, 3, 2, 1));
 
         let empty = span_from_byte_range(file, source, 4, 4);
         assert_eq!(empty.diagnostic_range(), diagnostic_range(2, 1, 2, 1));
@@ -1061,10 +1062,7 @@ mod tests {
         let clamped = span_from_byte_range(file, source, source.len() + 10, source.len() + 20);
         assert_eq!(clamped.start_byte as usize, source.len());
         assert_eq!(clamped.end_byte as usize, source.len());
-        assert_eq!(
-            clamped.diagnostic_range(),
-            diagnostic_range(3, 1, 3, 1)
-        );
+        assert_eq!(clamped.diagnostic_range(), diagnostic_range(3, 1, 3, 1));
     }
 
     #[test]
