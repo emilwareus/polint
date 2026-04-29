@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
+use oxc_ast::ast::{Program, Statement};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use polint_core::{
-    AnalysisDb, FunctionFact, FunctionId, ImportFact, JsxAttributeFact, Language, Span,
+    AnalysisDb, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact, Language, Span,
     StringLiteralFact, TsComponentFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange};
+use std::path::Path;
 
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     let files: Vec<_> = db
@@ -33,12 +35,12 @@ pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn parse_ts_file(db: &mut AnalysisDb, file_id: polint_core::FileId) -> Result<Vec<Diagnostic>> {
+fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
     let file = db.file(file_id).context("missing source file")?.clone();
-    let source = file.source.to_string();
+    let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let source_type = SourceType::from_path(&file.path).unwrap_or_default();
-    let parsed = Parser::new(&allocator, &source, source_type).parse();
+    let source_type = parse_source_type(&file.path);
+    let parsed = Parser::new(&allocator, source, source_type).parse();
     let mut diagnostics = Vec::new();
 
     for error in &parsed.errors {
@@ -47,8 +49,13 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: polint_core::FileId) -> Result<Ve
             .as_ref()
             .and_then(|labels| labels.first())
             .map(|label| {
-                span_from_byte_range(file_id, &source, label.offset(), label.offset() + label.len())
-                    .diagnostic_range()
+                span_from_byte_range(
+                    file_id,
+                    source,
+                    label.offset(),
+                    label.offset() + label.len(),
+                )
+                .diagnostic_range()
             })
             .unwrap_or_else(|| TextRange::point(1, 1));
 
@@ -69,19 +76,113 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: polint_core::FileId) -> Result<Ve
         ));
     }
 
-    extract_imports(db, file_id, &source, file.language);
-    extract_functions(db, file_id, &source, file.language);
-    extract_string_literals(db, file_id, &source, file.language);
-    extract_jsx_attributes(db, file_id, &source);
+    extract_from_program(db, file_id, source, file.language, &parsed.program);
     Ok(diagnostics)
 }
 
-fn extract_imports(
+fn parse_source_type(path: &Path) -> SourceType {
+    SourceType::from_path(path).unwrap_or_default()
+}
+
+fn extract_from_program(
     db: &mut AnalysisDb,
-    file: polint_core::FileId,
+    file_id: FileId,
     source: &str,
     language: Language,
+    program: &Program<'_>,
 ) {
+    let import_count = db.imports().len();
+    extract_imports_from_program(db, file_id, source, language, program);
+    if db.imports().len() == import_count {
+        extract_imports(db, file_id, source, language);
+    } else {
+        extract_require_imports(db, file_id, source, language);
+    }
+    extract_functions(db, file_id, source, language);
+    extract_string_literals(db, file_id, source, language);
+    extract_jsx_attributes(db, file_id, source);
+}
+
+fn statement_exported(statement: &Statement<'_>) -> bool {
+    matches!(
+        statement,
+        Statement::ExportAllDeclaration(_)
+            | Statement::ExportDefaultDeclaration(_)
+            | Statement::ExportNamedDeclaration(_)
+            | Statement::TSExportAssignment(_)
+            | Statement::TSNamespaceExportDeclaration(_)
+    )
+}
+
+fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
+    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+}
+
+fn extract_imports_from_program(
+    db: &mut AnalysisDb,
+    file: FileId,
+    source: &str,
+    language: Language,
+    program: &Program<'_>,
+) {
+    for statement in &program.body {
+        if !matches!(statement, Statement::ImportDeclaration(_)) && !statement_exported(statement) {
+            continue;
+        }
+
+        match statement {
+            Statement::ImportDeclaration(declaration) => {
+                push_module_import(
+                    db,
+                    file,
+                    declaration.source.value.as_str(),
+                    span_from_oxc(file, source, declaration.span),
+                    language,
+                );
+            }
+            Statement::ExportAllDeclaration(declaration) => {
+                push_module_import(
+                    db,
+                    file,
+                    declaration.source.value.as_str(),
+                    span_from_oxc(file, source, declaration.span),
+                    language,
+                );
+            }
+            Statement::ExportNamedDeclaration(declaration) => {
+                if let Some(module_source) = &declaration.source {
+                    push_module_import(
+                        db,
+                        file,
+                        module_source.value.as_str(),
+                        span_from_oxc(file, source, declaration.span),
+                        language,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_module_import(
+    db: &mut AnalysisDb,
+    file: FileId,
+    path: &str,
+    span: Span,
+    language: Language,
+) {
+    db.push_import(ImportFact {
+        id: polint_core::ImportId(0),
+        file,
+        package: None,
+        path: path.to_string(),
+        span,
+        language,
+    });
+}
+
+fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str, language: Language) {
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
         let has_module_specifier = trimmed.starts_with("import ")
@@ -106,12 +207,26 @@ fn extract_imports(
     }
 }
 
-fn extract_functions(
-    db: &mut AnalysisDb,
-    file: polint_core::FileId,
-    source: &str,
-    language: Language,
-) {
+fn extract_require_imports(db: &mut AnalysisDb, file: FileId, source: &str, language: Language) {
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.contains("require(") {
+            continue;
+        }
+        if let Some(path) = module_specifier(trimmed) {
+            db.push_import(ImportFact {
+                id: polint_core::ImportId(0),
+                file,
+                package: None,
+                path,
+                span: Span::point(file, line_idx as u32 + 1, 1),
+                language,
+            });
+        }
+    }
+}
+
+fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, language: Language) {
     let line_starts = line_starts(source);
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim_start();
@@ -145,12 +260,7 @@ fn extract_functions(
     }
 }
 
-fn extract_string_literals(
-    db: &mut AnalysisDb,
-    file: polint_core::FileId,
-    source: &str,
-    language: Language,
-) {
+fn extract_string_literals(db: &mut AnalysisDb, file: FileId, source: &str, language: Language) {
     let bytes = source.as_bytes();
     let mut idx = 0;
     while idx < bytes.len() {
@@ -184,7 +294,7 @@ fn extract_string_literals(
     }
 }
 
-fn extract_jsx_attributes(db: &mut AnalysisDb, file: polint_core::FileId, source: &str) {
+fn extract_jsx_attributes(db: &mut AnalysisDb, file: FileId, source: &str) {
     for (line_idx, line) in source.lines().enumerate() {
         if !line.contains('<') || !line.contains('=') {
             continue;
@@ -361,10 +471,7 @@ mod tests {
                 "component.tsx",
                 "export function Button() { return <button aria-label=\"Save\">Save</button>; }",
             ),
-            (
-                "util.js",
-                "export function ok(value) { return value + 1; }",
-            ),
+            ("util.js", "export function ok(value) { return value + 1; }"),
             (
                 "view.jsx",
                 "export function Button() { return <button aria-label=\"Save\">Save</button>; }",
@@ -384,10 +491,8 @@ mod tests {
 
     #[test]
     fn continues_best_effort_ast_extraction_after_oxc_parse_error() {
-        let (db, diagnostics) = analyze_source(
-            "recoverable.ts",
-            "import x from \"./x\";\nconst value = ;",
-        );
+        let (db, diagnostics) =
+            analyze_source("recoverable.ts", "import x from \"./x\";\nconst value = ;");
 
         assert!(
             diagnostics
@@ -404,13 +509,15 @@ mod tests {
     #[test]
     fn parses_ts_source_from_shared_arc_without_full_source_clone() {
         let production_source = include_str!("lib.rs");
+        let borrowed_source_access = ["file.source", ".as_ref()"].concat();
+        let full_source_clone = ["file.source", ".to_string()"].concat();
 
         assert!(
-            production_source.contains("file.source.as_ref()"),
+            production_source.contains(&borrowed_source_access),
             "parse_ts_file should borrow from SourceFile.source"
         );
         assert!(
-            !production_source.contains("file.source.to_string()"),
+            !production_source.contains(&full_source_clone),
             "parse_ts_file should not clone the full source string"
         );
     }
@@ -418,13 +525,16 @@ mod tests {
     #[test]
     fn source_type_comes_from_file_path_for_ts_family() {
         let production_source = include_str!("lib.rs");
+        let helper_signature = ["fn parse_source_type", "(path: &Path) -> SourceType"].concat();
+        let source_type_from_path =
+            ["SourceType::from_path", "(path).unwrap_or_default()"].concat();
 
         assert!(
-            production_source.contains("fn parse_source_type(path: &Path) -> SourceType"),
+            production_source.contains(&helper_signature),
             "expected parse_source_type helper"
         );
         assert!(
-            production_source.contains("SourceType::from_path(path).unwrap_or_default()"),
+            production_source.contains(&source_type_from_path),
             "parse_source_type should derive SourceType from the file path"
         );
     }
@@ -445,19 +555,26 @@ mod tests {
             .iter()
             .find(|import| import.path == "./x")
             .expect("expected import fact for ./x");
-        let start = source.find("import").expect("fixture should contain import");
+        let start = source
+            .find("import")
+            .expect("fixture should contain import");
         let end = start + "import x from \"./x\";".len();
         assert_eq!(import.span.start_byte as usize, start);
         assert_eq!(import.span.end_byte as usize, end);
 
         let production_source = include_str!("lib.rs");
+        let span_helper = ["fn span_from", "_oxc"].concat();
+        let span_conversion = [
+            "span_from_byte_range(file, source, ",
+            "span.start as usize, span.end as usize)",
+        ]
+        .concat();
         assert!(
-            production_source.contains("fn span_from_oxc"),
+            production_source.contains(&span_helper),
             "expected span_from_oxc helper"
         );
         assert!(
-            production_source
-                .contains("span_from_byte_range(file, source, span.start as usize, span.end as usize)"),
+            production_source.contains(&span_conversion),
             "span_from_oxc should convert Oxc byte spans through core span conversion"
         );
     }
