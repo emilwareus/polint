@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 5 context gathered
-last_updated: "2026-04-29T16:27:57.510Z"
-last_activity: 2026-04-29 -- Phase 05 execution started
+stopped_at: Completed 05-typescript-adapter-01-PLAN.md
+last_updated: "2026-04-29T16:40:46.290Z"
+last_activity: 2026-04-29
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 14
-  completed_plans: 10
-  percent: 71
+  completed_plans: 11
+  percent: 79
 ---
 
 # State: exlint
@@ -45,9 +45,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 ## Current Position
 
 Phase: 05 (typescript-adapter) — EXECUTING
-Status: Executing Phase 05
-Plan: 1 of 4
-Last activity: 2026-04-29 -- Phase 05 execution started
+Status: Ready to execute
+Plan: 2 of 4
+Last activity: 2026-04-29
 
 ## Phase Progress
 
@@ -78,6 +78,9 @@ Last activity: 2026-04-29 -- Phase 05 execution started
 - [Phase 04-go-adapter]: Kept graph command and DOT coverage out of Plan 04-04; Go import facts are proven through the import-boundary CLI rule path.
 - [Phase 04-go-adapter]: Treated the TDD-marked CLI task as coverage-only after the new tests passed against the existing Phase 4 implementation.
 - [Phase 04-go-adapter]: Recorded the verification-only task with an empty commit because all checks passed without producing file changes.
+- [Phase 05-typescript-adapter]: Kept parser/ts diagnostics local to polint-ts and used the stable TS/JS parser syntax-error prefix.
+- [Phase 05-typescript-adapter]: Parsed TS-family files from SourceFile.source as borrowed Arc-backed text instead of cloning full source strings.
+- [Phase 05-typescript-adapter]: Introduced narrow Oxc helper boundaries while preserving lexical extraction for fact families not yet AST-backed.
 
 ## Performance Metrics
 
@@ -87,12 +90,13 @@ Last activity: 2026-04-29 -- Phase 05 execution started
 | Phase 04-go-adapter P02 | 9min | 2 tasks | 3 files |
 | Phase 04-go-adapter P03 | 9min | 2 tasks | 2 files |
 | Phase 04-go-adapter P04 | 6min | 3 tasks | 6 files |
+| Phase 05-typescript-adapter P01 | 10min | 2 tasks | 1 files |
 
 ## Session
 
-**Last Date:** 2026-04-29T16:10:20.066Z
-**Stopped At:** Phase 5 context gathered
-**Resume File:** .planning/phases/05-typescript-adapter/05-CONTEXT.md
+**Last Date:** 2026-04-29T16:40:46.288Z
+**Stopped At:** Completed 05-typescript-adapter-01-PLAN.md
+**Resume File:** None
 
 ## Important Context For Execution
 
