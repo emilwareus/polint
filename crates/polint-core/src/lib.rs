@@ -129,6 +129,15 @@ pub struct FunctionFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageFact {
+    pub id: PackageId,
+    pub file: FileId,
+    pub name: String,
+    pub span: Span,
+    pub language: Language,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportFact {
     pub id: ImportId,
     pub file: FileId,
@@ -196,6 +205,7 @@ pub struct JsxAttributeFact {
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
+    packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
     branches: Vec<BranchObligation>,
@@ -223,6 +233,13 @@ impl AnalysisDb {
             source: Arc::from(source),
             content_hash,
         });
+        id
+    }
+
+    pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
+        let id = PackageId(self.packages.len() as u64);
+        fact.id = id;
+        self.packages.push(fact);
         id
     }
 
@@ -273,6 +290,10 @@ impl AnalysisDb {
 
     pub fn files(&self) -> &[SourceFile] {
         &self.files
+    }
+
+    pub fn packages(&self) -> &[PackageFact] {
+        &self.packages
     }
 
     pub fn functions(&self) -> &[FunctionFact] {
