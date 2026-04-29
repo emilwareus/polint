@@ -291,10 +291,8 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
             &body_lines,
             span.start_line.saturating_sub(1) as usize,
         );
-        if is_test {
-            if let Some(body) = body_node {
-                db.push_test(go_test_fact(file, function_id, name, span, source, body));
-            }
+        if is_test && let Some(body) = body_node {
+            db.push_test(go_test_fact(file, function_id, name, span, source, body));
         }
     });
 }
