@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-go-adapter-03-PLAN.md
-last_updated: "2026-04-29T05:47:43.854Z"
+status: verifying
+stopped_at: Completed 04-go-adapter-04-PLAN.md
+last_updated: "2026-04-29T05:58:00.063Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 10
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 # State: exlint
@@ -38,11 +38,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Phase 4 Plan 04-01 completed parser-backed Go package facts and parser diagnostics; see `.planning/phases/04-go-adapter/04-01-SUMMARY.md`.
 - Phase 4 Plan 04-02 completed parser-backed Go imports, declarations, calls, test evidence, and complexity; see `.planning/phases/04-go-adapter/04-02-SUMMARY.md`.
 - Phase 4 Plan 04-03 completed parser-backed Go branch obligations, stable branch fingerprints, and conservative error-path heuristics; see `.planning/phases/04-go-adapter/04-03-SUMMARY.md`.
-- Next action: execute Phase 4 Plan 04-04 Go fixtures, CLI integration, and workspace verification on `main`.
+- Phase 4 Plan 04-04 completed expanded Go fixtures, CLI integration coverage, and workspace verification; see `.planning/phases/04-go-adapter/04-04-SUMMARY.md`.
+- Next action: verify Phase 4 or continue planning/execution for the next phase.
 
 ## Current Position
 
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Plan: 4 of 4 in current phase
 Last activity: 2026-04-29
 
@@ -53,7 +54,7 @@ Last activity: 2026-04-29
 | 1 | Complete | Rust workspace foundation committed and verified |
 | 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
 | 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
-| 4 | In Progress | 3/4 plans complete; parser-backed package, import, declaration, call, complexity, test evidence, branch, and error-path facts verified |
+| 4 | Complete | 4/4 plans complete; parser-backed Go facts verified through unit and CLI integration coverage |
 | 5 | In Progress | TypeScript adapter parses with Oxc and extracts practical syntax facts |
 | 6 | In Progress | SDK and requested example rules have working initial implementation |
 | 7 | In Progress | Cache crate exists; deeper parse/fact persistence remains |
@@ -72,6 +73,9 @@ Last activity: 2026-04-29
 - [Phase 04-go-adapter]: Extracted Go branch obligations from parser nodes inside function and method bodies instead of line scanning.
 - [Phase 04-go-adapter]: Computed branch fingerprints from stable source identity and excluded BranchId, FunctionId, and traversal counters.
 - [Phase 04-go-adapter]: Kept Go error-path detection explicitly syntax-only and heuristic, without semantic type analysis or exact coverage claims.
+- [Phase 04-go-adapter]: Kept graph command and DOT coverage out of Plan 04-04; Go import facts are proven through the import-boundary CLI rule path.
+- [Phase 04-go-adapter]: Treated the TDD-marked CLI task as coverage-only after the new tests passed against the existing Phase 4 implementation.
+- [Phase 04-go-adapter]: Recorded the verification-only task with an empty commit because all checks passed without producing file changes.
 
 ## Performance Metrics
 
@@ -80,11 +84,12 @@ Last activity: 2026-04-29
 | Phase 04-go-adapter P01 | 8min | 2 tasks | 2 files |
 | Phase 04-go-adapter P02 | 9min | 2 tasks | 3 files |
 | Phase 04-go-adapter P03 | 9min | 2 tasks | 2 files |
+| Phase 04-go-adapter P04 | 6min | 3 tasks | 6 files |
 
 ## Session
 
-**Last Date:** 2026-04-29T05:47:43.851Z
-**Stopped At:** Completed 04-go-adapter-03-PLAN.md
+**Last Date:** 2026-04-29T05:58:00.060Z
+**Stopped At:** Completed 04-go-adapter-04-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution

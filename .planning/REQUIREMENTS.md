@@ -74,7 +74,7 @@
 ### Testing
 
 - [x] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
-- [ ] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
+- [x] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
 - [ ] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics.
 - [ ] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
 
@@ -141,7 +141,7 @@
 | PLUG-01 | Phase 9 | Pending |
 | PLUG-02 | Phase 9 | Pending |
 | TEST-01 | Phase 1-9 | Complete |
-| TEST-02 | Phase 2-8 | In Progress - Phase 2 CLI/config/discovery integration tests verified; broader command and CI coverage remains scheduled in later phases |
+| TEST-02 | Phase 2-8 | Complete |
 | TEST-03 | Phase 3-8 | In Progress - Phase 3 human and JSON diagnostic snapshots verified; SARIF-like and broader rule snapshots remain scheduled for later phases |
 | TEST-04 | Phase 3-7 | In Progress - Phase 3 span, diagnostic sorting, and discovery include/exclude property tests verified; cache/performance property scope remains scheduled |
 
@@ -152,4 +152,4 @@
 
 ---
 *Requirements defined: 2026-04-28*
-*Last updated: 2026-04-28 after Phase 3 verification*
+*Last updated: 2026-04-29 after Phase 4 verification*
