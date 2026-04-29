@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrowFunctionExpression, BindingPattern, Class, ClassElement, Declaration,
-    ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft, Function,
-    FunctionBody, MethodDefinition, Program, PropertyKey, Statement, VariableDeclarator,
+    Argument, ArrayExpressionElement, ArrowFunctionExpression, BindingPattern, Class, ClassElement,
+    Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
+    Function, FunctionBody, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild,
+    JSXElement, JSXExpression, JSXFragment, MethodDefinition, ObjectPropertyKind, Program,
+    PropertyKey, Statement, TemplateLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -121,8 +123,7 @@ fn extract_from_program(
 ) {
     extract_imports_and_exports(db, file_id, source, language, program);
     extract_declarations(db, file_id, source, language, program);
-    extract_string_literals(db, file_id, source, language);
-    extract_jsx_attributes(db, file_id, source);
+    extract_literals_and_jsx(db, file_id, source, language, program);
 }
 
 fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
@@ -724,125 +725,797 @@ fn expression_is_jsx(expression: &Expression<'_>) -> bool {
     }
 }
 
-fn extract_string_literals(db: &mut AnalysisDb, file: FileId, source: &str, language: Language) {
-    let bytes = source.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() {
-        let quote = bytes[idx];
-        if quote != b'\'' && quote != b'"' && quote != b'`' {
-            idx += 1;
-            continue;
+fn extract_literals_and_jsx(
+    db: &mut AnalysisDb,
+    file: FileId,
+    source: &str,
+    language: Language,
+    program: &Program<'_>,
+) {
+    let ctx = TsAstCtx {
+        file,
+        source,
+        language,
+    };
+    for directive in &program.directives {
+        push_string_literal_from_oxc(
+            db,
+            ctx,
+            directive.expression.value.to_string(),
+            directive.span,
+        );
+    }
+    for statement in &program.body {
+        walk_statement_for_literals(db, ctx, statement);
+    }
+}
+
+fn walk_statement_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, statement: &Statement<'_>) {
+    match statement {
+        Statement::BlockStatement(block) => {
+            for statement in &block.body {
+                walk_statement_for_literals(db, ctx, statement);
+            }
         }
-        let start = idx;
-        idx += 1;
-        let mut value = String::new();
-        while idx < bytes.len() {
-            if bytes[idx] == b'\\' {
-                idx += 2;
-                continue;
+        Statement::ExpressionStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.expression);
+        }
+        Statement::ReturnStatement(statement) => {
+            if let Some(argument) = &statement.argument {
+                walk_expression_for_literals(db, ctx, argument);
             }
-            if bytes[idx] == quote {
-                let end = idx + 1;
-                db.push_string_literal(StringLiteralFact {
-                    file,
-                    value,
-                    span: span_from_byte_range(file, source, start, end),
-                    language,
-                });
-                idx = end;
-                break;
+        }
+        Statement::IfStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.test);
+            walk_statement_for_literals(db, ctx, &statement.consequent);
+            if let Some(alternate) = &statement.alternate {
+                walk_statement_for_literals(db, ctx, alternate);
             }
-            value.push(bytes[idx] as char);
-            idx += 1;
+        }
+        Statement::DoWhileStatement(statement) => {
+            walk_statement_for_literals(db, ctx, &statement.body);
+            walk_expression_for_literals(db, ctx, &statement.test);
+        }
+        Statement::WhileStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.test);
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::ForStatement(statement) => {
+            if let Some(init) = &statement.init {
+                walk_for_init_for_literals(db, ctx, init);
+            }
+            if let Some(test) = &statement.test {
+                walk_expression_for_literals(db, ctx, test);
+            }
+            if let Some(update) = &statement.update {
+                walk_expression_for_literals(db, ctx, update);
+            }
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::ForInStatement(statement) => {
+            walk_for_left_for_literals(db, ctx, &statement.left);
+            walk_expression_for_literals(db, ctx, &statement.right);
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::ForOfStatement(statement) => {
+            walk_for_left_for_literals(db, ctx, &statement.left);
+            walk_expression_for_literals(db, ctx, &statement.right);
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::SwitchStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.discriminant);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    walk_expression_for_literals(db, ctx, test);
+                }
+                for statement in &case.consequent {
+                    walk_statement_for_literals(db, ctx, statement);
+                }
+            }
+        }
+        Statement::ThrowStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.argument);
+        }
+        Statement::TryStatement(statement) => {
+            for statement in &statement.block.body {
+                walk_statement_for_literals(db, ctx, statement);
+            }
+            if let Some(handler) = &statement.handler {
+                for statement in &handler.body.body {
+                    walk_statement_for_literals(db, ctx, statement);
+                }
+            }
+            if let Some(finalizer) = &statement.finalizer {
+                for statement in &finalizer.body {
+                    walk_statement_for_literals(db, ctx, statement);
+                }
+            }
+        }
+        Statement::WithStatement(statement) => {
+            walk_expression_for_literals(db, ctx, &statement.object);
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::LabeledStatement(statement) => {
+            walk_statement_for_literals(db, ctx, &statement.body);
+        }
+        Statement::VariableDeclaration(variable) => {
+            walk_variable_declaration_for_literals(db, ctx, variable);
+        }
+        Statement::FunctionDeclaration(function) => {
+            walk_function_for_literals(db, ctx, function);
+        }
+        Statement::ClassDeclaration(class) => {
+            walk_class_for_literals(db, ctx, class);
+        }
+        Statement::ImportDeclaration(declaration) => {
+            push_string_literal_from_oxc(
+                db,
+                ctx,
+                declaration.source.value.to_string(),
+                declaration.source.span,
+            );
+        }
+        Statement::ExportAllDeclaration(declaration) => {
+            push_string_literal_from_oxc(
+                db,
+                ctx,
+                declaration.source.value.to_string(),
+                declaration.source.span,
+            );
+        }
+        Statement::ExportNamedDeclaration(declaration) => {
+            if let Some(source) = &declaration.source {
+                push_string_literal_from_oxc(db, ctx, source.value.to_string(), source.span);
+            }
+            if let Some(declaration) = &declaration.declaration {
+                walk_declaration_for_literals(db, ctx, declaration);
+            }
+        }
+        Statement::ExportDefaultDeclaration(declaration) => {
+            walk_export_default_for_literals(db, ctx, &declaration.declaration);
+        }
+        _ => {}
+    }
+}
+
+fn walk_expression_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    expression: &Expression<'_>,
+) {
+    match expression {
+        Expression::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        Expression::TemplateLiteral(template) => {
+            push_template_literal_from_oxc(db, ctx, template);
+        }
+        Expression::TaggedTemplateExpression(tagged) => {
+            walk_expression_for_literals(db, ctx, &tagged.tag);
+            push_template_literal_from_oxc(db, ctx, &tagged.quasi);
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                walk_array_element_for_literals(db, ctx, element);
+            }
+        }
+        Expression::ArrowFunctionExpression(function) => {
+            walk_function_body_for_literals(db, ctx, &function.body);
+        }
+        Expression::AssignmentExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.right);
+        }
+        Expression::AwaitExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.argument);
+        }
+        Expression::BinaryExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.left);
+            walk_expression_for_literals(db, ctx, &expression.right);
+        }
+        Expression::CallExpression(call) => {
+            walk_expression_for_literals(db, ctx, &call.callee);
+            for argument in &call.arguments {
+                walk_argument_for_literals(db, ctx, argument);
+            }
+        }
+        Expression::ClassExpression(class) => {
+            walk_class_for_literals(db, ctx, class);
+        }
+        Expression::ConditionalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.test);
+            walk_expression_for_literals(db, ctx, &expression.consequent);
+            walk_expression_for_literals(db, ctx, &expression.alternate);
+        }
+        Expression::FunctionExpression(function) => {
+            walk_function_for_literals(db, ctx, function);
+        }
+        Expression::ImportExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.source);
+        }
+        Expression::LogicalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.left);
+            walk_expression_for_literals(db, ctx, &expression.right);
+        }
+        Expression::NewExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.callee);
+            for argument in &expression.arguments {
+                walk_argument_for_literals(db, ctx, argument);
+            }
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        walk_property_key_for_literals(db, ctx, &property.key);
+                        walk_expression_for_literals(db, ctx, &property.value);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        walk_expression_for_literals(db, ctx, &spread.argument);
+                    }
+                }
+            }
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                walk_expression_for_literals(db, ctx, expression);
+            }
+        }
+        Expression::UnaryExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.argument);
+        }
+        Expression::JSXElement(element) => {
+            extract_jsx_element_attributes(db, ctx, element);
+        }
+        Expression::JSXFragment(fragment) => {
+            walk_jsx_fragment_for_literals(db, ctx, fragment);
+        }
+        Expression::TSAsExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::TSNonNullExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::TSTypeAssertion(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::TSInstantiationExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::ComputedMemberExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.object);
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Expression::StaticMemberExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.object);
+        }
+        Expression::PrivateFieldExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.object);
+        }
+        _ => {}
+    }
+}
+
+fn push_string_literal_from_oxc(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    value: String,
+    span: oxc_span::Span,
+) {
+    db.push_string_literal(StringLiteralFact {
+        file: ctx.file,
+        value,
+        span: span_from_oxc(ctx.file, ctx.source, span),
+        language: ctx.language,
+    });
+}
+
+fn extract_jsx_element_attributes(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    element: &JSXElement<'_>,
+) {
+    for item in &element.opening_element.attributes {
+        match item {
+            JSXAttributeItem::Attribute(attribute) => {
+                if let Some(name) = jsx_attribute_name(&attribute.name) {
+                    db.push_jsx_attribute(JsxAttributeFact {
+                        file: ctx.file,
+                        name,
+                        value: attribute.value.as_ref().and_then(jsx_attribute_value),
+                        span: span_from_oxc(ctx.file, ctx.source, attribute.span),
+                    });
+                }
+                if let Some(value) = &attribute.value {
+                    walk_jsx_attribute_value_for_literals(db, ctx, value);
+                }
+            }
+            JSXAttributeItem::SpreadAttribute(spread) => {
+                walk_expression_for_literals(db, ctx, &spread.argument);
+            }
+        }
+    }
+    for child in &element.children {
+        walk_jsx_child_for_literals(db, ctx, child);
+    }
+}
+
+fn jsx_attribute_name(name: &JSXAttributeName<'_>) -> Option<String> {
+    match name {
+        JSXAttributeName::Identifier(identifier) => Some(identifier.name.to_string()),
+        JSXAttributeName::NamespacedName(name) => {
+            Some(format!("{}:{}", name.namespace.name, name.name.name))
         }
     }
 }
 
-fn extract_jsx_attributes(db: &mut AnalysisDb, file: FileId, source: &str) {
-    let bytes = source.as_bytes();
-    let mut idx = 0;
-    while idx < bytes.len() {
-        if bytes[idx] != b'=' {
-            idx += 1;
-            continue;
+fn jsx_attribute_value(value: &JSXAttributeValue<'_>) -> Option<String> {
+    match value {
+        JSXAttributeValue::StringLiteral(literal) => Some(literal.value.to_string()),
+        JSXAttributeValue::ExpressionContainer(container) => {
+            jsx_expression_static_value(&container.expression)
         }
-
-        let Some(open_tag) = source[..idx].rfind('<') else {
-            idx += 1;
-            continue;
-        };
-        if source[..idx]
-            .rfind('>')
-            .is_some_and(|close| close > open_tag)
-        {
-            idx += 1;
-            continue;
-        }
-
-        let mut name_start = idx;
-        while name_start > open_tag + 1 && is_jsx_attribute_name_byte(bytes[name_start - 1]) {
-            name_start -= 1;
-        }
-        if name_start == idx {
-            idx += 1;
-            continue;
-        }
-        let name = &source[name_start..idx];
-
-        let mut value_start = idx + 1;
-        while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
-            value_start += 1;
-        }
-        let (value, value_end) = jsx_attribute_value(source, value_start);
-        db.push_jsx_attribute(JsxAttributeFact {
-            file,
-            name: name.to_string(),
-            value,
-            span: span_from_byte_range(file, source, name_start, value_end),
-        });
-        idx = value_end.max(idx + 1);
+        JSXAttributeValue::Element(_) | JSXAttributeValue::Fragment(_) => None,
     }
 }
 
-fn is_jsx_attribute_name_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':')
+fn push_template_literal_from_oxc(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    template: &TemplateLiteral<'_>,
+) {
+    if template.expressions.is_empty() {
+        push_string_literal_from_oxc(db, ctx, template_literal_value(template), template.span);
+    } else {
+        for quasi in &template.quasis {
+            let value = template_element_value(quasi);
+            if !value.is_empty() {
+                push_string_literal_from_oxc(db, ctx, value, quasi.span);
+            }
+        }
+        for expression in &template.expressions {
+            walk_expression_for_literals(db, ctx, expression);
+        }
+    }
 }
 
-fn jsx_attribute_value(source: &str, start: usize) -> (Option<String>, usize) {
-    let bytes = source.as_bytes();
-    if start >= bytes.len() {
-        return (None, start);
-    }
+fn template_literal_value(template: &TemplateLiteral<'_>) -> String {
+    template
+        .quasis
+        .iter()
+        .map(template_element_value)
+        .collect::<Vec<_>>()
+        .join("")
+}
 
-    match bytes[start] {
-        b'"' | b'\'' => {
-            let quote = bytes[start];
-            let mut end = start + 1;
-            while end < bytes.len() && bytes[end] != quote {
-                end += 1;
-            }
-            let value = source[start + 1..end.min(bytes.len())].to_string();
-            (Some(value), (end + 1).min(bytes.len()))
+fn template_element_value(element: &oxc_ast::ast::TemplateElement<'_>) -> String {
+    element
+        .value
+        .cooked
+        .as_ref()
+        .unwrap_or(&element.value.raw)
+        .to_string()
+}
+
+fn walk_declaration_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &Declaration<'_>,
+) {
+    match declaration {
+        Declaration::VariableDeclaration(variable) => {
+            walk_variable_declaration_for_literals(db, ctx, variable);
         }
-        b'{' => {
-            let mut end = start + 1;
-            while end < bytes.len() && bytes[end] != b'}' {
-                end += 1;
-            }
-            let value = source[start + 1..end.min(bytes.len())].trim().to_string();
-            (
-                (!value.is_empty()).then_some(value),
-                (end + 1).min(bytes.len()),
-            )
+        Declaration::FunctionDeclaration(function) => {
+            walk_function_for_literals(db, ctx, function);
         }
-        _ => {
-            let mut end = start;
-            while end < bytes.len() && !bytes[end].is_ascii_whitespace() && bytes[end] != b'>' {
-                end += 1;
-            }
-            let value = source[start..end].to_string();
-            ((!value.is_empty()).then_some(value), end)
+        Declaration::ClassDeclaration(class) => {
+            walk_class_for_literals(db, ctx, class);
         }
+        _ => {}
+    }
+}
+
+fn walk_export_default_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &ExportDefaultDeclarationKind<'_>,
+) {
+    match declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+            walk_function_for_literals(db, ctx, function);
+        }
+        ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+            walk_class_for_literals(db, ctx, class);
+        }
+        ExportDefaultDeclarationKind::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        ExportDefaultDeclarationKind::TemplateLiteral(template) => {
+            push_template_literal_from_oxc(db, ctx, template);
+        }
+        ExportDefaultDeclarationKind::JSXElement(element) => {
+            extract_jsx_element_attributes(db, ctx, element);
+        }
+        ExportDefaultDeclarationKind::JSXFragment(fragment) => {
+            walk_jsx_fragment_for_literals(db, ctx, fragment);
+        }
+        _ => {}
+    }
+}
+
+fn walk_variable_declaration_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    variable: &oxc_ast::ast::VariableDeclaration<'_>,
+) {
+    for declarator in &variable.declarations {
+        if let Some(init) = &declarator.init {
+            walk_expression_for_literals(db, ctx, init);
+        }
+    }
+}
+
+fn walk_function_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, function: &Function<'_>) {
+    if let Some(body) = function.body.as_deref() {
+        walk_function_body_for_literals(db, ctx, body);
+    }
+}
+
+fn walk_function_body_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    body: &FunctionBody<'_>,
+) {
+    for directive in &body.directives {
+        push_string_literal_from_oxc(
+            db,
+            ctx,
+            directive.expression.value.to_string(),
+            directive.span,
+        );
+    }
+    for statement in &body.statements {
+        walk_statement_for_literals(db, ctx, statement);
+    }
+}
+
+fn walk_class_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, class: &Class<'_>) {
+    if let Some(super_class) = &class.super_class {
+        walk_expression_for_literals(db, ctx, super_class);
+    }
+    for element in &class.body.body {
+        match element {
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    walk_statement_for_literals(db, ctx, statement);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                walk_property_key_for_literals(db, ctx, &method.key);
+                walk_function_for_literals(db, ctx, &method.value);
+            }
+            ClassElement::PropertyDefinition(property) => {
+                walk_property_key_for_literals(db, ctx, &property.key);
+                if let Some(value) = &property.value {
+                    walk_expression_for_literals(db, ctx, value);
+                }
+            }
+            ClassElement::AccessorProperty(property) => {
+                walk_property_key_for_literals(db, ctx, &property.key);
+                if let Some(value) = &property.value {
+                    walk_expression_for_literals(db, ctx, value);
+                }
+            }
+            ClassElement::TSIndexSignature(_) => {}
+        }
+    }
+}
+
+fn walk_for_init_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, init: &ForStatementInit<'_>) {
+    match init {
+        ForStatementInit::VariableDeclaration(variable) => {
+            walk_variable_declaration_for_literals(db, ctx, variable);
+        }
+        ForStatementInit::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        ForStatementInit::TemplateLiteral(template) => {
+            push_template_literal_from_oxc(db, ctx, template);
+        }
+        _ => {}
+    }
+}
+
+fn walk_for_left_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, left: &ForStatementLeft<'_>) {
+    if let ForStatementLeft::VariableDeclaration(variable) = left {
+        walk_variable_declaration_for_literals(db, ctx, variable);
+    }
+}
+
+fn walk_argument_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, argument: &Argument<'_>) {
+    match argument {
+        Argument::SpreadElement(spread) => walk_expression_for_literals(db, ctx, &spread.argument),
+        Argument::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        Argument::TemplateLiteral(template) => push_template_literal_from_oxc(db, ctx, template),
+        Argument::TaggedTemplateExpression(tagged) => {
+            walk_expression_for_literals(db, ctx, &tagged.tag);
+            push_template_literal_from_oxc(db, ctx, &tagged.quasi);
+        }
+        Argument::ArrayExpression(array) => {
+            for element in &array.elements {
+                walk_array_element_for_literals(db, ctx, element);
+            }
+        }
+        Argument::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        walk_property_key_for_literals(db, ctx, &property.key);
+                        walk_expression_for_literals(db, ctx, &property.value);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        walk_expression_for_literals(db, ctx, &spread.argument);
+                    }
+                }
+            }
+        }
+        Argument::CallExpression(call) => {
+            walk_expression_for_literals(db, ctx, &call.callee);
+            for argument in &call.arguments {
+                walk_argument_for_literals(db, ctx, argument);
+            }
+        }
+        Argument::ConditionalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.test);
+            walk_expression_for_literals(db, ctx, &expression.consequent);
+            walk_expression_for_literals(db, ctx, &expression.alternate);
+        }
+        Argument::LogicalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.left);
+            walk_expression_for_literals(db, ctx, &expression.right);
+        }
+        Argument::ParenthesizedExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Argument::JSXElement(element) => extract_jsx_element_attributes(db, ctx, element),
+        Argument::JSXFragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
+        Argument::TSAsExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Argument::TSSatisfiesExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Argument::TSNonNullExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        Argument::TSTypeAssertion(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        _ => {}
+    }
+}
+
+fn walk_array_element_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    element: &ArrayExpressionElement<'_>,
+) {
+    match element {
+        ArrayExpressionElement::SpreadElement(spread) => {
+            walk_expression_for_literals(db, ctx, &spread.argument);
+        }
+        ArrayExpressionElement::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        ArrayExpressionElement::TemplateLiteral(template) => {
+            push_template_literal_from_oxc(db, ctx, template);
+        }
+        ArrayExpressionElement::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        walk_property_key_for_literals(db, ctx, &property.key);
+                        walk_expression_for_literals(db, ctx, &property.value);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        walk_expression_for_literals(db, ctx, &spread.argument);
+                    }
+                }
+            }
+        }
+        ArrayExpressionElement::JSXElement(element) => {
+            extract_jsx_element_attributes(db, ctx, element);
+        }
+        ArrayExpressionElement::JSXFragment(fragment) => {
+            walk_jsx_fragment_for_literals(db, ctx, fragment);
+        }
+        _ => {}
+    }
+}
+
+fn walk_property_key_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, key: &PropertyKey<'_>) {
+    match key {
+        PropertyKey::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        PropertyKey::TemplateLiteral(template) => push_template_literal_from_oxc(db, ctx, template),
+        _ => {}
+    }
+}
+
+fn walk_jsx_attribute_value_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    value: &JSXAttributeValue<'_>,
+) {
+    match value {
+        JSXAttributeValue::ExpressionContainer(container) => {
+            walk_jsx_expression_for_literals(db, ctx, &container.expression);
+        }
+        JSXAttributeValue::Element(element) => extract_jsx_element_attributes(db, ctx, element),
+        JSXAttributeValue::Fragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
+        JSXAttributeValue::StringLiteral(_) => {}
+    }
+}
+
+fn walk_jsx_child_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, child: &JSXChild<'_>) {
+    match child {
+        JSXChild::Element(element) => extract_jsx_element_attributes(db, ctx, element),
+        JSXChild::Fragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
+        JSXChild::ExpressionContainer(container) => {
+            walk_jsx_expression_for_literals(db, ctx, &container.expression);
+        }
+        JSXChild::Spread(spread) => walk_expression_for_literals(db, ctx, &spread.expression),
+        JSXChild::Text(_) => {}
+    }
+}
+
+fn walk_jsx_fragment_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    fragment: &JSXFragment<'_>,
+) {
+    for child in &fragment.children {
+        walk_jsx_child_for_literals(db, ctx, child);
+    }
+}
+
+fn walk_jsx_expression_for_literals(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    expression: &JSXExpression<'_>,
+) {
+    match expression {
+        JSXExpression::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
+        JSXExpression::TemplateLiteral(template) => {
+            push_template_literal_from_oxc(db, ctx, template);
+        }
+        JSXExpression::TaggedTemplateExpression(tagged) => {
+            walk_expression_for_literals(db, ctx, &tagged.tag);
+            push_template_literal_from_oxc(db, ctx, &tagged.quasi);
+        }
+        JSXExpression::ArrayExpression(array) => {
+            for element in &array.elements {
+                walk_array_element_for_literals(db, ctx, element);
+            }
+        }
+        JSXExpression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        walk_property_key_for_literals(db, ctx, &property.key);
+                        walk_expression_for_literals(db, ctx, &property.value);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        walk_expression_for_literals(db, ctx, &spread.argument);
+                    }
+                }
+            }
+        }
+        JSXExpression::CallExpression(call) => {
+            walk_expression_for_literals(db, ctx, &call.callee);
+            for argument in &call.arguments {
+                walk_argument_for_literals(db, ctx, argument);
+            }
+        }
+        JSXExpression::ConditionalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.test);
+            walk_expression_for_literals(db, ctx, &expression.consequent);
+            walk_expression_for_literals(db, ctx, &expression.alternate);
+        }
+        JSXExpression::LogicalExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.left);
+            walk_expression_for_literals(db, ctx, &expression.right);
+        }
+        JSXExpression::ParenthesizedExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        JSXExpression::JSXElement(element) => extract_jsx_element_attributes(db, ctx, element),
+        JSXExpression::JSXFragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
+        JSXExpression::TSAsExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        JSXExpression::TSSatisfiesExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        JSXExpression::TSNonNullExpression(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        JSXExpression::TSTypeAssertion(expression) => {
+            walk_expression_for_literals(db, ctx, &expression.expression);
+        }
+        JSXExpression::EmptyExpression(_) => {}
+        _ => {}
+    }
+}
+
+fn jsx_expression_static_value(expression: &JSXExpression<'_>) -> Option<String> {
+    match expression {
+        JSXExpression::Identifier(identifier) => Some(identifier.name.to_string()),
+        JSXExpression::StringLiteral(literal) => Some(literal.value.to_string()),
+        JSXExpression::NumericLiteral(literal) => Some(
+            literal
+                .raw
+                .as_ref()
+                .map_or_else(|| literal.value.to_string(), ToString::to_string),
+        ),
+        JSXExpression::TemplateLiteral(template) if template.expressions.is_empty() => {
+            Some(template_literal_value(template))
+        }
+        JSXExpression::ParenthesizedExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        JSXExpression::TSAsExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        JSXExpression::TSSatisfiesExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        JSXExpression::TSNonNullExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        JSXExpression::TSTypeAssertion(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        _ => None,
+    }
+}
+
+fn expression_static_value(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::NumericLiteral(literal) => Some(
+            literal
+                .raw
+                .as_ref()
+                .map_or_else(|| literal.value.to_string(), ToString::to_string),
+        ),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+            Some(template_literal_value(template))
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        Expression::TSAsExpression(expression) => expression_static_value(&expression.expression),
+        Expression::TSSatisfiesExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        Expression::TSNonNullExpression(expression) => {
+            expression_static_value(&expression.expression)
+        }
+        Expression::TSTypeAssertion(expression) => expression_static_value(&expression.expression),
+        _ => None,
     }
 }
 
