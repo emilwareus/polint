@@ -1007,6 +1007,83 @@ mod tests {
     }
 
     #[test]
+    fn analysis_db_assigns_package_ids_deterministically() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("payment.go"),
+            "payment.go".to_string(),
+            "package payment\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("billing.go"),
+            "billing.go".to_string(),
+            "package billing\n".to_string(),
+        );
+
+        let first = db.push_package(PackageFact {
+            id: PackageId(99),
+            file: first_file,
+            name: "payment".to_string(),
+            span: test_span(first_file, 1),
+            language: Language::Go,
+        });
+        let second = db.push_package(PackageFact {
+            id: PackageId(99),
+            file: second_file,
+            name: "billing".to_string(),
+            span: test_span(second_file, 1),
+            language: Language::Go,
+        });
+
+        assert_eq!(first, PackageId(0));
+        assert_eq!(second, PackageId(1));
+        assert_eq!(db.packages()[0].id, PackageId(0));
+        assert_eq!(db.packages()[1].id, PackageId(1));
+    }
+
+    #[test]
+    fn analysis_db_exposes_package_facts() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("payment.go"),
+            "payment.go".to_string(),
+            "package payment\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("billing.go"),
+            "billing.go".to_string(),
+            "package billing\n".to_string(),
+        );
+        let first_span = test_span(first_file, 1);
+        let second_span = test_span(second_file, 1);
+
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file: first_file,
+            name: "payment".to_string(),
+            span: first_span.clone(),
+            language: Language::Go,
+        });
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file: second_file,
+            name: "billing".to_string(),
+            span: second_span.clone(),
+            language: Language::Go,
+        });
+
+        assert_eq!(db.packages().len(), 2);
+        assert_eq!(db.packages()[0].file, first_file);
+        assert_eq!(db.packages()[0].name, "payment");
+        assert_eq!(db.packages()[0].span, first_span);
+        assert_eq!(db.packages()[0].language, Language::Go);
+        assert_eq!(db.packages()[1].file, second_file);
+        assert_eq!(db.packages()[1].name, "billing");
+        assert_eq!(db.packages()[1].span, second_span);
+        assert_eq!(db.packages()[1].language, Language::Go);
+    }
+
+    #[test]
     fn analysis_db_exposes_all_phase3_fact_families() {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
