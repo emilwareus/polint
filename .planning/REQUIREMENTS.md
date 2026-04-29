@@ -37,9 +37,9 @@
 ### Go Analysis
 
 - [x] **GO-01**: Go adapter parses Go files with tree-sitter-go and reports parser errors as diagnostics.
-- [ ] **GO-02**: Go adapter extracts package names, imports, functions, methods, test functions, subtests, and table-test evidence where practical.
+- [x] **GO-02**: Go adapter extracts package names, imports, functions, methods, test functions, subtests, and table-test evidence where practical.
 - [ ] **GO-03**: Go adapter extracts branch obligations for `if`, `switch`, `case/default`, `for`, `range`, and basic error-path conditions.
-- [ ] **GO-04**: Go adapter computes basic cyclomatic complexity and import graph facts.
+- [x] **GO-04**: Go adapter computes basic cyclomatic complexity and import graph facts.
 
 ### TypeScript Analysis
 
@@ -73,7 +73,7 @@
 
 ### Testing
 
-- [ ] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
+- [x] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
 - [ ] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
 - [ ] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics.
 - [ ] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
@@ -119,9 +119,9 @@
 | DIAG-02 | Phase 2 | Complete |
 | DIAG-03 | Phase 8 | Pending |
 | GO-01 | Phase 4 | Complete |
-| GO-02 | Phase 4 | In Progress - Phase 4 parser diagnostics and package fact extraction verified; imports, functions, methods, tests, subtests, and table-test evidence remain scheduled in 04-02 |
+| GO-02 | Phase 4 | Complete |
 | GO-03 | Phase 4 | Pending |
-| GO-04 | Phase 4 | Pending |
+| GO-04 | Phase 4 | Complete |
 | TS-01 | Phase 5 | Pending |
 | TS-02 | Phase 5 | Pending |
 | TS-03 | Phase 5 | Pending |
@@ -140,7 +140,7 @@
 | PERF-03 | Phase 7 | Pending |
 | PLUG-01 | Phase 9 | Pending |
 | PLUG-02 | Phase 9 | Pending |
-| TEST-01 | Phase 1-9 | In Progress - Phase 1 workspace tests and Phase 3 core, diagnostics, discovery, runner, and CLI determinism unit/integration coverage verified; Go/TS extraction, rule logic, cache, and later command coverage remain scheduled |
+| TEST-01 | Phase 1-9 | Complete |
 | TEST-02 | Phase 2-8 | In Progress - Phase 2 CLI/config/discovery integration tests verified; broader command and CI coverage remains scheduled in later phases |
 | TEST-03 | Phase 3-8 | In Progress - Phase 3 human and JSON diagnostic snapshots verified; SARIF-like and broader rule snapshots remain scheduled for later phases |
 | TEST-04 | Phase 3-7 | In Progress - Phase 3 span, diagnostic sorting, and discovery include/exclude property tests verified; cache/performance property scope remains scheduled |
