@@ -104,6 +104,14 @@ Plans:
 
 **Requirements:** TS-01, TS-02, TS-03, TEST-01, TEST-02
 
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md - Add the Oxc parser foundation, borrowed-source parsing, and `parser/ts` diagnostics.
+- [ ] 05-02-PLAN.md - Extract imports, exports, declarations, classes, components, and calls from Oxc AST nodes.
+- [ ] 05-03-PLAN.md - Extract string/JSX facts, compute TS complexity, and prove import graph facts.
+- [ ] 05-04-PLAN.md - Expand TS fixtures, add CLI integration tests, and run full Phase 5 verification.
+
 **Success criteria:**
 1. TS, TSX, JS, and JSX files parse through Oxc and parser errors become diagnostics.
 2. Imports/exports, functions, classes, component-like functions, JSX attributes, and string literals are extracted.
