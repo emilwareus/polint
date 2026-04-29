@@ -354,6 +354,17 @@ fn line_starts(source: &str) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            source.to_string(),
+        );
+        db
+    }
 
     #[test]
     fn extracts_go_function_name() {
@@ -370,5 +381,54 @@ mod tests {
             cyclomatic_complexity("if a { for _, x := range xs { _ = x } }"),
             4
         );
+    }
+
+    #[test]
+    fn reports_tree_sitter_parse_errors_with_stable_range() {
+        let mut db = db_with_go_file("payment.go", "package payment\n\nfunc Broken( {\n");
+
+        let diagnostics = analyze(&mut db);
+
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "parser/go");
+        assert_eq!(diagnostic.file, "payment.go");
+        assert_eq!(diagnostic.message, "Go parser reported a syntax error.");
+        assert_ne!(diagnostic.range, TextRange::point(1, 1));
+        assert!(diagnostic.range.start_line >= 3, "{:?}", diagnostic.range);
+        assert!(
+            (diagnostic.range.end_line, diagnostic.range.end_col)
+                >= (diagnostic.range.start_line, diagnostic.range.start_col),
+            "{:?}",
+            diagnostic.range
+        );
+    }
+
+    #[test]
+    fn continues_best_effort_package_extraction_after_parse_error() {
+        let mut db = db_with_go_file("payment.go", "package payment\n\nfunc Broken( {\n");
+
+        let diagnostics = analyze(&mut db);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "parser/go");
+        assert_eq!(db.packages().len(), 1);
+        assert_eq!(db.packages()[0].name, "payment");
+        assert_eq!(db.packages()[0].language, Language::Go);
+    }
+
+    #[test]
+    fn extracts_go_package_name_from_tree_sitter() {
+        let mut db = db_with_go_file("payment.go", "package payment\n\nfunc Authorize() {}\n");
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(db.packages().len(), 1);
+        let package = &db.packages()[0];
+        assert_eq!(package.name, "payment");
+        assert_eq!(package.language, Language::Go);
+        assert_eq!(package.span.diagnostic_range().start_line, 1);
+        assert_eq!(package.span.diagnostic_range().start_col, 9);
     }
 }
