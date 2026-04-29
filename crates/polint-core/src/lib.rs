@@ -822,6 +822,85 @@ mod tests {
         }
     }
 
+    #[test]
+    fn analysis_db_exposes_ts_class_facts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export class Button {}".to_string(),
+        );
+        let first_span = test_span(file, 1);
+        let second_span = test_span(file, 5);
+
+        db.push_ts_class(TsClassFact {
+            file,
+            name: "Button".to_string(),
+            span: first_span.clone(),
+            is_exported: true,
+            is_component_like: true,
+        });
+        db.push_ts_class(TsClassFact {
+            file,
+            name: "Store".to_string(),
+            span: second_span.clone(),
+            is_exported: false,
+            is_component_like: false,
+        });
+
+        let classes = db.ts_classes();
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].file, file);
+        assert_eq!(classes[0].name, "Button");
+        assert_eq!(classes[0].span, first_span);
+        assert!(classes[0].is_exported);
+        assert!(classes[0].is_component_like);
+        assert_eq!(classes[1].file, file);
+        assert_eq!(classes[1].name, "Store");
+        assert_eq!(classes[1].span, second_span);
+        assert!(!classes[1].is_exported);
+        assert!(!classes[1].is_component_like);
+    }
+
+    #[test]
+    fn rule_ctx_exposes_ts_classes() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/dialog.tsx"),
+            "src/dialog.tsx".to_string(),
+            "class Dialog {}".to_string(),
+        );
+        let span = test_span(file, 1);
+        db.push_ts_class(TsClassFact {
+            file,
+            name: "Dialog".to_string(),
+            span,
+            is_exported: false,
+            is_component_like: true,
+        });
+
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/ts-classes".to_string(),
+                description: "TS classes test".to_string(),
+                severity: Severity::Warn,
+            },
+            RuleOptions::default(),
+        );
+
+        assert_eq!(ctx.ts_classes().len(), 1);
+        assert_eq!(ctx.ts_classes()[0].name, db.ts_classes()[0].name);
+        assert_eq!(ctx.ts_classes()[0].span, db.ts_classes()[0].span);
+    }
+
+    #[test]
+    fn capabilities_expose_ts_classes() {
+        assert!(!Capabilities::new().ts_classes);
+        let capabilities = Capabilities::new().ts_classes();
+        assert!(capabilities.ts_classes);
+    }
+
     fn diagnostic_range(
         start_line: u32,
         start_col: u32,
