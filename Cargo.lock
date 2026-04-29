@@ -1719,6 +1719,7 @@ dependencies = [
  "anyhow",
  "polint-core",
  "polint-diagnostics",
+ "polint-graph",
  "tree-sitter",
  "tree-sitter-go",
 ]

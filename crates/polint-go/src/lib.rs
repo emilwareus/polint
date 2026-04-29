@@ -464,6 +464,7 @@ fn line_starts(source: &str) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polint_graph::ImportGraph;
     use std::path::PathBuf;
 
     fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
@@ -547,5 +548,137 @@ mod tests {
         reports_tree_sitter_parse_errors_with_stable_range();
         continues_best_effort_package_extraction_after_parse_error();
         extracts_go_package_name_from_tree_sitter();
+    }
+
+    #[test]
+    fn extracts_go_imports_from_tree_sitter() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "fmt"
+import (
+	alias "github.com/acme/aliased"
+	. "github.com/acme/dot"
+	_ "github.com/acme/sideeffect"
+	"context"
+)
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let imports = db
+            .imports()
+            .iter()
+            .map(|import| (import.package.as_deref(), import.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            imports,
+            vec![
+                (None, "fmt"),
+                (Some("alias"), "github.com/acme/aliased"),
+                (Some("."), "github.com/acme/dot"),
+                (Some("_"), "github.com/acme/sideeffect"),
+                (None, "context"),
+            ]
+        );
+        assert!(db.imports().iter().all(|import| import.language == Language::Go));
+        assert_eq!(db.imports()[0].span.diagnostic_range().start_line, 3);
+        assert_eq!(db.imports()[1].span.diagnostic_range().start_line, 5);
+    }
+
+    #[test]
+    fn extracts_go_functions_methods_calls_and_complexity_from_tree_sitter() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "log"
+
+type Service struct{}
+
+func Authorize(ok bool, svc *Service) error {
+	if ok && svc.Enabled() {
+		svc.Charge()
+		svc.Charge()
+		log.Printf("authorized")
+	}
+	for _, item := range []int{1, 2} {
+		process(item)
+	}
+	switch ok {
+	case true:
+		audit()
+	default:
+		fallback()
+	}
+	return nil
+}
+
+func (svc *Service) Charge() {}
+
+func (svc *Service) Enabled() bool {
+	return true
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let functions = db.functions();
+        assert_eq!(
+            functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Authorize", "Service.Charge", "Service.Enabled"]
+        );
+
+        let authorize = &functions[0];
+        assert_eq!(authorize.language, Language::Go);
+        assert!(authorize.is_exported);
+        assert!(!authorize.is_test);
+        assert_eq!(
+            authorize.calls,
+            vec![
+                "audit".to_string(),
+                "fallback".to_string(),
+                "log.Printf".to_string(),
+                "process".to_string(),
+                "svc.Charge".to_string(),
+                "svc.Enabled".to_string(),
+            ]
+        );
+        assert_eq!(authorize.cyclomatic_complexity, 6);
+        assert_eq!(authorize.span.diagnostic_range().start_line, 7);
+        assert_eq!(authorize.span.diagnostic_range().end_line, 23);
+
+        let method = &functions[1];
+        assert_eq!(method.name, "Service.Charge");
+        assert!(method.is_exported);
+        assert_eq!(method.cyclomatic_complexity, 1);
+    }
+
+    #[test]
+    fn go_import_facts_feed_import_graph() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "github.com/acme/authz"
+
+func Authorize() {}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+        let dot = ImportGraph::from_db(&db).to_dot();
+
+        assert!(diagnostics.is_empty());
+        assert!(dot.contains("payment.go"), "{dot}");
+        assert!(dot.contains("github.com/acme/authz"), "{dot}");
     }
 }
