@@ -26,6 +26,21 @@ fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
         .collect()
 }
 
+fn diagnostics(value: &serde_json::Value) -> &[serde_json::Value] {
+    value.as_array().unwrap()
+}
+
+fn diagnostic_has_evidence(diagnostic: &serde_json::Value, label: &str, value: &str) -> bool {
+    diagnostic["evidence"].as_array().is_some_and(|evidence| {
+        evidence.iter().any(|item| {
+            item["label"] == label
+                && item["value"]
+                    .as_str()
+                    .is_some_and(|actual| actual.contains(value))
+        })
+    })
+}
+
 #[test]
 fn init_creates_config() {
     let temp = tempfile::tempdir().unwrap();
@@ -139,6 +154,193 @@ fn check_reports_ts_raw_color() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("examples/ts-no-raw-colors"));
+}
+
+#[test]
+fn check_reports_go_parser_diagnostic_for_invalid_source() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase4]
+rules = []
+"#,
+    );
+    write_file(
+        &temp.path().join("broken.go"),
+        "package broken\nfunc Broken( {\n",
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase4",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| {
+            diagnostic["rule_id"] == "parser/go" && diagnostic["file"] == "broken.go"
+        })
+        .expect("invalid Go source should emit parser/go for broken.go");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("syntax error")),
+        "parser/go diagnostic should mention syntax error: {diagnostic:#?}"
+    );
+}
+
+#[test]
+fn check_clean_go_fixture_has_no_parser_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase4]
+rules = []
+"#,
+    );
+    write_file(
+        &temp.path().join("payment.go"),
+        include_str!("../../../tests/fixtures/go/clean/payment.go"),
+    );
+    write_file(
+        &temp.path().join("payment_test.go"),
+        include_str!("../../../tests/fixtures/go/clean/payment_test.go"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase4",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        !diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "parser/go"),
+        "clean Go fixtures should not emit parser/go diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn check_go_full_profile_uses_branch_and_test_facts() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase4]
+rules = ["examples/go-branch-obligations"]
+"#,
+    );
+    write_file(
+        &temp.path().join("payment.go"),
+        include_str!("../../../tests/fixtures/go/failing/payment.go"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase4",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/go-branch-obligations")
+        .expect("failing Go fixture should emit branch-obligation diagnostic");
+    assert!(
+        diagnostic_has_evidence(diagnostic, "edge", ""),
+        "branch diagnostic should include edge evidence: {diagnostic:#?}"
+    );
+    assert!(
+        diagnostic["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("heuristic")),
+        "branch diagnostic help should disclose heuristic behavior: {diagnostic:#?}"
+    );
+}
+
+#[test]
+fn check_go_import_boundary_uses_import_facts() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase4]
+rules = ["examples/go-import-boundaries"]
+
+[[rules.config]]
+id = "examples/go-import-boundaries"
+files = ["**/*.go"]
+
+[rules.config.forbidden_imports]
+"**/*.go" = ["net/http"]
+"#,
+    );
+    write_file(
+        &temp.path().join("main.go"),
+        "package main\nimport \"net/http\"\nfunc main() { _ = http.MethodGet }\n",
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase4",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/go-import-boundaries")
+        .expect("forbidden Go import should emit import-boundary diagnostic");
+    assert!(
+        diagnostic_has_evidence(diagnostic, "import", "net/http"),
+        "import-boundary diagnostic should include net/http evidence: {diagnostic:#?}"
+    );
 }
 
 #[test]
