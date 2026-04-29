@@ -386,7 +386,7 @@ mod tests {
     fn continues_best_effort_ast_extraction_after_oxc_parse_error() {
         let (db, diagnostics) = analyze_source(
             "recoverable.ts",
-            "import x from \"./x\";\nexport function Broken( {",
+            "import x from \"./x\";\nconst value = ;",
         );
 
         assert!(
@@ -398,6 +398,67 @@ mod tests {
         assert!(
             db.imports().iter().any(|import| import.path == "./x"),
             "expected best-effort import fact after parse error"
+        );
+    }
+
+    #[test]
+    fn parses_ts_source_from_shared_arc_without_full_source_clone() {
+        let production_source = include_str!("lib.rs");
+
+        assert!(
+            production_source.contains("file.source.as_ref()"),
+            "parse_ts_file should borrow from SourceFile.source"
+        );
+        assert!(
+            !production_source.contains("file.source.to_string()"),
+            "parse_ts_file should not clone the full source string"
+        );
+    }
+
+    #[test]
+    fn source_type_comes_from_file_path_for_ts_family() {
+        let production_source = include_str!("lib.rs");
+
+        assert!(
+            production_source.contains("fn parse_source_type(path: &Path) -> SourceType"),
+            "expected parse_source_type helper"
+        );
+        assert!(
+            production_source.contains("SourceType::from_path(path).unwrap_or_default()"),
+            "parse_source_type should derive SourceType from the file path"
+        );
+    }
+
+    #[test]
+    fn ast_helpers_preserve_source_byte_spans() {
+        let source = "\nimport x from \"./x\";\n";
+        let (db, diagnostics) = analyze_source("spans.ts", source);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "parser/ts"),
+            "unexpected parser diagnostics: {diagnostics:?}"
+        );
+
+        let import = db
+            .imports()
+            .iter()
+            .find(|import| import.path == "./x")
+            .expect("expected import fact for ./x");
+        let start = source.find("import").expect("fixture should contain import");
+        let end = start + "import x from \"./x\";".len();
+        assert_eq!(import.span.start_byte as usize, start);
+        assert_eq!(import.span.end_byte as usize, end);
+
+        let production_source = include_str!("lib.rs");
+        assert!(
+            production_source.contains("fn span_from_oxc"),
+            "expected span_from_oxc helper"
+        );
+        assert!(
+            production_source
+                .contains("span_from_byte_range(file, source, span.start as usize, span.end as usize)"),
+            "span_from_oxc should convert Oxc byte spans through core span conversion"
         );
     }
 }
