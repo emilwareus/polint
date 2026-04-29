@@ -52,8 +52,8 @@ fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
     }
 
     extract_package(db, file_id, source, root);
-    extract_imports(db, file_id, source);
-    extract_functions_and_tests(db, file_id, source);
+    extract_imports(db, file_id, source, root);
+    extract_functions(db, file_id, source, root);
     Ok(diagnostics)
 }
 
@@ -156,62 +156,115 @@ where
     None
 }
 
-fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str) {
-    let mut in_block = false;
-    for (line_idx, line) in source.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("import (") {
-            in_block = true;
-            continue;
+fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+    visit_named_descendants(root, &mut |node| {
+        if node.kind() != "import_declaration" {
+            return;
         }
-        if in_block && trimmed.starts_with(')') {
-            in_block = false;
-            continue;
-        }
-        let import_path = if in_block {
-            quoted(trimmed)
-        } else if let Some(rest) = trimmed.strip_prefix("import ") {
-            quoted(rest)
-        } else {
-            None
-        };
 
-        if let Some(path) = import_path {
-            let span = Span::point(file, line_idx as u32 + 1, 1);
-            db.push_import(ImportFact {
-                id: polint_core::ImportId(0),
-                file,
-                package: None,
-                path,
-                span,
-                language: Language::Go,
-            });
+        let mut specs = Vec::new();
+        visit_named_descendants(node, &mut |descendant| {
+            if descendant.kind() == "import_spec" {
+                specs.push(descendant);
+            }
+        });
+
+        if specs.is_empty() {
+            push_import_from_node(db, file, source, node);
+            return;
         }
+
+        for spec in specs {
+            push_import_from_node(db, file, source, spec);
+        }
+    });
+}
+
+fn push_import_from_node(db: &mut AnalysisDb, file: FileId, source: &str, node: Node<'_>) {
+    let Some(path_node) = first_named_descendant(node, &is_go_string_literal) else {
+        return;
+    };
+    let Some(path) = unquote_go_string_literal(source, path_node) else {
+        return;
+    };
+    let package = import_alias(source, node, path_node);
+
+    db.push_import(ImportFact {
+        id: polint_core::ImportId(0),
+        file,
+        package,
+        path,
+        span: node_span(file, source, node),
+        language: Language::Go,
+    });
+}
+
+fn import_alias(source: &str, spec: Node<'_>, path: Node<'_>) -> Option<String> {
+    let alias = source
+        .get(spec.start_byte()..path.start_byte())?
+        .trim()
+        .strip_prefix("import")
+        .unwrap_or_else(|| {
+            source
+                .get(spec.start_byte()..path.start_byte())
+                .unwrap_or("")
+        })
+        .trim()
+        .trim_matches('(')
+        .trim();
+
+    if alias.is_empty() {
+        None
+    } else {
+        Some(alias.to_string())
     }
 }
 
-fn extract_functions_and_tests(db: &mut AnalysisDb, file: FileId, source: &str) {
-    let line_starts = line_starts(source);
-    let lines: Vec<&str> = source.lines().collect();
-    let mut idx = 0;
-    while idx < lines.len() {
-        let trimmed = lines[idx].trim_start();
-        if !trimmed.starts_with("func ") {
-            idx += 1;
-            continue;
+fn unquote_go_string_literal(source: &str, node: Node<'_>) -> Option<String> {
+    let text = node_text(source, node)?.trim();
+    if text.len() < 2 {
+        return None;
+    }
+
+    let first = text.as_bytes()[0] as char;
+    let last = text.as_bytes()[text.len() - 1] as char;
+    if matches!((first, last), ('"', '"') | ('`', '`')) {
+        Some(text[1..text.len() - 1].to_string())
+    } else {
+        None
+    }
+}
+
+fn is_go_string_literal(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "interpreted_string_literal" | "raw_string_literal"
+    )
+}
+
+fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+    let file_path = db.path_for(file);
+    visit_named_descendants(root, &mut |node| {
+        if !matches!(node.kind(), "function_declaration" | "method_declaration") {
+            return;
         }
 
-        let start_line = idx;
-        let end_line = find_function_end(&lines, idx);
-        let start_byte = *line_starts.get(start_line).unwrap_or(&0);
-        let end_byte = line_starts
-            .get(end_line + 1)
-            .copied()
-            .unwrap_or(source.len());
-        let body = &source[start_byte..end_byte.min(source.len())];
-        let name = function_name(trimmed).unwrap_or_else(|| "<anonymous>".to_string());
-        let span = span_from_byte_range(file, source, start_byte, end_byte.min(source.len()));
-        let is_test = name.starts_with("Test") && db.path_for(file).ends_with("_test.go");
+        let Some(simple_name) = declaration_name(source, node) else {
+            return;
+        };
+        let body_node = node.child_by_field_name("body");
+        let body = body_node
+            .and_then(|body| node_text(source, body))
+            .unwrap_or_default();
+        let name = if node.kind() == "method_declaration" {
+            receiver_type_name(source, node)
+                .map(|receiver| format!("{receiver}.{simple_name}"))
+                .unwrap_or_else(|| simple_name.clone())
+        } else {
+            simple_name.clone()
+        };
+        let span = node_span(file, source, node);
+        let is_test = is_go_test_entry(&file_path, &simple_name);
         let fact = FunctionFact {
             id: FunctionId(0),
             file,
@@ -219,19 +272,27 @@ fn extract_functions_and_tests(db: &mut AnalysisDb, file: FileId, source: &str) 
             span: span.clone(),
             language: Language::Go,
             is_test,
-            is_exported: name.chars().next().is_some_and(char::is_uppercase),
-            cyclomatic_complexity: cyclomatic_complexity(body),
-            calls: calls(body),
+            is_exported: simple_name.chars().next().is_some_and(char::is_uppercase),
+            cyclomatic_complexity: body_node
+                .map(|body| go_cyclomatic_complexity(source, body))
+                .unwrap_or(1),
+            calls: body_node
+                .map(|body| extract_calls(source, body))
+                .unwrap_or_default(),
         };
         let function_id = db.push_function(fact);
 
+        let body_lines: Vec<&str> = node_text(source, node)
+            .unwrap_or_default()
+            .lines()
+            .collect();
         extract_branches(
             db,
             file,
             function_id,
             source,
-            &lines[start_line..=end_line],
-            start_line,
+            &body_lines,
+            span.start_line.saturating_sub(1) as usize,
         );
         if is_test {
             db.push_test(TestFact {
@@ -245,8 +306,120 @@ fn extract_functions_and_tests(db: &mut AnalysisDb, file: FileId, source: &str) 
                 table_rows: table_rows(body),
             });
         }
+    });
+}
 
-        idx = end_line + 1;
+fn declaration_name(source: &str, node: Node<'_>) -> Option<String> {
+    node.child_by_field_name("name")
+        .and_then(|name| node_text(source, name))
+        .map(str::to_string)
+        .or_else(|| {
+            first_named_descendant(node, &|child| {
+                matches!(child.kind(), "identifier" | "field_identifier")
+            })
+            .and_then(|name| node_text(source, name))
+            .map(str::to_string)
+        })
+}
+
+fn receiver_type_name(source: &str, node: Node<'_>) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    let receiver_text = node_text(source, receiver)?;
+    let inner = receiver_text
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
+    let raw_type = inner
+        .split_whitespace()
+        .last()
+        .unwrap_or(inner)
+        .trim_start_matches('*')
+        .trim_start_matches('&');
+    let without_package = raw_type.rsplit('.').next().unwrap_or(raw_type);
+    let without_generics = without_package
+        .split_once('[')
+        .map(|(name, _)| name)
+        .unwrap_or(without_package);
+
+    (!without_generics.is_empty()).then(|| without_generics.to_string())
+}
+
+fn is_go_test_entry(path: &str, name: &str) -> bool {
+    path.ends_with("_test.go")
+        && (name.starts_with("Test") || name.starts_with("Benchmark") || name.starts_with("Fuzz"))
+}
+
+fn extract_calls(source: &str, body: Node<'_>) -> Vec<String> {
+    let mut calls = Vec::new();
+    visit_named_descendants(body, &mut |node| {
+        if node.kind() != "call_expression" {
+            return;
+        }
+        let Some(function_node) = node
+            .child_by_field_name("function")
+            .or_else(|| node.named_child(0))
+        else {
+            return;
+        };
+        let Some(call) = stable_call_name(source, function_node) else {
+            return;
+        };
+        calls.push(call);
+    });
+    calls.sort();
+    calls.dedup();
+    calls
+}
+
+fn stable_call_name(source: &str, node: Node<'_>) -> Option<String> {
+    let text = node_text(source, node)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("");
+    if text.is_empty() || text.starts_with("func") {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn go_cyclomatic_complexity(_source: &str, body: Node<'_>) -> u32 {
+    let mut complexity = 1;
+    visit_named_descendants(body, &mut |node| match node.kind() {
+        "if_statement" | "for_statement" => complexity += 1,
+        "expression_case" | "type_case" | "communication_case" | "default_case" => {
+            complexity += 1;
+        }
+        "binary_expression" => complexity += boolean_operator_count(node),
+        _ => {}
+    });
+    complexity
+}
+
+fn boolean_operator_count(node: Node<'_>) -> u32 {
+    let mut count = 0;
+    for index in 0..node.child_count() as u32 {
+        let Some(child) = node.child(index) else {
+            continue;
+        };
+        if matches!(child.kind(), "&&" | "||") {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn visit_named_descendants<'tree, F>(node: Node<'tree>, visit: &mut F)
+where
+    F: FnMut(Node<'tree>),
+{
+    visit(node);
+    for index in 0..node.named_child_count() as u32 {
+        let Some(child) = node.named_child(index) else {
+            continue;
+        };
+        visit_named_descendants(child, visit);
     }
 }
 
@@ -346,76 +519,6 @@ fn push_branch(
     })
 }
 
-fn quoted(input: &str) -> Option<String> {
-    let start = input.find('"')?;
-    let rest = &input[start + 1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn function_name(signature: &str) -> Option<String> {
-    let after_func = signature.trim_start_matches("func ").trim_start();
-    let name_part = if after_func.starts_with('(') {
-        let receiver_end = after_func.find(')')?;
-        after_func[receiver_end + 1..].trim_start()
-    } else {
-        after_func
-    };
-    let end = name_part.find('(')?;
-    Some(name_part[..end].trim().to_string())
-}
-
-fn find_function_end(lines: &[&str], start: usize) -> usize {
-    let mut depth = 0_i32;
-    let mut saw_open = false;
-    for (idx, line) in lines.iter().enumerate().skip(start) {
-        for ch in line.chars() {
-            if ch == '{' {
-                depth += 1;
-                saw_open = true;
-            } else if ch == '}' {
-                depth -= 1;
-            }
-        }
-        if saw_open && depth <= 0 {
-            return idx;
-        }
-    }
-    lines.len().saturating_sub(1)
-}
-
-fn cyclomatic_complexity(body: &str) -> u32 {
-    1 + count_word(body, "if")
-        + count_word(body, "for")
-        + count_word(body, "range")
-        + count_word(body, "case")
-        + count_word(body, "default")
-        + body.matches("&&").count() as u32
-        + body.matches("||").count() as u32
-}
-
-fn count_word(body: &str, word: &str) -> u32 {
-    body.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .filter(|part| *part == word)
-        .count() as u32
-}
-
-fn calls(body: &str) -> Vec<String> {
-    let keywords = ["if", "for", "switch", "select", "return", "func"];
-    let mut calls = Vec::new();
-    for token in body.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')) {
-        if token.is_empty() || keywords.contains(&token) {
-            continue;
-        }
-        if body.contains(&format!("{token}(")) {
-            calls.push(token.to_string());
-        }
-    }
-    calls.sort();
-    calls.dedup();
-    calls
-}
-
 fn evidence_terms(body: &str) -> Vec<String> {
     let mut terms = Vec::new();
     for marker in ["err", "error", "invalid", "denied", "nil", "fail"] {
@@ -451,16 +554,6 @@ fn table_rows(body: &str) -> u32 {
         .count() as u32
 }
 
-fn line_starts(source: &str) -> Vec<usize> {
-    let mut starts = vec![0];
-    for (idx, ch) in source.char_indices() {
-        if ch == '\n' {
-            starts.push(idx + 1);
-        }
-    }
-    starts
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,23 +568,6 @@ mod tests {
             source.to_string(),
         );
         db
-    }
-
-    #[test]
-    fn extracts_go_function_name() {
-        assert_eq!(
-            function_name("func Authorize() error {").unwrap(),
-            "Authorize"
-        );
-        assert_eq!(function_name("func (s *Svc) Run() {").unwrap(), "Run");
-    }
-
-    #[test]
-    fn counts_complexity() {
-        assert_eq!(
-            cyclomatic_complexity("if a { for _, x := range xs { _ = x } }"),
-            4
-        );
     }
 
     #[test]
@@ -584,7 +660,11 @@ import (
                 (None, "context"),
             ]
         );
-        assert!(db.imports().iter().all(|import| import.language == Language::Go));
+        assert!(
+            db.imports()
+                .iter()
+                .all(|import| import.language == Language::Go)
+        );
         assert_eq!(db.imports()[0].span.diagnostic_range().start_line, 3);
         assert_eq!(db.imports()[1].span.diagnostic_range().start_line, 5);
     }
