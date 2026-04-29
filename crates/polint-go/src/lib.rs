@@ -1071,4 +1071,169 @@ func TestAssertions(t *testing.T) {
             ]
         );
     }
+
+    #[test]
+    fn extracts_go_branch_obligations_from_control_flow() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+func Authorize(ok bool, kind string, value any, items []int, ch <-chan int) error {
+	if ok {
+		approve()
+	} else {
+		deny()
+	}
+
+	switch kind {
+	case "card", "bank":
+		approve()
+	default:
+		deny()
+	}
+
+	switch typed := value.(type) {
+	case string:
+		_ = typed
+	default:
+		deny()
+	}
+
+	for i := 0; i < len(items); i++ {
+		_ = i
+	}
+	for _, item := range items {
+		_ = item
+	}
+
+	select {
+	case <-ch:
+		approve()
+	default:
+		deny()
+	}
+
+	return nil
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(db.functions().len(), 1);
+        let function = db.functions()[0].id;
+        assert!(
+            db.branches()
+                .iter()
+                .all(|branch| branch.function == Some(function))
+        );
+
+        let branches = db
+            .branches()
+            .iter()
+            .map(|branch| {
+                (
+                    branch.edge_label.as_str(),
+                    branch.condition_text.as_str(),
+                    branch.decision_span.start_line,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            branches.contains(&("true", "ok", 4)),
+            "missing if true branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("false", "ok", 4)),
+            "missing if false branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("switch", "kind", 10)),
+            "missing expression switch branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("case", r#"case "card", "bank":"#, 11)),
+            "missing expression case branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("default", "default", 13)),
+            "missing expression default branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("switch", "typed := value.(type)", 17)),
+            "missing type switch branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("case", "case string:", 18)),
+            "missing type case branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("loop", "for i := 0; i < len(items); i++", 24)),
+            "missing ordinary for branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("range", "_, item := range items", 27)),
+            "missing range branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("select", "select", 31)),
+            "missing select branch: {branches:?}"
+        );
+        assert!(
+            branches.contains(&("case", "case <-ch:", 32)),
+            "missing select communication case branch: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn branch_spans_come_from_tree_sitter_nodes() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+func Authorize(ok bool, kind string) {
+	if ok {
+		approve()
+	}
+	switch kind {
+	case "card":
+		approve()
+	default:
+		deny()
+	}
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let branches = db.branches();
+        let if_true = branches
+            .iter()
+            .find(|branch| branch.edge_label == "true" && branch.condition_text == "ok")
+            .expect("if true branch exists");
+        assert_eq!(if_true.decision_span.start_line, 4);
+        assert_eq!(if_true.decision_span.start_col, 5);
+        assert_eq!(if_true.decision_span.end_col, 7);
+        assert_ne!(if_true.decision_span.start_col, 1);
+
+        let switch = branches
+            .iter()
+            .find(|branch| branch.edge_label == "switch" && branch.condition_text == "kind")
+            .expect("switch branch exists");
+        assert_eq!(switch.decision_span.start_line, 7);
+        assert_eq!(switch.decision_span.start_col, 9);
+        assert_eq!(switch.decision_span.end_col, 13);
+
+        let case = branches
+            .iter()
+            .find(|branch| branch.edge_label == "case")
+            .expect("case branch exists");
+        assert_eq!(case.decision_span.start_line, 8);
+        assert_eq!(case.decision_span.start_col, 2);
+        assert_eq!(case.decision_span.end_col, 14);
+    }
 }
