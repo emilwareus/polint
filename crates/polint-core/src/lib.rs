@@ -187,6 +187,15 @@ pub struct TsComponentFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TsClassFact {
+    pub file: FileId,
+    pub name: String,
+    pub span: Span,
+    pub is_exported: bool,
+    pub is_component_like: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StringLiteralFact {
     pub file: FileId,
     pub value: String,
@@ -212,6 +221,7 @@ pub struct AnalysisDb {
     tests: Vec<TestFact>,
     coverage: Vec<CoverageFact>,
     ts_components: Vec<TsComponentFact>,
+    ts_classes: Vec<TsClassFact>,
     string_literals: Vec<StringLiteralFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
 }
@@ -276,6 +286,10 @@ impl AnalysisDb {
         self.ts_components.push(fact);
     }
 
+    pub fn push_ts_class(&mut self, fact: TsClassFact) {
+        self.ts_classes.push(fact);
+    }
+
     pub fn push_string_literal(&mut self, fact: StringLiteralFact) {
         self.string_literals.push(fact);
     }
@@ -320,6 +334,10 @@ impl AnalysisDb {
         &self.ts_components
     }
 
+    pub fn ts_classes(&self) -> &[TsClassFact] {
+        &self.ts_classes
+    }
+
     pub fn string_literals(&self) -> &[StringLiteralFact] {
         &self.string_literals
     }
@@ -353,6 +371,7 @@ pub struct Capabilities {
     pub coverage_facts: bool,
     pub test_suite_metrics: bool,
     pub ts_components: bool,
+    pub ts_classes: bool,
     pub string_literals: bool,
     pub jsx_attributes: bool,
 }
@@ -404,6 +423,11 @@ impl Capabilities {
 
     pub fn ts_components(mut self) -> Self {
         self.ts_components = true;
+        self
+    }
+
+    pub fn ts_classes(mut self) -> Self {
+        self.ts_classes = true;
         self
     }
 
@@ -485,6 +509,10 @@ impl<'a> RuleCtx<'a> {
 
     pub fn ts_components(&self) -> &[TsComponentFact] {
         self.db.ts_components()
+    }
+
+    pub fn ts_classes(&self) -> &[TsClassFact] {
+        self.db.ts_classes()
     }
 
     pub fn string_literals(&self) -> &[StringLiteralFact] {
