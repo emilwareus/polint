@@ -541,4 +541,11 @@ mod tests {
         assert_eq!(package.span.diagnostic_range().start_line, 1);
         assert_eq!(package.span.diagnostic_range().start_col, 9);
     }
+
+    #[test]
+    fn parser_foundation_covers_diagnostics_and_package_facts() {
+        reports_tree_sitter_parse_errors_with_stable_range();
+        continues_best_effort_package_extraction_after_parse_error();
+        extracts_go_package_name_from_tree_sitter();
+    }
 }
