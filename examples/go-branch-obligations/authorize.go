@@ -1,8 +1,11 @@
 package payments
 
-func Authorize(amount int, charge func(int) error) error {
+func Authorize(amount int, charge func(int) error, audit func(int) error) error {
 	if amount <= 0 {
 		return ErrInvalidAmount
+	}
+	if err := audit(amount); err != nil {
+		return err
 	}
 	if err := charge(amount); err != nil {
 		return err
