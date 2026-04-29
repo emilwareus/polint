@@ -279,18 +279,9 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
         };
         let function_id = db.push_function(fact);
 
-        let body_lines: Vec<&str> = node_text(source, node)
-            .unwrap_or_default()
-            .lines()
-            .collect();
-        extract_branches(
-            db,
-            file,
-            function_id,
-            source,
-            &body_lines,
-            span.start_line.saturating_sub(1) as usize,
-        );
+        if let Some(body) = body_node {
+            extract_branches(db, file, function_id, source, body);
+        }
         if is_test && let Some(body) = body_node {
             db.push_test(go_test_fact(file, function_id, name, span, source, body));
         }
@@ -635,72 +626,225 @@ fn extract_branches(
     file: FileId,
     function: FunctionId,
     source: &str,
-    lines: &[&str],
-    base_line: usize,
+    body: Node<'_>,
 ) {
-    for (offset, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        let line_no = base_line + offset + 1;
-        if let Some(condition) = trimmed.strip_prefix("if ") {
-            let condition = condition
-                .split('{')
-                .next()
-                .unwrap_or(condition)
-                .trim()
-                .to_string();
-            push_branch(
-                db,
-                file,
-                function,
-                source,
-                line_no,
-                condition.clone(),
-                "true",
-            );
-            push_branch(db, file, function, source, line_no, condition, "false");
-        } else if trimmed.starts_with("case ") {
-            let label = trimmed.trim_end_matches(':').to_string();
-            push_branch(db, file, function, source, line_no, label, "case");
-        } else if trimmed.starts_with("default:") {
-            push_branch(
-                db,
-                file,
-                function,
-                source,
-                line_no,
-                "default".to_string(),
-                "default",
-            );
-        } else if trimmed.starts_with("for ") || trimmed == "for {" {
-            push_branch(
-                db,
-                file,
-                function,
-                source,
-                line_no,
-                trimmed.to_string(),
-                "loop",
-            );
-        } else if trimmed.starts_with("select ") || trimmed == "select {" {
-            push_branch(
-                db,
-                file,
-                function,
-                source,
-                line_no,
-                "select".to_string(),
-                "select",
-            );
+    visit_named_descendants(body, &mut |node| match node.kind() {
+        "if_statement" => push_if_branches(db, file, function, source, node),
+        "expression_switch_statement" | "type_switch_statement" => {
+            push_switch_branch(db, file, function, source, node);
+        }
+        "expression_case" | "type_case" | "communication_case" => {
+            push_case_branch(db, file, function, source, node, "case");
+        }
+        "default_case" => {
+            push_case_branch(db, file, function, source, node, "default");
+        }
+        "for_statement" => push_for_branch(db, file, function, source, node),
+        "select_statement" => push_select_branch(db, file, function, source, node),
+        _ => {}
+    });
+}
+
+fn push_if_branches(
+    db: &mut AnalysisDb,
+    file: FileId,
+    function: FunctionId,
+    source: &str,
+    node: Node<'_>,
+) {
+    let decision = node.child_by_field_name("condition").unwrap_or(node);
+    let condition = if_condition_text(source, node)
+        .or_else(|| node_text(source, decision))
+        .unwrap_or("if")
+        .trim()
+        .to_string();
+    let span = node_span(file, source, decision);
+    push_branch(
+        db,
+        file,
+        function,
+        span.clone(),
+        condition.clone(),
+        "true",
+    );
+    push_branch(db, file, function, span, condition, "false");
+}
+
+fn push_switch_branch(
+    db: &mut AnalysisDb,
+    file: FileId,
+    function: FunctionId,
+    source: &str,
+    node: Node<'_>,
+) {
+    let Some((start, end)) = switch_decision_range(source, node) else {
+        return;
+    };
+    let condition = trimmed_text(source, start, end).unwrap_or("switch").to_string();
+    push_branch(
+        db,
+        file,
+        function,
+        trimmed_span(file, source, start, end),
+        condition,
+        "switch",
+    );
+}
+
+fn push_case_branch(
+    db: &mut AnalysisDb,
+    file: FileId,
+    function: FunctionId,
+    source: &str,
+    node: Node<'_>,
+    edge_label: &str,
+) {
+    let (start, end) = if edge_label == "default" {
+        (node.start_byte(), node.end_byte())
+    } else {
+        case_header_range(source, node)
+    };
+    let condition = if edge_label == "default" {
+        "default".to_string()
+    } else {
+        trimmed_text(source, start, end).unwrap_or("case").to_string()
+    };
+    push_branch(
+        db,
+        file,
+        function,
+        trimmed_span(file, source, start, end),
+        condition,
+        edge_label,
+    );
+}
+
+fn push_for_branch(
+    db: &mut AnalysisDb,
+    file: FileId,
+    function: FunctionId,
+    source: &str,
+    node: Node<'_>,
+) {
+    if let Some(range) = first_named_descendant(node, &|child| child.kind() == "range_clause") {
+        let condition = node_text(source, range).unwrap_or("range").trim().to_string();
+        push_branch(
+            db,
+            file,
+            function,
+            node_span(file, source, range),
+            condition,
+            "range",
+        );
+        return;
+    }
+
+    let (start, end) = statement_header_range(source, node);
+    let condition = trimmed_text(source, start, end).unwrap_or("for").to_string();
+    push_branch(
+        db,
+        file,
+        function,
+        trimmed_span(file, source, start, end),
+        condition,
+        "loop",
+    );
+}
+
+fn push_select_branch(
+    db: &mut AnalysisDb,
+    file: FileId,
+    function: FunctionId,
+    source: &str,
+    node: Node<'_>,
+) {
+    let end = node.start_byte().saturating_add("select".len());
+    push_branch(
+        db,
+        file,
+        function,
+        span_from_byte_range(file, source, node.start_byte(), end),
+        "select".to_string(),
+        "select",
+    );
+}
+
+fn switch_decision_range(source: &str, node: Node<'_>) -> Option<(usize, usize)> {
+    if node.kind() == "expression_switch_statement" {
+        if let Some(value) = node.child_by_field_name("value") {
+            return Some((value.start_byte(), value.end_byte()));
         }
     }
+
+    let (start, end) = statement_header_range(source, node);
+    let header = source.get(start..end)?;
+    let switch_offset = header.find("switch")? + "switch".len();
+    let after_switch = start + switch_offset;
+    let rest = source.get(after_switch..end)?;
+    let leading = rest.len() - rest.trim_start().len();
+    let decision_start = after_switch + leading;
+    let trimmed_rest = source.get(decision_start..end)?.trim_end();
+    if trimmed_rest.is_empty() {
+        return Some((start, end));
+    }
+    Some((decision_start, decision_start + trimmed_rest.len()))
+}
+
+fn case_header_range(source: &str, node: Node<'_>) -> (usize, usize) {
+    if let Some(case_text) = source.get(node.start_byte()..node.end_byte())
+        && let Some(colon_offset) = case_text.find(':')
+    {
+        return (node.start_byte(), node.start_byte() + colon_offset + 1);
+    }
+
+    let Some(after_node) = source.get(node.end_byte()..node.end_byte().saturating_add(16)) else {
+        return (node.start_byte(), node.end_byte());
+    };
+    let colon_offset = after_node.find(':').filter(|offset| {
+        after_node[..*offset]
+            .chars()
+            .all(|character| character.is_whitespace())
+    });
+
+    let end = colon_offset
+        .map(|offset| node.end_byte() + offset + 1)
+        .unwrap_or_else(|| node.end_byte());
+    (node.start_byte(), end)
+}
+
+fn statement_header_range(source: &str, node: Node<'_>) -> (usize, usize) {
+    let body_start = node
+        .child_by_field_name("body")
+        .map(|body| body.start_byte())
+        .or_else(|| {
+            source
+                .get(node.start_byte()..node.end_byte())
+                .and_then(|text| text.find('{'))
+                .map(|offset| node.start_byte() + offset)
+        })
+        .unwrap_or_else(|| node.end_byte());
+
+    (node.start_byte(), body_start)
+}
+
+fn trimmed_text(source: &str, start: usize, end: usize) -> Option<&str> {
+    source.get(start..end).map(str::trim)
+}
+
+fn trimmed_span(file: FileId, source: &str, start: usize, end: usize) -> Span {
+    let Some(text) = source.get(start..end) else {
+        return span_from_byte_range(file, source, start, end);
+    };
+    let leading = text.len() - text.trim_start().len();
+    let trailing = text.len() - text.trim_end().len();
+    span_from_byte_range(file, source, start + leading, end - trailing)
 }
 
 fn push_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
-    _source: &str,
-    line_no: usize,
+    decision_span: Span,
     condition_text: String,
     edge_label: &str,
 ) -> BranchId {
@@ -710,7 +854,7 @@ fn push_branch(
     let stable_fingerprint = fingerprint(&[
         &db.path_for(file),
         &function.0.to_string(),
-        &line_no.to_string(),
+        &decision_span.start_line.to_string(),
         &condition_text,
         edge_label,
     ]);
@@ -718,7 +862,7 @@ fn push_branch(
         id: BranchId(0),
         function: Some(function),
         file,
-        decision_span: Span::point(file, line_no as u32, 1),
+        decision_span,
         condition_text,
         edge_label: edge_label.to_string(),
         is_error_path,
