@@ -281,6 +281,14 @@ fn line_starts(source: &str) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn analyze_source(path: &str, source: &str) -> (AnalysisDb, Vec<Diagnostic>) {
+        let mut db = AnalysisDb::new();
+        db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
+        let diagnostics = analyze(&mut db);
+        (db, diagnostics)
+    }
 
     #[test]
     fn extracts_function_names() {
@@ -294,5 +302,73 @@ mod tests {
     #[test]
     fn extracts_module_specifier() {
         assert_eq!(module_specifier("import x from \"./x\";").unwrap(), "./x");
+    }
+
+    #[test]
+    fn reports_oxc_parser_errors_as_parser_ts_diagnostics() {
+        let (_db, diagnostics) = analyze_source("broken.ts", "export function Broken( {");
+
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.rule_id == "parser/ts")
+            .expect("expected parser/ts diagnostic");
+
+        assert_eq!(diagnostic.file, "broken.ts");
+        assert!(
+            diagnostic
+                .message
+                .contains("TS/JS parser reported a syntax error")
+        );
+    }
+
+    #[test]
+    fn clean_ts_family_sources_do_not_emit_parser_ts() {
+        let cases = [
+            (
+                "valid.ts",
+                "export function ok(value: number) { return value + 1; }",
+            ),
+            (
+                "component.tsx",
+                "export function Button() { return <button aria-label=\"Save\">Save</button>; }",
+            ),
+            (
+                "util.js",
+                "export function ok(value) { return value + 1; }",
+            ),
+            (
+                "view.jsx",
+                "export function Button() { return <button aria-label=\"Save\">Save</button>; }",
+            ),
+        ];
+
+        for (path, source) in cases {
+            let (_db, diagnostics) = analyze_source(path, source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.rule_id != "parser/ts"),
+                "{path} emitted parser/ts diagnostics: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn continues_best_effort_ast_extraction_after_oxc_parse_error() {
+        let (db, diagnostics) = analyze_source(
+            "recoverable.ts",
+            "import x from \"./x\";\nexport function Broken( {",
+        );
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "parser/ts"),
+            "expected parser/ts diagnostic"
+        );
+        assert!(
+            db.imports().iter().any(|import| import.path == "./x"),
+            "expected best-effort import fact after parse error"
+        );
     }
 }
