@@ -13,38 +13,67 @@ pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
         .files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .cloned()
+        .map(|file| file.id)
         .collect();
 
     let mut diagnostics = Vec::new();
-    for file in files {
-        if let Err(error) = parse_ts_file(db, file.id) {
-            diagnostics.push(Diagnostic::error(
-                "parser/ts",
-                db.path_for(file.id),
-                TextRange::point(1, 1),
-                format!("Failed to parse TS/JS file: {error}"),
-            ));
+    for file_id in files {
+        match parse_ts_file(db, file_id) {
+            Ok(mut file_diagnostics) => diagnostics.append(&mut file_diagnostics),
+            Err(error) => {
+                diagnostics.push(Diagnostic::error(
+                    "parser/ts",
+                    db.path_for(file_id),
+                    TextRange::point(1, 1),
+                    format!("Failed to parse TS/JS file: {error}"),
+                ));
+            }
         }
     }
     diagnostics
 }
 
-fn parse_ts_file(db: &mut AnalysisDb, file_id: polint_core::FileId) -> Result<()> {
+fn parse_ts_file(db: &mut AnalysisDb, file_id: polint_core::FileId) -> Result<Vec<Diagnostic>> {
     let file = db.file(file_id).context("missing source file")?.clone();
     let source = file.source.to_string();
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(&file.path).unwrap_or_default();
     let parsed = Parser::new(&allocator, &source, source_type).parse();
-    if !parsed.errors.is_empty() {
-        // Continue with best-effort lexical facts. The parser was still invoked as the source of truth.
+    let mut diagnostics = Vec::new();
+
+    for error in &parsed.errors {
+        let range = error
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.first())
+            .map(|label| {
+                span_from_byte_range(file_id, &source, label.offset(), label.offset() + label.len())
+                    .diagnostic_range()
+            })
+            .unwrap_or_else(|| TextRange::point(1, 1));
+
+        diagnostics.push(Diagnostic::error(
+            "parser/ts",
+            db.path_for(file_id),
+            range,
+            format!("TS/JS parser reported a syntax error: {error}"),
+        ));
+    }
+
+    if parsed.panicked && parsed.program.body.is_empty() && diagnostics.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            "parser/ts",
+            db.path_for(file_id),
+            TextRange::point(1, 1),
+            "TS/JS parser reported a syntax error",
+        ));
     }
 
     extract_imports(db, file_id, &source, file.language);
     extract_functions(db, file_id, &source, file.language);
     extract_string_literals(db, file_id, &source, file.language);
     extract_jsx_attributes(db, file_id, &source);
-    Ok(())
+    Ok(diagnostics)
 }
 
 fn extract_imports(
