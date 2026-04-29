@@ -253,9 +253,6 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
             return;
         };
         let body_node = node.child_by_field_name("body");
-        let body = body_node
-            .and_then(|body| node_text(source, body))
-            .unwrap_or_default();
         let name = if node.kind() == "method_declaration" {
             receiver_type_name(source, node)
                 .map(|receiver| format!("{receiver}.{simple_name}"))
@@ -264,7 +261,7 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
             simple_name.clone()
         };
         let span = node_span(file, source, node);
-        let is_test = is_go_test_entry(&file_path, &simple_name);
+        let is_test = is_go_test_entry(&file_path, &simple_name, node, source);
         let fact = FunctionFact {
             id: FunctionId(0),
             file,
@@ -295,16 +292,9 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
             span.start_line.saturating_sub(1) as usize,
         );
         if is_test {
-            db.push_test(TestFact {
-                file,
-                function: Some(function_id),
-                name,
-                span,
-                evidence_terms: evidence_terms(body),
-                assertion_count: assertion_count(body),
-                subtest_count: body.matches("t.Run(").count() as u32,
-                table_rows: table_rows(body),
-            });
+            if let Some(body) = body_node {
+                db.push_test(go_test_fact(file, function_id, name, span, source, body));
+            }
         }
     });
 }
@@ -345,9 +335,33 @@ fn receiver_type_name(source: &str, node: Node<'_>) -> Option<String> {
     (!without_generics.is_empty()).then(|| without_generics.to_string())
 }
 
-fn is_go_test_entry(path: &str, name: &str) -> bool {
-    path.ends_with("_test.go")
-        && (name.starts_with("Test") || name.starts_with("Benchmark") || name.starts_with("Fuzz"))
+fn is_go_test_entry(path: &str, name: &str, node: Node<'_>, source: &str) -> bool {
+    if !path.ends_with("_test.go") || node.kind() != "function_declaration" {
+        return false;
+    }
+
+    let expected_parameter = if name.starts_with("Test") {
+        "*testing.T"
+    } else if name.starts_with("Benchmark") {
+        "*testing.B"
+    } else if name.starts_with("Fuzz") {
+        "*testing.F"
+    } else {
+        return false;
+    };
+
+    let Some(parameters) = node
+        .child_by_field_name("parameters")
+        .or_else(|| first_named_child(node, "parameter_list"))
+    else {
+        return false;
+    };
+    let normalized = node_text(source, parameters)
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    normalized.contains(expected_parameter)
 }
 
 fn extract_calls(source: &str, body: Node<'_>) -> Vec<String> {
@@ -356,13 +370,7 @@ fn extract_calls(source: &str, body: Node<'_>) -> Vec<String> {
         if node.kind() != "call_expression" {
             return;
         }
-        let Some(function_node) = node
-            .child_by_field_name("function")
-            .or_else(|| node.named_child(0))
-        else {
-            return;
-        };
-        let Some(call) = stable_call_name(source, function_node) else {
+        let Some(call) = call_callee(source, node) else {
             return;
         };
         calls.push(call);
@@ -370,6 +378,13 @@ fn extract_calls(source: &str, body: Node<'_>) -> Vec<String> {
     calls.sort();
     calls.dedup();
     calls
+}
+
+fn call_callee(source: &str, node: Node<'_>) -> Option<String> {
+    let function_node = node
+        .child_by_field_name("function")
+        .or_else(|| node.named_child(0))?;
+    stable_call_name(source, function_node)
 }
 
 fn stable_call_name(source: &str, node: Node<'_>) -> Option<String> {
@@ -382,6 +397,188 @@ fn stable_call_name(source: &str, node: Node<'_>) -> Option<String> {
     } else {
         Some(text)
     }
+}
+
+fn go_test_fact(
+    file: FileId,
+    function: FunctionId,
+    name: String,
+    span: Span,
+    source: &str,
+    body: Node<'_>,
+) -> TestFact {
+    TestFact {
+        file,
+        function: Some(function),
+        name,
+        span,
+        evidence_terms: go_test_evidence_terms(source, body),
+        assertion_count: go_assertion_count(source, body),
+        subtest_count: go_subtest_count(source, body),
+        table_rows: go_table_rows(source, body),
+    }
+}
+
+fn go_subtest_count(source: &str, body: Node<'_>) -> u32 {
+    let mut count = 0;
+    visit_named_descendants(body, &mut |node| {
+        if node.kind() == "call_expression" && call_callee(source, node).as_deref() == Some("t.Run")
+        {
+            count += 1;
+        }
+    });
+    count
+}
+
+fn go_assertion_count(source: &str, body: Node<'_>) -> u32 {
+    let mut count = 0;
+    visit_named_descendants(body, &mut |node| match node.kind() {
+        "call_expression" => {
+            if call_callee(source, node).is_some_and(|callee| is_go_assertion_callee(&callee)) {
+                count += 1;
+            }
+        }
+        "if_statement" => {
+            if is_simple_assertion_condition(source, node) {
+                count += 1;
+            }
+        }
+        _ => {}
+    });
+    count
+}
+
+fn is_go_assertion_callee(callee: &str) -> bool {
+    matches!(callee, "t.Fatal" | "t.Fatalf" | "t.Error" | "t.Errorf")
+        || callee.starts_with("require.")
+        || callee.starts_with("assert.")
+}
+
+fn is_simple_assertion_condition(source: &str, node: Node<'_>) -> bool {
+    let Some(condition) = if_condition_text(source, node) else {
+        return false;
+    };
+    let normalized = condition
+        .trim()
+        .trim_matches('(')
+        .trim_matches(')')
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+
+    matches!(normalized.as_str(), "err==nil" | "err!=nil" | "got!=want")
+}
+
+fn if_condition_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
+    if let Some(condition) = node.child_by_field_name("condition") {
+        return node_text(source, condition);
+    }
+
+    let text = node_text(source, node)?.trim();
+    let condition = text.strip_prefix("if")?.split('{').next()?.trim();
+    condition.rsplit(';').next().map(str::trim)
+}
+
+fn go_table_rows(source: &str, body: Node<'_>) -> u32 {
+    let mut rows = std::collections::BTreeSet::new();
+    visit_named_descendants(body, &mut |node| {
+        if !matches!(
+            node.kind(),
+            "literal_element" | "keyed_element" | "literal_value"
+        ) {
+            return;
+        }
+        let Some(text) = node_text(source, node).map(str::trim) else {
+            return;
+        };
+        if text.starts_with('{')
+            && text.ends_with('}')
+            && text.contains(':')
+            && !text.contains('\n')
+        {
+            rows.insert((node.start_byte(), node.end_byte()));
+        }
+    });
+    rows.len() as u32
+}
+
+fn go_test_evidence_terms(source: &str, body: Node<'_>) -> Vec<String> {
+    let mut terms = std::collections::BTreeSet::new();
+    visit_named_descendants(body, &mut |node| match node.kind() {
+        "identifier" | "field_identifier" | "package_identifier" => {
+            if let Some(text) = node_text(source, node) {
+                add_identifier_evidence(&mut terms, text);
+            }
+        }
+        "interpreted_string_literal" | "raw_string_literal" => {
+            if let Some(text) = unquote_go_string_literal(source, node) {
+                add_string_evidence(&mut terms, source, node, &text);
+            }
+        }
+        "nil" => {
+            terms.insert("nil".to_string());
+        }
+        _ => {}
+    });
+
+    visit_named_descendants(body, &mut |node| {
+        if node.kind() == "if_statement"
+            && if_condition_text(source, node).is_some_and(|condition| condition.contains("nil"))
+        {
+            terms.insert("nil".to_string());
+        }
+    });
+
+    terms.into_iter().collect()
+}
+
+fn add_identifier_evidence(terms: &mut std::collections::BTreeSet<String>, text: &str) {
+    let lower = text.to_ascii_lowercase();
+    if is_go_evidence_word(&lower) {
+        terms.insert(lower);
+    }
+}
+
+fn add_string_evidence(
+    terms: &mut std::collections::BTreeSet<String>,
+    source: &str,
+    node: Node<'_>,
+    text: &str,
+) {
+    let words = evidence_words(text);
+    let is_case_or_subtest_name = string_literal_looks_like_test_case_name(source, node);
+    let has_marker = words.iter().any(|word| is_go_evidence_word(word));
+    for word in words {
+        if is_go_evidence_word(&word)
+            || (is_case_or_subtest_name && !has_marker && !word.contains('_'))
+        {
+            terms.insert(word);
+        }
+    }
+}
+
+fn evidence_words(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn is_go_evidence_word(word: &str) -> bool {
+    matches!(
+        word,
+        "allowed" | "denied" | "err" | "error" | "fail" | "invalid" | "nil"
+    )
+}
+
+fn string_literal_looks_like_test_case_name(source: &str, node: Node<'_>) -> bool {
+    let line_start = source[..node.start_byte()]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let prefix = &source[line_start..node.start_byte()];
+    prefix.contains("name:") || prefix.contains("t.Run(")
 }
 
 fn go_cyclomatic_complexity(_source: &str, body: Node<'_>) -> u32 {
@@ -421,6 +618,18 @@ where
         };
         visit_named_descendants(child, visit);
     }
+}
+
+fn first_named_child<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    for index in 0..node.named_child_count() as u32 {
+        let Some(child) = node.named_child(index) else {
+            continue;
+        };
+        if child.kind() == kind {
+            return Some(child);
+        }
+    }
+    None
 }
 
 fn extract_branches(
@@ -517,41 +726,6 @@ fn push_branch(
         is_error_path,
         stable_fingerprint,
     })
-}
-
-fn evidence_terms(body: &str) -> Vec<String> {
-    let mut terms = Vec::new();
-    for marker in ["err", "error", "invalid", "denied", "nil", "fail"] {
-        if body.contains(marker) {
-            terms.push(marker.to_string());
-        }
-    }
-    terms
-}
-
-fn assertion_count(body: &str) -> u32 {
-    [
-        "if got != want",
-        "if err != nil",
-        "if err == nil",
-        "require.",
-        "assert.",
-        "t.Fatal",
-        "t.Errorf",
-        "t.Fatalf",
-    ]
-    .iter()
-    .map(|needle| body.matches(needle).count() as u32)
-    .sum()
-}
-
-fn table_rows(body: &str) -> u32 {
-    body.lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            trimmed.starts_with('{') && trimmed.contains(':')
-        })
-        .count() as u32
 }
 
 #[cfg(test)]
