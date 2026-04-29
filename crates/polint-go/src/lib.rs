@@ -1,49 +1,159 @@
 use anyhow::{Context, Result};
 use polint_core::{
     AnalysisDb, BranchId, BranchObligation, FileId, FunctionFact, FunctionId, ImportFact, Language,
-    Span, TestFact, span_from_byte_range,
+    PackageFact, Span, TestFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange, fingerprint};
-use tree_sitter::Parser;
+use tree_sitter::{Node, Parser};
 
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     let files: Vec<_> = db
         .files()
         .iter()
         .filter(|file| file.language == Language::Go)
-        .cloned()
+        .map(|file| file.id)
         .collect();
 
     let mut diagnostics = Vec::new();
-    for file in files {
-        if let Err(error) = parse_go_file(db, file.id) {
-            diagnostics.push(Diagnostic::error(
-                "parser/go",
-                db.path_for(file.id),
-                TextRange::point(1, 1),
-                format!("Failed to parse Go file: {error}"),
-            ));
+    for file_id in files {
+        match parse_go_file(db, file_id) {
+            Ok(mut file_diagnostics) => diagnostics.append(&mut file_diagnostics),
+            Err(error) => {
+                diagnostics.push(Diagnostic::error(
+                    "parser/go",
+                    db.path_for(file_id),
+                    TextRange::point(1, 1),
+                    format!("Failed to parse Go file: {error}"),
+                ));
+            }
         }
     }
     diagnostics
 }
 
-fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<()> {
-    let file = db.file(file_id).context("missing source file")?.clone();
-    let source = file.source.to_string();
+fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
+    let source = db
+        .file(file_id)
+        .context("missing source file")?
+        .source
+        .clone();
+    let source = source.as_ref();
 
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_go::LANGUAGE.into())?;
     let tree = parser
-        .parse(&source, None)
+        .parse(source, None)
         .context("tree-sitter returned no parse tree")?;
-    if tree.root_node().has_error() {
-        // Keep extracting best-effort facts. The CLI also reports this parser diagnostic.
+    let root = tree.root_node();
+    let mut diagnostics = Vec::new();
+
+    if root.has_error() {
+        diagnostics.push(parser_error_diagnostic(db, file_id, source, root));
     }
 
-    extract_imports(db, file_id, &source);
-    extract_functions_and_tests(db, file_id, &source);
-    Ok(())
+    extract_package(db, file_id, source, root);
+    extract_imports(db, file_id, source);
+    extract_functions_and_tests(db, file_id, source);
+    Ok(diagnostics)
+}
+
+fn parser_error_diagnostic(
+    db: &AnalysisDb,
+    file_id: FileId,
+    source: &str,
+    root: Node<'_>,
+) -> Diagnostic {
+    let range = first_error_node(root)
+        .map(|node| node_span(file_id, source, node).diagnostic_range())
+        .unwrap_or_else(|| TextRange::point(1, 1));
+
+    Diagnostic::error(
+        "parser/go",
+        db.path_for(file_id),
+        range,
+        "Go parser reported a syntax error.",
+    )
+}
+
+fn extract_package(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+    let Some(package_clause) =
+        first_named_descendant(root, &|node| node.kind() == "package_clause")
+    else {
+        return;
+    };
+
+    let Some(identifier) =
+        first_named_descendant(package_clause, &|node| node.kind() == "package_identifier")
+    else {
+        return;
+    };
+
+    let Some(name) = node_text(source, identifier) else {
+        return;
+    };
+
+    db.push_package(PackageFact {
+        id: polint_core::PackageId(0),
+        file,
+        name: name.to_string(),
+        span: node_span(file, source, identifier),
+        language: Language::Go,
+    });
+}
+
+fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
+    span_from_byte_range(file, source, node.start_byte(), node.end_byte())
+}
+
+fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
+    source.get(node.start_byte()..node.end_byte())
+}
+
+fn first_error_node(node: Node<'_>) -> Option<Node<'_>> {
+    if node.is_error() || node.is_missing() {
+        return Some(node);
+    }
+
+    for index in 0..node.named_child_count() as u32 {
+        let Some(child) = node.named_child(index) else {
+            continue;
+        };
+        if let Some(error) = first_error_node(child) {
+            return Some(error);
+        }
+    }
+    None
+}
+
+fn first_named_descendant<'tree, F>(node: Node<'tree>, predicate: &F) -> Option<Node<'tree>>
+where
+    F: Fn(Node<'tree>) -> bool,
+{
+    if predicate(node) {
+        return Some(node);
+    }
+
+    walk_named_children(node, |child| {
+        if let Some(descendant) = first_named_descendant(child, predicate) {
+            return Some(descendant);
+        }
+        None
+    })
+}
+
+fn walk_named_children<'tree, F>(node: Node<'tree>, mut visit: F) -> Option<Node<'tree>>
+where
+    F: FnMut(Node<'tree>) -> Option<Node<'tree>>,
+{
+    for index in 0..node.named_child_count() as u32 {
+        let Some(child) = node.named_child(index) else {
+            continue;
+        };
+        if let Some(found) = visit(child) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn extract_imports(db: &mut AnalysisDb, file: FileId, source: &str) {
