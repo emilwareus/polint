@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-typescript-adapter-01-PLAN.md
-last_updated: "2026-04-29T16:40:46.290Z"
+stopped_at: Completed 05-typescript-adapter-02-PLAN.md
+last_updated: "2026-04-29T16:56:50.061Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 14
-  completed_plans: 11
-  percent: 79
+  completed_plans: 12
+  percent: 86
 ---
 
 # State: exlint
@@ -46,7 +46,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 
 Phase: 05 (typescript-adapter) — EXECUTING
 Status: Ready to execute
-Plan: 2 of 4
+Plan: 3 of 4
 Last activity: 2026-04-29
 
 ## Phase Progress
@@ -81,6 +81,9 @@ Last activity: 2026-04-29
 - [Phase 05-typescript-adapter]: Kept parser/ts diagnostics local to polint-ts and used the stable TS/JS parser syntax-error prefix.
 - [Phase 05-typescript-adapter]: Parsed TS-family files from SourceFile.source as borrowed Arc-backed text instead of cloning full source strings.
 - [Phase 05-typescript-adapter]: Introduced narrow Oxc helper boundaries while preserving lexical extraction for fact families not yet AST-backed.
+- [Phase 05-typescript-adapter]: Added a narrow TsClassFact public contract with no class IDs, inheritance graph, resolver, or type information.
+- [Phase 05-typescript-adapter]: Kept TS/JS module specifiers syntactic and parser-backed; no production Node or TypeScript resolution was added.
+- [Phase 05-typescript-adapter]: Used Oxc module records only as a parser-backed fallback to preserve best-effort imports after unrecoverable parser errors.
 
 ## Performance Metrics
 
@@ -91,11 +94,12 @@ Last activity: 2026-04-29
 | Phase 04-go-adapter P03 | 9min | 2 tasks | 2 files |
 | Phase 04-go-adapter P04 | 6min | 3 tasks | 6 files |
 | Phase 05-typescript-adapter P01 | 10min | 2 tasks | 1 files |
+| Phase 05-typescript-adapter P02 | 13min | 2 tasks | 2 files |
 
 ## Session
 
-**Last Date:** 2026-04-29T16:40:46.288Z
-**Stopped At:** Completed 05-typescript-adapter-01-PLAN.md
+**Last Date:** 2026-04-29T16:56:49.994Z
+**Stopped At:** Completed 05-typescript-adapter-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
