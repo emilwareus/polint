@@ -36,7 +36,7 @@
 
 ### Go Analysis
 
-- [ ] **GO-01**: Go adapter parses Go files with tree-sitter-go and reports parser errors as diagnostics.
+- [x] **GO-01**: Go adapter parses Go files with tree-sitter-go and reports parser errors as diagnostics.
 - [ ] **GO-02**: Go adapter extracts package names, imports, functions, methods, test functions, subtests, and table-test evidence where practical.
 - [ ] **GO-03**: Go adapter extracts branch obligations for `if`, `switch`, `case/default`, `for`, `range`, and basic error-path conditions.
 - [ ] **GO-04**: Go adapter computes basic cyclomatic complexity and import graph facts.
@@ -118,8 +118,8 @@
 | DIAG-01 | Phase 3 | Complete |
 | DIAG-02 | Phase 2 | Complete |
 | DIAG-03 | Phase 8 | Pending |
-| GO-01 | Phase 4 | Pending |
-| GO-02 | Phase 4 | Pending |
+| GO-01 | Phase 4 | Complete |
+| GO-02 | Phase 4 | In Progress - Phase 4 parser diagnostics and package fact extraction verified; imports, functions, methods, tests, subtests, and table-test evidence remain scheduled in 04-02 |
 | GO-03 | Phase 4 | Pending |
 | GO-04 | Phase 4 | Pending |
 | TS-01 | Phase 5 | Pending |

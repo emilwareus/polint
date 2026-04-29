@@ -2,14 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Executing Phase 04
-last_updated: "2026-04-29T05:10:03.373Z"
+status: executing
+stopped_at: Completed 04-go-adapter-01-PLAN.md
+last_updated: "2026-04-29T05:22:28.153Z"
+last_activity: 2026-04-29
 progress:
   total_phases: 10
   completed_phases: 3
   total_plans: 10
-  completed_plans: 6
-  percent: 60
+  completed_plans: 7
+  percent: 70
 ---
 
 # State: exlint
@@ -33,7 +35,14 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Phase 1 has been closed through GSD plan execution and verification.
 - Phase 2 has been closed through GSD plan execution and verification.
 - Phase 3 has been closed through GSD plan execution, advisory review fixes, and verification.
-- Next action: discuss/plan Phase 4 Go adapter work on `main`.
+- Phase 4 Plan 04-01 completed parser-backed Go package facts and parser diagnostics; see `.planning/phases/04-go-adapter/04-01-SUMMARY.md`.
+- Next action: execute Phase 4 Plan 04-02 Go imports, declarations, calls, test evidence, and complexity on `main`.
+
+## Current Position
+
+Status: Ready to execute
+Plan: 2 of 4 in current phase
+Last activity: 2026-04-29
 
 ## Phase Progress
 
@@ -42,13 +51,31 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 | 1 | Complete | Rust workspace foundation committed and verified |
 | 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
 | 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
-| 4 | Ready to plan | Go adapter parses with tree-sitter-go and has initial practical syntax facts to harden |
+| 4 | In Progress | 1/4 plans complete; parser diagnostics and package facts verified |
 | 5 | In Progress | TypeScript adapter parses with Oxc and extracts practical syntax facts |
 | 6 | In Progress | SDK and requested example rules have working initial implementation |
 | 7 | In Progress | Cache crate exists; deeper parse/fact persistence remains |
 | 8 | In Progress | SARIF-like output, exit codes, profile-rules, explain, and graph commands exist |
 | 9 | In Progress | WIT and plugin host skeleton exist |
 | 10 | In Progress | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
+
+## Decisions Made
+
+- [Phase 04-go-adapter]: Added only the narrow PackageFact core contract needed for Go package names.
+- [Phase 04-go-adapter]: Kept Go parser diagnostics local to polint-go with stable parser/go messages for malformed source.
+- [Phase 04-go-adapter]: Kept existing import/function extraction in place while moving package extraction to tree-sitter nodes for this foundation plan.
+
+## Performance Metrics
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 04-go-adapter P01 | 8min | 2 tasks | 2 files |
+
+## Session
+
+**Last Date:** 2026-04-29T05:22:12.786Z
+**Stopped At:** Completed 04-go-adapter-01-PLAN.md
+**Resume File:** None
 
 ## Important Context For Execution
 
