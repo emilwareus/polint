@@ -651,13 +651,35 @@ fn extract_branches(
         "expression_switch_statement" | "type_switch_statement" => {
             push_switch_branch(db, file, function, function_name, source, node);
         }
-        "expression_case" | "type_case" | "communication_case" => {
-            push_case_branch(db, file, function, function_name, source, node, "case");
-        }
-        "default_case" => {
-            push_case_branch(db, file, function, function_name, source, node, "default");
-        }
-        "for_statement" => push_for_branch(db, file, function, function_name, source, node),
+        "expression_case" | "type_case" | "communication_case" => push_case_branch(
+            db,
+            file,
+            function,
+            function_name,
+            function_returns_error,
+            source,
+            node,
+            "case",
+        ),
+        "default_case" => push_case_branch(
+            db,
+            file,
+            function,
+            function_name,
+            function_returns_error,
+            source,
+            node,
+            "default",
+        ),
+        "for_statement" => push_for_branch(
+            db,
+            file,
+            function,
+            function_name,
+            function_returns_error,
+            source,
+            node,
+        ),
         "select_statement" => push_select_branch(db, file, function, function_name, source, node),
         _ => {}
     });
@@ -679,6 +701,14 @@ fn push_if_branches(
         .trim()
         .to_string();
     let span = node_span(file, source, decision);
+    let true_body = node
+        .child_by_field_name("consequence")
+        .or_else(|| node.child_by_field_name("body"));
+    let false_body = node.child_by_field_name("alternative");
+    let true_is_error_path = branch_body_returns_error(source, true_body, function_returns_error)
+        || condition_implies_error_edge(&condition, "true");
+    let false_is_error_path = branch_body_returns_error(source, false_body, function_returns_error)
+        || condition_implies_error_edge(&condition, "false");
     push_branch(
         db,
         BranchTarget {
@@ -689,7 +719,7 @@ fn push_if_branches(
         span.clone(),
         condition.clone(),
         "true",
-        is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
+        true_is_error_path,
     );
     push_branch(
         db,
@@ -701,7 +731,7 @@ fn push_if_branches(
         span,
         condition.clone(),
         "false",
-        is_go_error_path_heuristic(source, &condition, None, function_returns_error),
+        false_is_error_path,
     );
 }
 
@@ -738,6 +768,7 @@ fn push_case_branch(
     file: FileId,
     function: FunctionId,
     function_name: &str,
+    function_returns_error: bool,
     source: &str,
     node: Node<'_>,
     edge_label: &str,
@@ -764,7 +795,7 @@ fn push_case_branch(
         trimmed_span(file, source, start, end),
         condition.clone(),
         edge_label,
-        is_go_error_path_heuristic(source, &condition, Some(node), false),
+        is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
     );
 }
 
@@ -773,10 +804,11 @@ fn push_for_branch(
     file: FileId,
     function: FunctionId,
     function_name: &str,
+    function_returns_error: bool,
     source: &str,
     node: Node<'_>,
 ) {
-    if let Some(range) = first_named_descendant(node, &|child| child.kind() == "range_clause") {
+    if let Some(range) = direct_range_clause(node) {
         let condition = node_text(source, range)
             .unwrap_or("range")
             .trim()
@@ -791,7 +823,7 @@ fn push_for_branch(
             node_span(file, source, range),
             condition.clone(),
             "range",
-            is_go_error_path_heuristic(source, &condition, Some(node), false),
+            is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
         );
         return;
     }
@@ -810,8 +842,14 @@ fn push_for_branch(
         trimmed_span(file, source, start, end),
         condition.clone(),
         "loop",
-        is_go_error_path_heuristic(source, &condition, Some(node), false),
+        is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
     );
+}
+
+fn direct_range_clause(node: Node<'_>) -> Option<Node<'_>> {
+    node.child_by_field_name("clause")
+        .filter(|child| child.kind() == "range_clause")
+        .or_else(|| first_named_child(node, "range_clause"))
 }
 
 fn push_select_branch(
@@ -978,18 +1016,35 @@ fn is_go_error_path_heuristic(
     branch_node: Option<Node<'_>>,
     function_returns_error: bool,
 ) -> bool {
+    condition_implies_error_edge(condition_text, "true")
+        || branch_body_returns_error(source, branch_node, function_returns_error)
+}
+
+fn condition_implies_error_edge(condition_text: &str, edge_label: &str) -> bool {
     let compact = condition_text
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase();
-    compact.contains("err!=nil")
-        || compact.contains("err==nil")
-        || compact.contains("errors.is(")
-        || compact.contains("errors.as(")
-        || condition_text.to_ascii_lowercase().contains("error")
-        || (function_returns_error
-            && branch_node.is_some_and(|node| subtree_returns_error_looking_value(source, node)))
+    match edge_label {
+        "true" => {
+            compact.contains("err!=nil")
+                || compact.contains("errors.is(")
+                || compact.contains("errors.as(")
+                || condition_text.to_ascii_lowercase().contains("error")
+        }
+        "false" => compact.contains("err==nil"),
+        _ => false,
+    }
+}
+
+fn branch_body_returns_error(
+    source: &str,
+    branch_node: Option<Node<'_>>,
+    function_returns_error: bool,
+) -> bool {
+    function_returns_error
+        && branch_node.is_some_and(|node| subtree_returns_error_looking_value(source, node))
 }
 
 fn subtree_returns_error_looking_value(source: &str, node: Node<'_>) -> bool {
@@ -1584,6 +1639,112 @@ func Authorize(err error, target error, ok bool, shouldReject bool) error {
         assert!(branch_for(&db, "errors.Is(err, target)", "true").is_error_path);
         assert!(branch_for(&db, "shouldReject", "true").is_error_path);
         assert!(!branch_for(&db, "ok", "true").is_error_path);
+    }
+
+    #[test]
+    fn classifies_if_error_paths_by_edge_and_body() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+var ErrDenied error
+
+func Authorize(err error, ok bool) error {
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	} else {
+		return ErrDenied
+	}
+	if err == nil {
+		return nil
+	}
+	return err
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert!(branch_for(&db, "err != nil", "true").is_error_path);
+        assert!(!branch_for(&db, "err != nil", "false").is_error_path);
+        assert!(!branch_for(&db, "ok", "true").is_error_path);
+        assert!(branch_for(&db, "ok", "false").is_error_path);
+        assert!(!branch_for(&db, "err == nil", "true").is_error_path);
+        assert!(branch_for(&db, "err == nil", "false").is_error_path);
+    }
+
+    #[test]
+    fn marks_case_and_loop_error_returns_without_marking_whole_switch() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+var ErrInvalid error
+
+func Authorize(kind string, items []int) error {
+	switch kind {
+	case "invalid":
+		return ErrInvalid
+	default:
+		return nil
+	}
+	for i := 0; i < len(items); i++ {
+		return ErrInvalid
+	}
+	return nil
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert!(!branch_for(&db, "kind", "switch").is_error_path);
+        assert!(branch_for(&db, r#"case "invalid":"#, "case").is_error_path);
+        assert!(!branch_for(&db, "default", "default").is_error_path);
+        assert!(branch_for(&db, "for i := 0; i < len(items); i++", "loop").is_error_path);
+    }
+
+    #[test]
+    fn ordinary_for_ignores_nested_range_clause() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+func Process(items []int) {
+	for i := 0; i < 1; i++ {
+		for _, item := range items {
+			_ = item
+		}
+	}
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let loop_branches = db
+            .branches()
+            .iter()
+            .filter(|branch| branch.edge_label == "loop")
+            .collect::<Vec<_>>();
+        let range_branches = db
+            .branches()
+            .iter()
+            .filter(|branch| branch.edge_label == "range")
+            .collect::<Vec<_>>();
+        assert_eq!(loop_branches.len(), 1, "{loop_branches:?}");
+        assert_eq!(range_branches.len(), 1, "{range_branches:?}");
+        assert_eq!(loop_branches[0].condition_text, "for i := 0; i < 1; i++");
+        assert_eq!(range_branches[0].condition_text, "_, item := range items");
+        assert!(
+            range_branches[0].decision_span.start_line > loop_branches[0].decision_span.start_line
+        );
     }
 
     #[test]
