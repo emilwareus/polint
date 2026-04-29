@@ -83,6 +83,14 @@ Plans:
 
 **Requirements:** GO-01, GO-02, GO-03, GO-04, TEST-01, TEST-02
 
+**Plans:** 4 plans
+
+Plans:
+- [ ] 04-01-PLAN.md - Add parser-backed Go foundation, parser diagnostics, and core package facts.
+- [ ] 04-02-PLAN.md - Extract Go imports, declarations, calls, test evidence, and complexity from tree-sitter.
+- [ ] 04-03-PLAN.md - Extract Go branch obligations and conservative error-path heuristics.
+- [ ] 04-04-PLAN.md - Prove Go facts through fixtures, CLI integration tests, and workspace verification.
+
 **Success criteria:**
 1. Go files parse through tree-sitter-go and parser errors become diagnostics.
 2. Package names, imports, functions, methods, tests, subtests, and practical table-test evidence are extracted.
