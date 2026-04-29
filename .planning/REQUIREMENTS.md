@@ -44,7 +44,7 @@
 ### TypeScript Analysis
 
 - [x] **TS-01**: TS adapter parses `.ts`, `.tsx`, `.js`, and `.jsx` files with Oxc and reports parser errors as diagnostics.
-- [x] **TS-02**: TS adapter extracts imports/exports, functions, classes, React-ish component functions, JSX attributes, and string literals.
+- [ ] **TS-02**: TS adapter extracts imports/exports, functions, classes, React-ish component functions, JSX attributes, and string literals.
 - [ ] **TS-03**: TS adapter computes basic cyclomatic complexity and import graph facts.
 
 ### SDK and Rules
@@ -123,7 +123,7 @@
 | GO-03 | Phase 4 | Complete |
 | GO-04 | Phase 4 | Complete |
 | TS-01 | Phase 5 | Complete |
-| TS-02 | Phase 5 | Complete |
+| TS-02 | Phase 5 | In Progress - imports/exports, functions, classes, component heuristics, methods, and calls verified in 05-02; JSX attributes and string literals remain scheduled in 05-03 |
 | TS-03 | Phase 5 | Pending |
 | SDK-01 | Phase 6 | Pending |
 | SDK-02 | Phase 6 | Pending |

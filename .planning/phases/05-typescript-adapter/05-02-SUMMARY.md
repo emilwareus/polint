@@ -40,7 +40,7 @@ patterns-established:
   - "FunctionFact.calls is sorted and deduped after collecting Oxc CallExpression callee names."
   - "Class methods are represented as FunctionFact names in ClassName.methodName form while classes use TsClassFact."
 
-requirements-completed: [TS-02, TEST-01]
+requirements-progress: [TS-02, TEST-01]
 
 duration: 13min
 completed: 2026-04-29
