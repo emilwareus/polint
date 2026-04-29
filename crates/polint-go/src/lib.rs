@@ -898,7 +898,7 @@ fn switch_decision_range(source: &str, node: Node<'_>) -> Option<(usize, usize)>
 
 fn case_header_range(source: &str, node: Node<'_>) -> (usize, usize) {
     if let Some(case_text) = source.get(node.start_byte()..node.end_byte())
-        && let Some(colon_offset) = case_text.find(':')
+        && let Some(colon_offset) = case_delimiter_colon(case_text)
     {
         return (node.start_byte(), node.start_byte() + colon_offset + 1);
     }
@@ -916,6 +916,59 @@ fn case_header_range(source: &str, node: Node<'_>) -> (usize, usize) {
         .map(|offset| node.end_byte() + offset + 1)
         .unwrap_or_else(|| node.end_byte());
     (node.start_byte(), end)
+}
+
+fn case_delimiter_colon(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut paren_depth = 0_u32;
+    let mut bracket_depth = 0_u32;
+    let mut brace_depth = 0_u32;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' | b'\'' => index = skip_quoted_literal(bytes, index)?,
+            b'`' => index = skip_raw_string_literal(bytes, index)?,
+            b'(' => paren_depth += 1,
+            b')' => paren_depth = paren_depth.saturating_sub(1),
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
+            b':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                if bytes.get(index + 1) != Some(&b'=') {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn skip_quoted_literal(bytes: &[u8], start: usize) -> Option<usize> {
+    let quote = *bytes.get(start)?;
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == quote => return Some(index),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn skip_raw_string_literal(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'`' {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
 }
 
 fn statement_header_range(source: &str, node: Node<'_>) -> (usize, usize) {
@@ -1744,6 +1797,55 @@ func Process(items []int) {
         assert_eq!(range_branches[0].condition_text, "_, item := range items");
         assert!(
             range_branches[0].decision_span.start_line > loop_branches[0].decision_span.start_line
+        );
+    }
+
+    #[test]
+    fn case_headers_keep_colons_inside_literals_and_short_declarations() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+func Process(kind string, ch <-chan string) {
+	switch kind {
+	case "bad:token":
+		deny()
+	case map[string]int{"a:b": 1}["a:b"]:
+		deny()
+	default:
+		allow()
+	}
+
+	select {
+	case msg := <-ch:
+		_ = msg
+	default:
+		return
+	}
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let case_headers = db
+            .branches()
+            .iter()
+            .filter(|branch| branch.edge_label == "case")
+            .map(|branch| branch.condition_text.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            case_headers.contains(&r#"case "bad:token":"#),
+            "{case_headers:?}"
+        );
+        assert!(
+            case_headers.contains(&r#"case map[string]int{"a:b": 1}["a:b"]:"#),
+            "{case_headers:?}"
+        );
+        assert!(
+            case_headers.contains(&"case msg := <-ch:"),
+            "{case_headers:?}"
         );
     }
 
