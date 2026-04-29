@@ -280,7 +280,15 @@ fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node
         let function_id = db.push_function(fact);
 
         if let Some(body) = body_node {
-            extract_branches(db, file, function_id, source, body);
+            extract_branches(
+                db,
+                file,
+                function_id,
+                &name,
+                function_result_contains_error(source, node),
+                source,
+                body,
+            );
         }
         if is_test && let Some(body) = body_node {
             db.push_test(go_test_fact(file, function_id, name, span, source, body));
@@ -625,22 +633,32 @@ fn extract_branches(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
+    function_returns_error: bool,
     source: &str,
     body: Node<'_>,
 ) {
     visit_named_descendants(body, &mut |node| match node.kind() {
-        "if_statement" => push_if_branches(db, file, function, source, node),
+        "if_statement" => push_if_branches(
+            db,
+            file,
+            function,
+            function_name,
+            function_returns_error,
+            source,
+            node,
+        ),
         "expression_switch_statement" | "type_switch_statement" => {
-            push_switch_branch(db, file, function, source, node);
+            push_switch_branch(db, file, function, function_name, source, node);
         }
         "expression_case" | "type_case" | "communication_case" => {
-            push_case_branch(db, file, function, source, node, "case");
+            push_case_branch(db, file, function, function_name, source, node, "case");
         }
         "default_case" => {
-            push_case_branch(db, file, function, source, node, "default");
+            push_case_branch(db, file, function, function_name, source, node, "default");
         }
-        "for_statement" => push_for_branch(db, file, function, source, node),
-        "select_statement" => push_select_branch(db, file, function, source, node),
+        "for_statement" => push_for_branch(db, file, function, function_name, source, node),
+        "select_statement" => push_select_branch(db, file, function, function_name, source, node),
         _ => {}
     });
 }
@@ -649,6 +667,8 @@ fn push_if_branches(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
+    function_returns_error: bool,
     source: &str,
     node: Node<'_>,
 ) {
@@ -663,17 +683,29 @@ fn push_if_branches(
         db,
         file,
         function,
+        function_name,
         span.clone(),
         condition.clone(),
         "true",
+        is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
     );
-    push_branch(db, file, function, span, condition, "false");
+    push_branch(
+        db,
+        file,
+        function,
+        function_name,
+        span,
+        condition.clone(),
+        "false",
+        is_go_error_path_heuristic(source, &condition, None, function_returns_error),
+    );
 }
 
 fn push_switch_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
     source: &str,
     node: Node<'_>,
 ) {
@@ -685,9 +717,11 @@ fn push_switch_branch(
         db,
         file,
         function,
+        function_name,
         trimmed_span(file, source, start, end),
-        condition,
+        condition.clone(),
         "switch",
+        is_go_error_path_heuristic(source, &condition, Some(node), false),
     );
 }
 
@@ -695,6 +729,7 @@ fn push_case_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
     source: &str,
     node: Node<'_>,
     edge_label: &str,
@@ -713,9 +748,11 @@ fn push_case_branch(
         db,
         file,
         function,
+        function_name,
         trimmed_span(file, source, start, end),
-        condition,
+        condition.clone(),
         edge_label,
+        is_go_error_path_heuristic(source, &condition, Some(node), false),
     );
 }
 
@@ -723,6 +760,7 @@ fn push_for_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
     source: &str,
     node: Node<'_>,
 ) {
@@ -732,9 +770,11 @@ fn push_for_branch(
             db,
             file,
             function,
+            function_name,
             node_span(file, source, range),
-            condition,
+            condition.clone(),
             "range",
+            is_go_error_path_heuristic(source, &condition, Some(node), false),
         );
         return;
     }
@@ -745,9 +785,11 @@ fn push_for_branch(
         db,
         file,
         function,
+        function_name,
         trimmed_span(file, source, start, end),
-        condition,
+        condition.clone(),
         "loop",
+        is_go_error_path_heuristic(source, &condition, Some(node), false),
     );
 }
 
@@ -755,6 +797,7 @@ fn push_select_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
     source: &str,
     node: Node<'_>,
 ) {
@@ -763,9 +806,11 @@ fn push_select_branch(
         db,
         file,
         function,
+        function_name,
         span_from_byte_range(file, source, node.start_byte(), end),
         "select".to_string(),
         "select",
+        false,
     );
 }
 
@@ -844,18 +889,21 @@ fn push_branch(
     db: &mut AnalysisDb,
     file: FileId,
     function: FunctionId,
+    function_name: &str,
     decision_span: Span,
     condition_text: String,
     edge_label: &str,
+    is_error_path: bool,
 ) -> BranchId {
-    let is_error_path = condition_text.contains("err != nil")
-        || condition_text.contains("err==nil")
-        || condition_text.contains("error");
+    let start_line = decision_span.start_line.to_string();
+    let start_col = decision_span.start_col.to_string();
+    let normalized_condition = normalize_branch_condition(&condition_text);
     let stable_fingerprint = fingerprint(&[
         &db.path_for(file),
-        &function.0.to_string(),
-        &decision_span.start_line.to_string(),
-        &condition_text,
+        function_name,
+        &start_line,
+        &start_col,
+        &normalized_condition,
         edge_label,
     ]);
     db.push_branch(BranchObligation {
@@ -868,6 +916,94 @@ fn push_branch(
         is_error_path,
         stable_fingerprint,
     })
+}
+
+fn normalize_branch_condition(condition_text: &str) -> String {
+    condition_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn function_result_contains_error(source: &str, node: Node<'_>) -> bool {
+    if node
+        .child_by_field_name("result")
+        .and_then(|result| node_text(source, result))
+        .is_some_and(contains_error_word)
+    {
+        return true;
+    }
+
+    let (start, end) = statement_header_range(source, node);
+    let Some(header) = trimmed_text(source, start, end) else {
+        return false;
+    };
+    header
+        .rsplit_once(')')
+        .is_some_and(|(_, result)| contains_error_word(result))
+}
+
+// Syntax-only heuristic: this flags obvious Go error branches, not exact path coverage.
+fn is_go_error_path_heuristic(
+    source: &str,
+    condition_text: &str,
+    branch_node: Option<Node<'_>>,
+    function_returns_error: bool,
+) -> bool {
+    let compact = condition_text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    compact.contains("err!=nil")
+        || compact.contains("err==nil")
+        || compact.contains("errors.is(")
+        || compact.contains("errors.as(")
+        || condition_text.to_ascii_lowercase().contains("error")
+        || (function_returns_error
+            && branch_node.is_some_and(|node| subtree_returns_error_looking_value(source, node)))
+}
+
+fn subtree_returns_error_looking_value(source: &str, node: Node<'_>) -> bool {
+    let mut returns_error = false;
+    visit_named_descendants(node, &mut |descendant| {
+        if returns_error || descendant.kind() != "return_statement" {
+            return;
+        }
+        returns_error = return_statement_looks_error(source, descendant);
+    });
+    returns_error
+}
+
+fn return_statement_looks_error(source: &str, node: Node<'_>) -> bool {
+    let Some(returned) = node_text(source, node)
+        .map(str::trim)
+        .and_then(|text| text.strip_prefix("return"))
+        .map(str::trim)
+    else {
+        return false;
+    };
+
+    returned
+        .split(',')
+        .map(str::trim)
+        .any(error_value_looks_error)
+}
+
+fn error_value_looks_error(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let trimmed = lower.trim_matches(|character: char| !character.is_ascii_alphanumeric());
+    !matches!(trimmed, "" | "nil" | "true" | "false")
+        && (trimmed == "err"
+            || trimmed.starts_with("err")
+            || trimmed.contains("error")
+            || trimmed.contains("errors.")
+            || trimmed.contains("fmt.errorf"))
+}
+
+fn contains_error_word(text: &str) -> bool {
+    text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|word| word == "error")
 }
 
 #[cfg(test)]
