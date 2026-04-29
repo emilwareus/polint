@@ -681,9 +681,11 @@ fn push_if_branches(
     let span = node_span(file, source, decision);
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         span.clone(),
         condition.clone(),
         "true",
@@ -691,9 +693,11 @@ fn push_if_branches(
     );
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         span,
         condition.clone(),
         "false",
@@ -712,12 +716,16 @@ fn push_switch_branch(
     let Some((start, end)) = switch_decision_range(source, node) else {
         return;
     };
-    let condition = trimmed_text(source, start, end).unwrap_or("switch").to_string();
+    let condition = trimmed_text(source, start, end)
+        .unwrap_or("switch")
+        .to_string();
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         trimmed_span(file, source, start, end),
         condition.clone(),
         "switch",
@@ -742,13 +750,17 @@ fn push_case_branch(
     let condition = if edge_label == "default" {
         "default".to_string()
     } else {
-        trimmed_text(source, start, end).unwrap_or("case").to_string()
+        trimmed_text(source, start, end)
+            .unwrap_or("case")
+            .to_string()
     };
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         trimmed_span(file, source, start, end),
         condition.clone(),
         edge_label,
@@ -765,12 +777,17 @@ fn push_for_branch(
     node: Node<'_>,
 ) {
     if let Some(range) = first_named_descendant(node, &|child| child.kind() == "range_clause") {
-        let condition = node_text(source, range).unwrap_or("range").trim().to_string();
+        let condition = node_text(source, range)
+            .unwrap_or("range")
+            .trim()
+            .to_string();
         push_branch(
             db,
-            file,
-            function,
-            function_name,
+            BranchTarget {
+                file,
+                function,
+                function_name,
+            },
             node_span(file, source, range),
             condition.clone(),
             "range",
@@ -780,12 +797,16 @@ fn push_for_branch(
     }
 
     let (start, end) = statement_header_range(source, node);
-    let condition = trimmed_text(source, start, end).unwrap_or("for").to_string();
+    let condition = trimmed_text(source, start, end)
+        .unwrap_or("for")
+        .to_string();
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         trimmed_span(file, source, start, end),
         condition.clone(),
         "loop",
@@ -804,9 +825,11 @@ fn push_select_branch(
     let end = node.start_byte().saturating_add("select".len());
     push_branch(
         db,
-        file,
-        function,
-        function_name,
+        BranchTarget {
+            file,
+            function,
+            function_name,
+        },
         span_from_byte_range(file, source, node.start_byte(), end),
         "select".to_string(),
         "select",
@@ -815,10 +838,10 @@ fn push_select_branch(
 }
 
 fn switch_decision_range(source: &str, node: Node<'_>) -> Option<(usize, usize)> {
-    if node.kind() == "expression_switch_statement" {
-        if let Some(value) = node.child_by_field_name("value") {
-            return Some((value.start_byte(), value.end_byte()));
-        }
+    if node.kind() == "expression_switch_statement"
+        && let Some(value) = node.child_by_field_name("value")
+    {
+        return Some((value.start_byte(), value.end_byte()));
     }
 
     let (start, end) = statement_header_range(source, node);
@@ -885,11 +908,16 @@ fn trimmed_span(file: FileId, source: &str, start: usize, end: usize) -> Span {
     span_from_byte_range(file, source, start + leading, end - trailing)
 }
 
-fn push_branch(
-    db: &mut AnalysisDb,
+#[derive(Clone, Copy)]
+struct BranchTarget<'name> {
     file: FileId,
     function: FunctionId,
-    function_name: &str,
+    function_name: &'name str,
+}
+
+fn push_branch(
+    db: &mut AnalysisDb,
+    target: BranchTarget<'_>,
     decision_span: Span,
     condition_text: String,
     edge_label: &str,
@@ -899,8 +927,8 @@ fn push_branch(
     let start_col = decision_span.start_col.to_string();
     let normalized_condition = normalize_branch_condition(&condition_text);
     let stable_fingerprint = fingerprint(&[
-        &db.path_for(file),
-        function_name,
+        &db.path_for(target.file),
+        target.function_name,
         &start_line,
         &start_col,
         &normalized_condition,
@@ -908,8 +936,8 @@ fn push_branch(
     ]);
     db.push_branch(BranchObligation {
         id: BranchId(0),
-        function: Some(function),
-        file,
+        function: Some(target.function),
+        file: target.file,
         decision_span,
         condition_text,
         edge_label: edge_label.to_string(),
@@ -1579,7 +1607,11 @@ func Authorize(err error, ok bool) error {
         let second_fingerprints = branch_fingerprints(&second);
 
         assert_eq!(first_fingerprints, second_fingerprints);
-        assert!(first_fingerprints.iter().all(|fingerprint| !fingerprint.is_empty()));
+        assert!(
+            first_fingerprints
+                .iter()
+                .all(|fingerprint| !fingerprint.is_empty())
+        );
     }
 
     #[test]
