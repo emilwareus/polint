@@ -761,4 +761,142 @@ func Authorize() {}
         assert!(dot.contains("payment.go"), "{dot}");
         assert!(dot.contains("github.com/acme/authz"), "{dot}");
     }
+
+    #[test]
+    fn extracts_go_test_functions_subtests_and_table_evidence() {
+        let mut db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import "testing"
+
+func TestAuthorize(t *testing.T) {
+	cases := []struct {
+		name string
+		allowed bool
+		wantErr bool
+	}{
+		{name: "allowed", allowed: true, wantErr: false},
+		{name: "denied", allowed: false, wantErr: true},
+		{name: "invalid token", allowed: false, wantErr: true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Authorize(tt.allowed)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error for %s", tt.name)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected denied error: %v", err)
+			}
+		})
+	}
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(db.functions().len(), 1);
+        assert!(db.functions()[0].is_test);
+        assert_eq!(db.tests().len(), 1);
+        let test = &db.tests()[0];
+        assert_eq!(test.name, "TestAuthorize");
+        assert_eq!(test.function, Some(db.functions()[0].id));
+        assert_eq!(test.subtest_count, 1);
+        assert_eq!(test.table_rows, 3);
+        assert_eq!(test.assertion_count, 2);
+        assert_eq!(
+            test.evidence_terms,
+            vec![
+                "allowed".to_string(),
+                "denied".to_string(),
+                "err".to_string(),
+                "error".to_string(),
+                "invalid".to_string(),
+                "nil".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_mark_non_test_go_functions_as_tests() {
+        let mut helper_db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+func TestHelper() {}
+"#,
+        );
+        let mut non_test_file_db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "testing"
+
+func TestAuthorize(t *testing.T) {}
+"#,
+        );
+
+        let helper_diagnostics = analyze(&mut helper_db);
+        let non_test_file_diagnostics = analyze(&mut non_test_file_db);
+
+        assert!(helper_diagnostics.is_empty());
+        assert!(non_test_file_diagnostics.is_empty());
+        assert_eq!(helper_db.tests().len(), 0);
+        assert!(!helper_db.functions()[0].is_test);
+        assert_eq!(non_test_file_db.tests().len(), 0);
+        assert!(!non_test_file_db.functions()[0].is_test);
+    }
+
+    #[test]
+    fn go_assertion_evidence_counts_common_failure_calls() {
+        let mut db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAssertions(t *testing.T) {
+	err := Authorize(false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := "denied"
+	want := "allowed"
+	if got != want {
+		t.Errorf("got %s want %s", got, want)
+	}
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(db.tests().len(), 1);
+        assert_eq!(db.tests()[0].assertion_count, 8);
+        assert_eq!(
+            db.tests()[0].evidence_terms,
+            vec![
+                "allowed".to_string(),
+                "denied".to_string(),
+                "err".to_string(),
+                "error".to_string(),
+                "nil".to_string(),
+            ]
+        );
+    }
 }
