@@ -358,7 +358,26 @@ fn is_go_test_entry(path: &str, name: &str, node: Node<'_>, source: &str) -> boo
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>();
-    normalized.contains(expected_parameter)
+    let Some(parameters) = normalized
+        .strip_prefix('(')
+        .and_then(|parameters| parameters.strip_suffix(')'))
+    else {
+        return false;
+    };
+
+    if parameters.contains(',') {
+        return false;
+    }
+
+    parameters == expected_parameter
+        || parameters
+            .strip_suffix(expected_parameter)
+            .is_some_and(|name| {
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+            })
 }
 
 fn extract_calls(source: &str, body: Node<'_>) -> Vec<String> {
@@ -479,24 +498,46 @@ fn if_condition_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'
 fn go_table_rows(source: &str, body: Node<'_>) -> u32 {
     let mut rows = std::collections::BTreeSet::new();
     visit_named_descendants(body, &mut |node| {
-        if !matches!(
-            node.kind(),
-            "literal_element" | "keyed_element" | "literal_value"
-        ) {
+        if node.kind() != "literal_value" || !is_anonymous_struct_table(source, node) {
             return;
         }
-        let Some(text) = node_text(source, node).map(str::trim) else {
-            return;
-        };
-        if text.starts_with('{')
-            && text.ends_with('}')
-            && text.contains(':')
-            && !text.contains('\n')
-        {
-            rows.insert((node.start_byte(), node.end_byte()));
+
+        for index in 0..node.named_child_count() as u32 {
+            let Some(row) = node.named_child(index) else {
+                continue;
+            };
+            let Some(text) = node_text(source, row).map(str::trim) else {
+                continue;
+            };
+            if matches!(
+                row.kind(),
+                "literal_element" | "keyed_element" | "literal_value"
+            ) && text.starts_with('{')
+                && text.ends_with('}')
+                && text.contains(':')
+            {
+                rows.insert((row.start_byte(), row.end_byte()));
+            }
         }
     });
     rows.len() as u32
+}
+
+fn is_anonymous_struct_table(source: &str, literal_value: Node<'_>) -> bool {
+    let Some(parent) = literal_value
+        .parent()
+        .filter(|parent| parent.kind() == "composite_literal")
+    else {
+        return false;
+    };
+    let Some(type_text) = source.get(parent.start_byte()..literal_value.start_byte()) else {
+        return false;
+    };
+    let compact = type_text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    compact.contains("[]struct") || compact.contains("[...]struct")
 }
 
 fn go_test_evidence_terms(source: &str, body: Node<'_>) -> Vec<String> {
@@ -653,9 +694,11 @@ fn extract_branches(
         }
         "expression_case" | "type_case" | "communication_case" => push_case_branch(
             db,
-            file,
-            function,
-            function_name,
+            BranchTarget {
+                file,
+                function,
+                function_name,
+            },
             function_returns_error,
             source,
             node,
@@ -663,9 +706,11 @@ fn extract_branches(
         ),
         "default_case" => push_case_branch(
             db,
-            file,
-            function,
-            function_name,
+            BranchTarget {
+                file,
+                function,
+                function_name,
+            },
             function_returns_error,
             source,
             node,
@@ -765,9 +810,7 @@ fn push_switch_branch(
 
 fn push_case_branch(
     db: &mut AnalysisDb,
-    file: FileId,
-    function: FunctionId,
-    function_name: &str,
+    target: BranchTarget<'_>,
     function_returns_error: bool,
     source: &str,
     node: Node<'_>,
@@ -787,12 +830,8 @@ fn push_case_branch(
     };
     push_branch(
         db,
-        BranchTarget {
-            file,
-            function,
-            function_name,
-        },
-        trimmed_span(file, source, start, end),
+        target,
+        trimmed_span(target.file, source, start, end),
         condition.clone(),
         edge_label,
         is_go_error_path_heuristic(source, &condition, Some(node), function_returns_error),
@@ -1427,16 +1466,106 @@ import "testing"
 func TestAuthorize(t *testing.T) {}
 "#,
         );
+        let mut extra_param_db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import "testing"
+
+func TestAuthorize(t *testing.T, extra int) {}
+"#,
+        );
+        let mut near_match_db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import "testing"
+
+func TestAuthorize(t *testing.TB) {}
+"#,
+        );
+        let mut unnamed_param_db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import "testing"
+
+func TestAuthorize(*testing.T) {}
+"#,
+        );
 
         let helper_diagnostics = analyze(&mut helper_db);
         let non_test_file_diagnostics = analyze(&mut non_test_file_db);
+        let extra_param_diagnostics = analyze(&mut extra_param_db);
+        let near_match_diagnostics = analyze(&mut near_match_db);
+        let unnamed_param_diagnostics = analyze(&mut unnamed_param_db);
 
         assert!(helper_diagnostics.is_empty());
         assert!(non_test_file_diagnostics.is_empty());
+        assert!(extra_param_diagnostics.is_empty());
+        assert!(near_match_diagnostics.is_empty());
+        assert!(unnamed_param_diagnostics.is_empty());
         assert_eq!(helper_db.tests().len(), 0);
         assert!(!helper_db.functions()[0].is_test);
         assert_eq!(non_test_file_db.tests().len(), 0);
         assert!(!non_test_file_db.functions()[0].is_test);
+        assert_eq!(extra_param_db.tests().len(), 0);
+        assert!(!extra_param_db.functions()[0].is_test);
+        assert_eq!(near_match_db.tests().len(), 0);
+        assert!(!near_match_db.functions()[0].is_test);
+        assert_eq!(unnamed_param_db.tests().len(), 1);
+        assert!(unnamed_param_db.functions()[0].is_test);
+    }
+
+    #[test]
+    fn counts_multiline_go_table_rows_without_nested_literals() {
+        let mut db = db_with_go_file(
+            "payment_test.go",
+            r#"package payment
+
+import "testing"
+
+type charge struct {
+	ID string
+}
+
+func TestAuthorize(t *testing.T) {
+	cases := []struct {
+		name string
+		charges []charge
+		wantErr bool
+	}{
+		{
+			name: "allowed",
+			charges: []charge{
+				{ID: "one"},
+				{ID: "two"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "denied",
+			charges: nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantErr {
+				t.Fatal("denied")
+			}
+		})
+	}
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(db.tests().len(), 1);
+        assert_eq!(db.tests()[0].table_rows, 2);
     }
 
     #[test]
