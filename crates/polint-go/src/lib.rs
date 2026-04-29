@@ -1380,4 +1380,150 @@ func Authorize(ok bool, kind string) {
         assert_eq!(case.decision_span.start_col, 2);
         assert_eq!(case.decision_span.end_col, 14);
     }
+
+    #[test]
+    fn marks_basic_go_error_paths_heuristically() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "errors"
+
+var ErrDenied error
+
+func Authorize(err error, target error, ok bool, shouldReject bool) error {
+	if err != nil {
+		return err
+	}
+	if err == nil {
+		return ErrDenied
+	}
+	if errors.Is(err, target) {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	if shouldReject {
+		return ErrDenied
+	}
+	return nil
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        assert!(branch_for(&db, "err != nil", "true").is_error_path);
+        assert!(branch_for(&db, "err == nil", "true").is_error_path);
+        assert!(branch_for(&db, "errors.Is(err, target)", "true").is_error_path);
+        assert!(branch_for(&db, "shouldReject", "true").is_error_path);
+        assert!(!branch_for(&db, "ok", "true").is_error_path);
+    }
+
+    #[test]
+    fn branch_fingerprints_are_stable_for_same_source() {
+        let source = r#"package payment
+
+func Authorize(err error, ok bool) error {
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	return nil
+}
+"#;
+        let first = analyzed_go_file("payment.go", source);
+        let second = analyzed_go_file("payment.go", source);
+
+        let first_fingerprints = branch_fingerprints(&first);
+        let second_fingerprints = branch_fingerprints(&second);
+
+        assert_eq!(first_fingerprints, second_fingerprints);
+        assert!(first_fingerprints.iter().all(|fingerprint| !fingerprint.is_empty()));
+    }
+
+    #[test]
+    fn branch_fingerprints_do_not_use_branch_ids() {
+        let source = r#"package payment
+
+func Authorize(err error) error {
+	if err != nil {
+		return err
+	}
+	return nil
+}
+"#;
+        let baseline = analyzed_go_file("payment.go", source);
+        let baseline_branch = branch_for(&baseline, "err != nil", "true");
+
+        let mut shifted = AnalysisDb::new();
+        shifted.add_file(
+            PathBuf::from("other.go"),
+            "other.go".to_string(),
+            r#"package payment
+
+func Other(ok bool) {
+	if ok {
+		return
+	}
+}
+"#
+            .to_string(),
+        );
+        shifted.add_file(
+            PathBuf::from("payment.go"),
+            "payment.go".to_string(),
+            source.to_string(),
+        );
+
+        let diagnostics = analyze(&mut shifted);
+
+        assert!(diagnostics.is_empty());
+        let shifted_branch = shifted
+            .branches()
+            .iter()
+            .find(|branch| {
+                shifted.path_for(branch.file) == "payment.go"
+                    && branch.condition_text == "err != nil"
+                    && branch.edge_label == "true"
+            })
+            .expect("shifted branch exists");
+
+        assert_ne!(baseline_branch.id, shifted_branch.id);
+        assert_eq!(
+            baseline_branch.stable_fingerprint,
+            shifted_branch.stable_fingerprint
+        );
+    }
+
+    fn analyzed_go_file(relative_path: &str, source: &str) -> AnalysisDb {
+        let mut db = db_with_go_file(relative_path, source);
+        let diagnostics = analyze(&mut db);
+        assert!(diagnostics.is_empty());
+        db
+    }
+
+    fn branch_for<'db>(
+        db: &'db AnalysisDb,
+        condition_text: &str,
+        edge_label: &str,
+    ) -> &'db BranchObligation {
+        db.branches()
+            .iter()
+            .find(|branch| {
+                branch.condition_text == condition_text && branch.edge_label == edge_label
+            })
+            .expect("branch exists")
+    }
+
+    fn branch_fingerprints(db: &AnalysisDb) -> Vec<String> {
+        db.branches()
+            .iter()
+            .map(|branch| branch.stable_fingerprint.clone())
+            .collect()
+    }
 }
