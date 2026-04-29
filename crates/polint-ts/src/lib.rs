@@ -1132,4 +1132,77 @@ class store {}
             "span_from_oxc should convert Oxc byte spans through core span conversion"
         );
     }
+
+    #[test]
+    fn extracts_string_literals_and_static_templates_from_oxc_ast() {
+        let source = r#"
+const plain = "plain";
+const single = 'single';
+const staticTemplate = `static-template`;
+const dynamicTemplate = `prefix-${name}`;
+"#;
+        let (db, diagnostics) = analyze_source("literals.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let values: Vec<_> = db
+            .string_literals()
+            .iter()
+            .map(|literal| literal.value.as_str())
+            .collect();
+        assert_eq!(values, ["plain", "single", "static-template", "prefix-"]);
+        assert!(
+            !values.iter().any(|value| value.contains("${")),
+            "dynamic template expressions should not be recorded as exact strings: {values:?}"
+        );
+    }
+
+    #[test]
+    fn extracts_jsx_attributes_from_oxc_ast() {
+        let source = r#"
+const View = ({ token }) => (
+  <Button aria-label="Pay" data-token={token} disabled {...spread} />
+);
+"#;
+        let (db, diagnostics) = analyze_source("component.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let attributes: Vec<_> = db
+            .jsx_attributes()
+            .iter()
+            .map(|attribute| (attribute.name.as_str(), attribute.value.as_deref()))
+            .collect();
+        assert_eq!(
+            attributes,
+            [
+                ("aria-label", Some("Pay")),
+                ("data-token", Some("token")),
+                ("disabled", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_color_literals_are_available_from_strings_and_jsx_attributes() {
+        let source = r##"
+const rawColor = "#ff00aa";
+export function Button() {
+  return <Button data-color="#00ff00" />;
+}
+"##;
+        let (db, diagnostics) = analyze_source("raw-colors.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        assert!(
+            db.string_literals()
+                .iter()
+                .any(|literal| literal.value == "#ff00aa"),
+            "expected raw color string literal fact"
+        );
+        assert!(
+            db.jsx_attributes().iter().any(|attribute| {
+                attribute.name == "data-color" && attribute.value.as_deref() == Some("#00ff00")
+            }),
+            "expected raw color JSX attribute fact"
+        );
+    }
 }
