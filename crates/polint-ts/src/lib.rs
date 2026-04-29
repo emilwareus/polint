@@ -429,6 +429,145 @@ mod tests {
         (db, diagnostics)
     }
 
+    fn assert_no_parser_diagnostics(diagnostics: &[Diagnostic]) {
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "parser/ts"),
+            "unexpected parser diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn extracts_imports_and_export_from_specifiers_from_oxc_ast() {
+        let source = r#"
+import React from "react";
+import { token } from "./tokens";
+export { token } from "./tokens";
+export * from "./shared";
+"#;
+        let (db, diagnostics) = analyze_source("imports.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let paths: Vec<_> = db
+            .imports()
+            .iter()
+            .map(|import| import.path.as_str())
+            .collect();
+        assert_eq!(paths, ["react", "./tokens", "./tokens", "./shared"]);
+    }
+
+    #[test]
+    fn extracts_functions_arrows_classes_methods_and_calls_from_oxc_ast() {
+        let source = r#"
+function helper(label: string) {
+  track(label);
+  return formatLabel(label);
+}
+
+export const Button = () => helper("ok");
+
+export class Dialog {
+  render() {
+    track("dialog");
+    return formatLabel("dialog");
+  }
+}
+"#;
+        let (db, diagnostics) = analyze_source("component.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let function_names: Vec<_> = db
+            .functions()
+            .iter()
+            .map(|function| function.name.as_str())
+            .collect();
+        assert_eq!(function_names, ["helper", "Button", "Dialog.render"]);
+
+        let classes: Vec<_> = db.ts_classes().iter().collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Dialog");
+        assert!(classes[0].is_exported);
+        assert!(classes[0].is_component_like);
+
+        let helper = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "helper")
+            .expect("expected helper function");
+        assert_eq!(helper.calls, ["formatLabel", "track"]);
+
+        let button = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "Button")
+            .expect("expected Button function");
+        assert!(button.is_exported);
+        assert_eq!(button.calls, ["helper"]);
+
+        let render = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "Dialog.render")
+            .expect("expected Dialog.render method");
+        assert_eq!(render.calls, ["formatLabel", "track"]);
+    }
+
+    #[test]
+    fn detects_component_like_ts_facts_with_honest_heuristics() {
+        let source = r#"
+function helper() {
+  return "ok";
+}
+
+function Button() {
+  return label("ok");
+}
+
+const Link = () => <a href="/">Home</a>;
+
+class Dialog {
+  render() {
+    return <section />;
+  }
+}
+
+class store {}
+"#;
+        let (db, diagnostics) = analyze_source("components.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let component_names: Vec<_> = db
+            .ts_components()
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect();
+        assert_eq!(component_names, ["Button", "Link", "Dialog"]);
+
+        assert!(
+            db.ts_components()
+                .iter()
+                .all(|component| component.name != "helper" && component.name != "store"),
+            "lower-case helpers without JSX should not be component facts"
+        );
+        assert!(
+            db.ts_classes()
+                .iter()
+                .any(|class| class.name == "Dialog" && class.is_component_like)
+        );
+        assert!(
+            db.ts_classes()
+                .iter()
+                .any(|class| class.name == "store" && !class.is_component_like)
+        );
+
+        let production_source = include_str!("lib.rs");
+        assert!(
+            production_source.contains("syntax-level component heuristic"),
+            "component detection must identify itself as a heuristic"
+        );
+    }
+
     #[test]
     fn extracts_function_names() {
         assert_eq!(ts_function_name("function run() {}").unwrap(), "run");
