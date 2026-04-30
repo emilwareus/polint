@@ -51,9 +51,9 @@
 
 - [x] **SDK-01**: `polint-sdk` exposes a documented `Rule` trait, `RuleMeta`, `Capabilities`, `RuleCtx`, and prelude.
 - [x] **SDK-02**: `RuleCtx` exposes high-level queries for files, functions, imports, graphs, branch obligations, Go tests, TS components, string literals, JSX attributes, and diagnostic reporting.
-- [ ] **RULE-01**: Built-in example rule `examples/go-cyclomatic-complexity` works and is configurable.
-- [ ] **RULE-02**: Built-in example rule `examples/ts-cyclomatic-complexity` works and is configurable.
-- [ ] **RULE-03**: Built-in example rule `examples/go-import-boundaries` works and is configurable.
+- [x] **RULE-01**: Built-in example rule `examples/go-cyclomatic-complexity` works and is configurable.
+- [x] **RULE-02**: Built-in example rule `examples/ts-cyclomatic-complexity` works and is configurable.
+- [x] **RULE-03**: Built-in example rule `examples/go-import-boundaries` works and is configurable.
 - [x] **RULE-04**: Built-in example rule `examples/ts-no-raw-colors` detects raw color literals with allow-list support.
 - [ ] **RULE-05**: Built-in example rule `examples/go-branch-obligations` reports missing nearby test evidence using honest heuristic wording.
 - [ ] **RULE-06**: Built-in example rule `examples/go-test-suite-size` computes a weighted maintainability score.
@@ -127,9 +127,9 @@
 | TS-03 | Phase 5 | Complete |
 | SDK-01 | Phase 6 | Complete |
 | SDK-02 | Phase 6 | Complete |
-| RULE-01 | Phase 6 | Pending |
-| RULE-02 | Phase 6 | Pending |
-| RULE-03 | Phase 6 | Pending |
+| RULE-01 | Phase 6 | Complete |
+| RULE-02 | Phase 6 | Complete |
+| RULE-03 | Phase 6 | Complete |
 | RULE-04 | Phase 6 | Complete |
 | RULE-05 | Phase 6 | Pending |
 | RULE-06 | Phase 6 | Pending |
