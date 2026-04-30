@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use polint_core::{
     AnalysisDb, BranchId, BranchObligation, FileId, FunctionFact, FunctionId, ImportFact, Language,
-    PackageFact, Span, TestFact, span_from_byte_range,
+    PackageFact, Span, StringLiteralFact, TestFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange, fingerprint};
 use tree_sitter::{Node, Parser};
@@ -53,6 +53,7 @@ fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
 
     extract_package(db, file_id, source, root);
     extract_imports(db, file_id, source, root);
+    extract_string_literals(db, file_id, source, root);
     extract_functions(db, file_id, source, root);
     Ok(diagnostics)
 }
@@ -240,6 +241,36 @@ fn is_go_string_literal(node: Node<'_>) -> bool {
         node.kind(),
         "interpreted_string_literal" | "raw_string_literal"
     )
+}
+
+fn extract_string_literals(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
+    visit_named_descendants(root, &mut |node| {
+        if !is_go_string_literal(node) || is_inside_go_import(node) {
+            return;
+        }
+
+        let Some(value) = unquote_go_string_literal(source, node) else {
+            return;
+        };
+
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value,
+            span: node_span(file, source, node),
+            language: Language::Go,
+        });
+    });
+}
+
+fn is_inside_go_import(node: Node<'_>) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(parent.kind(), "import_spec" | "import_declaration") {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 fn extract_functions(db: &mut AnalysisDb, file: FileId, source: &str, root: Node<'_>) {
