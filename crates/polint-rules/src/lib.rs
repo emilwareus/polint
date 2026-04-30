@@ -295,27 +295,32 @@ impl Rule for GoTestSuiteSize {
     }
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
-        let max = ctx.options().max.unwrap_or(120);
-        let tests: Vec<_> = ctx.go_tests().to_vec();
-        for test in tests {
-            let weight = 1.0
-                + f64::from(test.subtest_count) * 0.4
-                + f64::from(test.table_rows) * 0.15
-                + f64::from(test.assertion_count) * 0.1;
-            if weight > f64::from(max) {
-                ctx.report(
+        let max = ctx.options().max.unwrap_or(24);
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for test in ctx.go_tests() {
+            let score = 1 + (test.subtest_count * 4) + (test.table_rows * 2) + test.assertion_count;
+            if score > max {
+                diagnostics.push(
                     Diagnostic::warning(
-                        self.meta().id,
+                        rule_id.clone(),
                         ctx.file_path(test.file),
                         test.span.diagnostic_range(),
                         format!(
-                            "Go test `{}` has suite weight {:.1}, max {}.",
-                            test.name, weight, max
+                            "Go test `{}` has heuristic maintainability score {}, max {}.",
+                            test.name, score, max
                         ),
                     )
-                    .with_help("Split this test suite into smaller behavior-focused suites."),
+                    .with_evidence("score", score.to_string())
+                    .with_evidence("subtests", test.subtest_count.to_string())
+                    .with_evidence("table_rows", test.table_rows.to_string())
+                    .with_evidence("assertions", test.assertion_count.to_string())
+                    .with_help("Split this test suite into smaller behavior-focused suites. This rule is heuristic."),
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
