@@ -348,7 +348,7 @@ impl Rule for ConfigQueryNoLiteral {
     fn meta(&self) -> RuleMeta {
         RuleMeta {
             id: "examples/config-query-no-literal".to_string(),
-            description: "Deny configured string literals across supported languages.".to_string(),
+            description: "Deny configured syntax-level string and regex literal text across supported languages.".to_string(),
             severity: Severity::Error,
         }
     }
@@ -361,28 +361,43 @@ impl Rule for ConfigQueryNoLiteral {
         if ctx.options().deny.is_empty() {
             return Ok(());
         }
-        let literals: Vec<_> = ctx.string_literals().to_vec();
-        for literal in literals {
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for literal in ctx
+            .string_literals()
+            .iter()
+            .filter(|literal| is_supported_literal_language(literal.language))
+        {
             let file = ctx.file_path(literal.file);
-            if !file_selected(ctx.options(), &file) || file_allowed(ctx.options(), &file) {
+            if !file_selected(ctx.options(), &file)
+                || file_allowed(ctx.options(), &file)
+                || literal_allowed(ctx.options(), &literal.value)
+            {
                 continue;
             }
-            if ctx
+
+            if let Some(matched) = ctx
                 .options()
                 .deny
                 .iter()
-                .any(|deny| literal.value.contains(deny))
+                .find(|deny| literal.value.contains(deny.as_str()))
             {
-                ctx.report(
+                diagnostics.push(
                     Diagnostic::error(
-                        self.meta().id,
+                        rule_id.clone(),
                         file,
                         literal.span.diagnostic_range(),
-                        format!("Denied literal `{}` found.", literal.value),
+                        format!("Configured denied literal `{}` found.", literal.value),
                     )
+                    .with_evidence("literal", literal.value.clone())
+                    .with_evidence("matched", matched.clone())
+                    .with_evidence("language", language_label(literal.language))
                     .with_help("Replace the literal with an allowed constant or project-specific abstraction."),
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
@@ -445,6 +460,21 @@ fn literal_allowed(options: &RuleOptions, value: &str) -> bool {
 fn file_language_is_ts_family(ctx: &RuleCtx<'_>, file: FileId) -> bool {
     ctx.source_file(file)
         .is_some_and(|source_file| source_file.language.is_ts_family())
+}
+
+fn is_supported_literal_language(language: Language) -> bool {
+    language == Language::Go || language.is_ts_family()
+}
+
+fn language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
 }
 
 fn has_nearby_test_evidence(ctx: &RuleCtx<'_>, file: FileId, condition: &str) -> bool {
@@ -896,10 +926,8 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert!(
-            diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.message
-                    == "Configured denied literal `legacy-token` found.")
+            diagnostics.iter().all(|diagnostic| diagnostic.message
+                == "Configured denied literal `legacy-token` found.")
         );
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.file == "src/payment.go"
@@ -910,9 +938,10 @@ mod tests {
         }));
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.file == "src/view.ts"
-                && diagnostic.evidence.iter().any(|evidence| {
-                    evidence.label == "language" && evidence.value == "typescript"
-                })
+                && diagnostic
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.label == "language" && evidence.value == "typescript")
         }));
         assert!(diagnostics.iter().all(|diagnostic| {
             diagnostic
@@ -957,8 +986,7 @@ mod tests {
             diagnostic
                 .evidence
                 .iter()
-                .any(|evidence| evidence.label == "matched"
-                    && evidence.value == "legacy-testid")
+                .any(|evidence| evidence.label == "matched" && evidence.value == "legacy-testid")
         );
         assert_eq!(diagnostic.file, "src/view.ts");
     }
