@@ -75,7 +75,7 @@
 
 - [x] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
 - [x] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
-- [ ] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics.
+- [x] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics.
 - [ ] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
 
 ## v2 Requirements

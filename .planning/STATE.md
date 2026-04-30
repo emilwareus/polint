@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 06-05-PLAN.md
-last_updated: "2026-04-30T10:05:45.812Z"
+status: verifying
+stopped_at: Completed 06-06-PLAN.md
+last_updated: "2026-04-30T10:41:10.787Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 20
-  completed_plans: 19
-  percent: 95
+  completed_plans: 20
+  percent: 100
 ---
 
 # State: exlint
@@ -52,7 +52,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 ## Current Position
 
 Phase: 06 (sdk-and-example-rules) — EXECUTING
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Plan: 6 of 6
 Last activity: 2026-04-30
 
@@ -110,6 +110,9 @@ Last activity: 2026-04-30
 - [Phase 06-sdk-and-example-rules]: Used a small fixture expectation test as the Task 1 RED step before creating the missing failing Go test fixture.
 - [Phase 06-sdk-and-example-rules]: Kept Phase 6 CLI proof in temp repos with exact profile rule IDs and parsed JSON assertions.
 - [Phase 06-sdk-and-example-rules]: Fixed clean branch-obligation suppression through realistic Go test case evidence instead of weakening heuristic rule behavior.
+- [Phase 06-sdk-and-example-rules]: Kept snapshot coverage on built_in_rules instead of private rule structs so tests exercise the public registration path.
+- [Phase 06-sdk-and-example-rules]: Used synthetic AnalysisDb facts for deterministic snapshot data instead of CLI fixtures, keeping snapshots focused on rule diagnostics.
+- [Phase 06-sdk-and-example-rules]: Filtered the all-rule-ID JSON snapshot to the first diagnostic per rule ID so the snapshot proves all eight IDs without duplicating every finding.
 
 ## Performance Metrics
 
@@ -128,11 +131,12 @@ Last activity: 2026-04-30
 | Phase 06-sdk-and-example-rules P03 | 10 min | 3 tasks | 1 files |
 | Phase 06-sdk-and-example-rules P04 | 5 min | 3 tasks | 1 files |
 | Phase 06-sdk-and-example-rules P05 | 7 min | 3 tasks | 5 files |
+| Phase 06-sdk-and-example-rules P06 | 31 min | 2 tasks | 3 files |
 
 ## Session
 
-**Last Date:** 2026-04-30T10:05:45.808Z
-**Stopped At:** Completed 06-05-PLAN.md
+**Last Date:** 2026-04-30T10:41:10.784Z
+**Stopped At:** Completed 06-06-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
