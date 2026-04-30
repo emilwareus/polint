@@ -198,10 +198,12 @@ impl Rule for TsNoRawColors {
                 &rule_id,
                 &mut seen,
                 &mut diagnostics,
-                literal.file,
-                &literal.span,
-                &literal.value,
-                "string-literal",
+                RawColorFinding {
+                    file: literal.file,
+                    span: &literal.span,
+                    value: &literal.value,
+                    source: "string-literal",
+                },
             );
         }
         for attribute in ctx.jsx_attributes() {
@@ -214,10 +216,12 @@ impl Rule for TsNoRawColors {
                     &rule_id,
                     &mut seen,
                     &mut diagnostics,
-                    attribute.file,
-                    &attribute.span,
-                    value,
-                    "jsx-attribute",
+                    RawColorFinding {
+                        file: attribute.file,
+                        span: &attribute.span,
+                        value,
+                        source: "jsx-attribute",
+                    },
                 );
             }
         }
@@ -414,26 +418,35 @@ fn is_raw_color(value: &str) -> bool {
         || lower.starts_with("hsla(")
 }
 
+struct RawColorFinding<'a> {
+    file: FileId,
+    span: &'a Span,
+    value: &'a str,
+    source: &'static str,
+}
+
 fn push_raw_color_diagnostic(
     ctx: &RuleCtx<'_>,
     rule_id: &str,
     seen: &mut std::collections::BTreeSet<(FileId, u32, u32, String)>,
     diagnostics: &mut Vec<Diagnostic>,
-    file_id: FileId,
-    span: &Span,
-    value: &str,
-    source: &str,
+    finding: RawColorFinding<'_>,
 ) {
-    let file = ctx.file_path(file_id);
+    let file = ctx.file_path(finding.file);
     if !file_selected(ctx.options(), &file)
         || file_allowed(ctx.options(), &file)
-        || literal_allowed(ctx.options(), value)
-        || !is_raw_color(value)
+        || literal_allowed(ctx.options(), finding.value)
+        || !is_raw_color(finding.value)
     {
         return;
     }
 
-    let key = (file_id, span.start_byte, span.end_byte, value.to_string());
+    let key = (
+        finding.file,
+        finding.span.start_byte,
+        finding.span.end_byte,
+        finding.value.to_string(),
+    );
     if !seen.insert(key) {
         return;
     }
@@ -442,11 +455,14 @@ fn push_raw_color_diagnostic(
         Diagnostic::error(
             rule_id.to_string(),
             file,
-            span.diagnostic_range(),
-            format!("Raw color literal `{value}` should use a design token."),
+            finding.span.diagnostic_range(),
+            format!(
+                "Raw color literal `{}` should use a design token.",
+                finding.value
+            ),
         )
-        .with_evidence("literal", value.to_string())
-        .with_evidence("source", source.to_string())
+        .with_evidence("literal", finding.value.to_string())
+        .with_evidence("source", finding.source)
         .with_help(
             "This rule reports syntax-level literal findings; move this value to a theme/design-token file or use an existing token/CSS variable.",
         ),
