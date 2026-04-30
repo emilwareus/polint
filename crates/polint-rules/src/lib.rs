@@ -440,6 +440,57 @@ pub fn rule_fingerprint(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polint_sdk::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    fn run_single_rule(
+        rule: Arc<dyn Rule>,
+        db: &AnalysisDb,
+        options: RuleOptions,
+    ) -> Vec<Diagnostic> {
+        let mut options_by_rule = BTreeMap::new();
+        options_by_rule.insert(rule.meta().id, options);
+        polint_core::run_rules(
+            db,
+            &[rule],
+            &options_by_rule,
+            &BTreeSet::new(),
+            false,
+        )
+    }
+
+    fn add_file(db: &mut AnalysisDb, path: &str) -> FileId {
+        db.add_file(
+            PathBuf::from(path),
+            path.to_string(),
+            "synthetic source\n".to_string(),
+        )
+    }
+
+    fn span(file: FileId, line: u32, start_col: u32, end_col: u32) -> Span {
+        Span {
+            file,
+            start_byte: start_col - 1,
+            end_byte: end_col - 1,
+            start_line: line,
+            start_col,
+            end_line: line,
+            end_col,
+        }
+    }
+
+    fn assert_sdk_prelude_authoring_surface() {
+        let source = include_str!("lib.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source segment exists");
+        assert!(
+            production_source.contains("use polint_sdk::prelude::*;"),
+            "built-in examples should author through the SDK prelude"
+        );
+    }
 
     #[test]
     fn detects_raw_colors() {
@@ -464,5 +515,178 @@ mod tests {
         let options = rule_options_from_config(Some(&config));
 
         assert_eq!(options.allow, vec!["#fff", "currentColor"]);
+    }
+
+    #[test]
+    fn go_complexity_uses_configured_max() {
+        assert_sdk_prelude_authoring_surface();
+
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payment.go");
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "Authorize".to_string(),
+            span: span(file, 3, 6, 15),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 7,
+            calls: Vec::new(),
+        });
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "Helper".to_string(),
+            span: span(file, 9, 6, 12),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 6,
+            calls: Vec::new(),
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoCyclomaticComplexity),
+            &db,
+            RuleOptions {
+                max: Some(6),
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/go-cyclomatic-complexity");
+        assert_eq!(diagnostic.file, "src/payment.go");
+        assert_eq!(diagnostic.range, span(file, 3, 6, 15).diagnostic_range());
+        assert!(diagnostic.message.contains("Go function"));
+        assert!(diagnostic.message.contains("cyclomatic complexity"));
+        assert!(diagnostic.message.contains("max 6"));
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "function" && evidence.value == "Authorize")
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "complexity" && evidence.value == "7")
+        );
+        assert!(diagnostic.help.is_some());
+    }
+
+    #[test]
+    fn ts_complexity_uses_configured_max() {
+        assert_sdk_prelude_authoring_surface();
+
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/view.tsx");
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "renderView".to_string(),
+            span: span(file, 2, 17, 27),
+            language: Language::Tsx,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 8,
+            calls: Vec::new(),
+        });
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "helper".to_string(),
+            span: span(file, 10, 17, 23),
+            language: Language::Go,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 99,
+            calls: Vec::new(),
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(TsCyclomaticComplexity),
+            &db,
+            RuleOptions {
+                max: Some(7),
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/ts-cyclomatic-complexity");
+        assert_eq!(diagnostic.file, "src/view.tsx");
+        assert!(diagnostic.message.contains("TS/JS function"));
+        assert!(diagnostic.message.contains("cyclomatic complexity"));
+        assert!(diagnostic.message.contains("max 7"));
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "function" && evidence.value == "renderView")
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "complexity" && evidence.value == "8")
+        );
+        assert!(diagnostic.help.is_some());
+    }
+
+    #[test]
+    fn go_import_boundary_uses_forbidden_imports_config() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payment.go");
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "github.com/acme/legacy/auth".to_string(),
+            span: span(file, 4, 8, 39),
+            language: Language::Go,
+        });
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "fmt".to_string(),
+            span: span(file, 5, 8, 13),
+            language: Language::Go,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoImportBoundaries),
+            &db,
+            RuleOptions {
+                forbidden_imports: BTreeMap::from([(
+                    "src/**/*.go".to_string(),
+                    vec!["github.com/acme/legacy/*".to_string()],
+                )]),
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/go-import-boundaries");
+        assert_eq!(diagnostic.file, "src/payment.go");
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "import"
+                    && evidence.value == "github.com/acme/legacy/auth")
+        );
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(
+                "Move the dependency behind an allowed interface or update the boundary config if this is intentional."
+            )
+        );
     }
 }
