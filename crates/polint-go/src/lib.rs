@@ -1297,6 +1297,69 @@ import (
     }
 
     #[test]
+    fn extracts_go_string_literals_for_sdk_rules() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+const status = "blocked"
+
+func Validate() {
+	message := "invalid empty payment"
+	token := `legacy-token`
+	_, _, _ = status, message, token
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let literals = db
+            .string_literals()
+            .iter()
+            .map(|literal| (literal.value.as_str(), literal.language))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            literals,
+            vec![
+                ("blocked", Language::Go),
+                ("invalid empty payment", Language::Go),
+                ("legacy-token", Language::Go),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_duplicate_go_import_paths_as_string_literals() {
+        let mut db = db_with_go_file(
+            "payment.go",
+            r#"package payment
+
+import "net/http"
+
+func Validate() {
+	_ = "blocked"
+}
+"#,
+        );
+
+        let diagnostics = analyze(&mut db);
+
+        assert!(diagnostics.is_empty());
+        let literal_values = db
+            .string_literals()
+            .iter()
+            .map(|literal| literal.value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(literal_values, vec!["blocked"]);
+        assert!(
+            !literal_values.contains(&"net/http"),
+            "import paths should remain ImportFact-only"
+        );
+    }
+
+    #[test]
     fn extracts_go_functions_methods_calls_and_complexity_from_tree_sitter() {
         let mut db = db_with_go_file(
             "payment.go",
