@@ -344,6 +344,205 @@ files = ["**/*.go"]
 }
 
 #[test]
+fn check_reports_ts_parser_diagnostic_for_invalid_source() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase5]
+rules = []
+"#,
+    );
+    write_file(&temp.path().join("broken.ts"), "export function Broken( {");
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase5",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| {
+            diagnostic["rule_id"] == "parser/ts" && diagnostic["file"] == "broken.ts"
+        })
+        .expect("invalid TS source should emit parser/ts for broken.ts");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| { message.contains("TS/JS parser reported a syntax error") }),
+        "parser/ts diagnostic should mention syntax error: {diagnostic:#?}"
+    );
+}
+
+#[test]
+fn check_clean_ts_fixture_has_no_parser_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase5]
+rules = []
+"#,
+    );
+    write_file(
+        &temp.path().join("component.tsx"),
+        include_str!("../../../tests/fixtures/ts/clean/component.tsx"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase5",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        !diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "parser/ts"),
+        "clean TS fixture should not emit parser/ts diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn check_ts_full_profile_uses_phase5_facts() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase5]
+rules = ["examples/ts-cyclomatic-complexity", "examples/ts-no-raw-colors", "examples/config-query-no-literal"]
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+max = 3
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/config-query-no-literal"
+deny = ["legacy-testid"]
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+"##,
+    );
+    write_file(
+        &temp.path().join("component.tsx"),
+        include_str!("../../../tests/fixtures/ts/failing/component.tsx"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase5",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let complexity = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-cyclomatic-complexity")
+        .expect("failing TS fixture should emit TS complexity diagnostic");
+    assert!(
+        diagnostic_has_evidence(complexity, "complexity", ""),
+        "complexity diagnostic should include complexity evidence: {complexity:#?}"
+    );
+
+    let raw_color = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
+        .expect("failing TS fixture should emit raw-color diagnostic");
+    assert_eq!(raw_color["file"], "component.tsx");
+
+    let denied_literal = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/config-query-no-literal")
+        .expect("failing TS fixture should emit denied literal diagnostic");
+    assert!(
+        denied_literal["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("legacy-testid")),
+        "denied literal diagnostic should mention legacy-testid: {denied_literal:#?}"
+    );
+}
+
+#[test]
+fn check_ts_design_token_example_reports_raw_colors() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[profiles.phase5]
+rules = ["examples/ts-no-raw-colors"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+"#,
+    );
+    write_file(
+        &temp.path().join("Button.tsx"),
+        include_str!("../../../examples/ts-design-tokens/Button.tsx"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase5",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
+        .expect("TS design-token example should emit raw-color diagnostic");
+    assert_eq!(diagnostic["file"], "Button.tsx");
+}
+
+#[test]
 fn check_json_without_config_is_parseable() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
