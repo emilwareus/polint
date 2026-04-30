@@ -19,9 +19,21 @@ func TestAuthorizeDenied(t *testing.T) {
 			wantErr:  "denied",
 		},
 		{
-			name:     "invalid customer returns err not nil",
+			name:     "strings trimspace customer blank",
 			customer: " ",
 			charges:  nil,
+			wantErr:  "invalid",
+		},
+		{
+			name:     "negative charge amount",
+			customer: "allowed",
+			charges:  []Charge{{ID: "negative", Amount: -10}},
+			wantErr:  "invalid",
+		},
+		{
+			name:     "zero total amount",
+			customer: "allowed",
+			charges:  []Charge{{ID: "zero", Amount: 0}},
 			wantErr:  "invalid",
 		},
 	}
