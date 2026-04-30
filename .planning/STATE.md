@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-typescript-adapter-02-PLAN.md
-last_updated: "2026-04-29T16:56:50.061Z"
-last_activity: 2026-04-29
+stopped_at: Completed 05-typescript-adapter-03-PLAN.md
+last_updated: "2026-04-30T06:42:49Z"
+last_activity: 2026-04-30
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 14
-  completed_plans: 12
-  percent: 86
+  completed_plans: 13
+  percent: 93
 ---
 
 # State: exlint
@@ -40,14 +40,17 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Phase 4 Plan 04-03 completed parser-backed Go branch obligations, stable branch fingerprints, and conservative error-path heuristics; see `.planning/phases/04-go-adapter/04-03-SUMMARY.md`.
 - Phase 4 Plan 04-04 completed expanded Go fixtures, CLI integration coverage, and workspace verification; see `.planning/phases/04-go-adapter/04-04-SUMMARY.md`.
 - Phase 4 verification passed with no gaps; see `.planning/phases/04-go-adapter/04-VERIFICATION.md`.
-- Next action: discuss Phase 5 (`/gsd-discuss-phase 5 --auto`) on `main`.
+- Phase 5 Plan 05-01 completed the Oxc parser foundation and controlled `parser/ts` diagnostics; see `.planning/phases/05-typescript-adapter/05-01-SUMMARY.md`.
+- Phase 5 Plan 05-02 completed parser-backed TS imports, exports, functions, classes, methods, component heuristics, and calls; see `.planning/phases/05-typescript-adapter/05-02-SUMMARY.md`.
+- Phase 5 Plan 05-03 completed parser-backed TS literals, JSX attributes, complexity, and import graph proof; see `.planning/phases/05-typescript-adapter/05-03-SUMMARY.md`.
+- Next action: execute Phase 5 Plan 05-04 on `main`.
 
 ## Current Position
 
 Phase: 05 (typescript-adapter) — EXECUTING
 Status: Ready to execute
-Plan: 3 of 4
-Last activity: 2026-04-29
+Plan: 4 of 4
+Last activity: 2026-04-30
 
 ## Phase Progress
 
@@ -84,6 +87,9 @@ Last activity: 2026-04-29
 - [Phase 05-typescript-adapter]: Added a narrow TsClassFact public contract with no class IDs, inheritance graph, resolver, or type information.
 - [Phase 05-typescript-adapter]: Kept TS/JS module specifiers syntactic and parser-backed; no production Node or TypeScript resolution was added.
 - [Phase 05-typescript-adapter]: Used Oxc module records only as a parser-backed fallback to preserve best-effort imports after unrecoverable parser errors.
+- [Phase 05-typescript-adapter]: Recorded dynamic template literals as static quasi facts only instead of synthetic exact combined values.
+- [Phase 05-typescript-adapter]: Computed TS/JS complexity from Oxc AST control-flow nodes rather than comments or string contents.
+- [Phase 05-typescript-adapter]: Added polint-graph as a polint-ts dev-dependency solely for import graph unit proof.
 
 ## Performance Metrics
 
@@ -95,11 +101,12 @@ Last activity: 2026-04-29
 | Phase 04-go-adapter P04 | 6min | 3 tasks | 6 files |
 | Phase 05-typescript-adapter P01 | 10min | 2 tasks | 1 files |
 | Phase 05-typescript-adapter P02 | 13min | 2 tasks | 2 files |
+| Phase 05-typescript-adapter P03 | interrupted/resumed | 2 tasks | 3 files |
 
 ## Session
 
-**Last Date:** 2026-04-29T16:56:49.994Z
-**Stopped At:** Completed 05-typescript-adapter-02-PLAN.md
+**Last Date:** 2026-04-30T06:42:49Z
+**Stopped At:** Completed 05-typescript-adapter-03-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
