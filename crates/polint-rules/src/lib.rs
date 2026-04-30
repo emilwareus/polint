@@ -1029,6 +1029,111 @@ mod tests {
         );
     }
 
+    fn go_assertion_test_fact(
+        file: FileId,
+        name: &str,
+        assertion_count: u32,
+        evidence_terms: Vec<&str>,
+    ) -> TestFact {
+        TestFact {
+            file,
+            function: None,
+            name: name.to_string(),
+            span: span(file, 20, 6, 18),
+            evidence_terms: evidence_terms
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+            assertion_count,
+            subtest_count: 0,
+            table_rows: 0,
+        }
+    }
+
+    #[test]
+    fn go_assertion_after_action_reports_tests_without_assertions() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_assertion_test_fact(
+            file,
+            "TestPaymentAction",
+            0,
+            vec!["payment", "action"],
+        ));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoAssertionAfterAction),
+            &db,
+            RuleOptions::default(),
+        );
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/go-assertion-after-action");
+        assert!(
+            diagnostic
+                .message
+                .contains("has no obvious assertion or error check")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "test" && evidence.value == "TestPaymentAction"
+        }));
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "assertions" && evidence.value == "0"
+        }));
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "evidence_terms" && evidence.value == "payment, action"
+        }));
+    }
+
+    #[test]
+    fn go_assertion_after_action_ignores_tests_with_assertions() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_assertion_test_fact(
+            file,
+            "TestPaymentAssertion",
+            1,
+            vec!["payment"],
+        ));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoAssertionAfterAction),
+            &db,
+            RuleOptions::default(),
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn go_assertion_after_action_discloses_heuristic_wording() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_assertion_test_fact(
+            file,
+            "TestPaymentAction",
+            0,
+            vec!["payment"],
+        ));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoAssertionAfterAction),
+            &db,
+            RuleOptions::default(),
+        );
+
+        let diagnostic = diagnostics
+            .first()
+            .expect("expected assertion-after-action diagnostic");
+        assert!(
+            diagnostic
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("heuristic"))
+        );
+    }
+
     #[test]
     fn ts_raw_colors_respects_literal_allow_list() {
         let mut db = AnalysisDb::new();
