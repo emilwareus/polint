@@ -24,13 +24,13 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - [x] Run rules through the core registry with capability declarations, severity/options, deterministic sequential/parallel output, deduplication, and panic/error containment. Validated in Phase 3: Core Facts and Diagnostics.
 - [x] Provide the Phase 3 diagnostic contract: severities, labels, evidence, suggestions/fixes, help text, stable fingerprints, deterministic sort/dedupe, and human/JSON rendering coverage. Validated in Phase 3: Core Facts and Diagnostics.
 - [x] Implement Go analysis with tree-sitter-go for packages, imports, functions, methods, tests, branch obligations, import graph facts, and cyclomatic complexity foundations. Validated in Phase 4: Go Adapter.
+- [x] Implement TypeScript/JavaScript analysis with Oxc for parser diagnostics, imports/exports, functions, classes, JSX attributes, string literals, component heuristics, cyclomatic complexity, and import graph facts. Validated in Phase 5: TypeScript Adapter.
 
 ### Active
 
 - [ ] Finish the remaining CLI surface for custom rules: `polint test-rules`, `polint profile-rules`, `polint explain`, graph export commands, and final exit-code semantics.
 - [ ] Keep file discovery scalable for large repositories.
 - [ ] Harden SARIF-like diagnostics for CI output and final command behavior.
-- [ ] Implement TypeScript/JavaScript analysis with Oxc: imports/exports, functions, classes, JSX attributes, string literals, component heuristics, and cyclomatic complexity.
 - [ ] Ship example rules that dogfood the same SDK users will use, including Go complexity, TS complexity, Go import boundaries, TS raw color detection, Go branch obligations, Go test suite size, and Go assertion-after-action.
 - [ ] Provide a public `polint-sdk` with a clean `Rule` trait, capability declarations, high-level `RuleCtx` queries, and helpers for reporting diagnostics.
 - [ ] Support repo-local Rust rule scaffolding through `polint new-rule` and document the native registration path.
@@ -60,6 +60,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - Phase 2 completed on 2026-04-28 through GSD plan execution and verification on `main`.
 - Phase 3 completed on 2026-04-28 through GSD plan execution and verification on `main`, closing deterministic discovery, core facts/runner, and the Phase 3 diagnostic contract without claiming Go/TS semantic extraction, cache/performance, production SARIF, or broad CLI hardening.
 - Phase 4 completed on 2026-04-29 through GSD plan execution, code review fixes, and verification on `main`, closing parser-backed Go facts and Go CLI integration coverage without claiming full Go type checking or production graph command hardening.
+- Phase 5 completed on 2026-04-30 through GSD plan execution, code review fixes, and verification on `main`, closing parser-backed TS/JS facts and TS CLI integration coverage without claiming TypeScript semantic type checking, production module resolution, or final graph command hardening.
 
 ## Constraints
 
@@ -84,6 +85,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 | Treat Phase 3 stable IDs as deterministic within a run | File discovery now sorts root-relative paths before `AnalysisDb::add_file`, and cross-run externally visible identity remains fingerprint-based where needed. | Accepted in Phase 3 |
 | Snapshot the JSON diagnostic renderer output directly | Workspace-wide `serde_json/preserve_order` can change `Value` object reserialization order; parseability is still verified separately while snapshots pin CLI-facing renderer output. | Accepted in Phase 3 |
 | Keep Go analysis syntax-first and explicit about heuristics | Phase 4 uses tree-sitter facts and conservative error-path heuristics, while full Go type checking and exact coverage remain out of scope for the first pass. | Accepted in Phase 4 |
+| Keep TypeScript analysis syntax-first and explicit about heuristics | Phase 5 uses Oxc syntax facts for TS/JS parsing, declarations, JSX, literals, calls, complexity, and import graph proof, while TypeScript type checking and production module resolution remain out of scope. | Accepted in Phase 5 |
 
 ## Evolution
 
@@ -103,4 +105,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-29 after Phase 4 verification*
+*Last updated: 2026-04-30 after Phase 5 verification*

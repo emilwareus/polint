@@ -104,7 +104,7 @@ Plans:
 
 **Requirements:** TS-01, TS-02, TS-03, TEST-01, TEST-02
 
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 05-01-PLAN.md - Add the Oxc parser foundation, borrowed-source parsing, and `parser/ts` diagnostics.

@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 05-typescript-adapter-04-PLAN.md
-last_updated: "2026-04-30T06:55:00Z"
+status: ready
+stopped_at: Completed Phase 5 verification
+last_updated: "2026-04-30T07:24:11.517Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 14
   completed_plans: 14
   percent: 100
@@ -18,11 +18,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-04-28)
+See: `.planning/PROJECT.md` (updated 2026-04-30)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 05 — typescript-adapter
+**Current focus:** Phase 06 — sdk-and-example-rules
 
 ## Current Status
 
@@ -44,13 +44,15 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Phase 5 Plan 05-02 completed parser-backed TS imports, exports, functions, classes, methods, component heuristics, and calls; see `.planning/phases/05-typescript-adapter/05-02-SUMMARY.md`.
 - Phase 5 Plan 05-03 completed parser-backed TS literals, JSX attributes, complexity, and import graph proof; see `.planning/phases/05-typescript-adapter/05-03-SUMMARY.md`.
 - Phase 5 Plan 05-04 completed expanded TS fixtures, CLI integration tests, and full workspace verification; see `.planning/phases/05-typescript-adapter/05-04-SUMMARY.md`.
-- Next action: run Phase 5 code review and phase verification on `main`.
+- Phase 5 code review passed clean after review fixes; see `.planning/phases/05-typescript-adapter/05-REVIEW.md` and `.planning/phases/05-typescript-adapter/05-REVIEW-FIX.md`.
+- Phase 5 verification passed with no gaps; see `.planning/phases/05-typescript-adapter/05-VERIFICATION.md`.
+- Next action: run the Phase 5 security gate, then discuss Phase 6 on `main`.
 
 ## Current Position
 
-Phase: 05 (typescript-adapter) — EXECUTING
-Status: Ready for code review and verification
-Plan: 4 of 4
+Phase: 06 (sdk-and-example-rules) — NOT STARTED
+Status: Ready for Phase 6 discussion after Phase 5 security gate
+Plan: Not started
 Last activity: 2026-04-30
 
 ## Phase Progress
@@ -61,8 +63,8 @@ Last activity: 2026-04-30
 | 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
 | 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
 | 4 | Complete | 4/4 plans complete; parser-backed Go facts verified through unit and CLI integration coverage |
-| 5 | In Progress | TypeScript adapter parses with Oxc and extracts practical syntax facts |
-| 6 | In Progress | SDK and requested example rules have working initial implementation |
+| 5 | Complete | 4/4 plans complete; Oxc-backed TS/JS facts, review fixes, and phase verification passed |
+| 6 | Not Started | SDK and requested example rules have working initial implementation; GSD phase execution not started |
 | 7 | In Progress | Cache crate exists; deeper parse/fact persistence remains |
 | 8 | In Progress | SARIF-like output, exit codes, profile-rules, explain, and graph commands exist |
 | 9 | In Progress | WIT and plugin host skeleton exist |
