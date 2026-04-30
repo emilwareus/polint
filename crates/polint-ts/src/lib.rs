@@ -2986,6 +2986,88 @@ export function render(error: unknown) {
     }
 
     #[test]
+    fn referenced_default_exports_mark_ts_facts_as_exported() {
+        let (function_db, function_diagnostics) = analyze_source(
+            "default-function.tsx",
+            r#"
+const Button = () => null;
+export default Button;
+"#,
+        );
+        assert_no_parser_diagnostics(&function_diagnostics);
+        let button = function_db
+            .functions()
+            .iter()
+            .find(|function| function.name == "Button")
+            .expect("expected Button function fact");
+        assert!(button.is_exported);
+
+        let (class_db, class_diagnostics) = analyze_source(
+            "default-class.tsx",
+            r#"
+class Panel {}
+export default Panel;
+"#,
+        );
+        assert_no_parser_diagnostics(&class_diagnostics);
+        let panel = class_db
+            .ts_classes()
+            .iter()
+            .find(|class| class.name == "Panel")
+            .expect("expected Panel class fact");
+        assert!(panel.is_exported);
+    }
+
+    #[test]
+    fn calls_inside_expression_containers_are_collected() {
+        let source = r#"
+export function render() {
+  const values = [load()];
+  const obj = { value: format() };
+  const client = new Client(createConfig());
+  return <View label={labelText()}>{renderChild()}</View>;
+}
+"#;
+        let (db, diagnostics) = analyze_source("containers.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let render = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "render")
+            .expect("expected render function");
+        assert_eq!(
+            render.calls,
+            [
+                "Client",
+                "createConfig",
+                "format",
+                "labelText",
+                "load",
+                "renderChild"
+            ]
+        );
+    }
+
+    #[test]
+    fn commonjs_require_calls_emit_import_facts() {
+        let source = r#"
+const config = require("./config");
+const lib = require("@scope/lib");
+export const value = config.value;
+"#;
+        let (db, diagnostics) = analyze_source("commonjs.js", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let paths: Vec<_> = db
+            .imports()
+            .iter()
+            .map(|import| import.path.as_str())
+            .collect();
+        assert_eq!(paths, ["./config", "@scope/lib"]);
+    }
+
+    #[test]
     fn computes_ts_complexity_from_oxc_control_flow() {
         let source = r#"
 export function authorize(input: Input) {
