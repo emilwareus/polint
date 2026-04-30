@@ -1,6 +1,6 @@
 use polint_core::{
-    AnalysisDb, BranchId, BranchObligation, FileId, FunctionFact, FunctionId, ImportFact,
-    ImportId, Language, RuleOptions, Span, StringLiteralFact, TestFact, run_rules,
+    AnalysisDb, BranchId, BranchObligation, FileId, FunctionFact, FunctionId, ImportFact, ImportId,
+    Language, RuleOptions, Span, StringLiteralFact, TestFact, run_rules,
 };
 use polint_diagnostics::{Diagnostic, OutputFormat, render};
 use polint_rules::built_in_rules;
@@ -197,7 +197,11 @@ fn diagnostics_for(rule_ids: &[&str]) -> Vec<Diagnostic> {
         .into_iter()
         .filter(|rule| wanted.contains(rule.meta().id.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(rules.len(), rule_ids.len(), "missing selected built-in rule");
+    assert_eq!(
+        rules.len(),
+        rule_ids.len(),
+        "missing selected built-in rule"
+    );
 
     let db = phase6_db();
     let enabled = rule_ids
