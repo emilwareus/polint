@@ -923,6 +923,289 @@ mod tests {
     }
 
     #[test]
+    fn rule_ctx_exposes_sdk_query_helpers() {
+        let mut db = AnalysisDb::new();
+        let go_file = db.add_file(
+            PathBuf::from("src/payment.go"),
+            "src/payment.go".to_string(),
+            "package payment\n".to_string(),
+        );
+        let ts_file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export function Button() { return <button aria-label=\"Pay\">Pay</button>; }"
+                .to_string(),
+        );
+        let go_span = test_span(go_file, 1);
+        let ts_span = test_span(ts_file, 1);
+
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file: go_file,
+            name: "payment".to_string(),
+            span: go_span.clone(),
+            language: Language::Go,
+        });
+        let go_function = db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file: go_file,
+            name: "Charge".to_string(),
+            span: go_span.clone(),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 3,
+            calls: vec!["authorize".to_string()],
+        });
+        let ts_function = db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file: ts_file,
+            name: "Button".to_string(),
+            span: ts_span.clone(),
+            language: Language::Tsx,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: vec!["render".to_string()],
+        });
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file: go_file,
+            package: None,
+            path: "context".to_string(),
+            span: go_span.clone(),
+            language: Language::Go,
+        });
+        db.push_branch(BranchObligation {
+            id: BranchId(99),
+            function: Some(go_function),
+            file: go_file,
+            decision_span: go_span.clone(),
+            condition_text: "err != nil".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: true,
+            stable_fingerprint: "branch".to_string(),
+        });
+        db.push_test(TestFact {
+            file: go_file,
+            function: Some(go_function),
+            name: "TestCharge".to_string(),
+            span: go_span.clone(),
+            evidence_terms: vec!["err".to_string()],
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+        db.push_ts_component(TsComponentFact {
+            file: ts_file,
+            function: Some(ts_function),
+            name: "Button".to_string(),
+            span: ts_span.clone(),
+        });
+        db.push_ts_class(TsClassFact {
+            file: ts_file,
+            name: "Dialog".to_string(),
+            span: ts_span.clone(),
+            is_exported: true,
+            is_component_like: true,
+        });
+        db.push_string_literal(StringLiteralFact {
+            file: ts_file,
+            value: "Pay".to_string(),
+            span: ts_span.clone(),
+            language: Language::Tsx,
+        });
+        db.push_jsx_attribute(JsxAttributeFact {
+            file: ts_file,
+            name: "aria-label".to_string(),
+            value: Some("Pay".to_string()),
+            span: ts_span,
+        });
+
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/sdk-query".to_string(),
+                description: "SDK query helper test".to_string(),
+                severity: Severity::Warn,
+            },
+            RuleOptions::default(),
+        );
+
+        assert_eq!(ctx.packages()[0].name, "payment");
+        assert_eq!(ctx.branches()[0].condition_text, "err != nil");
+        assert_eq!(ctx.source_file(go_file).unwrap().relative_path, "src/payment.go");
+        assert_eq!(
+            ctx.functions_for_file(go_file)
+                .map(|function| function.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Charge"]
+        );
+        assert_eq!(
+            ctx.imports_for_file(go_file)
+                .map(|import| import.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["context"]
+        );
+        assert_eq!(ctx.branch_obligations_for_file(go_file).count(), 1);
+        assert_eq!(
+            ctx.go_tests_for_file(go_file)
+                .map(|test| test.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TestCharge"]
+        );
+        assert_eq!(
+            ctx.ts_components_for_file(ts_file)
+                .map(|component| component.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Button"]
+        );
+        assert_eq!(
+            ctx.ts_classes_for_file(ts_file)
+                .map(|class| class.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Dialog"]
+        );
+        assert_eq!(
+            ctx.string_literals_for_file(ts_file)
+                .map(|literal| literal.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Pay"]
+        );
+        assert_eq!(
+            ctx.jsx_attributes_for_file(ts_file)
+                .map(|attribute| attribute.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aria-label"]
+        );
+    }
+
+    #[test]
+    fn rule_ctx_import_edges_preserve_analysis_order() {
+        let mut db = AnalysisDb::new();
+        let first_file = db.add_file(
+            PathBuf::from("src/first.go"),
+            "src/first.go".to_string(),
+            "package first\n".to_string(),
+        );
+        let second_file = db.add_file(
+            PathBuf::from("src/second.go"),
+            "src/second.go".to_string(),
+            "package second\n".to_string(),
+        );
+
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file: second_file,
+            package: None,
+            path: "fmt".to_string(),
+            span: test_span(second_file, 1),
+            language: Language::Go,
+        });
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file: first_file,
+            package: None,
+            path: "strings".to_string(),
+            span: test_span(first_file, 1),
+            language: Language::Go,
+        });
+
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/import-edges".to_string(),
+                description: "Import edge helper test".to_string(),
+                severity: Severity::Warn,
+            },
+            RuleOptions::default(),
+        );
+
+        assert_eq!(
+            ctx.import_edges()
+                .map(|(file, import)| (file.relative_path.as_str(), import.path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("src/second.go", "fmt"), ("src/first.go", "strings")]
+        );
+    }
+
+    #[test]
+    fn rule_ctx_go_tests_for_related_file_matches_companion_tests() {
+        let mut db = AnalysisDb::new();
+        let production_file = db.add_file(
+            PathBuf::from("src/payments/payment.go"),
+            "src/payments/payment.go".to_string(),
+            "package payments\n".to_string(),
+        );
+        let companion_file = db.add_file(
+            PathBuf::from("src/payments/payment_test.go"),
+            "src/payments/payment_test.go".to_string(),
+            "package payments\n".to_string(),
+        );
+        let unrelated_file = db.add_file(
+            PathBuf::from("src/users/payment_test.go"),
+            "src/users/payment_test.go".to_string(),
+            "package users\n".to_string(),
+        );
+
+        db.push_test(TestFact {
+            file: production_file,
+            function: None,
+            name: "TestInline".to_string(),
+            span: test_span(production_file, 1),
+            evidence_terms: Vec::new(),
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+        db.push_test(TestFact {
+            file: companion_file,
+            function: None,
+            name: "TestPayment".to_string(),
+            span: test_span(companion_file, 1),
+            evidence_terms: Vec::new(),
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+        db.push_test(TestFact {
+            file: unrelated_file,
+            function: None,
+            name: "TestUserPayment".to_string(),
+            span: test_span(unrelated_file, 1),
+            evidence_terms: Vec::new(),
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/go-related-tests".to_string(),
+                description: "Related Go test helper test".to_string(),
+                severity: Severity::Warn,
+            },
+            RuleOptions::default(),
+        );
+
+        assert_eq!(
+            ctx.go_tests_for_related_file(production_file)
+                .iter()
+                .map(|test| test.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TestInline", "TestPayment"]
+        );
+        assert_eq!(
+            ctx.go_tests_for_related_file(companion_file)
+                .iter()
+                .map(|test| test.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TestPayment"]
+        );
+    }
+
+    #[test]
     fn capabilities_expose_ts_classes() {
         assert!(!Capabilities::new().ts_classes);
         let capabilities = Capabilities::new().ts_classes();
