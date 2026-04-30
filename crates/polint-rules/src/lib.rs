@@ -446,4 +446,22 @@ mod tests {
         assert!(is_raw_color("rgba(0,0,0,0.5)"));
         assert!(!is_raw_color("primary.500"));
     }
+
+    #[test]
+    fn rule_options_from_config_maps_literal_allow_list() {
+        let config = polint_config::RuleConfig {
+            id: "examples/ts-no-raw-colors".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: vec!["#fff".to_string(), "currentColor".to_string()],
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: std::collections::BTreeMap::new(),
+        };
+
+        let options = rule_options_from_config(Some(&config));
+
+        assert_eq!(options.allow, vec!["#fff", "currentColor"]);
+    }
 }

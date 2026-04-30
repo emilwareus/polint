@@ -260,4 +260,34 @@ mod tests {
         let config: PolintConfig = toml::from_str(default_config_toml()).unwrap();
         assert!(config.profiles.contains_key("fast"));
     }
+
+    #[test]
+    fn rule_config_parses_literal_allow_list() {
+        let config: PolintConfig = toml::from_str(
+            r##"
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+allow_files = ["**/theme/**"]
+allow = ["#fff", "currentColor"]
+"##,
+        )
+        .unwrap();
+
+        let rule = &config.rules.config[0];
+        assert_eq!(rule.allow_files, vec!["**/theme/**"]);
+        assert_eq!(rule.allow, vec!["#fff", "currentColor"]);
+    }
+
+    #[test]
+    fn rule_config_defaults_literal_allow_list_to_empty() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.rules.config[0].allow.is_empty());
+    }
 }
