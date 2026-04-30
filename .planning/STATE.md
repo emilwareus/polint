@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready
-stopped_at: Completed Phase 5 verification
-last_updated: "2026-04-30T07:24:11.517Z"
+stopped_at: Completed Phase 5 verification and security gate
+last_updated: "2026-04-30T07:30:59Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
@@ -46,12 +46,13 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 - Phase 5 Plan 05-04 completed expanded TS fixtures, CLI integration tests, and full workspace verification; see `.planning/phases/05-typescript-adapter/05-04-SUMMARY.md`.
 - Phase 5 code review passed clean after review fixes; see `.planning/phases/05-typescript-adapter/05-REVIEW.md` and `.planning/phases/05-typescript-adapter/05-REVIEW-FIX.md`.
 - Phase 5 verification passed with no gaps; see `.planning/phases/05-typescript-adapter/05-VERIFICATION.md`.
-- Next action: run the Phase 5 security gate, then discuss Phase 6 on `main`.
+- Phase 5 security gate passed with `threats_open: 0`; see `.planning/phases/05-typescript-adapter/05-SECURITY.md`.
+- Next action: discuss Phase 6 on `main`.
 
 ## Current Position
 
 Phase: 06 (sdk-and-example-rules) — NOT STARTED
-Status: Ready for Phase 6 discussion after Phase 5 security gate
+Status: Ready for Phase 6 discussion
 Plan: Not started
 Last activity: 2026-04-30
 
