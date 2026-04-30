@@ -6,7 +6,7 @@ use oxc_ast::ast::{
     Function, FunctionBody, ImportOrExportKind, JSXAttributeItem, JSXAttributeName,
     JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment, MethodDefinition,
     ModuleExportName, ObjectPropertyKind, Program, PropertyKey, Statement, TemplateLiteral,
-    VariableDeclarator,
+    RegExpLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -2439,6 +2439,9 @@ fn walk_expression_for_literals(
     expression: &Expression<'_>,
 ) {
     match expression {
+        Expression::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         Expression::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2570,6 +2573,18 @@ fn push_string_literal_from_oxc(
     });
 }
 
+fn push_regex_literal_from_oxc(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    literal: &RegExpLiteral<'_>,
+) {
+    let value = literal.raw.as_ref().map_or_else(
+        || literal.regex.to_string(),
+        |raw| raw.as_str().to_string(),
+    );
+    push_string_literal_from_oxc(db, ctx, value, literal.span);
+}
+
 fn extract_jsx_element_attributes(
     db: &mut AnalysisDb,
     ctx: TsAstCtx<'_>,
@@ -2688,6 +2703,9 @@ fn walk_export_default_for_literals(
         ExportDefaultDeclarationKind::ClassDeclaration(class) => {
             walk_class_for_literals(db, ctx, class);
         }
+        ExportDefaultDeclarationKind::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         ExportDefaultDeclarationKind::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2777,6 +2795,9 @@ fn walk_for_init_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, init: &For
         ForStatementInit::VariableDeclaration(variable) => {
             walk_variable_declaration_for_literals(db, ctx, variable);
         }
+        ForStatementInit::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         ForStatementInit::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2796,6 +2817,9 @@ fn walk_for_left_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, left: &For
 fn walk_argument_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, argument: &Argument<'_>) {
     match argument {
         Argument::SpreadElement(spread) => walk_expression_for_literals(db, ctx, &spread.argument),
+        Argument::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         Argument::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2867,6 +2891,9 @@ fn walk_array_element_for_literals(
         ArrayExpressionElement::SpreadElement(spread) => {
             walk_expression_for_literals(db, ctx, &spread.argument);
         }
+        ArrayExpressionElement::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         ArrayExpressionElement::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2898,6 +2925,9 @@ fn walk_array_element_for_literals(
 
 fn walk_property_key_for_literals(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, key: &PropertyKey<'_>) {
     match key {
+        PropertyKey::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         PropertyKey::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
@@ -2951,6 +2981,9 @@ fn walk_jsx_expression_for_literals(
     expression: &JSXExpression<'_>,
 ) {
     match expression {
+        JSXExpression::RegExpLiteral(literal) => {
+            push_regex_literal_from_oxc(db, ctx, literal);
+        }
         JSXExpression::StringLiteral(literal) => {
             push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
         }
