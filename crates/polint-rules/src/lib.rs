@@ -918,6 +918,112 @@ mod tests {
         );
     }
 
+    fn go_suite_test_fact(
+        file: FileId,
+        subtest_count: u32,
+        table_rows: u32,
+        assertion_count: u32,
+    ) -> TestFact {
+        TestFact {
+            file,
+            function: None,
+            name: "TestPaymentMatrix".to_string(),
+            span: span(file, 12, 6, 23),
+            evidence_terms: vec!["payment".to_string()],
+            assertion_count,
+            subtest_count,
+            table_rows,
+        }
+    }
+
+    #[test]
+    fn go_test_suite_size_uses_weighted_score() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_suite_test_fact(file, 3, 5, 2));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoTestSuiteSize),
+            &db,
+            RuleOptions {
+                max: Some(24),
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/go-test-suite-size");
+        assert!(
+            diagnostic
+                .message
+                .contains("heuristic maintainability score")
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "score" && evidence.value == "25")
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "subtests" && evidence.value == "3")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "table_rows" && evidence.value == "5"
+        }));
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "assertions" && evidence.value == "2"
+        }));
+    }
+
+    #[test]
+    fn go_test_suite_size_respects_configured_max() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_suite_test_fact(file, 3, 5, 2));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoTestSuiteSize),
+            &db,
+            RuleOptions {
+                max: Some(25),
+                ..RuleOptions::default()
+            },
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn go_test_suite_size_discloses_heuristic_wording() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_suite_test_fact(file, 3, 5, 2));
+
+        let diagnostics = run_single_rule(
+            Arc::new(GoTestSuiteSize),
+            &db,
+            RuleOptions {
+                max: Some(24),
+                ..RuleOptions::default()
+            },
+        );
+
+        let diagnostic = diagnostics
+            .first()
+            .expect("expected test suite size diagnostic");
+        assert!(
+            diagnostic.message.contains("heuristic")
+                || diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("heuristic"))
+        );
+    }
+
     #[test]
     fn ts_raw_colors_respects_literal_allow_list() {
         let mut db = AnalysisDb::new();
