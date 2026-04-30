@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-typescript-adapter-03-PLAN.md
-last_updated: "2026-04-30T06:42:49Z"
+stopped_at: Completed 05-typescript-adapter-04-PLAN.md
+last_updated: "2026-04-30T06:55:00Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 14
-  completed_plans: 13
-  percent: 93
+  completed_plans: 14
+  percent: 100
 ---
 
 # State: exlint
@@ -43,12 +43,13 @@ See: `.planning/PROJECT.md` (updated 2026-04-28)
 - Phase 5 Plan 05-01 completed the Oxc parser foundation and controlled `parser/ts` diagnostics; see `.planning/phases/05-typescript-adapter/05-01-SUMMARY.md`.
 - Phase 5 Plan 05-02 completed parser-backed TS imports, exports, functions, classes, methods, component heuristics, and calls; see `.planning/phases/05-typescript-adapter/05-02-SUMMARY.md`.
 - Phase 5 Plan 05-03 completed parser-backed TS literals, JSX attributes, complexity, and import graph proof; see `.planning/phases/05-typescript-adapter/05-03-SUMMARY.md`.
-- Next action: execute Phase 5 Plan 05-04 on `main`.
+- Phase 5 Plan 05-04 completed expanded TS fixtures, CLI integration tests, and full workspace verification; see `.planning/phases/05-typescript-adapter/05-04-SUMMARY.md`.
+- Next action: run Phase 5 code review and phase verification on `main`.
 
 ## Current Position
 
 Phase: 05 (typescript-adapter) — EXECUTING
-Status: Ready to execute
+Status: Ready for code review and verification
 Plan: 4 of 4
 Last activity: 2026-04-30
 
@@ -90,6 +91,7 @@ Last activity: 2026-04-30
 - [Phase 05-typescript-adapter]: Recorded dynamic template literals as static quasi facts only instead of synthetic exact combined values.
 - [Phase 05-typescript-adapter]: Computed TS/JS complexity from Oxc AST control-flow nodes rather than comments or string contents.
 - [Phase 05-typescript-adapter]: Added polint-graph as a polint-ts dev-dependency solely for import graph unit proof.
+- [Phase 05-typescript-adapter]: Proved TS parser diagnostics and TS rule consumption through parsed CLI JSON integration tests.
 
 ## Performance Metrics
 
@@ -102,11 +104,12 @@ Last activity: 2026-04-30
 | Phase 05-typescript-adapter P01 | 10min | 2 tasks | 1 files |
 | Phase 05-typescript-adapter P02 | 13min | 2 tasks | 2 files |
 | Phase 05-typescript-adapter P03 | interrupted/resumed | 2 tasks | 3 files |
+| Phase 05-typescript-adapter P04 | 10min | 3 tasks | 5 files |
 
 ## Session
 
-**Last Date:** 2026-04-30T06:42:49Z
-**Stopped At:** Completed 05-typescript-adapter-03-PLAN.md
+**Last Date:** 2026-04-30T06:55:00Z
+**Stopped At:** Completed 05-typescript-adapter-04-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
