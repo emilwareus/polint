@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-04-30T09:15:00.044Z"
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-04-30T09:24:43.105Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
   completed_phases: 5
   total_plans: 20
-  completed_plans: 15
-  percent: 75
+  completed_plans: 16
+  percent: 80
 ---
 
 # State: exlint
@@ -53,7 +53,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 
 Phase: 06 (sdk-and-example-rules) — EXECUTING
 Status: Ready to execute
-Plan: 2 of 6
+Plan: 3 of 6
 Last activity: 2026-04-30
 
 ## Phase Progress
@@ -98,6 +98,9 @@ Last activity: 2026-04-30
 - [Phase 06-sdk-and-example-rules]: Kept the core Rule and RuleCtx contract additive while exposing new borrowed helper methods.
 - [Phase 06-sdk-and-example-rules]: Returned Vec<&TestFact> only for go_tests_for_related_file because it combines same-file and companion borrowed references.
 - [Phase 06-sdk-and-example-rules]: Kept polint new-rule scaffolds honest: SDK helper examples only, no dynamic loading claims.
+- [Phase 06-sdk-and-example-rules]: Kept literal allow-list support as a narrow additive config field separate from allow_files.
+- [Phase 06-sdk-and-example-rules]: Excluded Go import path string nodes from general string literal facts so ImportFact remains the import source of truth.
+- [Phase 06-sdk-and-example-rules]: Represented TS/JS regex literals as slash-delimited source syntax only, preserving flags without evaluating regex semantics.
 
 ## Performance Metrics
 
@@ -112,11 +115,12 @@ Last activity: 2026-04-30
 | Phase 05-typescript-adapter P03 | interrupted/resumed | 2 tasks | 3 files |
 | Phase 05-typescript-adapter P04 | 10min | 3 tasks | 5 files |
 | Phase 06-sdk-and-example-rules P01 | 7 min | 3 tasks | 4 files |
+| Phase 06-sdk-and-example-rules P02 | 6 min | 3 tasks | 5 files |
 
 ## Session
 
-**Last Date:** 2026-04-30T09:15:00.041Z
-**Stopped At:** Completed 06-01-PLAN.md
+**Last Date:** 2026-04-30T09:24:43.101Z
+**Stopped At:** Completed 06-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
