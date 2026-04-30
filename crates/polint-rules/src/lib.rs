@@ -1,7 +1,6 @@
-use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_core::{Capabilities, Rule, RuleCtx, RuleMeta, RuleOptions};
-use polint_diagnostics::{Diagnostic, Severity, fingerprint};
+use polint_diagnostics::fingerprint;
+use polint_sdk::prelude::*;
 use std::sync::Arc;
 
 pub fn built_in_rules() -> Vec<Arc<dyn Rule>> {
@@ -41,31 +40,34 @@ impl Rule for GoCyclomaticComplexity {
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
         let max = ctx.options().max.unwrap_or(12);
-        let functions: Vec<_> = ctx
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for function in ctx
             .functions()
             .iter()
-            .filter(|function| function.language == polint_core::Language::Go)
-            .cloned()
-            .collect();
-        for function in functions {
+            .filter(|function| function.language == Language::Go)
+        {
             if function.cyclomatic_complexity > max
                 && file_selected(ctx.options(), &ctx.file_path(function.file))
             {
-                ctx.report(
+                diagnostics.push(
                     Diagnostic::warning(
-                        self.meta().id,
-                        ctx.file_path(function.file),
-                        function.span.diagnostic_range(),
-                        format!(
-                            "Go function `{}` has cyclomatic complexity {}, max {}.",
-                            function.name, function.cyclomatic_complexity, max
-                        ),
-                    )
-                    .with_evidence("function", function.name.clone())
-                    .with_evidence("complexity", function.cyclomatic_complexity.to_string())
-                    .with_help("Split deeply branched behavior into smaller focused functions or table-driven helpers."),
+                    rule_id.clone(),
+                    ctx.file_path(function.file),
+                    function.span.diagnostic_range(),
+                    format!(
+                        "Go function `{}` has cyclomatic complexity {}, max {}.",
+                        function.name, function.cyclomatic_complexity, max
+                    ),
+                )
+                .with_evidence("function", function.name.clone())
+                .with_evidence("complexity", function.cyclomatic_complexity.to_string())
+                .with_help("Split deeply branched behavior into smaller focused functions or table-driven helpers."),
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
@@ -86,19 +88,19 @@ impl Rule for TsCyclomaticComplexity {
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
         let max = ctx.options().max.unwrap_or(12);
-        let functions: Vec<_> = ctx
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for function in ctx
             .functions()
             .iter()
             .filter(|function| function.language.is_ts_family())
-            .cloned()
-            .collect();
-        for function in functions {
+        {
             if function.cyclomatic_complexity > max
                 && file_selected(ctx.options(), &ctx.file_path(function.file))
             {
-                ctx.report(
+                diagnostics.push(
                     Diagnostic::warning(
-                        self.meta().id,
+                        rule_id.clone(),
                         ctx.file_path(function.file),
                         function.span.diagnostic_range(),
                         format!(
@@ -113,6 +115,9 @@ impl Rule for TsCyclomaticComplexity {
                     ),
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
@@ -132,24 +137,23 @@ impl Rule for GoImportBoundaries {
     }
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
-        let imports: Vec<_> = ctx
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for import in ctx
             .imports()
             .iter()
-            .filter(|import| import.language == polint_core::Language::Go)
-            .cloned()
-            .collect();
-        let forbidden_imports = ctx.options().forbidden_imports.clone();
-        for import in imports {
+            .filter(|import| import.language == Language::Go)
+        {
             let file = ctx.file_path(import.file);
-            for (from_glob, forbidden) in &forbidden_imports {
+            for (from_glob, forbidden) in &ctx.options().forbidden_imports {
                 if glob_matches(from_glob, &file)
                     && forbidden.iter().any(|pattern| {
                         glob_matches(pattern, &import.path) || import.path.contains(pattern)
                     })
                 {
-                    ctx.report(
+                    diagnostics.push(
                         Diagnostic::error(
-                            self.meta().id,
+                            rule_id.clone(),
                             file.clone(),
                             import.span.diagnostic_range(),
                             format!("Go import `{}` violates configured import boundary.", import.path),
@@ -159,6 +163,9 @@ impl Rule for GoImportBoundaries {
                     );
                 }
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
@@ -371,7 +378,7 @@ fn is_raw_color(value: &str) -> bool {
         || lower.starts_with("hsla(")
 }
 
-fn has_nearby_test_evidence(ctx: &RuleCtx<'_>, file: polint_core::FileId, condition: &str) -> bool {
+fn has_nearby_test_evidence(ctx: &RuleCtx<'_>, file: FileId, condition: &str) -> bool {
     let condition_lower = condition.to_ascii_lowercase();
     ctx.go_tests().iter().any(|test| {
         test.file == file
@@ -440,7 +447,6 @@ pub fn rule_fingerprint(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polint_sdk::prelude::*;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
@@ -451,13 +457,7 @@ mod tests {
     ) -> Vec<Diagnostic> {
         let mut options_by_rule = BTreeMap::new();
         options_by_rule.insert(rule.meta().id, options);
-        polint_core::run_rules(
-            db,
-            &[rule],
-            &options_by_rule,
-            &BTreeSet::new(),
-            false,
-        )
+        polint_core::run_rules(db, &[rule], &options_by_rule, &BTreeSet::new(), false)
     }
 
     fn add_file(db: &mut AnalysisDb, path: &str) -> FileId {
