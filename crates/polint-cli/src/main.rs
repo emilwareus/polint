@@ -189,20 +189,26 @@ fn rule_template(language: &str, rule_name: &str) -> String {
         _ => ".syntax()",
     };
     let query_example = match language {
-        "go" => r#"        for file in ctx.files() {
+        "go" => {
+            r#"        for file in ctx.files() {
             let test_count = ctx.go_tests_for_file(file.id).count();
             let branch_count = ctx.branch_obligations_for_file(file.id).count();
             let _ = (test_count, branch_count);
-        }"#,
-        "ts" | "tsx" | "js" | "jsx" => r#"        for file in ctx.files() {
+        }"#
+        }
+        "ts" | "tsx" | "js" | "jsx" => {
+            r#"        for file in ctx.files() {
             let literal_count = ctx.string_literals_for_file(file.id).count();
             let attribute_count = ctx.jsx_attributes_for_file(file.id).count();
             let _ = (literal_count, attribute_count);
-        }"#,
-        _ => r#"        for file in ctx.files() {
+        }"#
+        }
+        _ => {
+            r#"        for file in ctx.files() {
             let function_count = ctx.functions_for_file(file.id).count();
             let _ = function_count;
-        }"#,
+        }"#
+        }
     };
     format!(
         r#"use polint_sdk::prelude::*;

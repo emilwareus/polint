@@ -535,10 +535,7 @@ impl<'a> RuleCtx<'a> {
     }
 
     /// Returns function facts for a file without cloning facts.
-    pub fn functions_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &FunctionFact> + '_ {
+    pub fn functions_for_file(&self, file: FileId) -> impl Iterator<Item = &FunctionFact> + '_ {
         self.db
             .functions()
             .iter()
@@ -658,10 +655,7 @@ impl<'a> RuleCtx<'a> {
     }
 
     /// Returns TypeScript/JavaScript class facts for a file without cloning facts.
-    pub fn ts_classes_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &TsClassFact> + '_ {
+    pub fn ts_classes_for_file(&self, file: FileId) -> impl Iterator<Item = &TsClassFact> + '_ {
         self.db
             .ts_classes()
             .iter()
@@ -1226,7 +1220,10 @@ mod tests {
 
         assert_eq!(ctx.packages()[0].name, "payment");
         assert_eq!(ctx.branches()[0].condition_text, "err != nil");
-        assert_eq!(ctx.source_file(go_file).unwrap().relative_path, "src/payment.go");
+        assert_eq!(
+            ctx.source_file(go_file).unwrap().relative_path,
+            "src/payment.go"
+        );
         assert_eq!(
             ctx.functions_for_file(go_file)
                 .map(|function| function.name.as_str())
