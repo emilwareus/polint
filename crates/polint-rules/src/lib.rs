@@ -874,9 +874,11 @@ mod tests {
                 .message
                 .contains("No nearby test evidence found for Go branch")
         );
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "condition" && evidence.value == "err != nil"
-        }));
+        assert!(
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "condition" && evidence.value == "err != nil"
+            })
+        );
         assert!(
             diagnostic
                 .evidence
@@ -983,12 +985,18 @@ mod tests {
                 .iter()
                 .any(|evidence| evidence.label == "subtests" && evidence.value == "3")
         );
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "table_rows" && evidence.value == "5"
-        }));
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "assertions" && evidence.value == "2"
-        }));
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.label == "table_rows" && evidence.value == "5" })
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.label == "assertions" && evidence.value == "2" })
+        );
     }
 
     #[test]
@@ -1082,12 +1090,17 @@ mod tests {
                 .message
                 .contains("has no obvious assertion or error check")
         );
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "test" && evidence.value == "TestPaymentAction"
-        }));
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "assertions" && evidence.value == "0"
-        }));
+        assert!(
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "test" && evidence.value == "TestPaymentAction"
+            })
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.label == "assertions" && evidence.value == "0" })
+        );
         assert!(diagnostic.evidence.iter().any(|evidence| {
             evidence.label == "evidence_terms" && evidence.value == "payment, action"
         }));
