@@ -2503,6 +2503,69 @@ export function Button() {
     }
 
     #[test]
+    fn quoted_jsx_attributes_are_available_as_string_literals() {
+        let source = r##"
+export function Button() {
+  return <button data-color="#00ff00" />;
+}
+"##;
+        let (db, diagnostics) = analyze_source("jsx-attribute-literal.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        assert!(
+            db.string_literals()
+                .iter()
+                .any(|literal| literal.value == "#00ff00"),
+            "quoted JSX attribute values should be available to literal rules"
+        );
+    }
+
+    #[test]
+    fn export_specifiers_mark_ts_facts_as_exported() {
+        let source = r#"
+const Button = () => null;
+class Panel {}
+
+export { Button, Panel };
+"#;
+        let (db, diagnostics) = analyze_source("exports.tsx", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let button = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "Button")
+            .expect("expected Button function fact");
+        assert!(button.is_exported);
+
+        let panel = db
+            .ts_classes()
+            .iter()
+            .find(|class| class.name == "Panel")
+            .expect("expected Panel class fact");
+        assert!(panel.is_exported);
+    }
+
+    #[test]
+    fn nested_calls_inside_regular_arguments_are_collected() {
+        let source = r#"
+export function render(error: unknown) {
+  outer(inner());
+  track(String(error));
+}
+"#;
+        let (db, diagnostics) = analyze_source("calls.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let render = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "render")
+            .expect("expected render function");
+        assert_eq!(render.calls, ["String", "inner", "outer", "track"]);
+    }
+
+    #[test]
     fn computes_ts_complexity_from_oxc_control_flow() {
         let source = r#"
 export function authorize(input: Input) {
