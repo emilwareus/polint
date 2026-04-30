@@ -341,19 +341,26 @@ impl Rule for GoAssertionAfterAction {
     }
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
-        let tests: Vec<_> = ctx.go_tests().to_vec();
-        for test in tests {
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+        for test in ctx.go_tests() {
             if test.assertion_count == 0 {
-                ctx.report(
+                diagnostics.push(
                     Diagnostic::warning(
-                        self.meta().id,
+                        rule_id.clone(),
                         ctx.file_path(test.file),
                         test.span.diagnostic_range(),
                         format!("Go test `{}` has no obvious assertion or error check.", test.name),
                     )
+                    .with_evidence("test", test.name.clone())
+                    .with_evidence("assertions", test.assertion_count.to_string())
+                    .with_evidence("evidence_terms", test.evidence_terms.join(", "))
                     .with_help("Add an explicit assertion, error check, or failure path. This rule is heuristic."),
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
