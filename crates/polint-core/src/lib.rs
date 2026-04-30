@@ -353,6 +353,7 @@ impl AnalysisDb {
     }
 }
 
+/// Static metadata for a rule as shown in diagnostics, config, and registries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleMeta {
     pub id: String,
@@ -360,6 +361,10 @@ pub struct RuleMeta {
     pub severity: Severity,
 }
 
+/// Fact families a rule wants the host to provide.
+///
+/// Capabilities are declarative: they let hosts and future plugin loaders know
+/// which analysis facts a rule consumes without changing the `Rule` trait.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Capabilities {
     pub syntax: bool,
@@ -442,12 +447,21 @@ impl Capabilities {
     }
 }
 
+/// A static-analysis rule that runs against an [`AnalysisDb`] through [`RuleCtx`].
+///
+/// Implementations should declare their metadata and capabilities, then report
+/// diagnostics through the context instead of panicking or writing output.
 pub trait Rule: Send + Sync {
     fn meta(&self) -> RuleMeta;
     fn capabilities(&self) -> Capabilities;
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()>;
 }
 
+/// Resolved per-rule options from configuration.
+///
+/// Built-in and repo-local rules can read these values through
+/// [`RuleCtx::options`] to apply severity overrides, file filters, thresholds,
+/// denied values, or import-boundary settings.
 #[derive(Debug, Clone, Default)]
 pub struct RuleOptions {
     pub severity: Option<Severity>,
@@ -458,6 +472,10 @@ pub struct RuleOptions {
     pub forbidden_imports: BTreeMap<String, Vec<String>>,
 }
 
+/// Borrowed execution context passed to a single rule run.
+///
+/// The context exposes stable, deterministic views of facts in [`AnalysisDb`]
+/// and buffers diagnostics until the rule finishes.
 pub struct RuleCtx<'a> {
     db: &'a AnalysisDb,
     diagnostics: Vec<Diagnostic>,
@@ -466,6 +484,7 @@ pub struct RuleCtx<'a> {
 }
 
 impl<'a> RuleCtx<'a> {
+    /// Creates a rule context for one rule execution.
     pub fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
         Self {
             db,
@@ -475,26 +494,69 @@ impl<'a> RuleCtx<'a> {
         }
     }
 
+    /// Returns the underlying analysis database for advanced read-only queries.
     pub fn db(&self) -> &AnalysisDb {
         self.db
     }
 
+    /// Returns resolved options for the current rule.
     pub fn options(&self) -> &RuleOptions {
         &self.options
     }
 
+    /// Returns all analyzed source files in deterministic database order.
     pub fn files(&self) -> &[SourceFile] {
         self.db.files()
     }
 
+    /// Returns all package facts in deterministic database order.
+    pub fn packages(&self) -> &[PackageFact] {
+        self.db.packages()
+    }
+
+    /// Returns all function facts in deterministic database order.
     pub fn functions(&self) -> &[FunctionFact] {
         self.db.functions()
     }
 
+    /// Returns all import facts in deterministic database order.
     pub fn imports(&self) -> &[ImportFact] {
         self.db.imports()
     }
 
+    /// Returns all branch obligations in deterministic database order.
+    pub fn branches(&self) -> &[BranchObligation] {
+        self.db.branches()
+    }
+
+    /// Returns the source file for a stable file ID.
+    pub fn source_file(&self, file: FileId) -> Option<&SourceFile> {
+        self.db.file(file)
+    }
+
+    /// Returns function facts for a file without cloning facts.
+    pub fn functions_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &FunctionFact> + '_ {
+        self.db
+            .functions()
+            .iter()
+            .filter(move |function| function.file == file)
+    }
+
+    /// Returns import facts for a file without cloning facts.
+    pub fn imports_for_file(&self, file: FileId) -> impl Iterator<Item = &ImportFact> + '_ {
+        self.db
+            .imports()
+            .iter()
+            .filter(move |import| import.file == file)
+    }
+
+    /// Returns branch obligations for a function.
+    ///
+    /// This compatibility helper combines borrowed branch references for the
+    /// requested function ID.
     pub fn branch_obligations(&self, function: FunctionId) -> Vec<&BranchObligation> {
         self.db
             .branches()
@@ -503,30 +565,157 @@ impl<'a> RuleCtx<'a> {
             .collect()
     }
 
+    /// Returns branch obligations for a file without cloning facts.
+    pub fn branch_obligations_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &BranchObligation> + '_ {
+        self.db
+            .branches()
+            .iter()
+            .filter(move |branch| branch.file == file)
+    }
+
+    /// Returns all Go test facts in deterministic database order.
     pub fn go_tests(&self) -> &[TestFact] {
         self.db.tests()
     }
 
+    /// Returns Go test facts for a file without cloning facts.
+    pub fn go_tests_for_file(&self, file: FileId) -> impl Iterator<Item = &TestFact> + '_ {
+        self.db.tests().iter().filter(move |test| test.file == file)
+    }
+
+    /// Returns Go tests related to a source file.
+    ///
+    /// For a production `.go` file, this includes tests in the same file and
+    /// tests from same-directory `_test.go` files. For a `_test.go` file, this
+    /// includes only tests from that same test file.
+    pub fn go_tests_for_related_file(&self, file: FileId) -> Vec<&TestFact> {
+        let Some(source_file) = self.source_file(file) else {
+            return Vec::new();
+        };
+        if source_file.language != Language::Go {
+            return Vec::new();
+        }
+
+        let source_path = Path::new(&source_file.relative_path);
+        let source_name = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+
+        if source_name.ends_with("_test.go") {
+            return self.go_tests_for_file(file).collect();
+        }
+
+        let source_dir = source_path.parent();
+        self.db
+            .tests()
+            .iter()
+            .filter(|test| {
+                if test.file == file {
+                    return true;
+                }
+
+                let Some(test_file) = self.source_file(test.file) else {
+                    return false;
+                };
+                if test_file.language != Language::Go {
+                    return false;
+                }
+
+                let test_path = Path::new(&test_file.relative_path);
+                let test_name = test_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+
+                test_name.ends_with("_test.go") && test_path.parent() == source_dir
+            })
+            .collect()
+    }
+
+    /// Returns TypeScript/JavaScript component facts in database order.
     pub fn ts_components(&self) -> &[TsComponentFact] {
         self.db.ts_components()
     }
 
+    /// Returns TypeScript/JavaScript component facts for a file without cloning facts.
+    pub fn ts_components_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &TsComponentFact> + '_ {
+        self.db
+            .ts_components()
+            .iter()
+            .filter(move |component| component.file == file)
+    }
+
+    /// Returns TypeScript/JavaScript class facts in database order.
     pub fn ts_classes(&self) -> &[TsClassFact] {
         self.db.ts_classes()
     }
 
+    /// Returns TypeScript/JavaScript class facts for a file without cloning facts.
+    pub fn ts_classes_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &TsClassFact> + '_ {
+        self.db
+            .ts_classes()
+            .iter()
+            .filter(move |class| class.file == file)
+    }
+
+    /// Returns string literal facts in deterministic database order.
     pub fn string_literals(&self) -> &[StringLiteralFact] {
         self.db.string_literals()
     }
 
+    /// Returns string literal facts for a file without cloning facts.
+    pub fn string_literals_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &StringLiteralFact> + '_ {
+        self.db
+            .string_literals()
+            .iter()
+            .filter(move |literal| literal.file == file)
+    }
+
+    /// Returns JSX attribute facts in deterministic database order.
     pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
         self.db.jsx_attributes()
     }
 
+    /// Returns JSX attribute facts for a file without cloning facts.
+    pub fn jsx_attributes_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &JsxAttributeFact> + '_ {
+        self.db
+            .jsx_attributes()
+            .iter()
+            .filter(move |attribute| attribute.file == file)
+    }
+
+    /// Returns syntactic import graph edges as `(source file, import)` pairs.
+    ///
+    /// Edges follow import fact insertion order from [`AnalysisDb`].
+    pub fn import_edges(&self) -> impl Iterator<Item = (&SourceFile, &ImportFact)> + '_ {
+        self.db
+            .imports()
+            .iter()
+            .filter_map(move |import| self.source_file(import.file).map(|file| (file, import)))
+    }
+
+    /// Returns a display path for a file ID, or `<unknown>` if missing.
     pub fn file_path(&self, file: FileId) -> String {
         self.db.path_for(file)
     }
 
+    /// Adds a diagnostic for the current rule, applying severity overrides.
     pub fn report(&mut self, mut diagnostic: Diagnostic) {
         if let Some(severity) = self.options.severity {
             diagnostic.severity = severity;
@@ -534,6 +723,7 @@ impl<'a> RuleCtx<'a> {
         self.diagnostics.push(diagnostic);
     }
 
+    /// Reports an error diagnostic at a core span.
     pub fn error(&mut self, span: &Span, message: impl Into<String>) {
         let file = self.file_path(span.file);
         self.report(Diagnostic::error(
@@ -544,6 +734,7 @@ impl<'a> RuleCtx<'a> {
         ));
     }
 
+    /// Reports a warning diagnostic at a core span.
     pub fn warn(&mut self, span: &Span, message: impl Into<String>) {
         let file = self.file_path(span.file);
         self.report(Diagnostic::warning(
@@ -554,6 +745,7 @@ impl<'a> RuleCtx<'a> {
         ));
     }
 
+    /// Consumes the context and returns buffered diagnostics.
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
