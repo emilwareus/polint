@@ -1,6 +1,6 @@
 ---
 phase: 05-typescript-adapter
-reviewed: 2026-04-30T06:52:11Z
+reviewed: 2026-04-30T07:00:41Z
 depth: standard
 files_reviewed: 8
 files_reviewed_list:
@@ -22,88 +22,126 @@ status: issues_found
 
 # Phase 5: Code Review Report
 
-**Reviewed:** 2026-04-30T06:52:11Z
+**Reviewed:** 2026-04-30T07:00:41Z
 **Depth:** standard
 **Files Reviewed:** 8
 **Status:** issues_found
 
 ## Summary
 
-Reviewed the Phase 5 TypeScript adapter, core fact exposure, CLI integration tests, and TS fixtures/examples. The adapter is broadly integrated and the targeted tests pass, but there are three correctness gaps in extracted TS facts that can produce false negatives for literal policies, export-aware rules, and call graph consumers.
+Re-reviewed the Phase 5 TypeScript adapter, core fact exposure, CLI integration tests, and TS fixtures/examples after the fixes in `05-REVIEW-FIX.md`. The three prior warnings are closed:
+
+- quoted JSX attributes are now emitted as `StringLiteralFact` values and covered by `quoted_jsx_attributes_are_available_as_string_literals`;
+- named export specifiers now mark local function/class facts as exported and are covered by `export_specifiers_mark_ts_facts_as_exported`;
+- nested calls inside ordinary arguments are now collected and covered by `nested_calls_inside_regular_arguments_are_collected`.
 
 Verification run:
 
-- `cargo test -p polint-ts` passed.
-- `cargo test -p polint-cli --test cli check_ts` passed.
-- A manual CLI repro with only `<button data-color="#00ff00">` returned `[]`, confirming WR-01.
+- `cargo test -p polint-ts --lib` passed, 18 tests.
+- `cargo test -p polint-cli --test cli check_ts` passed, 2 tests.
+- `cargo test -p polint-core --lib` passed, 17 tests.
+
+The remaining issues are new/adjacent correctness gaps in TypeScript/JavaScript fact extraction.
 
 ## Warnings
 
-### WR-01: Quoted JSX Attribute Literals Bypass Literal Rules
+### WR-01: Referenced Default Exports Are Not Marked Exported
 
-**File:** `crates/polint-ts/src/lib.rs:1987`
-**Issue:** `walk_jsx_attribute_value_for_literals` ignores `JSXAttributeValue::StringLiteral`. Built-in literal policies such as `examples/ts-no-raw-colors` and `examples/config-query-no-literal` consume `ctx.string_literals()`, so JSX like `<button data-color="#00ff00" />` is missed unless another raw string exists elsewhere in the file.
+**File:** `crates/polint-ts/src/lib.rs:415`
+**Issue:** `exported_local_names` only collects `ExportNamedDeclaration` specifiers, while `extract_declarations` only marks inline default declarations (`export default function Button() {}` / `export default class Button {}`) as exported. Common patterns such as `const Button = () => null; export default Button;` leave the `FunctionFact` or `TsClassFact` with `is_exported: false`, so export-aware rules get incorrect facts for a valid public API.
 **Fix:**
 ```rust
-fn walk_jsx_attribute_value_for_literals(
-    db: &mut AnalysisDb,
-    ctx: TsAstCtx<'_>,
-    value: &JSXAttributeValue<'_>,
-) {
-    match value {
-        JSXAttributeValue::ExpressionContainer(container) => {
-            walk_jsx_expression_for_literals(db, ctx, &container.expression);
+fn exported_local_names(program: &Program<'_>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+
+    for statement in &program.body {
+        match statement {
+            Statement::ExportNamedDeclaration(export) if export.source.is_none() => {
+                for specifier in &export.specifiers {
+                    if matches!(specifier.export_kind, ImportOrExportKind::Value)
+                        && let Some(name) = module_export_name_text(&specifier.local)
+                    {
+                        names.insert(name);
+                    }
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => {
+                if let ExportDefaultDeclarationKind::Identifier(identifier) = &export.declaration {
+                    names.insert(identifier.name.to_string());
+                }
+            }
+            _ => {}
         }
-        JSXAttributeValue::Element(element) => extract_jsx_element_attributes(db, ctx, element),
-        JSXAttributeValue::Fragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
-        JSXAttributeValue::StringLiteral(literal) => {
-            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+    }
+
+    names
+}
+```
+
+### WR-02: Call Collection Still Skips Calls Inside Expression Containers
+
+**File:** `crates/polint-ts/src/lib.rs:680`
+**Issue:** `collect_calls_from_argument` was expanded, but the central `collect_calls_from_expression` walker still drops several expression containers, including arrays, objects, `new`, JSX, tagged templates, and `await`. As a result, calls in normal function bodies such as `const values = [load()]`, `return { value: format() }`, `return <View label={format()} />`, or `new Client(createConfig())` are omitted from `FunctionFact.calls`, leaving `polint-graph` call edges incomplete.
+**Fix:** Mirror the expression coverage already present in the complexity/literal walkers instead of relying on argument-only recursion.
+```rust
+fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<String>) {
+    match expression {
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_calls_from_array_element(element, calls);
+            }
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_calls_from_property_key(&property.key, calls);
+                        collect_calls_from_expression(&property.value, calls);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_calls_from_expression(&spread.argument, calls);
+                    }
+                }
+            }
+        }
+        Expression::NewExpression(expression) => {
+            collect_calls_from_expression(&expression.callee, calls);
+            for argument in &expression.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        Expression::JSXElement(element) => collect_calls_from_jsx_element(element, calls),
+        Expression::JSXFragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
+        _ => {
+            // keep the existing call, conditional, logical, wrapper, and member handling
         }
     }
 }
 ```
 
-### WR-02: Export Specifier Declarations Are Not Marked Exported
+### WR-03: CommonJS Require Imports No Longer Produce Import Facts
 
-**File:** `crates/polint-ts/src/lib.rs:242-245`
-**Issue:** `ExportNamedDeclaration` only propagates `is_exported: true` when it contains an inline declaration, so common TS patterns like `const Button = () => null; export { Button };` leave the `FunctionFact` or `TsClassFact` marked as not exported. Rules using the exposed `is_exported` field will see incorrect SDK facts for valid exported APIs.
-**Fix:** Collect local names from export specifiers before extracting declarations, then apply that set when pushing matching functions/classes.
+**File:** `crates/polint-ts/src/lib.rs:142`
+**Issue:** The previous TS adapter detected `require("...")` while extracting imports. The Oxc-based extractor now only handles `import` declarations and `export ... from` statements, and the module-record fallback only runs when no AST imports were emitted. JavaScript/CommonJS files such as `const config = require("./config")` therefore lose `ImportFact` coverage, which makes `ImportGraph::from_db` incomplete for supported `.js` files.
+**Fix:** Add a regression test for CommonJS imports, then either walk call expressions for a `require` callee with a string-literal first argument or handle Oxc's TS import-equals form explicitly.
 ```rust
-let exported_names = exported_local_names(program);
-
-// When pushing top-level declarations:
-let is_exported = exported_names.contains(name.as_str());
-```
-
-### WR-03: Nested Calls In Normal Arguments Are Omitted
-
-**File:** `crates/polint-ts/src/lib.rs:1275-1279`
-**Issue:** `collect_calls_from_expression` delegates call arguments to `collect_calls_from_argument`, but that helper only recurses into spread arguments. Calls inside ordinary arguments, such as `outer(inner())` or `track(String(error))`, are absent from `FunctionFact.calls`, which makes `polint-graph` call edges incomplete.
-**Fix:** Expand `collect_calls_from_argument` to mirror the expression recursion used by the complexity and literal walkers, including call, conditional, logical, array, object, JSX, and TS wrapper argument variants.
-```rust
-fn collect_calls_from_argument(argument: &Argument<'_>, calls: &mut Vec<String>) {
-    match argument {
-        Argument::SpreadElement(spread) => collect_calls_from_expression(&spread.argument, calls),
-        Argument::CallExpression(call) => {
-            if let Some(name) = callee_text(&call.callee) {
-                calls.push(name);
-            }
-            for argument in &call.arguments {
-                collect_calls_from_argument(argument, calls);
-            }
-        }
-        Argument::ConditionalExpression(expression) => {
-            collect_calls_from_expression(&expression.test, calls);
-            collect_calls_from_expression(&expression.consequent, calls);
-            collect_calls_from_expression(&expression.alternate, calls);
-        }
-        _ => {}
-    }
+// During expression traversal:
+if let Expression::CallExpression(call) = expression
+    && callee_text(&call.callee).as_deref() == Some("require")
+    && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+{
+    push_module_import(
+        db,
+        file,
+        path.value.as_str(),
+        span_from_oxc(file, source, path.span),
+        language,
+    );
 }
 ```
 
 ---
 
-_Reviewed: 2026-04-30T06:52:11Z_
+_Reviewed: 2026-04-30T07:00:41Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
