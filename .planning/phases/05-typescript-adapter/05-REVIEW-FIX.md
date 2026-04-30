@@ -2,7 +2,7 @@
 phase: 05-typescript-adapter
 source_review: .planning/phases/05-typescript-adapter/05-REVIEW.md
 status: fixed
-fixed: 6
+fixed: 7
 remaining: 0
 completed: 2026-04-30
 ---
@@ -39,12 +39,20 @@ completed: 2026-04-30
    - Added a regression test for `const config = require("./config")` in `.js` source.
    - Added parser-backed CommonJS `require("...")` extraction into `ImportFact`.
 
+### Third Review Pass
+
+7. **WR-01: Body-Scoped CommonJS Requires Are Still Skipped**
+   - Added a regression test covering `require(...)` calls inside function, arrow function, class method, class field, and static block bodies.
+   - Extended CommonJS require traversal through function and class bodies, default-exported declarations, expression-bodied arrows, class expressions, and class heritage.
+
 ## Commits
 
 - `9bfd5d2` test(05-review): cover TS fact review gaps
 - `2242292` fix(05-review): close TS adapter fact gaps
 - `75ee5ba` test(05-review): cover remaining TS adapter gaps
 - `80f0758` fix(05-review): close remaining TS adapter gaps
+- `de20315` test(05-review): cover body scoped require imports
+- `acdfa28` fix(05-review): collect body scoped require imports
 
 ## Verification
 
@@ -54,8 +62,9 @@ completed: 2026-04-30
 - `cargo test -p polint-ts --lib referenced_default_exports_mark_ts_facts_as_exported` - passed
 - `cargo test -p polint-ts --lib calls_inside_expression_containers_are_collected` - passed
 - `cargo test -p polint-ts --lib commonjs_require_calls_emit_import_facts` - passed
+- `cargo test -p polint-ts --lib commonjs_require_calls_inside_function_and_class_bodies_emit_import_facts` - passed
 - `cargo fmt -- --check` - passed
-- `cargo test -p polint-ts --lib` - passed, 21 tests
+- `cargo test -p polint-ts --lib` - passed, 22 tests
 - `cargo test -p polint-cli --test cli check_ts` - passed, 2 tests
 - `cargo clippy -p polint-ts --all-targets -- -D warnings` - passed
 
