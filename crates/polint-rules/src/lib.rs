@@ -805,6 +805,109 @@ mod tests {
         );
     }
 
+    fn branch_obligation(file: FileId, condition_text: &str) -> BranchObligation {
+        BranchObligation {
+            id: BranchId(99),
+            function: None,
+            file,
+            decision_span: span(file, 7, 5, 15),
+            condition_text: condition_text.to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: true,
+            stable_fingerprint: "branch-payment-err".to_string(),
+        }
+    }
+
+    fn go_test_fact(file: FileId, name: &str, evidence_terms: Vec<&str>) -> TestFact {
+        TestFact {
+            file,
+            function: None,
+            name: name.to_string(),
+            span: span(file, 4, 6, 21),
+            evidence_terms: evidence_terms
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        }
+    }
+
+    #[test]
+    fn go_branch_obligations_reports_missing_nearby_test_evidence() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment.go");
+        db.push_branch(branch_obligation(file, "err != nil"));
+
+        let diagnostics =
+            run_single_rule(Arc::new(GoBranchObligations), &db, RuleOptions::default());
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "examples/go-branch-obligations");
+        assert_eq!(diagnostic.file, "src/payments/payment.go");
+        assert!(
+            diagnostic
+                .message
+                .contains("No nearby test evidence found for Go branch")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "condition" && evidence.value == "err != nil"
+        }));
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "edge" && evidence.value == "true")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "branch_fingerprint" && evidence.value == "branch-payment-err"
+        }));
+    }
+
+    #[test]
+    fn go_branch_obligations_suppresses_matched_companion_test_evidence() {
+        let mut db = AnalysisDb::new();
+        let source_file = add_file(&mut db, "src/payments/payment.go");
+        let test_file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_branch(branch_obligation(source_file, "err != nil"));
+        db.push_test(go_test_fact(
+            test_file,
+            "TestPaymentReturnsError",
+            vec!["ERR != NIL"],
+        ));
+
+        let diagnostics =
+            run_single_rule(Arc::new(GoBranchObligations), &db, RuleOptions::default());
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn go_branch_obligations_discloses_heuristic_wording() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment.go");
+        db.push_branch(branch_obligation(file, "err != nil"));
+
+        let diagnostics =
+            run_single_rule(Arc::new(GoBranchObligations), &db, RuleOptions::default());
+
+        let diagnostic = diagnostics.first().expect("expected branch diagnostic");
+        assert!(
+            diagnostic
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("heuristic"))
+        );
+        assert!(
+            diagnostic
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("does not prove exact coverage"))
+        );
+    }
+
     #[test]
     fn ts_raw_colors_respects_literal_allow_list() {
         let mut db = AnalysisDb::new();
