@@ -866,4 +866,124 @@ mod tests {
                 .any(|evidence| evidence.label == "source" && evidence.value == "jsx-attribute")
         );
     }
+
+    #[test]
+    fn config_query_no_literal_reports_go_and_ts_literals() {
+        let mut db = AnalysisDb::new();
+        let go_file = add_file(&mut db, "src/payment.go");
+        let ts_file = add_file(&mut db, "src/view.ts");
+        db.push_string_literal(StringLiteralFact {
+            file: go_file,
+            value: "legacy-token".to_string(),
+            span: span(go_file, 6, 12, 26),
+            language: Language::Go,
+        });
+        db.push_string_literal(StringLiteralFact {
+            file: ts_file,
+            value: "legacy-token".to_string(),
+            span: span(ts_file, 3, 15, 29),
+            language: Language::TypeScript,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(ConfigQueryNoLiteral),
+            &db,
+            RuleOptions {
+                deny: vec!["legacy-token".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.message
+                    == "Configured denied literal `legacy-token` found.")
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.file == "src/payment.go"
+                && diagnostic
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.label == "language" && evidence.value == "go")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.file == "src/view.ts"
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "language" && evidence.value == "typescript"
+                })
+        }));
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "literal" && evidence.value == "legacy-token")
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "matched" && evidence.value == "legacy-token"
+                })
+                && diagnostic.help.as_deref()
+                    == Some("Replace the literal with an allowed constant or project-specific abstraction.")
+        }));
+    }
+
+    #[test]
+    fn config_query_no_literal_reports_regex_literal_text() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/view.ts");
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "/legacy-testid/".to_string(),
+            span: span(file, 4, 19, 36),
+            language: Language::TypeScript,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(ConfigQueryNoLiteral),
+            &db,
+            RuleOptions {
+                deny: vec!["legacy-testid".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(
+            diagnostic.message,
+            "Configured denied literal `/legacy-testid/` found."
+        );
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "matched"
+                    && evidence.value == "legacy-testid")
+        );
+        assert_eq!(diagnostic.file, "src/view.ts");
+    }
+
+    #[test]
+    fn config_query_no_literal_respects_allow_list() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payment.go");
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "legacy-token".to_string(),
+            span: span(file, 2, 11, 25),
+            language: Language::Go,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(ConfigQueryNoLiteral),
+            &db,
+            RuleOptions {
+                allow: vec!["legacy-token".to_string()],
+                deny: vec!["legacy".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
 }
