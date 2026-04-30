@@ -5,8 +5,8 @@ use oxc_ast::ast::{
     Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
     Function, FunctionBody, ImportOrExportKind, JSXAttributeItem, JSXAttributeName,
     JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment, MethodDefinition,
-    ModuleExportName, ObjectPropertyKind, Program, PropertyKey, Statement, TemplateLiteral,
-    RegExpLiteral, VariableDeclarator,
+    ModuleExportName, ObjectPropertyKind, Program, PropertyKey, RegExpLiteral, Statement,
+    TemplateLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -2578,10 +2578,10 @@ fn push_regex_literal_from_oxc(
     ctx: TsAstCtx<'_>,
     literal: &RegExpLiteral<'_>,
 ) {
-    let value = literal.raw.as_ref().map_or_else(
-        || literal.regex.to_string(),
-        |raw| raw.as_str().to_string(),
-    );
+    let value = literal
+        .raw
+        .as_ref()
+        .map_or_else(|| literal.regex.to_string(), |raw| raw.as_str().to_string());
     push_string_literal_from_oxc(db, ctx, value, literal.span);
 }
 
