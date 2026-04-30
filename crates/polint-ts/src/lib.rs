@@ -3517,6 +3517,34 @@ export const value = config.value;
     }
 
     #[test]
+    fn commonjs_require_calls_inside_function_and_class_bodies_emit_import_facts() {
+        let source = r#"
+function loadConfig() {
+  return require("./config");
+}
+
+const loadLazy = () => require("./lazy");
+
+class Loader {
+  load() {
+    return require("./method");
+  }
+
+  static fallback = require("./static");
+}
+"#;
+        let (db, diagnostics) = analyze_source("commonjs-bodies.js", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let paths: Vec<_> = db
+            .imports()
+            .iter()
+            .map(|import| import.path.as_str())
+            .collect();
+        assert_eq!(paths, ["./config", "./lazy", "./method", "./static"]);
+    }
+
+    #[test]
     fn computes_ts_complexity_from_oxc_control_flow() {
         let source = r#"
 export function authorize(input: Input) {
