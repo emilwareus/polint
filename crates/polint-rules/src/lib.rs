@@ -185,23 +185,44 @@ impl Rule for TsNoRawColors {
     }
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
-        let literals: Vec<_> = ctx.string_literals().to_vec();
-        for literal in literals {
-            let file = ctx.file_path(literal.file);
-            if !file_selected(ctx.options(), &file) || file_allowed(ctx.options(), &file) {
+        let rule_id = self.meta().id;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut diagnostics = Vec::new();
+        for literal in ctx
+            .string_literals()
+            .iter()
+            .filter(|literal| literal.language.is_ts_family())
+        {
+            push_raw_color_diagnostic(
+                ctx,
+                &rule_id,
+                &mut seen,
+                &mut diagnostics,
+                literal.file,
+                &literal.span,
+                &literal.value,
+                "string-literal",
+            );
+        }
+        for attribute in ctx.jsx_attributes() {
+            if !file_language_is_ts_family(ctx, attribute.file) {
                 continue;
             }
-            if is_raw_color(&literal.value) {
-                ctx.report(
-                    Diagnostic::error(
-                        self.meta().id,
-                        file,
-                        literal.span.diagnostic_range(),
-                        format!("Raw color literal `{}` should use a design token.", literal.value),
-                    )
-                    .with_help("Move this value to a theme/design-token file or use an existing token/CSS variable."),
+            if let Some(value) = &attribute.value {
+                push_raw_color_diagnostic(
+                    ctx,
+                    &rule_id,
+                    &mut seen,
+                    &mut diagnostics,
+                    attribute.file,
+                    &attribute.span,
+                    value,
+                    "jsx-attribute",
                 );
             }
+        }
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
         }
         Ok(())
     }
@@ -376,6 +397,54 @@ fn is_raw_color(value: &str) -> bool {
         || lower.starts_with("rgba(")
         || lower.starts_with("hsl(")
         || lower.starts_with("hsla(")
+}
+
+fn push_raw_color_diagnostic(
+    ctx: &RuleCtx<'_>,
+    rule_id: &str,
+    seen: &mut std::collections::BTreeSet<(FileId, u32, u32, String)>,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_id: FileId,
+    span: &Span,
+    value: &str,
+    source: &str,
+) {
+    let file = ctx.file_path(file_id);
+    if !file_selected(ctx.options(), &file)
+        || file_allowed(ctx.options(), &file)
+        || literal_allowed(ctx.options(), value)
+        || !is_raw_color(value)
+    {
+        return;
+    }
+
+    let key = (file_id, span.start_byte, span.end_byte, value.to_string());
+    if !seen.insert(key) {
+        return;
+    }
+
+    diagnostics.push(
+        Diagnostic::error(
+            rule_id.to_string(),
+            file,
+            span.diagnostic_range(),
+            format!("Raw color literal `{value}` should use a design token."),
+        )
+        .with_evidence("literal", value.to_string())
+        .with_evidence("source", source.to_string())
+        .with_help(
+            "This rule reports syntax-level literal findings; move this value to a theme/design-token file or use an existing token/CSS variable.",
+        ),
+    );
+}
+
+fn literal_allowed(options: &RuleOptions, value: &str) -> bool {
+    options.allow.iter().any(|allowed| allowed == value)
+}
+
+fn file_language_is_ts_family(ctx: &RuleCtx<'_>, file: FileId) -> bool {
+    ctx.source_file(file)
+        .is_some_and(|source_file| source_file.language.is_ts_family())
 }
 
 fn has_nearby_test_evidence(ctx: &RuleCtx<'_>, file: FileId, condition: &str) -> bool {
