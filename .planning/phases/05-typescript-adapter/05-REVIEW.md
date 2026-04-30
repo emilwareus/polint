@@ -1,6 +1,6 @@
 ---
 phase: 05-typescript-adapter
-reviewed: 2026-04-30T07:08:11Z
+reviewed: 2026-04-30T07:15:55Z
 depth: standard
 files_reviewed: 8
 files_reviewed_list:
@@ -14,83 +14,43 @@ files_reviewed_list:
   - examples/ts-design-tokens/Button.tsx
 findings:
   critical: 0
-  warning: 1
+  warning: 0
   info: 0
-  total: 1
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 5: Code Review Report
 
-**Reviewed:** 2026-04-30T07:08:11Z
+**Reviewed:** 2026-04-30T07:15:55Z
 **Depth:** standard
 **Files Reviewed:** 8
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-Re-reviewed the Phase 5 TypeScript adapter, core fact exposure, CLI tests, and TS fixtures/examples after the fixes recorded in `05-REVIEW-FIX.md`.
+Re-reviewed the Phase 5 TypeScript adapter, core fact exposure, CLI coverage, fixtures, and example after the fixes recorded in `05-REVIEW-FIX.md`. `Cargo.lock` and the prior phase review/fix artifacts were read as context; lock files and planning artifacts are not counted as source review scope.
 
-Both prior warning batches are closed for their covered cases:
+All previously reported warning batches are closed in the current implementation:
 
-- quoted JSX attributes are now emitted as `StringLiteralFact` values and covered by `quoted_jsx_attributes_are_available_as_string_literals`;
-- named export specifiers and referenced default exports now mark local function/class facts as exported and are covered by `export_specifiers_mark_ts_facts_as_exported` plus `referenced_default_exports_mark_ts_facts_as_exported`;
-- nested calls in normal arguments and expression containers are now collected and covered by `nested_calls_inside_regular_arguments_are_collected` plus `calls_inside_expression_containers_are_collected`;
-- simple top-level CommonJS `require("...")` calls now emit `ImportFact` values and are covered by `commonjs_require_calls_emit_import_facts`.
+- quoted JSX attributes are emitted through `walk_jsx_attribute_value_for_literals` as `StringLiteralFact` values and are covered by `quoted_jsx_attributes_are_available_as_string_literals`;
+- named export specifiers and referenced default exports feed `exported_local_names`, causing local function and class facts to be marked exported, with tests for both export styles;
+- nested calls in ordinary arguments, arrays, objects, constructor arguments, and JSX expression containers are collected by the central call walkers and covered by regression tests;
+- CommonJS `require("...")` imports are collected at top level and inside function declarations, arrow functions, class methods, and class fields, with regression coverage for those body-scoped cases.
 
-Verification run:
+No bugs, security issues, behavior regressions, or missing test gaps were found in the reviewed source files.
 
-- `cargo test -p polint-ts --lib` passed, 21 tests.
+## Verification
+
+- `cargo test -p polint-ts --lib` passed, 22 tests.
 - `cargo test -p polint-cli --test cli check_ts` passed, 2 tests.
 - `cargo test -p polint-core --lib` passed, 17 tests.
 - `cargo clippy -p polint-ts --all-targets -- -D warnings` passed.
 
-One remaining adjacent correctness gap exists in the new CommonJS require traversal.
-
-## Warnings
-
-### WR-01: CommonJS Require Traversal Skips Function Bodies
-
-**File:** `crates/polint-ts/src/lib.rs:294`
-**Issue:** `collect_require_imports_from_statement` drops ordinary `FunctionDeclaration` and `ClassDeclaration` statements through the `_ => {}` arm, and `collect_require_imports_from_expression` also drops `ArrowFunctionExpression`, `FunctionExpression`, and `ClassExpression`. This means supported `.js`/`.ts` files such as `function load() { return require("./config"); }` or `const load = () => require("./config");` still produce no `ImportFact`, leaving `ImportGraph::from_db` incomplete for common lazy CommonJS dependencies.
-**Fix:** Add a regression test for require calls inside function/arrow/class bodies, then reuse the existing declaration/body/class traversal shape used by the literal walker.
-```rust
-match statement {
-    Statement::FunctionDeclaration(function) => {
-        if let Some(body) = function.body.as_deref() {
-            for statement in &body.statements {
-                collect_require_imports_from_statement(db, ctx, statement);
-            }
-        }
-    }
-    Statement::ClassDeclaration(class) => {
-        collect_require_imports_from_class(db, ctx, class);
-    }
-    _ => {}
-}
-
-match expression {
-    Expression::ArrowFunctionExpression(function) => {
-        for statement in &function.body.statements {
-            collect_require_imports_from_statement(db, ctx, statement);
-        }
-    }
-    Expression::FunctionExpression(function) => {
-        if let Some(body) = function.body.as_deref() {
-            for statement in &body.statements {
-                collect_require_imports_from_statement(db, ctx, statement);
-            }
-        }
-    }
-    Expression::ClassExpression(class) => {
-        collect_require_imports_from_class(db, ctx, class);
-    }
-    _ => {}
-}
-```
+All reviewed files meet quality standards. No issues found.
 
 ---
 
-_Reviewed: 2026-04-30T07:08:11Z_
+_Reviewed: 2026-04-30T07:15:55Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
