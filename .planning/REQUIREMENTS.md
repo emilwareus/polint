@@ -55,9 +55,9 @@
 - [x] **RULE-02**: Built-in example rule `examples/ts-cyclomatic-complexity` works and is configurable.
 - [x] **RULE-03**: Built-in example rule `examples/go-import-boundaries` works and is configurable.
 - [x] **RULE-04**: Built-in example rule `examples/ts-no-raw-colors` detects raw color literals with allow-list support.
-- [ ] **RULE-05**: Built-in example rule `examples/go-branch-obligations` reports missing nearby test evidence using honest heuristic wording.
-- [ ] **RULE-06**: Built-in example rule `examples/go-test-suite-size` computes a weighted maintainability score.
-- [ ] **RULE-07**: Built-in example rule `examples/go-assertion-after-action` warns when Go tests appear to lack assertions.
+- [x] **RULE-05**: Built-in example rule `examples/go-branch-obligations` reports missing nearby test evidence using honest heuristic wording.
+- [x] **RULE-06**: Built-in example rule `examples/go-test-suite-size` computes a weighted maintainability score.
+- [x] **RULE-07**: Built-in example rule `examples/go-assertion-after-action` warns when Go tests appear to lack assertions.
 - [x] **RULE-08**: Built-in example rule `examples/config-query-no-literal` denies configured string/regex literals across supported languages where possible.
 
 ### Cache and Performance
@@ -131,9 +131,9 @@
 | RULE-02 | Phase 6 | Complete |
 | RULE-03 | Phase 6 | Complete |
 | RULE-04 | Phase 6 | Complete |
-| RULE-05 | Phase 6 | Pending |
-| RULE-06 | Phase 6 | Pending |
-| RULE-07 | Phase 6 | Pending |
+| RULE-05 | Phase 6 | Complete |
+| RULE-06 | Phase 6 | Complete |
+| RULE-07 | Phase 6 | Complete |
 | RULE-08 | Phase 6 | Complete |
 | PERF-01 | Phase 7 | Pending |
 | PERF-02 | Phase 7 | Pending |
