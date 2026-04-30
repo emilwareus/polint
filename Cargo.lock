@@ -1749,10 +1749,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "globset",
+ "insta",
  "polint-config",
  "polint-core",
  "polint-diagnostics",
  "polint-sdk",
+ "serde_json",
 ]
 
 [[package]]

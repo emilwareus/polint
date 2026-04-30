@@ -13,3 +13,7 @@ polint-config = { path = "../polint-config" }
 polint-core = { path = "../polint-core" }
 polint-diagnostics = { path = "../polint-diagnostics" }
 polint-sdk = { path = "../polint-sdk" }
+
+[dev-dependencies]
+insta.workspace = true
+serde_json.workspace = true
