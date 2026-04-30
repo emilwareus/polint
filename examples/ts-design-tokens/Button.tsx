@@ -1,3 +1,9 @@
 export function Button() {
-  return <button style={{ color: "#ff00aa" }}>Pay</button>;
+  const accent = "#ff00aa";
+
+  return (
+    <button style={{ color: accent }} data-color="#00ff00">
+      Pay
+    </button>
+  );
 }
