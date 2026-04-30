@@ -283,6 +283,12 @@ fn collect_require_imports_from_statement(
                 }
             }
         }
+        Statement::FunctionDeclaration(function) => {
+            collect_require_imports_from_function(db, ctx, function);
+        }
+        Statement::ClassDeclaration(class) => {
+            collect_require_imports_from_class(db, ctx, class);
+        }
         Statement::ExportNamedDeclaration(declaration) => {
             if let Some(declaration) = &declaration.declaration {
                 collect_require_imports_from_declaration(db, ctx, declaration);
@@ -329,14 +335,21 @@ fn collect_require_imports_from_expression(
         Expression::AwaitExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.argument);
         }
+        Expression::ArrowFunctionExpression(function) => {
+            collect_require_imports_from_arrow_function(db, ctx, function);
+        }
         Expression::BinaryExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.left);
             collect_require_imports_from_expression(db, ctx, &expression.right);
         }
+        Expression::ClassExpression(class) => collect_require_imports_from_class(db, ctx, class),
         Expression::ConditionalExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.test);
             collect_require_imports_from_expression(db, ctx, &expression.consequent);
             collect_require_imports_from_expression(db, ctx, &expression.alternate);
+        }
+        Expression::FunctionExpression(function) => {
+            collect_require_imports_from_function(db, ctx, function);
         }
         Expression::LogicalExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.left);
@@ -425,11 +438,10 @@ fn collect_require_imports_from_declaration(
             }
         }
         Declaration::FunctionDeclaration(function) => {
-            if let Some(body) = function.body.as_deref() {
-                for statement in &body.statements {
-                    collect_require_imports_from_statement(db, ctx, statement);
-                }
-            }
+            collect_require_imports_from_function(db, ctx, function);
+        }
+        Declaration::ClassDeclaration(class) => {
+            collect_require_imports_from_class(db, ctx, class);
         }
         _ => {}
     }
@@ -442,11 +454,10 @@ fn collect_require_imports_from_export_default(
 ) {
     match declaration {
         ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-            if let Some(body) = function.body.as_deref() {
-                for statement in &body.statements {
-                    collect_require_imports_from_statement(db, ctx, statement);
-                }
-            }
+            collect_require_imports_from_function(db, ctx, function);
+        }
+        ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+            collect_require_imports_from_class(db, ctx, class);
         }
         ExportDefaultDeclarationKind::CallExpression(call) => {
             if callee_text(&call.callee).as_deref() == Some("require")
@@ -465,6 +476,61 @@ fn collect_require_imports_from_export_default(
             }
         }
         _ => {}
+    }
+}
+
+fn collect_require_imports_from_function(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    function: &Function<'_>,
+) {
+    if let Some(body) = function.body.as_deref() {
+        for statement in &body.statements {
+            collect_require_imports_from_statement(db, ctx, statement);
+        }
+    }
+}
+
+fn collect_require_imports_from_arrow_function(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    function: &ArrowFunctionExpression<'_>,
+) {
+    if let Some(expression) = function.get_expression() {
+        collect_require_imports_from_expression(db, ctx, expression);
+    } else {
+        for statement in &function.body.statements {
+            collect_require_imports_from_statement(db, ctx, statement);
+        }
+    }
+}
+
+fn collect_require_imports_from_class(db: &mut AnalysisDb, ctx: TsAstCtx<'_>, class: &Class<'_>) {
+    if let Some(super_class) = &class.super_class {
+        collect_require_imports_from_expression(db, ctx, super_class);
+    }
+    for element in &class.body.body {
+        match element {
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                collect_require_imports_from_function(db, ctx, &method.value);
+            }
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    collect_require_imports_from_expression(db, ctx, value);
+                }
+            }
+            ClassElement::AccessorProperty(property) => {
+                if let Some(value) = &property.value {
+                    collect_require_imports_from_expression(db, ctx, value);
+                }
+            }
+            ClassElement::TSIndexSignature(_) => {}
+        }
     }
 }
 
