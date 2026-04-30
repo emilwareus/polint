@@ -467,6 +467,7 @@ pub struct RuleOptions {
     pub severity: Option<Severity>,
     pub files: Vec<String>,
     pub allow_files: Vec<String>,
+    pub allow: Vec<String>,
     pub max: Option<u32>,
     pub deny: Vec<String>,
     pub forbidden_imports: BTreeMap<String, Vec<String>>,

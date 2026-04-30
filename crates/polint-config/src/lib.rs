@@ -90,6 +90,8 @@ pub struct RuleConfig {
     #[serde(default)]
     pub allow_files: Vec<String>,
     #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
     pub max: Option<u32>,
     #[serde(default)]
     pub deny: Vec<String>,

@@ -417,6 +417,7 @@ pub fn rule_options_from_config(config: Option<&polint_config::RuleConfig>) -> R
         severity: config.severity.as_deref().and_then(parse_severity),
         files: config.files.clone(),
         allow_files: config.allow_files.clone(),
+        allow: config.allow.clone(),
         max: config.max,
         deny: config.deny.clone(),
         forbidden_imports: config.forbidden_imports.clone(),
