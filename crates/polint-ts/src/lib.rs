@@ -173,6 +173,396 @@ fn extract_imports_and_exports(
             _ => {}
         }
     }
+    extract_commonjs_require_imports(db, file, source, language, program);
+}
+
+fn extract_commonjs_require_imports(
+    db: &mut AnalysisDb,
+    file: FileId,
+    source: &str,
+    language: Language,
+    program: &Program<'_>,
+) {
+    let ctx = TsAstCtx {
+        file,
+        source,
+        language,
+    };
+    for statement in &program.body {
+        collect_require_imports_from_statement(db, ctx, statement);
+    }
+}
+
+fn collect_require_imports_from_statement(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    statement: &Statement<'_>,
+) {
+    match statement {
+        Statement::BlockStatement(block) => {
+            for statement in &block.body {
+                collect_require_imports_from_statement(db, ctx, statement);
+            }
+        }
+        Statement::ExpressionStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.expression);
+        }
+        Statement::ReturnStatement(statement) => {
+            if let Some(argument) = &statement.argument {
+                collect_require_imports_from_expression(db, ctx, argument);
+            }
+        }
+        Statement::IfStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.test);
+            collect_require_imports_from_statement(db, ctx, &statement.consequent);
+            if let Some(alternate) = &statement.alternate {
+                collect_require_imports_from_statement(db, ctx, alternate);
+            }
+        }
+        Statement::DoWhileStatement(statement) => {
+            collect_require_imports_from_statement(db, ctx, &statement.body);
+            collect_require_imports_from_expression(db, ctx, &statement.test);
+        }
+        Statement::WhileStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.test);
+            collect_require_imports_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForStatement(statement) => {
+            if let Some(init) = &statement.init {
+                collect_require_imports_from_for_init(db, ctx, init);
+            }
+            if let Some(test) = &statement.test {
+                collect_require_imports_from_expression(db, ctx, test);
+            }
+            if let Some(update) = &statement.update {
+                collect_require_imports_from_expression(db, ctx, update);
+            }
+            collect_require_imports_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForInStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.right);
+            collect_require_imports_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForOfStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.right);
+            collect_require_imports_from_statement(db, ctx, &statement.body);
+        }
+        Statement::SwitchStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.discriminant);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    collect_require_imports_from_expression(db, ctx, test);
+                }
+                for statement in &case.consequent {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+        }
+        Statement::ThrowStatement(statement) => {
+            collect_require_imports_from_expression(db, ctx, &statement.argument);
+        }
+        Statement::TryStatement(statement) => {
+            for statement in &statement.block.body {
+                collect_require_imports_from_statement(db, ctx, statement);
+            }
+            if let Some(handler) = &statement.handler {
+                for statement in &handler.body.body {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+            if let Some(finalizer) = &statement.finalizer {
+                for statement in &finalizer.body {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+        }
+        Statement::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_require_imports_from_expression(db, ctx, init);
+                }
+            }
+        }
+        Statement::ExportNamedDeclaration(declaration) => {
+            if let Some(declaration) = &declaration.declaration {
+                collect_require_imports_from_declaration(db, ctx, declaration);
+            }
+        }
+        Statement::ExportDefaultDeclaration(declaration) => {
+            collect_require_imports_from_export_default(db, ctx, &declaration.declaration);
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_expression(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    expression: &Expression<'_>,
+) {
+    match expression {
+        Expression::CallExpression(call) => {
+            if callee_text(&call.callee).as_deref() == Some("require")
+                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+            {
+                push_module_import(
+                    db,
+                    ctx.file,
+                    path.value.as_str(),
+                    span_from_oxc(ctx.file, ctx.source, path.span),
+                    ctx.language,
+                );
+            }
+            collect_require_imports_from_expression(db, ctx, &call.callee);
+            for argument in &call.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_require_imports_from_array_element(db, ctx, element);
+            }
+        }
+        Expression::AssignmentExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.right);
+        }
+        Expression::AwaitExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.argument);
+        }
+        Expression::BinaryExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.left);
+            collect_require_imports_from_expression(db, ctx, &expression.right);
+        }
+        Expression::ConditionalExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.test);
+            collect_require_imports_from_expression(db, ctx, &expression.consequent);
+            collect_require_imports_from_expression(db, ctx, &expression.alternate);
+        }
+        Expression::LogicalExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.left);
+            collect_require_imports_from_expression(db, ctx, &expression.right);
+        }
+        Expression::NewExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.callee);
+            for argument in &expression.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_require_imports_from_expression(db, ctx, &property.value);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_require_imports_from_expression(db, ctx, &spread.argument);
+                    }
+                }
+            }
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                collect_require_imports_from_expression(db, ctx, expression);
+            }
+        }
+        Expression::TaggedTemplateExpression(tagged) => {
+            collect_require_imports_from_expression(db, ctx, &tagged.tag);
+            for expression in &tagged.quasi.expressions {
+                collect_require_imports_from_expression(db, ctx, expression);
+            }
+        }
+        Expression::UnaryExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.argument);
+        }
+        Expression::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                collect_require_imports_from_expression(db, ctx, argument);
+            }
+        }
+        Expression::TSAsExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::TSNonNullExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::TSTypeAssertion(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::TSInstantiationExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::ComputedMemberExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.object);
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        Expression::StaticMemberExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.object);
+        }
+        Expression::PrivateFieldExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.object);
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_declaration(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &Declaration<'_>,
+) {
+    match declaration {
+        Declaration::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_require_imports_from_expression(db, ctx, init);
+                }
+            }
+        }
+        Declaration::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                for statement in &body.statements {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_export_default(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &ExportDefaultDeclarationKind<'_>,
+) {
+    match declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                for statement in &body.statements {
+                    collect_require_imports_from_statement(db, ctx, statement);
+                }
+            }
+        }
+        ExportDefaultDeclarationKind::CallExpression(call) => {
+            if callee_text(&call.callee).as_deref() == Some("require")
+                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+            {
+                push_module_import(
+                    db,
+                    ctx.file,
+                    path.value.as_str(),
+                    span_from_oxc(ctx.file, ctx.source, path.span),
+                    ctx.language,
+                );
+            }
+            for argument in &call.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_for_init(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    init: &ForStatementInit<'_>,
+) {
+    match init {
+        ForStatementInit::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_require_imports_from_expression(db, ctx, init);
+                }
+            }
+        }
+        ForStatementInit::CallExpression(call) => {
+            if callee_text(&call.callee).as_deref() == Some("require")
+                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+            {
+                push_module_import(
+                    db,
+                    ctx.file,
+                    path.value.as_str(),
+                    span_from_oxc(ctx.file, ctx.source, path.span),
+                    ctx.language,
+                );
+            }
+            for argument in &call.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        ForStatementInit::ParenthesizedExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_argument(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    argument: &Argument<'_>,
+) {
+    match argument {
+        Argument::SpreadElement(spread) => {
+            collect_require_imports_from_expression(db, ctx, &spread.argument);
+        }
+        Argument::CallExpression(call) => {
+            if callee_text(&call.callee).as_deref() == Some("require")
+                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+            {
+                push_module_import(
+                    db,
+                    ctx.file,
+                    path.value.as_str(),
+                    span_from_oxc(ctx.file, ctx.source, path.span),
+                    ctx.language,
+                );
+            }
+            for argument in &call.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        Argument::ParenthesizedExpression(expression) => {
+            collect_require_imports_from_expression(db, ctx, &expression.expression);
+        }
+        _ => {}
+    }
+}
+
+fn collect_require_imports_from_array_element(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    element: &ArrayExpressionElement<'_>,
+) {
+    match element {
+        ArrayExpressionElement::SpreadElement(spread) => {
+            collect_require_imports_from_expression(db, ctx, &spread.argument);
+        }
+        ArrayExpressionElement::CallExpression(call) => {
+            if callee_text(&call.callee).as_deref() == Some("require")
+                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
+            {
+                push_module_import(
+                    db,
+                    ctx.file,
+                    path.value.as_str(),
+                    span_from_oxc(ctx.file, ctx.source, path.span),
+                    ctx.language,
+                );
+            }
+            for argument in &call.arguments {
+                collect_require_imports_from_argument(db, ctx, argument);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn push_module_import(
@@ -416,18 +806,25 @@ fn exported_local_names(program: &Program<'_>) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
 
     for statement in &program.body {
-        let Statement::ExportNamedDeclaration(export) = statement else {
-            continue;
-        };
-        if export.source.is_some() || !matches!(export.export_kind, ImportOrExportKind::Value) {
-            continue;
-        }
-        for specifier in &export.specifiers {
-            if matches!(specifier.export_kind, ImportOrExportKind::Value)
-                && let Some(name) = module_export_name_text(&specifier.local)
+        match statement {
+            Statement::ExportNamedDeclaration(export)
+                if export.source.is_none()
+                    && matches!(export.export_kind, ImportOrExportKind::Value) =>
             {
-                names.insert(name);
+                for specifier in &export.specifiers {
+                    if matches!(specifier.export_kind, ImportOrExportKind::Value)
+                        && let Some(name) = module_export_name_text(&specifier.local)
+                    {
+                        names.insert(name);
+                    }
+                }
             }
+            Statement::ExportDefaultDeclaration(export) => {
+                if let ExportDefaultDeclarationKind::Identifier(identifier) = &export.declaration {
+                    names.insert(identifier.name.to_string());
+                }
+            }
+            _ => {}
         }
     }
 
@@ -683,6 +1080,7 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
             if let Some(name) = callee_text(&call.callee) {
                 calls.push(name);
             }
+            collect_calls_from_expression(&call.callee, calls);
             for argument in &call.arguments {
                 collect_calls_from_argument(argument, calls);
             }
@@ -690,9 +1088,16 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
         Expression::StaticMemberExpression(member) => {
             collect_calls_from_expression(&member.object, calls);
         }
-        Expression::ArrayExpression(_) => {}
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_calls_from_array_element(element, calls);
+            }
+        }
         Expression::AssignmentExpression(expression) => {
             collect_calls_from_expression(&expression.right, calls);
+        }
+        Expression::AwaitExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
         }
         Expression::BinaryExpression(expression) => {
             collect_calls_from_expression(&expression.left, calls);
@@ -707,6 +1112,28 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
             collect_calls_from_expression(&expression.left, calls);
             collect_calls_from_expression(&expression.right, calls);
         }
+        Expression::NewExpression(expression) => {
+            if let Some(name) = callee_text(&expression.callee) {
+                calls.push(name);
+            }
+            collect_calls_from_expression(&expression.callee, calls);
+            for argument in &expression.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_calls_from_property_key(&property.key, calls);
+                        collect_calls_from_expression(&property.value, calls);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_calls_from_expression(&spread.argument, calls);
+                    }
+                }
+            }
+        }
         Expression::ParenthesizedExpression(expression) => {
             collect_calls_from_expression(&expression.expression, calls);
         }
@@ -715,10 +1142,22 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
                 collect_calls_from_expression(expression, calls);
             }
         }
+        Expression::TaggedTemplateExpression(tagged) => {
+            collect_calls_from_expression(&tagged.tag, calls);
+            for expression in &tagged.quasi.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
         Expression::UnaryExpression(expression) => {
             collect_calls_from_expression(&expression.argument, calls);
         }
-        Expression::UpdateExpression(_) => {}
+        Expression::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                collect_calls_from_expression(argument, calls);
+            }
+        }
+        Expression::JSXElement(element) => collect_calls_from_jsx_element(element, calls),
+        Expression::JSXFragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
         Expression::TSAsExpression(expression) => {
             collect_calls_from_expression(&expression.expression, calls);
         }
@@ -730,6 +1169,16 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
         }
         Expression::TSTypeAssertion(expression) => {
             collect_calls_from_expression(&expression.expression, calls);
+        }
+        Expression::TSInstantiationExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Expression::ComputedMemberExpression(expression) => {
+            collect_calls_from_expression(&expression.object, calls);
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Expression::PrivateFieldExpression(expression) => {
+            collect_calls_from_expression(&expression.object, calls);
         }
         _ => {}
     }
