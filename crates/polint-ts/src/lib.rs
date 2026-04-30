@@ -3,9 +3,10 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ArrowFunctionExpression, BindingPattern, Class, ClassElement,
     Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
-    Function, FunctionBody, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild,
-    JSXElement, JSXExpression, JSXFragment, MethodDefinition, ObjectPropertyKind, Program,
-    PropertyKey, Statement, TemplateLiteral, VariableDeclarator,
+    Function, FunctionBody, ImportOrExportKind, JSXAttributeItem, JSXAttributeName,
+    JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment, MethodDefinition,
+    ModuleExportName, ObjectPropertyKind, Program, PropertyKey, Statement, TemplateLiteral,
+    VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -14,6 +15,7 @@ use polint_core::{
     StringLiteralFact, TsClassFact, TsComponentFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
@@ -209,10 +211,12 @@ fn extract_declarations(
         source,
         language,
     };
+    let exported_names = exported_local_names(program);
     for statement in &program.body {
         match statement {
             Statement::FunctionDeclaration(function) => {
                 if let Some(name) = function.id.as_ref().map(|id| id.name.to_string()) {
+                    let is_exported = exported_names.contains(name.as_str());
                     let is_component_like =
                         is_component_like_name(&name) || function_returns_jsx(function);
                     push_ts_function(
@@ -221,7 +225,7 @@ fn extract_declarations(
                         TsFunctionSpec {
                             name,
                             span: function.span,
-                            is_exported: false,
+                            is_exported,
                             cyclomatic_complexity: ts_cyclomatic_complexity(function),
                             calls: function_body_calls(function.body.as_deref()),
                             is_component_like,
@@ -231,17 +235,34 @@ fn extract_declarations(
             }
             Statement::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
-                    extract_variable_declarator(db, file, source, language, declarator, false);
+                    extract_variable_declarator(
+                        db,
+                        file,
+                        source,
+                        language,
+                        declarator,
+                        false,
+                        &exported_names,
+                    );
                 }
             }
             Statement::ClassDeclaration(class) => {
                 if let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) {
-                    push_ts_class(db, file, source, language, name, class, false);
+                    let is_exported = exported_names.contains(name.as_str());
+                    push_ts_class(db, file, source, language, name, class, is_exported);
                 }
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(declaration) = &export.declaration {
-                    extract_declaration(db, file, source, language, declaration, true);
+                    extract_declaration(
+                        db,
+                        file,
+                        source,
+                        language,
+                        declaration,
+                        true,
+                        &exported_names,
+                    );
                 }
             }
             Statement::ExportDefaultDeclaration(export) => match &export.declaration {
@@ -282,6 +303,7 @@ fn extract_declaration(
     language: Language,
     declaration: &Declaration<'_>,
     is_exported: bool,
+    exported_names: &BTreeSet<String>,
 ) {
     let ctx = TsAstCtx {
         file,
@@ -309,7 +331,15 @@ fn extract_declaration(
         }
         Declaration::VariableDeclaration(variable) => {
             for declarator in &variable.declarations {
-                extract_variable_declarator(db, file, source, language, declarator, is_exported);
+                extract_variable_declarator(
+                    db,
+                    file,
+                    source,
+                    language,
+                    declarator,
+                    is_exported,
+                    exported_names,
+                );
             }
         }
         Declaration::ClassDeclaration(class) => {
@@ -328,6 +358,7 @@ fn extract_variable_declarator(
     language: Language,
     declarator: &VariableDeclarator<'_>,
     is_exported: bool,
+    exported_names: &BTreeSet<String>,
 ) {
     let ctx = TsAstCtx {
         file,
@@ -342,6 +373,7 @@ fn extract_variable_declarator(
     };
 
     let name = name.name.to_string();
+    let is_exported = is_exported || exported_names.contains(name.as_str());
     match init {
         Expression::ArrowFunctionExpression(function) => {
             let is_component_like = is_component_like_name(&name) || arrow_returns_jsx(function);
@@ -377,6 +409,36 @@ fn extract_variable_declarator(
             push_ts_class(db, file, source, language, name, class, is_exported);
         }
         _ => {}
+    }
+}
+
+fn exported_local_names(program: &Program<'_>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+
+    for statement in &program.body {
+        let Statement::ExportNamedDeclaration(export) = statement else {
+            continue;
+        };
+        if export.source.is_some() || !matches!(export.export_kind, ImportOrExportKind::Value) {
+            continue;
+        }
+        for specifier in &export.specifiers {
+            if matches!(specifier.export_kind, ImportOrExportKind::Value)
+                && let Some(name) = module_export_name_text(&specifier.local)
+            {
+                names.insert(name);
+            }
+        }
+    }
+
+    names
+}
+
+fn module_export_name_text(name: &ModuleExportName<'_>) -> Option<String> {
+    match name {
+        ModuleExportName::IdentifierName(identifier) => Some(identifier.name.to_string()),
+        ModuleExportName::IdentifierReference(identifier) => Some(identifier.name.to_string()),
+        ModuleExportName::StringLiteral(literal) => Some(literal.value.to_string()),
     }
 }
 
@@ -1273,8 +1335,364 @@ fn complexity_from_jsx_expression(expression: &JSXExpression<'_>) -> u32 {
 }
 
 fn collect_calls_from_argument(argument: &Argument<'_>, calls: &mut Vec<String>) {
-    if let Argument::SpreadElement(spread) = argument {
-        collect_calls_from_expression(&spread.argument, calls);
+    match argument {
+        Argument::SpreadElement(spread) => collect_calls_from_expression(&spread.argument, calls),
+        Argument::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_calls_from_array_element(element, calls);
+            }
+        }
+        Argument::AssignmentExpression(expression) => {
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        Argument::AwaitExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
+        }
+        Argument::BinaryExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        Argument::CallExpression(call) => {
+            if let Some(name) = callee_text(&call.callee) {
+                calls.push(name);
+            }
+            collect_calls_from_expression(&call.callee, calls);
+            for argument in &call.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        Argument::ConditionalExpression(expression) => {
+            collect_calls_from_expression(&expression.test, calls);
+            collect_calls_from_expression(&expression.consequent, calls);
+            collect_calls_from_expression(&expression.alternate, calls);
+        }
+        Argument::ImportExpression(expression) => {
+            collect_calls_from_expression(&expression.source, calls);
+        }
+        Argument::LogicalExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        Argument::NewExpression(expression) => {
+            collect_calls_from_expression(&expression.callee, calls);
+            for argument in &expression.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        Argument::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_calls_from_property_key(&property.key, calls);
+                        collect_calls_from_expression(&property.value, calls);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_calls_from_expression(&spread.argument, calls);
+                    }
+                }
+            }
+        }
+        Argument::ParenthesizedExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
+        Argument::TaggedTemplateExpression(tagged) => {
+            collect_calls_from_expression(&tagged.tag, calls);
+            for expression in &tagged.quasi.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
+        Argument::UnaryExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
+        }
+        Argument::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                collect_calls_from_expression(argument, calls);
+            }
+        }
+        Argument::JSXElement(element) => collect_calls_from_jsx_element(element, calls),
+        Argument::JSXFragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
+        Argument::TSAsExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::TSSatisfiesExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::TSNonNullExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::TSTypeAssertion(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::TSInstantiationExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::ComputedMemberExpression(expression) => {
+            collect_calls_from_expression(&expression.object, calls);
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        Argument::StaticMemberExpression(expression) => {
+            collect_calls_from_expression(&expression.object, calls);
+        }
+        Argument::PrivateFieldExpression(expression) => {
+            collect_calls_from_expression(&expression.object, calls);
+        }
+        _ => {}
+    }
+}
+
+fn collect_calls_from_array_element(element: &ArrayExpressionElement<'_>, calls: &mut Vec<String>) {
+    match element {
+        ArrayExpressionElement::SpreadElement(spread) => {
+            collect_calls_from_expression(&spread.argument, calls);
+        }
+        ArrayExpressionElement::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_calls_from_array_element(element, calls);
+            }
+        }
+        ArrayExpressionElement::AssignmentExpression(expression) => {
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        ArrayExpressionElement::AwaitExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
+        }
+        ArrayExpressionElement::BinaryExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        ArrayExpressionElement::CallExpression(call) => {
+            if let Some(name) = callee_text(&call.callee) {
+                calls.push(name);
+            }
+            collect_calls_from_expression(&call.callee, calls);
+            for argument in &call.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        ArrayExpressionElement::ConditionalExpression(expression) => {
+            collect_calls_from_expression(&expression.test, calls);
+            collect_calls_from_expression(&expression.consequent, calls);
+            collect_calls_from_expression(&expression.alternate, calls);
+        }
+        ArrayExpressionElement::LogicalExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        ArrayExpressionElement::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_calls_from_property_key(&property.key, calls);
+                        collect_calls_from_expression(&property.value, calls);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_calls_from_expression(&spread.argument, calls);
+                    }
+                }
+            }
+        }
+        ArrayExpressionElement::ParenthesizedExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        ArrayExpressionElement::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
+        ArrayExpressionElement::TaggedTemplateExpression(tagged) => {
+            collect_calls_from_expression(&tagged.tag, calls);
+            for expression in &tagged.quasi.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
+        ArrayExpressionElement::UnaryExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
+        }
+        ArrayExpressionElement::JSXElement(element) => {
+            collect_calls_from_jsx_element(element, calls)
+        }
+        ArrayExpressionElement::JSXFragment(fragment) => {
+            collect_calls_from_jsx_fragment(fragment, calls);
+        }
+        ArrayExpressionElement::TSAsExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        ArrayExpressionElement::TSSatisfiesExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        ArrayExpressionElement::TSNonNullExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        ArrayExpressionElement::TSTypeAssertion(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        _ => {}
+    }
+}
+
+fn collect_calls_from_property_key(key: &PropertyKey<'_>, calls: &mut Vec<String>) {
+    match key {
+        PropertyKey::CallExpression(call) => {
+            if let Some(name) = callee_text(&call.callee) {
+                calls.push(name);
+            }
+            for argument in &call.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        PropertyKey::ConditionalExpression(expression) => {
+            collect_calls_from_expression(&expression.test, calls);
+            collect_calls_from_expression(&expression.consequent, calls);
+            collect_calls_from_expression(&expression.alternate, calls);
+        }
+        PropertyKey::LogicalExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        PropertyKey::ParenthesizedExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        PropertyKey::TSAsExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        PropertyKey::TSSatisfiesExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        PropertyKey::TSNonNullExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        PropertyKey::TSTypeAssertion(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        _ => {}
+    }
+}
+
+fn collect_calls_from_jsx_element(element: &JSXElement<'_>, calls: &mut Vec<String>) {
+    for item in &element.opening_element.attributes {
+        match item {
+            JSXAttributeItem::Attribute(attribute) => {
+                if let Some(value) = &attribute.value {
+                    collect_calls_from_jsx_attribute_value(value, calls);
+                }
+            }
+            JSXAttributeItem::SpreadAttribute(spread) => {
+                collect_calls_from_expression(&spread.argument, calls);
+            }
+        }
+    }
+    for child in &element.children {
+        collect_calls_from_jsx_child(child, calls);
+    }
+}
+
+fn collect_calls_from_jsx_attribute_value(value: &JSXAttributeValue<'_>, calls: &mut Vec<String>) {
+    match value {
+        JSXAttributeValue::ExpressionContainer(container) => {
+            collect_calls_from_jsx_expression(&container.expression, calls);
+        }
+        JSXAttributeValue::Element(element) => collect_calls_from_jsx_element(element, calls),
+        JSXAttributeValue::Fragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
+        JSXAttributeValue::StringLiteral(_) => {}
+    }
+}
+
+fn collect_calls_from_jsx_child(child: &JSXChild<'_>, calls: &mut Vec<String>) {
+    match child {
+        JSXChild::Element(element) => collect_calls_from_jsx_element(element, calls),
+        JSXChild::Fragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
+        JSXChild::ExpressionContainer(container) => {
+            collect_calls_from_jsx_expression(&container.expression, calls);
+        }
+        JSXChild::Spread(spread) => collect_calls_from_expression(&spread.expression, calls),
+        JSXChild::Text(_) => {}
+    }
+}
+
+fn collect_calls_from_jsx_fragment(fragment: &JSXFragment<'_>, calls: &mut Vec<String>) {
+    for child in &fragment.children {
+        collect_calls_from_jsx_child(child, calls);
+    }
+}
+
+fn collect_calls_from_jsx_expression(expression: &JSXExpression<'_>, calls: &mut Vec<String>) {
+    match expression {
+        JSXExpression::ArrayExpression(array) => {
+            for element in &array.elements {
+                collect_calls_from_array_element(element, calls);
+            }
+        }
+        JSXExpression::AssignmentExpression(expression) => {
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        JSXExpression::BinaryExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        JSXExpression::CallExpression(call) => {
+            if let Some(name) = callee_text(&call.callee) {
+                calls.push(name);
+            }
+            collect_calls_from_expression(&call.callee, calls);
+            for argument in &call.arguments {
+                collect_calls_from_argument(argument, calls);
+            }
+        }
+        JSXExpression::ConditionalExpression(expression) => {
+            collect_calls_from_expression(&expression.test, calls);
+            collect_calls_from_expression(&expression.consequent, calls);
+            collect_calls_from_expression(&expression.alternate, calls);
+        }
+        JSXExpression::LogicalExpression(expression) => {
+            collect_calls_from_expression(&expression.left, calls);
+            collect_calls_from_expression(&expression.right, calls);
+        }
+        JSXExpression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_calls_from_property_key(&property.key, calls);
+                        collect_calls_from_expression(&property.value, calls);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_calls_from_expression(&spread.argument, calls);
+                    }
+                }
+            }
+        }
+        JSXExpression::ParenthesizedExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        JSXExpression::TaggedTemplateExpression(tagged) => {
+            collect_calls_from_expression(&tagged.tag, calls);
+            for expression in &tagged.quasi.expressions {
+                collect_calls_from_expression(expression, calls);
+            }
+        }
+        JSXExpression::UnaryExpression(expression) => {
+            collect_calls_from_expression(&expression.argument, calls);
+        }
+        JSXExpression::JSXElement(element) => collect_calls_from_jsx_element(element, calls),
+        JSXExpression::JSXFragment(fragment) => collect_calls_from_jsx_fragment(fragment, calls),
+        JSXExpression::TSAsExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        JSXExpression::TSSatisfiesExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        JSXExpression::TSNonNullExpression(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        JSXExpression::TSTypeAssertion(expression) => {
+            collect_calls_from_expression(&expression.expression, calls);
+        }
+        JSXExpression::EmptyExpression(_) => {}
+        _ => {}
     }
 }
 
@@ -1984,7 +2402,9 @@ fn walk_jsx_attribute_value_for_literals(
         }
         JSXAttributeValue::Element(element) => extract_jsx_element_attributes(db, ctx, element),
         JSXAttributeValue::Fragment(fragment) => walk_jsx_fragment_for_literals(db, ctx, fragment),
-        JSXAttributeValue::StringLiteral(_) => {}
+        JSXAttributeValue::StringLiteral(literal) => {
+            push_string_literal_from_oxc(db, ctx, literal.value.to_string(), literal.span);
+        }
     }
 }
 
