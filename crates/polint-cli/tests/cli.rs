@@ -42,6 +42,18 @@ fn diagnostic_has_evidence(diagnostic: &serde_json::Value, label: &str, value: &
 }
 
 #[test]
+fn fixture_inputs_cover_requested_rule_triggers() {
+    let go_failing = include_str!("../../../tests/fixtures/go/failing/payment.go");
+    let go_failing_test = include_str!("../../../tests/fixtures/go/failing/payment_test.go");
+    let ts_failing = include_str!("../../../tests/fixtures/ts/failing/component.tsx");
+
+    assert!(go_failing.contains("legacy-token"));
+    assert!(go_failing_test.contains("TestProcessOversizedSuite"));
+    assert!(go_failing_test.contains("TestProcessNoAssertion"));
+    assert!(ts_failing.contains("/legacy-testid/"));
+}
+
+#[test]
 fn init_creates_config() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
