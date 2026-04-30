@@ -49,8 +49,8 @@
 
 ### SDK and Rules
 
-- [ ] **SDK-01**: `polint-sdk` exposes a documented `Rule` trait, `RuleMeta`, `Capabilities`, `RuleCtx`, and prelude.
-- [ ] **SDK-02**: `RuleCtx` exposes high-level queries for files, functions, imports, graphs, branch obligations, Go tests, TS components, string literals, JSX attributes, and diagnostic reporting.
+- [x] **SDK-01**: `polint-sdk` exposes a documented `Rule` trait, `RuleMeta`, `Capabilities`, `RuleCtx`, and prelude.
+- [x] **SDK-02**: `RuleCtx` exposes high-level queries for files, functions, imports, graphs, branch obligations, Go tests, TS components, string literals, JSX attributes, and diagnostic reporting.
 - [ ] **RULE-01**: Built-in example rule `examples/go-cyclomatic-complexity` works and is configurable.
 - [ ] **RULE-02**: Built-in example rule `examples/ts-cyclomatic-complexity` works and is configurable.
 - [ ] **RULE-03**: Built-in example rule `examples/go-import-boundaries` works and is configurable.
@@ -125,8 +125,8 @@
 | TS-01 | Phase 5 | Complete |
 | TS-02 | Phase 5 | Complete |
 | TS-03 | Phase 5 | Complete |
-| SDK-01 | Phase 6 | Pending |
-| SDK-02 | Phase 6 | Pending |
+| SDK-01 | Phase 6 | Complete |
+| SDK-02 | Phase 6 | Complete |
 | RULE-01 | Phase 6 | Pending |
 | RULE-02 | Phase 6 | Pending |
 | RULE-03 | Phase 6 | Pending |

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-04-30T09:03:42.933Z"
-last_activity: 2026-04-30 -- Phase 06 execution started
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-04-30T09:15:00.044Z"
+last_activity: 2026-04-30
 progress:
   total_phases: 10
   completed_phases: 5
   total_plans: 20
-  completed_plans: 14
-  percent: 70
+  completed_plans: 15
+  percent: 75
 ---
 
 # State: exlint
@@ -52,9 +52,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 ## Current Position
 
 Phase: 06 (sdk-and-example-rules) — EXECUTING
-Status: Executing Phase 06
-Plan: 1 of 6
-Last activity: 2026-04-30 -- Phase 06 execution started
+Status: Ready to execute
+Plan: 2 of 6
+Last activity: 2026-04-30
 
 ## Phase Progress
 
@@ -95,6 +95,9 @@ Last activity: 2026-04-30 -- Phase 06 execution started
 - [Phase 05-typescript-adapter]: Computed TS/JS complexity from Oxc AST control-flow nodes rather than comments or string contents.
 - [Phase 05-typescript-adapter]: Added polint-graph as a polint-ts dev-dependency solely for import graph unit proof.
 - [Phase 05-typescript-adapter]: Proved TS parser diagnostics and TS rule consumption through parsed CLI JSON integration tests.
+- [Phase 06-sdk-and-example-rules]: Kept the core Rule and RuleCtx contract additive while exposing new borrowed helper methods.
+- [Phase 06-sdk-and-example-rules]: Returned Vec<&TestFact> only for go_tests_for_related_file because it combines same-file and companion borrowed references.
+- [Phase 06-sdk-and-example-rules]: Kept polint new-rule scaffolds honest: SDK helper examples only, no dynamic loading claims.
 
 ## Performance Metrics
 
@@ -108,12 +111,13 @@ Last activity: 2026-04-30 -- Phase 06 execution started
 | Phase 05-typescript-adapter P02 | 13min | 2 tasks | 2 files |
 | Phase 05-typescript-adapter P03 | interrupted/resumed | 2 tasks | 3 files |
 | Phase 05-typescript-adapter P04 | 10min | 3 tasks | 5 files |
+| Phase 06-sdk-and-example-rules P01 | 7 min | 3 tasks | 4 files |
 
 ## Session
 
-**Last Date:** 2026-04-30T08:34:47.920Z
-**Stopped At:** Phase 6 context gathered
-**Resume File:** .planning/phases/06-sdk-and-example-rules/06-CONTEXT.md
+**Last Date:** 2026-04-30T09:15:00.041Z
+**Stopped At:** Completed 06-01-PLAN.md
+**Resume File:** None
 
 ## Important Context For Execution
 
