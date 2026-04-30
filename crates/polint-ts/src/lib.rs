@@ -218,11 +218,14 @@ fn extract_declarations(
                     push_ts_function(
                         db,
                         ctx,
-                        name,
-                        function.span,
-                        false,
-                        function_body_calls(function.body.as_deref()),
-                        is_component_like,
+                        TsFunctionSpec {
+                            name,
+                            span: function.span,
+                            is_exported: false,
+                            cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                            calls: function_body_calls(function.body.as_deref()),
+                            is_component_like,
+                        },
                     );
                 }
             }
@@ -249,11 +252,14 @@ fn extract_declarations(
                         push_ts_function(
                             db,
                             ctx,
-                            name,
-                            function.span,
-                            true,
-                            function_body_calls(function.body.as_deref()),
-                            is_component_like,
+                            TsFunctionSpec {
+                                name,
+                                span: function.span,
+                                is_exported: true,
+                                cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                                calls: function_body_calls(function.body.as_deref()),
+                                is_component_like,
+                            },
                         );
                     }
                 }
@@ -290,11 +296,14 @@ fn extract_declaration(
                 push_ts_function(
                     db,
                     ctx,
-                    name,
-                    function.span,
-                    is_exported,
-                    function_body_calls(function.body.as_deref()),
-                    is_component_like,
+                    TsFunctionSpec {
+                        name,
+                        span: function.span,
+                        is_exported,
+                        cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                        calls: function_body_calls(function.body.as_deref()),
+                        is_component_like,
+                    },
                 );
             }
         }
@@ -339,11 +348,14 @@ fn extract_variable_declarator(
             push_ts_function(
                 db,
                 ctx,
-                name,
-                declarator.span,
-                is_exported,
-                function_body_calls(Some(&function.body)),
-                is_component_like,
+                TsFunctionSpec {
+                    name,
+                    span: declarator.span,
+                    is_exported,
+                    cyclomatic_complexity: arrow_cyclomatic_complexity(function),
+                    calls: function_body_calls(Some(&function.body)),
+                    is_component_like,
+                },
             );
         }
         Expression::FunctionExpression(function) => {
@@ -351,11 +363,14 @@ fn extract_variable_declarator(
             push_ts_function(
                 db,
                 ctx,
-                name,
-                declarator.span,
-                is_exported,
-                function_body_calls(function.body.as_deref()),
-                is_component_like,
+                TsFunctionSpec {
+                    name,
+                    span: declarator.span,
+                    is_exported,
+                    cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                    calls: function_body_calls(function.body.as_deref()),
+                    is_component_like,
+                },
             );
         }
         Expression::ClassExpression(class) => {
@@ -365,36 +380,41 @@ fn extract_variable_declarator(
     }
 }
 
-fn push_ts_function(
-    db: &mut AnalysisDb,
-    ctx: TsAstCtx<'_>,
+struct TsFunctionSpec {
     name: String,
     span: oxc_span::Span,
     is_exported: bool,
-    mut calls: Vec<String>,
+    cyclomatic_complexity: u32,
+    calls: Vec<String>,
     is_component_like: bool,
+}
+
+fn push_ts_function(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    mut spec: TsFunctionSpec,
 ) -> FunctionId {
-    calls.sort();
-    calls.dedup();
-    let span = span_from_oxc(ctx.file, ctx.source, span);
+    spec.calls.sort();
+    spec.calls.dedup();
+    let span = span_from_oxc(ctx.file, ctx.source, spec.span);
     let function_id = db.push_function(FunctionFact {
         id: FunctionId(0),
         file: ctx.file,
-        name: name.clone(),
+        name: spec.name.clone(),
         span: span.clone(),
         language: ctx.language,
-        is_test: name.contains("test") || name.contains("spec"),
-        is_exported,
-        cyclomatic_complexity: 1,
-        calls,
+        is_test: spec.name.contains("test") || spec.name.contains("spec"),
+        is_exported: spec.is_exported,
+        cyclomatic_complexity: spec.cyclomatic_complexity,
+        calls: spec.calls,
     });
 
-    if is_component_like {
+    if spec.is_component_like {
         // syntax-level component heuristic: PascalCase or JSX-returning syntax only.
         db.push_ts_component(TsComponentFact {
             file: ctx.file,
             function: Some(function_id),
-            name,
+            name: spec.name,
             span,
         });
     }
@@ -442,11 +462,14 @@ fn push_ts_class(
                     source,
                     language,
                 },
-                format!("{name}.{method_name}"),
-                method.span,
-                is_exported,
-                function_body_calls(method.value.body.as_deref()),
-                false,
+                TsFunctionSpec {
+                    name: format!("{name}.{method_name}"),
+                    span: method.span,
+                    is_exported,
+                    cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
+                    calls: function_body_calls(method.value.body.as_deref()),
+                    is_component_like: false,
+                },
             );
         }
     }
@@ -647,6 +670,605 @@ fn collect_calls_from_expression(expression: &Expression<'_>, calls: &mut Vec<St
             collect_calls_from_expression(&expression.expression, calls);
         }
         _ => {}
+    }
+}
+
+fn ts_cyclomatic_complexity(function: &Function<'_>) -> u32 {
+    1 + function
+        .body
+        .as_deref()
+        .map_or(0, |body| complexity_from_statements(&body.statements))
+}
+
+fn arrow_cyclomatic_complexity(function: &ArrowFunctionExpression<'_>) -> u32 {
+    1 + function.get_expression().map_or_else(
+        || complexity_from_statements(&function.body.statements),
+        complexity_from_expression,
+    )
+}
+
+fn complexity_from_statements(statements: &[Statement<'_>]) -> u32 {
+    statements.iter().map(complexity_from_statement).sum()
+}
+
+fn complexity_from_statement(statement: &Statement<'_>) -> u32 {
+    match statement {
+        Statement::BlockStatement(block) => complexity_from_statements(&block.body),
+        Statement::ExpressionStatement(statement) => {
+            complexity_from_expression(&statement.expression)
+        }
+        Statement::ReturnStatement(statement) => statement
+            .argument
+            .as_ref()
+            .map_or(0, complexity_from_expression),
+        Statement::IfStatement(statement) => {
+            1 + complexity_from_expression(&statement.test)
+                + complexity_from_statement(&statement.consequent)
+                + statement
+                    .alternate
+                    .as_ref()
+                    .map_or(0, |alternate| complexity_from_statement(alternate))
+        }
+        Statement::DoWhileStatement(statement) => {
+            1 + complexity_from_statement(&statement.body)
+                + complexity_from_expression(&statement.test)
+        }
+        Statement::WhileStatement(statement) => {
+            1 + complexity_from_expression(&statement.test)
+                + complexity_from_statement(&statement.body)
+        }
+        Statement::ForStatement(statement) => {
+            1 + statement.init.as_ref().map_or(0, complexity_from_for_init)
+                + statement
+                    .test
+                    .as_ref()
+                    .map_or(0, complexity_from_expression)
+                + statement
+                    .update
+                    .as_ref()
+                    .map_or(0, complexity_from_expression)
+                + complexity_from_statement(&statement.body)
+        }
+        Statement::ForInStatement(statement) => {
+            1 + complexity_from_for_left(&statement.left)
+                + complexity_from_expression(&statement.right)
+                + complexity_from_statement(&statement.body)
+        }
+        Statement::ForOfStatement(statement) => {
+            1 + complexity_from_for_left(&statement.left)
+                + complexity_from_expression(&statement.right)
+                + complexity_from_statement(&statement.body)
+        }
+        Statement::SwitchStatement(statement) => {
+            complexity_from_expression(&statement.discriminant)
+                + statement
+                    .cases
+                    .iter()
+                    .map(|case| {
+                        1 + case.test.as_ref().map_or(0, complexity_from_expression)
+                            + complexity_from_statements(&case.consequent)
+                    })
+                    .sum::<u32>()
+        }
+        Statement::ThrowStatement(statement) => complexity_from_expression(&statement.argument),
+        Statement::TryStatement(statement) => {
+            complexity_from_statements(&statement.block.body)
+                + statement.handler.as_ref().map_or(0, |handler| {
+                    1 + complexity_from_statements(&handler.body.body)
+                })
+                + statement
+                    .finalizer
+                    .as_ref()
+                    .map_or(0, |finalizer| complexity_from_statements(&finalizer.body))
+        }
+        Statement::VariableDeclaration(variable) => complexity_from_variable_declaration(variable),
+        Statement::WithStatement(statement) => {
+            complexity_from_expression(&statement.object)
+                + complexity_from_statement(&statement.body)
+        }
+        Statement::LabeledStatement(statement) => complexity_from_statement(&statement.body),
+        _ => 0,
+    }
+}
+
+fn complexity_from_expression(expression: &Expression<'_>) -> u32 {
+    match expression {
+        Expression::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(complexity_from_array_element)
+            .sum(),
+        Expression::AssignmentExpression(expression) => {
+            complexity_from_expression(&expression.right)
+        }
+        Expression::AwaitExpression(expression) => complexity_from_expression(&expression.argument),
+        Expression::BinaryExpression(expression) => {
+            complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        Expression::CallExpression(call) => {
+            complexity_from_expression(&call.callee)
+                + call
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        Expression::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        Expression::ImportExpression(expression) => complexity_from_expression(&expression.source),
+        Expression::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        Expression::NewExpression(expression) => {
+            complexity_from_expression(&expression.callee)
+                + expression
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        Expression::ObjectExpression(object) => object
+            .properties
+            .iter()
+            .map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    complexity_from_property_key(&property.key)
+                        + complexity_from_expression(&property.value)
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    complexity_from_expression(&spread.argument)
+                }
+            })
+            .sum(),
+        Expression::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::SequenceExpression(expression) => expression
+            .expressions
+            .iter()
+            .map(complexity_from_expression)
+            .sum(),
+        Expression::TaggedTemplateExpression(tagged) => {
+            complexity_from_expression(&tagged.tag)
+                + tagged
+                    .quasi
+                    .expressions
+                    .iter()
+                    .map(complexity_from_expression)
+                    .sum::<u32>()
+        }
+        Expression::UnaryExpression(expression) => complexity_from_expression(&expression.argument),
+        Expression::YieldExpression(expression) => expression
+            .argument
+            .as_ref()
+            .map_or(0, complexity_from_expression),
+        Expression::JSXElement(element) => complexity_from_jsx_element(element),
+        Expression::JSXFragment(fragment) => complexity_from_jsx_fragment(fragment),
+        Expression::TSAsExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::TSTypeAssertion(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::TSInstantiationExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Expression::ComputedMemberExpression(expression) => {
+            complexity_from_expression(&expression.object)
+                + complexity_from_expression(&expression.expression)
+        }
+        Expression::StaticMemberExpression(expression) => {
+            complexity_from_expression(&expression.object)
+        }
+        Expression::PrivateFieldExpression(expression) => {
+            complexity_from_expression(&expression.object)
+        }
+        _ => 0,
+    }
+}
+
+fn complexity_from_variable_declaration(variable: &oxc_ast::ast::VariableDeclaration<'_>) -> u32 {
+    variable
+        .declarations
+        .iter()
+        .filter_map(|declarator| declarator.init.as_ref())
+        .map(complexity_from_expression)
+        .sum()
+}
+
+fn complexity_from_for_init(init: &ForStatementInit<'_>) -> u32 {
+    match init {
+        ForStatementInit::VariableDeclaration(variable) => {
+            complexity_from_variable_declaration(variable)
+        }
+        ForStatementInit::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(complexity_from_array_element)
+            .sum(),
+        ForStatementInit::AssignmentExpression(expression) => {
+            complexity_from_expression(&expression.right)
+        }
+        ForStatementInit::CallExpression(call) => {
+            complexity_from_expression(&call.callee)
+                + call
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        ForStatementInit::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        ForStatementInit::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        ForStatementInit::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ForStatementInit::SequenceExpression(expression) => expression
+            .expressions
+            .iter()
+            .map(complexity_from_expression)
+            .sum(),
+        ForStatementInit::TSAsExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ForStatementInit::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ForStatementInit::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ForStatementInit::TSTypeAssertion(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        _ => 0,
+    }
+}
+
+fn complexity_from_for_left(left: &ForStatementLeft<'_>) -> u32 {
+    if let ForStatementLeft::VariableDeclaration(variable) = left {
+        complexity_from_variable_declaration(variable)
+    } else {
+        0
+    }
+}
+
+fn complexity_from_argument(argument: &Argument<'_>) -> u32 {
+    match argument {
+        Argument::SpreadElement(spread) => complexity_from_expression(&spread.argument),
+        Argument::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(complexity_from_array_element)
+            .sum(),
+        Argument::AssignmentExpression(expression) => complexity_from_expression(&expression.right),
+        Argument::BinaryExpression(expression) => {
+            complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        Argument::CallExpression(call) => {
+            complexity_from_expression(&call.callee)
+                + call
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        Argument::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        Argument::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        Argument::ObjectExpression(object) => object
+            .properties
+            .iter()
+            .map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    complexity_from_property_key(&property.key)
+                        + complexity_from_expression(&property.value)
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    complexity_from_expression(&spread.argument)
+                }
+            })
+            .sum(),
+        Argument::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Argument::SequenceExpression(expression) => expression
+            .expressions
+            .iter()
+            .map(complexity_from_expression)
+            .sum(),
+        Argument::TaggedTemplateExpression(tagged) => {
+            complexity_from_expression(&tagged.tag)
+                + tagged
+                    .quasi
+                    .expressions
+                    .iter()
+                    .map(complexity_from_expression)
+                    .sum::<u32>()
+        }
+        Argument::UnaryExpression(expression) => complexity_from_expression(&expression.argument),
+        Argument::JSXElement(element) => complexity_from_jsx_element(element),
+        Argument::JSXFragment(fragment) => complexity_from_jsx_fragment(fragment),
+        Argument::TSAsExpression(expression) => complexity_from_expression(&expression.expression),
+        Argument::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Argument::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        Argument::TSTypeAssertion(expression) => complexity_from_expression(&expression.expression),
+        _ => 0,
+    }
+}
+
+fn complexity_from_array_element(element: &ArrayExpressionElement<'_>) -> u32 {
+    match element {
+        ArrayExpressionElement::SpreadElement(spread) => {
+            complexity_from_expression(&spread.argument)
+        }
+        ArrayExpressionElement::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(complexity_from_array_element)
+            .sum(),
+        ArrayExpressionElement::AssignmentExpression(expression) => {
+            complexity_from_expression(&expression.right)
+        }
+        ArrayExpressionElement::CallExpression(call) => {
+            complexity_from_expression(&call.callee)
+                + call
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        ArrayExpressionElement::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        ArrayExpressionElement::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        ArrayExpressionElement::ObjectExpression(object) => object
+            .properties
+            .iter()
+            .map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    complexity_from_property_key(&property.key)
+                        + complexity_from_expression(&property.value)
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    complexity_from_expression(&spread.argument)
+                }
+            })
+            .sum(),
+        ArrayExpressionElement::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ArrayExpressionElement::SequenceExpression(expression) => expression
+            .expressions
+            .iter()
+            .map(complexity_from_expression)
+            .sum(),
+        ArrayExpressionElement::TaggedTemplateExpression(tagged) => {
+            complexity_from_expression(&tagged.tag)
+                + tagged
+                    .quasi
+                    .expressions
+                    .iter()
+                    .map(complexity_from_expression)
+                    .sum::<u32>()
+        }
+        ArrayExpressionElement::UnaryExpression(expression) => {
+            complexity_from_expression(&expression.argument)
+        }
+        ArrayExpressionElement::JSXElement(element) => complexity_from_jsx_element(element),
+        ArrayExpressionElement::JSXFragment(fragment) => complexity_from_jsx_fragment(fragment),
+        ArrayExpressionElement::TSAsExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ArrayExpressionElement::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ArrayExpressionElement::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        ArrayExpressionElement::TSTypeAssertion(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        _ => 0,
+    }
+}
+
+fn complexity_from_property_key(key: &PropertyKey<'_>) -> u32 {
+    match key {
+        PropertyKey::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        PropertyKey::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        PropertyKey::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        PropertyKey::TSAsExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        PropertyKey::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        PropertyKey::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        PropertyKey::TSTypeAssertion(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        _ => 0,
+    }
+}
+
+fn complexity_from_jsx_element(element: &JSXElement<'_>) -> u32 {
+    element
+        .opening_element
+        .attributes
+        .iter()
+        .map(|item| match item {
+            JSXAttributeItem::Attribute(attribute) => attribute
+                .value
+                .as_ref()
+                .map_or(0, complexity_from_jsx_attribute_value),
+            JSXAttributeItem::SpreadAttribute(spread) => {
+                complexity_from_expression(&spread.argument)
+            }
+        })
+        .sum::<u32>()
+        + element
+            .children
+            .iter()
+            .map(complexity_from_jsx_child)
+            .sum::<u32>()
+}
+
+fn complexity_from_jsx_attribute_value(value: &JSXAttributeValue<'_>) -> u32 {
+    match value {
+        JSXAttributeValue::ExpressionContainer(container) => {
+            complexity_from_jsx_expression(&container.expression)
+        }
+        JSXAttributeValue::Element(element) => complexity_from_jsx_element(element),
+        JSXAttributeValue::Fragment(fragment) => complexity_from_jsx_fragment(fragment),
+        JSXAttributeValue::StringLiteral(_) => 0,
+    }
+}
+
+fn complexity_from_jsx_child(child: &JSXChild<'_>) -> u32 {
+    match child {
+        JSXChild::Element(element) => complexity_from_jsx_element(element),
+        JSXChild::Fragment(fragment) => complexity_from_jsx_fragment(fragment),
+        JSXChild::ExpressionContainer(container) => {
+            complexity_from_jsx_expression(&container.expression)
+        }
+        JSXChild::Spread(spread) => complexity_from_expression(&spread.expression),
+        JSXChild::Text(_) => 0,
+    }
+}
+
+fn complexity_from_jsx_fragment(fragment: &JSXFragment<'_>) -> u32 {
+    fragment
+        .children
+        .iter()
+        .map(complexity_from_jsx_child)
+        .sum()
+}
+
+fn complexity_from_jsx_expression(expression: &JSXExpression<'_>) -> u32 {
+    match expression {
+        JSXExpression::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(complexity_from_array_element)
+            .sum(),
+        JSXExpression::AssignmentExpression(expression) => {
+            complexity_from_expression(&expression.right)
+        }
+        JSXExpression::BinaryExpression(expression) => {
+            complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        JSXExpression::CallExpression(call) => {
+            complexity_from_expression(&call.callee)
+                + call
+                    .arguments
+                    .iter()
+                    .map(complexity_from_argument)
+                    .sum::<u32>()
+        }
+        JSXExpression::ConditionalExpression(expression) => {
+            1 + complexity_from_expression(&expression.test)
+                + complexity_from_expression(&expression.consequent)
+                + complexity_from_expression(&expression.alternate)
+        }
+        JSXExpression::LogicalExpression(expression) => {
+            u32::from(expression.operator.is_and() || expression.operator.is_or())
+                + complexity_from_expression(&expression.left)
+                + complexity_from_expression(&expression.right)
+        }
+        JSXExpression::ObjectExpression(object) => object
+            .properties
+            .iter()
+            .map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    complexity_from_property_key(&property.key)
+                        + complexity_from_expression(&property.value)
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    complexity_from_expression(&spread.argument)
+                }
+            })
+            .sum(),
+        JSXExpression::ParenthesizedExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        JSXExpression::TaggedTemplateExpression(tagged) => {
+            complexity_from_expression(&tagged.tag)
+                + tagged
+                    .quasi
+                    .expressions
+                    .iter()
+                    .map(complexity_from_expression)
+                    .sum::<u32>()
+        }
+        JSXExpression::UnaryExpression(expression) => {
+            complexity_from_expression(&expression.argument)
+        }
+        JSXExpression::JSXElement(element) => complexity_from_jsx_element(element),
+        JSXExpression::JSXFragment(fragment) => complexity_from_jsx_fragment(fragment),
+        JSXExpression::TSAsExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        JSXExpression::TSSatisfiesExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        JSXExpression::TSNonNullExpression(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        JSXExpression::TSTypeAssertion(expression) => {
+            complexity_from_expression(&expression.expression)
+        }
+        JSXExpression::EmptyExpression(_) => 0,
+        _ => 0,
     }
 }
 
