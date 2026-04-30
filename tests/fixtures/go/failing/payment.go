@@ -5,6 +5,8 @@ import (
 	"net/http"
 )
 
+const legacyToken = "legacy-token"
+
 func Authorize(charge func() error) error {
 	if err := charge(); err != nil {
 		return err
@@ -18,6 +20,9 @@ func Process(amount int, charge func() error, client *http.Client) error {
 	}
 	if amount <= 0 {
 		return fmt.Errorf("invalid amount")
+	}
+	if amount == 13 {
+		return fmt.Errorf("%s rejected amount", legacyToken)
 	}
 
 	switch {

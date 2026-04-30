@@ -10,6 +10,7 @@ export function Button(props: ButtonProps) {
   const rawColor = "#ff00aa";
   const overlay = `rgba(0,0,0,0.5)`;
   const testId = "legacy-testid";
+  const deniedPattern = /legacy-testid/;
 
   if (props.tone && palette.primary || props.label) {
     for (const item of props.items) {
@@ -31,6 +32,9 @@ export function Button(props: ButtonProps) {
     track(props.label ? props.label : testId);
   } catch (error) {
     track(String(error));
+  }
+  if (deniedPattern.test(testId)) {
+    track(testId);
   }
 
   return (
