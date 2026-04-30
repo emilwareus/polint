@@ -1522,6 +1522,7 @@ fn expression_static_value(expression: &Expression<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polint_graph::ImportGraph;
     use std::path::PathBuf;
 
     fn analyze_source(path: &str, source: &str) -> (AnalysisDb, Vec<Diagnostic>) {
@@ -1877,5 +1878,82 @@ export function Button() {
             }),
             "expected raw color JSX attribute fact"
         );
+    }
+
+    #[test]
+    fn computes_ts_complexity_from_oxc_control_flow() {
+        let source = r#"
+export function authorize(input: Input) {
+  if (input.ready && input.allowed || input.admin) {
+    approve();
+  }
+
+  for (const item of input.items) {
+    audit(item);
+  }
+
+  switch (input.kind) {
+    case "fast":
+      fast();
+      break;
+    default:
+      fallback();
+  }
+
+  try {
+    risky(input.flag ? "yes" : "no");
+  } catch (error) {
+    recover(error);
+  }
+}
+"#;
+        let (db, diagnostics) = analyze_source("complexity.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let function = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "authorize")
+            .expect("expected authorize function");
+
+        assert_eq!(function.cyclomatic_complexity, 9);
+    }
+
+    #[test]
+    fn ts_complexity_does_not_count_words_inside_strings_or_comments() {
+        let source = r#"
+// if for while case catch && || ?
+export function plain() {
+  const text = "if for while case catch && || ?";
+  return text;
+}
+"#;
+        let (db, diagnostics) = analyze_source("plain.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let function = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "plain")
+            .expect("expected plain function");
+
+        assert_eq!(function.cyclomatic_complexity, 1);
+    }
+
+    #[test]
+    fn ts_import_facts_feed_import_graph() {
+        let source = r#"
+import { tokens } from "./tokens";
+
+export function renderView() {
+  return tokens.primary;
+}
+"#;
+        let (db, diagnostics) = analyze_source("src/view.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let dot = ImportGraph::from_db(&db).to_dot();
+        assert!(dot.contains("src/view.ts"), "{dot}");
+        assert!(dot.contains("./tokens"), "{dot}");
     }
 }

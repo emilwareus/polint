@@ -1777,6 +1777,7 @@ dependencies = [
  "oxc_span",
  "polint-core",
  "polint-diagnostics",
+ "polint-graph",
 ]
 
 [[package]]

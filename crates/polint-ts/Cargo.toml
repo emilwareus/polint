@@ -16,3 +16,6 @@ oxc_semantic.workspace = true
 oxc_span.workspace = true
 polint-core = { path = "../polint-core" }
 polint-diagnostics = { path = "../polint-diagnostics" }
+
+[dev-dependencies]
+polint-graph = { path = "../polint-graph" }
