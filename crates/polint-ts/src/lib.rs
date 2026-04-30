@@ -3388,6 +3388,62 @@ const dynamicTemplate = `prefix-${name}`;
     }
 
     #[test]
+    fn extracts_ts_regex_literals_as_syntax_literals() {
+        let source = r#"
+const testIdPattern = /legacy-testid/;
+const unsafePrefix = /^unsafe-/i;
+"#;
+        let (db, diagnostics) = analyze_source("regex-literals.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+
+        let values: Vec<_> = db
+            .string_literals()
+            .iter()
+            .map(|literal| literal.value.as_str())
+            .collect();
+        assert_eq!(values, ["/legacy-testid/", "/^unsafe-/i"]);
+    }
+
+    #[test]
+    fn denied_literal_rules_can_see_regex_literal_text() {
+        use polint_core::{RuleCtx, RuleMeta, RuleOptions};
+        use polint_diagnostics::Severity;
+
+        let source = r#"
+const allowed = /legacy-testid/;
+const denied = /^unsafe-/i;
+"#;
+        let (db, diagnostics) = analyze_source("regex-deny.ts", source);
+        assert_no_parser_diagnostics(&diagnostics);
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/config-query-no-literal".to_string(),
+                description: "Deny configured syntax-level literals.".to_string(),
+                severity: Severity::Error,
+            },
+            RuleOptions {
+                deny: vec!["unsafe".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        let denied = ctx
+            .string_literals()
+            .iter()
+            .filter(|literal| {
+                ctx.options()
+                    .deny
+                    .iter()
+                    .any(|deny| literal.value.contains(deny))
+            })
+            .map(|literal| literal.value.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(denied, vec!["/^unsafe-/i"]);
+    }
+
+    #[test]
     fn extracts_jsx_attributes_from_oxc_ast() {
         let source = r#"
 const View = ({ token }) => (
