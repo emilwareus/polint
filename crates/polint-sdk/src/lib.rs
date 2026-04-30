@@ -1,10 +1,18 @@
+//! `polint-sdk` is the public rule-authoring entry point for Polint.
+//!
+//! Repo-local and built-in rule authors should start with
+//! `use polint_sdk::prelude::*;`. The prelude re-exports the stable core rule
+//! contract, fact types, diagnostics, severity types, and `anyhow::Result`
+//! needed for ordinary rule implementations without depending on `polint-core`
+//! directly.
+
 pub mod prelude {
     pub use anyhow::Result;
     pub use polint_core::{
         AnalysisDb, BranchId, BranchObligation, Capabilities, CoverageFact, FileId, FunctionFact,
-        FunctionId, ImportFact, ImportId, JsxAttributeFact, Language, NodeId, PackageId, Rule,
-        RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span, StringLiteralFact, TestFact,
-        TextRange, TsComponentFact,
+        FunctionId, ImportFact, ImportId, JsxAttributeFact, Language, NodeId, PackageFact,
+        PackageId, Rule, RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span,
+        StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
     };
     pub use polint_diagnostics::{
         Diagnostic, Evidence, Fix, Label, OutputFormat, Severity, Suggestion,
