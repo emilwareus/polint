@@ -112,7 +112,11 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     assert!(rule_dir.join("Cargo.toml").exists());
     let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("id: \"custom/branch-error-paths\""));
+    assert!(lib.contains("use polint_sdk::prelude::*;"));
     assert!(lib.contains(".go_tests().branch_obligations()"));
+    assert!(lib.contains("ctx.go_tests_for_file(file.id)"));
+    assert!(lib.contains("ctx.branch_obligations_for_file(file.id)"));
+    assert!(!lib.contains("polint_core::"));
 }
 
 #[test]
@@ -129,7 +133,31 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
     assert!(rule_dir.join("Cargo.toml").exists());
     let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("id: \"custom/no-raw-brand-colors\""));
+    assert!(lib.contains("use polint_sdk::prelude::*;"));
     assert!(lib.contains(".string_literals().jsx_attributes()"));
+    assert!(lib.contains("ctx.string_literals_for_file(file.id)"));
+    assert!(lib.contains("ctx.jsx_attributes_for_file(file.id)"));
+    assert!(!lib.contains("polint_core::"));
+}
+
+#[test]
+fn new_rule_generic_uses_sdk_query_helpers() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["new-rule", "generic", "domain-names"])
+        .assert()
+        .success();
+
+    let rule_dir = temp.path().join(".polint/rules/domain-names");
+    assert!(rule_dir.join("Cargo.toml").exists());
+    let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
+    assert!(lib.contains("id: \"custom/domain-names\""));
+    assert!(lib.contains("use polint_sdk::prelude::*;"));
+    assert!(lib.contains(".syntax()"));
+    assert!(lib.contains("ctx.functions_for_file(file.id)"));
+    assert!(!lib.contains("polint_core::"));
 }
 
 #[test]
