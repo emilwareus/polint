@@ -689,4 +689,112 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn ts_raw_colors_respects_literal_allow_list() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/button.tsx");
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "#fff".to_string(),
+            span: span(file, 4, 18, 24),
+            language: Language::Tsx,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(TsNoRawColors),
+            &db,
+            RuleOptions {
+                allow: vec!["#fff".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn ts_raw_colors_respects_allow_files() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/theme/generated.ts");
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "rgba(0, 0, 0, 0.5)".to_string(),
+            span: span(file, 2, 22, 42),
+            language: Language::TypeScript,
+        });
+
+        let diagnostics = run_single_rule(
+            Arc::new(TsNoRawColors),
+            &db,
+            RuleOptions {
+                allow_files: vec!["src/theme/**".to_string()],
+                ..RuleOptions::default()
+            },
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn ts_raw_colors_dedupes_string_and_jsx_attribute_facts() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/button.tsx");
+        let duplicate_span = span(file, 8, 23, 32);
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "#00ff00".to_string(),
+            span: duplicate_span.clone(),
+            language: Language::Tsx,
+        });
+        db.push_jsx_attribute(JsxAttributeFact {
+            file,
+            name: "data-color".to_string(),
+            value: Some("#00ff00".to_string()),
+            span: duplicate_span,
+        });
+        db.push_jsx_attribute(JsxAttributeFact {
+            file,
+            name: "style".to_string(),
+            value: Some("rgb(0, 0, 0)".to_string()),
+            span: span(file, 9, 14, 35),
+        });
+
+        let diagnostics = run_single_rule(Arc::new(TsNoRawColors), &db, RuleOptions::default());
+
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        let deduped = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("#00ff00"))
+            .expect("expected deduped raw color diagnostic");
+        assert!(
+            deduped
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "literal" && evidence.value == "#00ff00")
+        );
+        assert!(
+            deduped
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "source" && evidence.value == "string-literal")
+        );
+        assert!(
+            deduped
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("syntax-level literal findings"))
+        );
+
+        let jsx_only = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("rgb(0, 0, 0)"))
+            .expect("expected JSX-only raw color diagnostic");
+        assert!(
+            jsx_only
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "source" && evidence.value == "jsx-attribute")
+        );
+    }
 }
