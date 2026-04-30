@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -41,6 +42,65 @@ fn diagnostic_has_evidence(diagnostic: &serde_json::Value, label: &str, value: &
     })
 }
 
+const PHASE6_RULE_IDS: [&str; 8] = [
+    "examples/go-cyclomatic-complexity",
+    "examples/ts-cyclomatic-complexity",
+    "examples/go-import-boundaries",
+    "examples/ts-no-raw-colors",
+    "examples/go-branch-obligations",
+    "examples/go-test-suite-size",
+    "examples/go-assertion-after-action",
+    "examples/config-query-no-literal",
+];
+
+fn diagnostic_rule_ids(value: &serde_json::Value) -> BTreeSet<String> {
+    diagnostics(value)
+        .iter()
+        .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
+        .map(str::to_string)
+        .collect()
+}
+
+fn diagnostics_for_rule<'a>(
+    value: &'a serde_json::Value,
+    rule_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    diagnostics(value)
+        .iter()
+        .filter(|diagnostic| diagnostic["rule_id"] == rule_id)
+        .collect()
+}
+
+fn write_phase6_failing_fixtures(root: &Path) {
+    write_file(
+        &root.join("payment.go"),
+        include_str!("../../../tests/fixtures/go/failing/payment.go"),
+    );
+    write_file(
+        &root.join("payment_test.go"),
+        include_str!("../../../tests/fixtures/go/failing/payment_test.go"),
+    );
+    write_file(
+        &root.join("component.tsx"),
+        include_str!("../../../tests/fixtures/ts/failing/component.tsx"),
+    );
+}
+
+fn write_phase6_clean_fixtures(root: &Path) {
+    write_file(
+        &root.join("payment.go"),
+        include_str!("../../../tests/fixtures/go/clean/payment.go"),
+    );
+    write_file(
+        &root.join("payment_test.go"),
+        include_str!("../../../tests/fixtures/go/clean/payment_test.go"),
+    );
+    write_file(
+        &root.join("component.tsx"),
+        include_str!("../../../tests/fixtures/ts/clean/component.tsx"),
+    );
+}
+
 #[test]
 fn fixture_inputs_cover_requested_rule_triggers() {
     let go_failing = include_str!("../../../tests/fixtures/go/failing/payment.go");
@@ -51,6 +111,294 @@ fn fixture_inputs_cover_requested_rule_triggers() {
     assert!(go_failing_test.contains("TestProcessOversizedSuite"));
     assert!(go_failing_test.contains("TestProcessNoAssertion"));
     assert!(ts_failing.contains("/legacy-testid/"));
+}
+
+#[test]
+fn check_phase6_runs_all_requested_example_rules() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase6]
+rules = [
+  "examples/go-cyclomatic-complexity",
+  "examples/ts-cyclomatic-complexity",
+  "examples/go-import-boundaries",
+  "examples/ts-no-raw-colors",
+  "examples/go-branch-obligations",
+  "examples/go-test-suite-size",
+  "examples/go-assertion-after-action",
+  "examples/config-query-no-literal",
+]
+
+[[rules.config]]
+id = "examples/go-cyclomatic-complexity"
+max = 3
+files = ["**/*.go"]
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+max = 3
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/go-import-boundaries"
+files = ["**/*.go"]
+
+[rules.config.forbidden_imports]
+"**/*.go" = ["net/http"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/go-test-suite-size"
+max = 24
+
+[[rules.config]]
+id = "examples/config-query-no-literal"
+deny = ["legacy-token", "legacy-testid"]
+files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+"##,
+    );
+    write_phase6_failing_fixtures(temp.path());
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase6",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let actual_rule_ids = diagnostic_rule_ids(&json);
+    for expected in PHASE6_RULE_IDS {
+        assert!(
+            actual_rule_ids.contains(expected),
+            "missing {expected}; got {actual_rule_ids:#?}\njson: {json:#?}"
+        );
+    }
+}
+
+#[test]
+fn check_phase6_clean_fixtures_do_not_emit_example_rule_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase6]
+rules = [
+  "examples/go-cyclomatic-complexity",
+  "examples/ts-cyclomatic-complexity",
+  "examples/go-import-boundaries",
+  "examples/ts-no-raw-colors",
+  "examples/go-branch-obligations",
+  "examples/go-test-suite-size",
+  "examples/go-assertion-after-action",
+  "examples/config-query-no-literal",
+]
+
+[[rules.config]]
+id = "examples/go-cyclomatic-complexity"
+max = 20
+files = ["**/*.go"]
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+max = 20
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/go-import-boundaries"
+files = ["**/*.go"]
+
+[rules.config.forbidden_imports]
+"**/*.go" = ["net/http"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+allow_files = ["**/theme/**", "**/design-tokens/**"]
+
+[[rules.config]]
+id = "examples/go-test-suite-size"
+max = 24
+
+[[rules.config]]
+id = "examples/config-query-no-literal"
+deny = ["legacy-token", "legacy-testid"]
+files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+"##,
+    );
+    write_phase6_clean_fixtures(temp.path());
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase6",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let example_diagnostics = diagnostics(&json)
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic["rule_id"]
+                .as_str()
+                .is_some_and(|rule_id| rule_id.starts_with("examples/"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        example_diagnostics.is_empty(),
+        "clean fixtures should not emit examples/* diagnostics: {example_diagnostics:#?}"
+    );
+}
+
+#[test]
+fn check_phase6_rule_options_configure_thresholds_allow_lists_and_denied_literals() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase6]
+rules = [
+  "examples/go-cyclomatic-complexity",
+  "examples/ts-cyclomatic-complexity",
+  "examples/go-import-boundaries",
+  "examples/ts-no-raw-colors",
+  "examples/go-branch-obligations",
+  "examples/go-test-suite-size",
+  "examples/go-assertion-after-action",
+  "examples/config-query-no-literal",
+]
+
+[[rules.config]]
+id = "examples/go-cyclomatic-complexity"
+max = 3
+files = ["**/*.go"]
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+max = 3
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+
+[[rules.config]]
+id = "examples/go-import-boundaries"
+severity = "warn"
+files = ["**/*.go"]
+
+[rules.config.forbidden_imports]
+"**/*.go" = ["net/http"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+allow_files = ["theme/**"]
+allow = ["#00ff00"]
+
+[[rules.config]]
+id = "examples/go-test-suite-size"
+max = 24
+
+[[rules.config]]
+id = "examples/config-query-no-literal"
+deny = ["legacy-token", "legacy-testid"]
+files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
+"##,
+    );
+    write_phase6_failing_fixtures(temp.path());
+    write_file(
+        &temp.path().join("theme/generated.tsx"),
+        "export const ignored = \"#123456\";\n",
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase6",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let import_boundary = diagnostics_for_rule(&json, "examples/go-import-boundaries");
+    assert!(
+        import_boundary
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == "warn"),
+        "severity override should apply to import-boundary diagnostics: {import_boundary:#?}"
+    );
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "import", "net/http")),
+        "expected forbidden import evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "literal", "legacy-token")),
+        "expected denied literal evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "matched", "legacy-testid")),
+        "expected denied literal match evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "score", "")),
+        "expected test-suite score evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "branch_fingerprint", "")),
+        "expected branch fingerprint evidence: {json:#?}"
+    );
+
+    let raw_color_diagnostics = diagnostics_for_rule(&json, "examples/ts-no-raw-colors");
+    assert!(
+        raw_color_diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic_has_evidence(diagnostic, "literal", "#00ff00")),
+        "raw color allow-list should suppress #00ff00: {raw_color_diagnostics:#?}"
+    );
+    assert!(
+        raw_color_diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["file"] != "theme/generated.tsx"),
+        "allow_files should suppress theme/generated.tsx: {raw_color_diagnostics:#?}"
+    );
 }
 
 #[test]
