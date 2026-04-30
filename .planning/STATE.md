@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-04-30T09:54:45.974Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-04-30T10:05:45.812Z"
 last_activity: 2026-04-30
 progress:
   total_phases: 10
   completed_phases: 5
   total_plans: 20
-  completed_plans: 18
-  percent: 90
+  completed_plans: 19
+  percent: 95
 ---
 
 # State: exlint
@@ -53,7 +53,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 
 Phase: 06 (sdk-and-example-rules) — EXECUTING
 Status: Ready to execute
-Plan: 5 of 6
+Plan: 6 of 6
 Last activity: 2026-04-30
 
 ## Phase Progress
@@ -107,6 +107,9 @@ Last activity: 2026-04-30
 - [Phase 06-sdk-and-example-rules]: Used RuleCtx::branches and RuleCtx::go_tests_for_related_file for Go branch evidence instead of direct AnalysisDb access.
 - [Phase 06-sdk-and-example-rules]: Defined the Go test-suite score as 1 + subtests*4 + table_rows*2 + assertions with default max 24.
 - [Phase 06-sdk-and-example-rules]: Kept all three Go heuristic diagnostics explicit about heuristic behavior and limited evidence to extracted facts.
+- [Phase 06-sdk-and-example-rules]: Used a small fixture expectation test as the Task 1 RED step before creating the missing failing Go test fixture.
+- [Phase 06-sdk-and-example-rules]: Kept Phase 6 CLI proof in temp repos with exact profile rule IDs and parsed JSON assertions.
+- [Phase 06-sdk-and-example-rules]: Fixed clean branch-obligation suppression through realistic Go test case evidence instead of weakening heuristic rule behavior.
 
 ## Performance Metrics
 
@@ -124,11 +127,12 @@ Last activity: 2026-04-30
 | Phase 06-sdk-and-example-rules P02 | 6 min | 3 tasks | 5 files |
 | Phase 06-sdk-and-example-rules P03 | 10 min | 3 tasks | 1 files |
 | Phase 06-sdk-and-example-rules P04 | 5 min | 3 tasks | 1 files |
+| Phase 06-sdk-and-example-rules P05 | 7 min | 3 tasks | 5 files |
 
 ## Session
 
-**Last Date:** 2026-04-30T09:54:45.972Z
-**Stopped At:** Completed 06-04-PLAN.md
+**Last Date:** 2026-04-30T10:05:45.808Z
+**Stopped At:** Completed 06-05-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
