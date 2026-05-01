@@ -399,12 +399,35 @@ fn explain(rule_id: &str) {
 
 fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config(&root)?;
-    let mut db = load_analysis_files(&config)?;
-    let mut parser_diagnostics = Vec::new();
-    parser_diagnostics.extend(polint_go::analyze(&mut db));
-    parser_diagnostics.extend(polint_ts::analyze(&mut db));
-    let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
+    let cache = polint_cache::Cache::default_for_repo(&root, !args.no_cache);
+    let config_digest = config_hash(&config);
     let rules = built_in_rules();
+    let mut parser_diagnostics = Vec::new();
+    let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
+    let mut all_options = BTreeMap::<String, RuleOptions>::new();
+    for rule in &rules {
+        let meta = rule.meta();
+        all_options.insert(
+            meta.id.clone(),
+            rule_options_from_config(config.rule_config(&meta.id)),
+        );
+    }
+    let rule_digest = rule_hash(&rules, &enabled, &all_options);
+    let mut db = load_analysis_files(&config)?;
+    parser_diagnostics.extend(polint_go::analyze_with_options(
+        &mut db,
+        &cache,
+        &config_digest,
+        &rule_digest,
+        true,
+    ));
+    parser_diagnostics.extend(polint_ts::analyze_with_options(
+        &mut db,
+        &cache,
+        &config_digest,
+        &rule_digest,
+        true,
+    ));
     let mut all_diagnostics = parser_diagnostics;
 
     for rule in &rules {
@@ -425,9 +448,9 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         let diagnostics = run_rules(&db, std::slice::from_ref(rule), &options, &enabled, false);
         let elapsed = start.elapsed();
         println!(
-            "{:<42} {:>8.2?} {} diagnostics",
+            "{}\telapsed_ms={:.3}\tdiagnostics={}",
             meta.id,
-            elapsed,
+            elapsed.as_secs_f64() * 1000.0,
             diagnostics.len()
         );
         all_diagnostics.extend(diagnostics);

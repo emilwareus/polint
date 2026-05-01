@@ -1425,6 +1425,63 @@ fn check_parallel_cached_output_is_deterministic_across_repeated_runs() {
 }
 
 #[test]
+fn profile_rules_reports_per_rule_timings() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+
+    let output = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "profile-rules",
+                "--profile",
+                "phase7",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let ts_index = output.find("examples/ts-no-raw-colors").unwrap();
+    let go_index = output.find("examples/go-cyclomatic-complexity").unwrap();
+    assert!(go_index < ts_index);
+    for line in output.lines() {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 3, "{line}");
+        assert!(fields[0].starts_with("examples/"), "{line}");
+        let elapsed = fields[1]
+            .strip_prefix("elapsed_ms=")
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        assert!(elapsed >= 0.0, "{line}");
+        assert!(fields[2].starts_with("diagnostics="), "{line}");
+    }
+}
+
+#[test]
+fn profile_rules_honors_fail_on_threshold() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "profile-rules",
+            "--profile",
+            "phase7",
+            "--fail-on",
+            "warn",
+        ])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
 fn discovery_detects_all_supported_extensions() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
