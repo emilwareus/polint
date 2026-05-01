@@ -145,6 +145,9 @@ impl Rule for GoImportBoundaries {
             .filter(|import| import.language == Language::Go)
         {
             let file = ctx.file_path(import.file);
+            if !file_in_rule_scope(ctx.options(), &file) {
+                continue;
+            }
             for (from_glob, forbidden) in &ctx.options().forbidden_imports {
                 if glob_matches(from_glob, &file)
                     && forbidden.iter().any(|pattern| {
@@ -299,12 +302,16 @@ impl Rule for GoTestSuiteSize {
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();
         for test in ctx.go_tests() {
+            let file = ctx.file_path(test.file);
+            if !file_in_rule_scope(ctx.options(), &file) {
+                continue;
+            }
             let score = 1 + (test.subtest_count * 4) + (test.table_rows * 2) + test.assertion_count;
             if score > max {
                 diagnostics.push(
                     Diagnostic::warning(
                         rule_id.clone(),
-                        ctx.file_path(test.file),
+                        file,
                         test.span.diagnostic_range(),
                         format!(
                             "Go test `{}` has heuristic maintainability score {}, max {}.",
@@ -344,11 +351,15 @@ impl Rule for GoAssertionAfterAction {
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();
         for test in ctx.go_tests() {
+            let file = ctx.file_path(test.file);
+            if !file_in_rule_scope(ctx.options(), &file) {
+                continue;
+            }
             if test.assertion_count == 0 {
                 diagnostics.push(
                     Diagnostic::warning(
                         rule_id.clone(),
-                        ctx.file_path(test.file),
+                        file,
                         test.span.diagnostic_range(),
                         format!("Go test `{}` has no obvious assertion or error check.", test.name),
                     )
@@ -559,6 +570,10 @@ fn file_allowed(options: &RuleOptions, file: &str) -> bool {
         .allow_files
         .iter()
         .any(|pattern| glob_matches(pattern, file))
+}
+
+fn file_in_rule_scope(options: &RuleOptions, file: &str) -> bool {
+    file_selected(options, file) && !file_allowed(options, file)
 }
 
 fn glob_matches(pattern: &str, value: &str) -> bool {
@@ -847,6 +862,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn go_import_boundary_respects_rule_file_filters() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payment.go");
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "github.com/acme/legacy/auth".to_string(),
+            span: span(file, 4, 8, 39),
+            language: Language::Go,
+        });
+
+        let forbidden_imports = || {
+            BTreeMap::from([(
+                "src/**/*.go".to_string(),
+                vec!["github.com/acme/legacy/*".to_string()],
+            )])
+        };
+
+        for options in [
+            RuleOptions {
+                files: vec!["no-match/**".to_string()],
+                forbidden_imports: forbidden_imports(),
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                allow_files: vec!["src/**".to_string()],
+                forbidden_imports: forbidden_imports(),
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(GoImportBoundaries), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+    }
+
     fn branch_obligation(file: FileId, condition_text: &str) -> BranchObligation {
         BranchObligation {
             id: BranchId(99),
@@ -1038,6 +1091,30 @@ mod tests {
     }
 
     #[test]
+    fn go_test_suite_size_respects_file_filters() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_suite_test_fact(file, 3, 5, 2));
+
+        for options in [
+            RuleOptions {
+                max: Some(24),
+                files: vec!["no-match/**".to_string()],
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                max: Some(24),
+                allow_files: vec!["src/payments/**".to_string()],
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(GoTestSuiteSize), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+    }
+
+    #[test]
     fn go_test_suite_size_discloses_heuristic_wording() {
         let mut db = AnalysisDb::new();
         let file = add_file(&mut db, "src/payments/payment_test.go");
@@ -1144,6 +1221,33 @@ mod tests {
         );
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn go_assertion_after_action_respects_file_filters() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment_test.go");
+        db.push_test(go_assertion_test_fact(
+            file,
+            "TestPaymentAction",
+            0,
+            vec!["payment", "action"],
+        ));
+
+        for options in [
+            RuleOptions {
+                files: vec!["no-match/**".to_string()],
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                allow_files: vec!["src/payments/**".to_string()],
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(GoAssertionAfterAction), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
     }
 
     #[test]
