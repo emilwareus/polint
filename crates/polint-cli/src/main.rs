@@ -314,7 +314,12 @@ fn analyze_and_run(
         &config_digest,
         &rule_digest,
     ));
-    diagnostics.extend(polint_ts::analyze(&mut db));
+    diagnostics.extend(polint_ts::analyze_with_cache(
+        &mut db,
+        &cache,
+        &config_digest,
+        &rule_digest,
+    ));
 
     diagnostics.extend(run_rules(&db, &rules, &options, &enabled, parallel));
     Ok((diagnostics, db))

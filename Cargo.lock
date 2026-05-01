@@ -1779,6 +1779,7 @@ dependencies = [
  "oxc_resolver",
  "oxc_semantic",
  "oxc_span",
+ "polint-cache",
  "polint-core",
  "polint-diagnostics",
  "polint-graph",

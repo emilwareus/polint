@@ -17,6 +17,27 @@ fn stdout_json(assert: assert_cmd::assert::Assert) -> serde_json::Value {
         .unwrap_or_else(|error| panic!("stdout was not parseable JSON: {error}\nstdout:\n{stdout}"))
 }
 
+fn stdout_string(assert: assert_cmd::assert::Assert) -> String {
+    String::from_utf8(assert.get_output().stdout.clone()).unwrap()
+}
+
+fn cache_json_count(root: &Path) -> usize {
+    let cache_dir = root.join(".polint/cache");
+    if !cache_dir.exists() {
+        return 0;
+    }
+    fs::read_dir(cache_dir)
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|entry| entry.path().extension().map(|ext| ext == "json"))
+                .unwrap_or(false)
+        })
+        .count()
+}
+
 fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
     value
         .as_array()
@@ -1222,6 +1243,150 @@ rules = ["examples/ts-no-raw-colors"]
         .success();
 
     assert!(!temp.path().join(".polint/cache").exists());
+}
+
+#[test]
+fn check_no_cache_bypasses_cache_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase7]
+rules = ["examples/ts-no-raw-colors"]
+"##,
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("component.tsx"),
+        "export const color = \"#ff00aa\";",
+    )
+    .unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase7",
+            "--format",
+            "json",
+            "--no-cache",
+            "--fail-on",
+            "none",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(cache_json_count(temp.path()), 0);
+}
+
+fn write_phase7_cache_fixture(root: &Path) {
+    fs::write(
+        root.join(".polint.toml"),
+        r##"
+[profiles.phase7]
+rules = ["examples/ts-no-raw-colors", "examples/go-cyclomatic-complexity"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx"]
+"##,
+    )
+    .unwrap();
+    fs::write(
+        root.join("component.tsx"),
+        r##"
+import { token } from "./tokens";
+
+export function Button() {
+  return <div data-color="#ff00aa">{token}</div>;
+}
+"##,
+    )
+    .unwrap();
+    fs::write(
+        root.join("payment.go"),
+        r#"
+package payment
+
+func Authorize(user string) bool {
+    return user != ""
+}
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn check_cache_writes_fact_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase7",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(json.as_array().unwrap().iter().any(
+        |diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"
+    ));
+    assert!(cache_json_count(temp.path()) >= 2);
+    let cache_entry = fs::read_to_string(
+        fs::read_dir(temp.path().join(".polint/cache"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path(),
+    )
+    .unwrap();
+    assert!(!cache_entry.contains("export function Button"));
+    assert!(!cache_entry.contains("package payment"));
+}
+
+#[test]
+fn check_cached_output_is_deterministic_across_repeated_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+    let run = || {
+        stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args([
+                    "check",
+                    "--profile",
+                    "phase7",
+                    "--format",
+                    "json",
+                    "--fail-on",
+                    "none",
+                ])
+                .assert()
+                .success(),
+        )
+    };
+
+    let first = run();
+    let second = run();
+    let third = run();
+
+    assert_eq!(second, first);
+    assert_eq!(third, first);
+    assert!(cache_json_count(temp.path()) >= 2);
 }
 
 #[test]
