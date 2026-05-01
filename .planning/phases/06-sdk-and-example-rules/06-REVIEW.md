@@ -1,6 +1,6 @@
 ---
 phase: 06-sdk-and-example-rules
-reviewed: 2026-05-01T06:35:50Z
+reviewed: 2026-05-01T06:43:33Z
 depth: standard
 files_reviewed: 14
 files_reviewed_list:
@@ -19,70 +19,41 @@ files_reviewed_list:
   - tests/fixtures/go/failing/payment_test.go
   - tests/fixtures/ts/failing/component.tsx
 findings:
-  critical: 1
+  critical: 0
   warning: 0
   info: 0
-  total: 1
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 6: Code Review Report
 
-**Reviewed:** 2026-05-01T06:35:50Z
+**Reviewed:** 2026-05-01T06:43:33Z
 **Depth:** standard
 **Files Reviewed:** 14
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-Re-reviewed the Phase 6 CLI, SDK, parser adapters, built-in rules, rule tests, and fixtures after the code-review fixes.
+Final clean-check re-review of the Phase 6 CLI, SDK, parser adapters, built-in example rules, rule tests, and fixtures after all code review fixes.
 
-The prior findings are resolved: TS raw-color diagnostics dedupe overlapping string and JSX attribute facts, the focused built-in rules now honor `files` and `allow_files`, and `polint new-rule` rejects path traversal and unsafe rule names before writing generated files.
+All prior findings are resolved:
 
-One scaffold data-loss issue remains: `polint new-rule` still overwrites an existing safe rule directory.
+- Overlapping raw-color JSX attribute and string literal facts are deduped by file, value, and overlapping byte span before diagnostics are reported.
+- Built-in rule diagnostics consistently honor relevant `files` and `allow_files` options before reporting.
+- `polint new-rule` rejects traversal and unsafe rule names before writing.
+- `polint new-rule` rejects an existing rule directory before writing generated files, preserving existing `Cargo.toml` and `src/lib.rs`.
 
-## Critical Issues
-
-### CR-01: `new-rule` overwrites existing rule files
-
-**File:** `crates/polint-cli/src/main.rs:159`
-**Issue:** After validating a safe rule name, `new_rule` calls `fs::create_dir_all(&src_dir)` and then unconditionally writes `Cargo.toml` and `src/lib.rs`. Re-running `polint new-rule go demo` for an existing `.polint/rules/demo` succeeds and replaces the existing rule implementation, which can destroy repo-local rule code. I verified this in a temporary directory: a sentinel `src/lib.rs` was replaced with the generated SDK template.
-**Fix:**
-```rust
-fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
-    let rule_name = validate_rule_name(&args.rule_name)?;
-    let rules_dir = root.join(".polint/rules");
-    let rule_dir = rules_dir.join(&rule_name);
-
-    match fs::symlink_metadata(&rule_dir) {
-        Ok(_) => anyhow::bail!("rule already exists: {}", rule_dir.display()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| {
-            format!("failed to inspect {}", rule_dir.display())
-        }),
-    }
-
-    fs::create_dir_all(&rules_dir)?;
-    fs::create_dir(&rule_dir)?;
-    let src_dir = rule_dir.join("src");
-    fs::create_dir(&src_dir)?;
-
-    // write Cargo.toml and src/lib.rs after the exclusive directory creation
-    // succeeds.
-    Ok(())
-}
-```
+All reviewed files meet quality standards. No issues found.
 
 ## Verification
 
-- `cargo test -p polint-cli new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir`
-- `cargo test -p polint-cli check_ts_no_raw_colors_dedupes_real_jsx_attribute_literal`
-- `cargo test -p polint-rules ts_raw_colors_dedupes_string_and_jsx_attribute_facts`
-- `cargo test -p polint-rules respects`
+- `cargo test -p polint-rules`
+- `cargo test -p polint-cli`
 - `cargo fmt --check`
 
 ---
 
-_Reviewed: 2026-05-01T06:35:50Z_
+_Reviewed: 2026-05-01T06:43:33Z_
 _Reviewer: Codex (gsd-code-reviewer)_
 _Depth: standard_
