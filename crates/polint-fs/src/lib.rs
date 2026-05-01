@@ -3,6 +3,7 @@ use globset::GlobSet;
 use ignore::WalkBuilder;
 use polint_config::LoadedConfig;
 use polint_core::{AnalysisDb, Language, SourceFile};
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -55,6 +56,28 @@ pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
 }
 
 pub fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
+    load_analysis_files_parallel(config)
+}
+
+fn load_analysis_files_parallel(config: &LoadedConfig) -> Result<AnalysisDb> {
+    let loaded = discover_files(config)?
+        .into_par_iter()
+        .map(|file| {
+            let source = fs::read_to_string(&file.path)
+                .with_context(|| format!("failed to read {}", file.path.display()))?;
+            Ok((file, source))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut db = AnalysisDb::new();
+    for (file, source) in loaded {
+        db.add_file(file.path, file.relative_path, source);
+    }
+    Ok(db)
+}
+
+#[cfg(test)]
+fn load_analysis_files_sequential(config: &LoadedConfig) -> Result<AnalysisDb> {
     let mut db = AnalysisDb::new();
     for file in discover_files(config)? {
         let source = fs::read_to_string(&file.path)
@@ -221,6 +244,51 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
         assert_eq!(files[1].id.0, 1);
         assert_eq!(files[2].relative_path, "src/z.tsx");
         assert_eq!(files[2].id.0, 2);
+    }
+
+    #[test]
+    fn load_analysis_files_parallel_preserves_file_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path().join("src/z.tsx"), "export const z = 1;");
+        write_file(temp.path().join("src/a.ts"), "export const a = 1;");
+        write_file(temp.path().join("cmd/main.go"), "package main\n");
+
+        let config = load_config(temp.path()).unwrap();
+        let db = load_analysis_files_parallel(&config).unwrap();
+        let ids = db
+            .files()
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.id.0))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec![("cmd/main.go", 0), ("src/a.ts", 1), ("src/z.tsx", 2)]
+        );
+    }
+
+    #[test]
+    fn load_analysis_files_parallel_matches_sequential_order() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path().join("b/view.tsx"), "export const b = 1;");
+        write_file(temp.path().join("a/main.go"), "package main\n");
+        write_file(temp.path().join("c/util.js"), "export const c = 1;");
+
+        let config = load_config(temp.path()).unwrap();
+        let parallel = load_analysis_files_parallel(&config).unwrap();
+        let sequential = load_analysis_files_sequential(&config).unwrap();
+        let parallel_paths = parallel
+            .files()
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.id))
+            .collect::<Vec<_>>();
+        let sequential_paths = sequential
+            .files()
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(parallel_paths, sequential_paths);
     }
 
     fn write_file(path: impl AsRef<Path>, contents: &str) {

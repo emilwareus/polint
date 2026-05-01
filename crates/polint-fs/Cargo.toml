@@ -12,6 +12,7 @@ globset.workspace = true
 ignore.workspace = true
 polint-config = { path = "../polint-config" }
 polint-core = { path = "../polint-core" }
+rayon.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

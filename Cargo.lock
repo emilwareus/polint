@@ -1709,6 +1709,7 @@ dependencies = [
  "polint-config",
  "polint-core",
  "proptest",
+ "rayon",
  "tempfile",
  "thiserror 2.0.18",
 ]
