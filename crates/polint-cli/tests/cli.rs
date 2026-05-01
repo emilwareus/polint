@@ -1472,13 +1472,7 @@ fn profile_rules_reports_per_rule_timings() {
         Command::cargo_bin("polint")
             .unwrap()
             .current_dir(temp.path())
-            .args([
-                "profile-rules",
-                "--profile",
-                "phase7",
-                "--fail-on",
-                "none",
-            ])
+            .args(["profile-rules", "--profile", "phase7", "--fail-on", "none"])
             .assert()
             .success(),
     );
@@ -1508,13 +1502,7 @@ fn profile_rules_honors_fail_on_threshold() {
     Command::cargo_bin("polint")
         .unwrap()
         .current_dir(temp.path())
-        .args([
-            "profile-rules",
-            "--profile",
-            "phase7",
-            "--fail-on",
-            "warn",
-        ])
+        .args(["profile-rules", "--profile", "phase7", "--fail-on", "warn"])
         .assert()
         .failure()
         .code(1);
