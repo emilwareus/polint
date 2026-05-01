@@ -1393,6 +1393,38 @@ fn check_cached_output_is_deterministic_across_repeated_runs() {
 }
 
 #[test]
+fn check_parallel_cached_output_is_deterministic_across_repeated_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+    let run = || {
+        stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args([
+                    "check",
+                    "--profile",
+                    "phase7",
+                    "--format",
+                    "json",
+                    "--fail-on",
+                    "none",
+                ])
+                .assert()
+                .success(),
+        )
+    };
+
+    let first = run();
+    let second = run();
+    let third = run();
+
+    assert_eq!(second, first);
+    assert_eq!(third, first);
+    assert!(cache_json_count(temp.path()) >= 2);
+}
+
+#[test]
 fn discovery_detects_all_supported_extensions() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
