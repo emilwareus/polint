@@ -148,6 +148,14 @@ Plans:
 
 **Requirements:** PERF-01, PERF-02, PERF-03, TEST-01, TEST-04
 
+**Plans:** 4/4 plans complete
+
+Plans:
+- [x] 07-01-PLAN.md - Build the cache foundation and invalidation contract.
+- [x] 07-02-PLAN.md - Cache parser/fact extraction outputs without storing source text.
+- [x] 07-03-PLAN.md - Add deterministic Rayon-backed file loading, adapter analysis, and rule execution proof.
+- [x] 07-04-PLAN.md - Close profiling, no-cache, and repeated-run verification.
+
 **Success criteria:**
 1. Cache keys include file hash, config hash, rule hash, and cache/schema version.
 2. `--no-cache` fully bypasses cache reads/writes.
