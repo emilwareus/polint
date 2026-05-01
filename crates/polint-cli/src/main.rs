@@ -153,7 +153,8 @@ fn init_project(root: PathBuf) -> Result<()> {
 }
 
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
-    let rule_dir = root.join(".polint/rules").join(&args.rule_name);
+    let rule_name = validate_rule_name(&args.rule_name)?;
+    let rule_dir = root.join(".polint/rules").join(&rule_name);
     let src_dir = rule_dir.join("src");
     fs::create_dir_all(&src_dir)?;
     fs::write(
@@ -170,15 +171,31 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 polint-sdk = {{ path = "../../../crates/polint-sdk" }}
 "#,
-            sanitize_name(&args.rule_name)
+            rule_name
         ),
     )?;
     fs::write(
         src_dir.join("lib.rs"),
-        rule_template(&args.language, &args.rule_name),
+        rule_template(&args.language, &rule_name),
     )?;
     println!("Created rule skeleton at {}", rule_dir.display());
     Ok(())
+}
+
+fn validate_rule_name(name: &str) -> Result<String> {
+    let sanitized = sanitize_name(name);
+    let path = Path::new(name);
+    if name.is_empty()
+        || sanitized != name
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        anyhow::bail!(
+            "rule name must be a non-empty safe path component using only ASCII letters, digits, and '-'"
+        );
+    }
+    Ok(sanitized)
 }
 
 fn rule_template(language: &str, rule_name: &str) -> String {

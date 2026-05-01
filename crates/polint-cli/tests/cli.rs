@@ -459,6 +459,45 @@ fn new_rule_creates_skeleton() {
 }
 
 #[test]
+fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
+    for rule_name in ["../..", "nested/rule", "", "branch_error_paths"] {
+        let temp = tempfile::tempdir().unwrap();
+
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["new-rule", "go", rule_name])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("rule name must be"));
+
+        assert!(
+            !temp.path().join("Cargo.toml").exists(),
+            "{rule_name:?} must not write Cargo.toml outside .polint/rules"
+        );
+        assert!(
+            !temp.path().join("src/lib.rs").exists(),
+            "{rule_name:?} must not write src/lib.rs outside .polint/rules"
+        );
+        assert!(
+            !temp.path().join(".polint/rules/Cargo.toml").exists(),
+            "{rule_name:?} must not write into .polint/rules directly"
+        );
+        assert!(
+            !temp.path().join(".polint/rules/nested/rule").exists(),
+            "{rule_name:?} must not create nested rule directories"
+        );
+        assert!(
+            !temp
+                .path()
+                .join(".polint/rules/branch_error_paths")
+                .exists(),
+            "{rule_name:?} must not create unsanitized rule directories"
+        );
+    }
+}
+
+#[test]
 fn new_rule_go_creates_sdk_oriented_skeleton() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
