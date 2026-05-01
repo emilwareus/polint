@@ -1340,9 +1340,12 @@ fn check_cache_writes_fact_metadata() {
             .success(),
     );
 
-    assert!(json.as_array().unwrap().iter().any(
-        |diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"
-    ));
+    assert!(
+        json.as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
+    );
     assert!(cache_json_count(temp.path()) >= 2);
     let cache_entry = fs::read_to_string(
         fs::read_dir(temp.path().join(".polint/cache"))

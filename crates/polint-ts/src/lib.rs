@@ -11,9 +11,8 @@ use oxc_ast::ast::{
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use polint_core::{
-    AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact,
-    JsxAttributeFact, Language, Span, StringLiteralFact, TsClassFact, TsComponentFact,
-    span_from_byte_range,
+    AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
+    Language, Span, StringLiteralFact, TsClassFact, TsComponentFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange};
 use std::collections::BTreeSet;

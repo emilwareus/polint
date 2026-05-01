@@ -1297,7 +1297,10 @@ mod tests {
             .unwrap();
         assert_ne!(restored_function.id, function);
         assert_eq!(restored_branch.function, Some(restored_function.id));
-        assert_eq!(restored_db.coverage().last().unwrap().branch, restored_branch.id);
+        assert_eq!(
+            restored_db.coverage().last().unwrap().branch,
+            restored_branch.id
+        );
         assert_eq!(
             restored_db.tests().last().unwrap().function,
             Some(restored_function.id)
