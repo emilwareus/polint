@@ -11,6 +11,7 @@ pub struct CacheKey {
     pub config_hash: String,
     pub rule_hash: String,
     pub version: String,
+    pub schema: String,
 }
 
 impl CacheKey {
@@ -24,6 +25,23 @@ impl CacheKey {
             config_hash: config_hash.into(),
             rule_hash: rule_hash.into(),
             version: CACHE_VERSION.to_string(),
+            schema: "analysis-facts-v1".to_string(),
+        }
+    }
+
+    pub fn for_file(
+        relative_path: &str,
+        content_hash: &str,
+        config_hash: &str,
+        rule_hash: &str,
+        schema: &str,
+    ) -> Self {
+        Self {
+            file_hash: stable_hash(&[relative_path, content_hash]),
+            config_hash: config_hash.to_string(),
+            rule_hash: rule_hash.to_string(),
+            version: CACHE_VERSION.to_string(),
+            schema: schema.to_string(),
         }
     }
 
@@ -33,6 +51,7 @@ impl CacheKey {
             &self.config_hash,
             &self.rule_hash,
             &self.version,
+            &self.schema,
         ])
     }
 }
@@ -111,6 +130,30 @@ mod tests {
     fn cache_key_changes_with_config() {
         let a = CacheKey::new("file", "config-a", "rule");
         let b = CacheKey::new("file", "config-b", "rule");
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
+    fn cache_key_changes_with_rule_hash() {
+        let a = CacheKey::for_file("src/main.go", "content", "config", "rule-a", "go-facts-v1");
+        let b = CacheKey::for_file("src/main.go", "content", "config", "rule-b", "go-facts-v1");
+
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
+    fn cache_key_changes_with_schema() {
+        let a = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let b = CacheKey::for_file("src/main.go", "content", "config", "rule", "ts-facts-v1");
+
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
+    fn cache_key_changes_with_relative_path() {
+        let a = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let b = CacheKey::for_file("src/other.go", "content", "config", "rule", "go-facts-v1");
+
         assert_ne!(a.stable_id(), b.stable_id());
     }
 }
