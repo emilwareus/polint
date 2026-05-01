@@ -4,17 +4,31 @@ polint is a Rust framework for repo-local static-analysis rules. It is built for
 
 It is not a replacement for ESLint, Biome, Ruff, golangci-lint, rustfmt, gofmt, or formatters. Keep using those tools. Use polint when the policy is local to your repository and should be executable instead of repeated in prompts.
 
+This repository is named `exlint`; the CLI binary and Rust crates use the `polint` name.
+
 ## Why This Exists
 
 AI-assisted coding often violates subtle local conventions. Prompting the agent again and again is unreliable. Encoding those expectations as repo-local rules gives the team a repeatable check that works locally, in CI, and in agent workflows.
 
-Rules are code. The framework provides file discovery, parsing, facts, diagnostics, rule testing, profiling, caching, and CI output.
+Rules are code. The framework provides file discovery, Go and TypeScript/JavaScript parsing, reusable facts, diagnostics, rule testing, profiling, caching, graph output, CI output, and an experimental Wasm plugin boundary.
+
+## Installation
+
+From this repository:
+
+```bash
+cargo install --path crates/polint-cli
+```
+
+During development, run the CLI without installing it:
+
+```bash
+cargo run -p polint-cli -- check
+```
 
 ## Quickstart
 
 ```bash
-cargo install --path crates/polint-cli
-
 polint init
 polint new-rule go require-payment-error-tests
 polint check
@@ -30,6 +44,8 @@ polint check --profile full --format json
 ```
 
 `polint new-rule go my-policy` creates a repo-local Rust rule skeleton under `.polint/rules/my-policy`.
+
+If config is missing, `polint check` still runs a minimal default and suggests `polint init`.
 
 ## Example Config
 
@@ -56,7 +72,7 @@ allow_files = ["apps/web/src/theme/**", "apps/web/src/design-tokens/**"]
 
 ## Built-In Example Rules
 
-The built-ins are SDK examples, not a comprehensive ruleset:
+The built-ins are SDK dogfood examples, not a comprehensive lint pack:
 
 - `examples/go-cyclomatic-complexity`
 - `examples/ts-cyclomatic-complexity`
@@ -67,7 +83,7 @@ The built-ins are SDK examples, not a comprehensive ruleset:
 - `examples/go-assertion-after-action`
 - `examples/config-query-no-literal`
 
-Heuristic rules say so in diagnostics. For example, Go branch obligation diagnostics report "No nearby test evidence found"; they do not claim exact coverage.
+Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnostics report "No nearby test evidence found"; they do not claim exact coverage.
 
 ## Rule Authoring
 
@@ -104,9 +120,57 @@ impl Rule for RequirePaymentErrorTests {
 }
 ```
 
-Capabilities let the engine compute only the facts a rule asks for.
+Generated repo-local Rust rules are scaffolded for authoring and testing, but they are not automatically compiled or dynamically loaded by `polint check` in v1. Native registration and the built-in example rules are the current executable path.
 
-## Experimental Wasm plugins
+## Capabilities
+
+Rules declare the facts they need so the engine computes only relevant analysis:
+
+```rust
+fn capabilities(&self) -> Capabilities {
+    Capabilities::new()
+        .imports()
+        .functions()
+        .go_tests()
+        .branch_obligations()
+}
+```
+
+Capabilities cover facts such as files, functions, imports, Go tests, branch obligations, TypeScript components/classes, string literals, JSX attributes, and graph-oriented import/call facts where available.
+
+## Testing Rules
+
+Use `polint test-rules` to run the same analysis path against fixtures:
+
+```bash
+polint test-rules --format json
+polint test-rules --profile full --format json --fail-on none
+```
+
+Use `--fail-on warn|error|none` to control CI status. Exit codes are:
+
+- `0`: no diagnostics at or above the fail threshold
+- `1`: diagnostics at or above the fail threshold
+- `2`: fatal tool/config/internal error
+
+## Examples
+
+The top-level `examples/` directory contains copyable examples:
+
+- `examples/basic` - minimal init/check flow.
+- `examples/custom-rule-go` - Go repo-local rule skeleton and SDK helper notes.
+- `examples/custom-rule-ts` - TypeScript/JS rule skeleton and literal/JSX helper notes.
+- `examples/go-branch-obligations` - heuristic branch-test evidence example.
+- `examples/ts-design-tokens` - syntax-level raw color detection example.
+
+Run examples with an installed binary or through Cargo:
+
+```bash
+polint check --profile fast --format json
+cargo run -p polint-cli -- check --profile fast --format json
+```
+
+## Experimental Wasm Plugins
 
 Repo-local Wasm rules are experimental. The `polint-plugin` crate currently provides the WIT rule interface, manifest validation, and optional Wasmtime component-byte validation behind the `wasmtime-host` feature.
 
@@ -130,23 +194,34 @@ jobs:
       - run: cargo run -p polint-cli -- check --profile full --format sarif > polint.sarif
 ```
 
-Exit codes:
-
-- `0`: no diagnostics at or above the fail threshold
-- `1`: diagnostics at or above the fail threshold
-- `2`: fatal tool/config/internal error
+CI should prefer `polint check --profile full --format sarif` so the full rule profile runs and output can be uploaded or archived by the CI system. The output is SARIF-like for v1 and intentionally does not claim full SARIF certification.
 
 ## Development
 
 ```bash
 cargo fmt
+cargo fmt -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+## Release Readiness
+
+Before treating the workspace as release-ready, run:
+
+```bash
+cargo fmt -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Release readiness means the documented v1 behavior is implemented and verified. It does not mean crates.io publication, release tags, exact Go semantics, dynamic branch coverage, or automatic repo-local Wasm rule compilation are complete.
+
 ## Roadmap
 
-- Exact Go semantic sidecar through `go/packages` or `go/analysis`
-- Dynamic branch coverage instrumentation
-- Repo-local Wasm rule compilation and caching
-- Additional language adapters
+Future work:
+
+- Exact Go semantic sidecar through `go/packages` or `go/analysis`.
+- Dynamic branch coverage instrumentation.
+- Repo-local Wasm rule compilation and caching by source hash, SDK version, and target triple.
+- More language adapters after Go and TypeScript/JavaScript stabilize.
