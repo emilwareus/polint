@@ -186,7 +186,7 @@ impl Rule for TsNoRawColors {
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
         let rule_id = self.meta().id;
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = Vec::new();
         let mut diagnostics = Vec::new();
         for literal in ctx
             .string_literals()
@@ -443,10 +443,17 @@ struct RawColorFinding<'a> {
     source: &'static str,
 }
 
+struct SeenRawColorFinding {
+    file: FileId,
+    start_byte: u32,
+    end_byte: u32,
+    value: String,
+}
+
 fn push_raw_color_diagnostic(
     ctx: &RuleCtx<'_>,
     rule_id: &str,
-    seen: &mut std::collections::BTreeSet<(FileId, u32, u32, String)>,
+    seen: &mut Vec<SeenRawColorFinding>,
     diagnostics: &mut Vec<Diagnostic>,
     finding: RawColorFinding<'_>,
 ) {
@@ -459,15 +466,24 @@ fn push_raw_color_diagnostic(
         return;
     }
 
-    let key = (
-        finding.file,
-        finding.span.start_byte,
-        finding.span.end_byte,
-        finding.value.to_string(),
-    );
-    if !seen.insert(key) {
+    if seen.iter().any(|seen| {
+        seen.file == finding.file
+            && seen.value == finding.value
+            && spans_overlap(
+                seen.start_byte,
+                seen.end_byte,
+                finding.span.start_byte,
+                finding.span.end_byte,
+            )
+    }) {
         return;
     }
+    seen.push(SeenRawColorFinding {
+        file: finding.file,
+        start_byte: finding.span.start_byte,
+        end_byte: finding.span.end_byte,
+        value: finding.value.to_string(),
+    });
 
     diagnostics.push(
         Diagnostic::error(
@@ -485,6 +501,10 @@ fn push_raw_color_diagnostic(
             "This rule reports syntax-level literal findings; move this value to a theme/design-token file or use an existing token/CSS variable.",
         ),
     );
+}
+
+fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
+    a_start < b_end && b_start < a_end
 }
 
 fn literal_allowed(options: &RuleOptions, value: &str) -> bool {
@@ -1204,18 +1224,18 @@ mod tests {
     fn ts_raw_colors_dedupes_string_and_jsx_attribute_facts() {
         let mut db = AnalysisDb::new();
         let file = add_file(&mut db, "src/button.tsx");
-        let duplicate_span = span(file, 8, 23, 32);
+        let attribute_span = span(file, 8, 13, 44);
         db.push_string_literal(StringLiteralFact {
             file,
             value: "#00ff00".to_string(),
-            span: duplicate_span.clone(),
+            span: span(file, 8, 35, 44),
             language: Language::Tsx,
         });
         db.push_jsx_attribute(JsxAttributeFact {
             file,
             name: "data-color".to_string(),
             value: Some("#00ff00".to_string()),
-            span: duplicate_span,
+            span: attribute_span,
         });
         db.push_jsx_attribute(JsxAttributeFact {
             file,

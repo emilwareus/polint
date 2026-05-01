@@ -931,6 +931,59 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 }
 
 #[test]
+fn check_ts_no_raw_colors_dedupes_real_jsx_attribute_literal() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase6]
+rules = ["examples/ts-no-raw-colors"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+files = ["**/*.tsx"]
+"##,
+    );
+    write_file(
+        &temp.path().join("Button.tsx"),
+        r##"
+export function Button() {
+  return <button data-color="#00ff00">Pay</button>;
+}
+"##,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase6",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let raw_color_diagnostics = diagnostics_for_rule(&json, "examples/ts-no-raw-colors");
+    assert_eq!(
+        raw_color_diagnostics.len(),
+        1,
+        "JSX attribute literal should be reported once: {raw_color_diagnostics:#?}"
+    );
+    assert!(diagnostic_has_evidence(
+        raw_color_diagnostics[0],
+        "literal",
+        "#00ff00"
+    ));
+}
+
+#[test]
 fn check_json_without_config_is_parseable() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
