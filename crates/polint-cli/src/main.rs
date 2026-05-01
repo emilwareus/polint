@@ -308,17 +308,19 @@ fn analyze_and_run(
 
     let mut db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
-    diagnostics.extend(polint_go::analyze_with_cache(
+    diagnostics.extend(polint_go::analyze_with_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        parallel,
     ));
-    diagnostics.extend(polint_ts::analyze_with_cache(
+    diagnostics.extend(polint_ts::analyze_with_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        parallel,
     ));
 
     diagnostics.extend(run_rules(&db, &rules, &options, &enabled, parallel));

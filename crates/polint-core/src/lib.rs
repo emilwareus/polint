@@ -253,15 +253,37 @@ impl AnalysisDb {
     }
 
     pub fn add_file(&mut self, path: PathBuf, relative_path: String, source: String) -> FileId {
-        let id = FileId(self.files.len() as u32);
         let language = Language::from_path(&path);
         let content_hash = fingerprint(&[&source]);
+        self.push_source_file(path, relative_path, language, Arc::from(source), content_hash)
+    }
+
+    pub fn add_source_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        language: Language,
+        source: Arc<str>,
+        content_hash: String,
+    ) -> FileId {
+        self.push_source_file(path, relative_path, language, source, content_hash)
+    }
+
+    fn push_source_file(
+        &mut self,
+        path: PathBuf,
+        relative_path: String,
+        language: Language,
+        source: Arc<str>,
+        content_hash: String,
+    ) -> FileId {
+        let id = FileId(self.files.len() as u32);
         self.files.push(SourceFile {
             id,
             path,
             relative_path,
             language,
-            source: Arc::from(source),
+            source,
             content_hash,
         });
         id

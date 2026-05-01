@@ -17,6 +17,7 @@ oxc_span.workspace = true
 polint-cache = { path = "../polint-cache" }
 polint-core = { path = "../polint-core" }
 polint-diagnostics = { path = "../polint-diagnostics" }
+rayon.workspace = true
 
 [dev-dependencies]
 polint-graph = { path = "../polint-graph" }

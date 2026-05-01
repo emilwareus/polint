@@ -11,6 +11,7 @@ anyhow.workspace = true
 polint-cache = { path = "../polint-cache" }
 polint-core = { path = "../polint-core" }
 polint-diagnostics = { path = "../polint-diagnostics" }
+rayon.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
 

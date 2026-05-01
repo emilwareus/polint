@@ -15,14 +15,16 @@ use polint_core::{
     Language, Span, StringLiteralFact, TsClassFact, TsComponentFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange};
+use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 
 const TS_CACHE_SCHEMA: &str = "ts-facts-v1";
 
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     let cache = polint_cache::Cache::new("", false);
-    analyze_with_cache(db, &cache, "", "")
+    analyze_with_options(db, &cache, "", "", false)
 }
 
 pub fn analyze_with_cache(
@@ -31,62 +33,118 @@ pub fn analyze_with_cache(
     config_hash: &str,
     rule_hash: &str,
 ) -> Vec<Diagnostic> {
+    analyze_with_options(db, cache, config_hash, rule_hash, false)
+}
+
+pub fn analyze_with_options(
+    db: &mut AnalysisDb,
+    cache: &polint_cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+    parallel: bool,
+) -> Vec<Diagnostic> {
     let files: Vec<_> = db
         .files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .map(|file| file.id)
+        .cloned()
         .collect();
 
-    let mut diagnostics = Vec::new();
-    for file_id in files {
-        let Some(file) = db.file(file_id).cloned() else {
-            continue;
-        };
-        let key = polint_cache::CacheKey::for_file(
-            file.relative_path.as_str(),
-            file.content_hash.as_str(),
-            config_hash,
-            rule_hash,
-            TS_CACHE_SCHEMA,
-        );
-        if let Some(cached) = cache.read_json_or_miss::<CachedFileAnalysis>(&key)
-            && cached.schema == TS_CACHE_SCHEMA
-        {
-            db.restore_file_facts(file_id, cached.facts);
-            diagnostics.extend(cached.diagnostics);
-            continue;
-        }
+    let mut results = if parallel {
+        files
+            .par_iter()
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash))
+            .collect::<Vec<_>>()
+    } else {
+        files
+            .iter()
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash))
+            .collect::<Vec<_>>()
+    };
+    results.sort_by_key(|result| result.file_id);
 
-        match parse_ts_file(db, file_id) {
-            Ok(mut file_diagnostics) => {
-                let cached = CachedFileAnalysis {
-                    schema: TS_CACHE_SCHEMA.to_string(),
-                    diagnostics: file_diagnostics.clone(),
-                    facts: db.facts_for_file(file_id),
-                };
-                if let Err(error) = cache.write_json(&key, &cached) {
-                    file_diagnostics.push(cache_write_diagnostic(db, file_id, error));
-                }
-                diagnostics.append(&mut file_diagnostics);
-            }
-            Err(error) => {
-                diagnostics.push(Diagnostic::error(
-                    "parser/ts",
-                    db.path_for(file_id),
-                    TextRange::point(1, 1),
-                    format!("Failed to parse TS/JS file: {error}"),
-                ));
-            }
+    let mut diagnostics = Vec::new();
+    for result in results {
+        if let Some(facts) = result.facts {
+            db.restore_file_facts(result.file_id, facts);
         }
+        diagnostics.extend(result.diagnostics);
     }
     diagnostics
 }
 
-fn cache_write_diagnostic(db: &AnalysisDb, file_id: FileId, error: anyhow::Error) -> Diagnostic {
+struct TsFileAnalysis {
+    file_id: FileId,
+    diagnostics: Vec<Diagnostic>,
+    facts: Option<polint_core::CachedFileFacts>,
+}
+
+fn analyze_ts_source_file(
+    file: &polint_core::SourceFile,
+    cache: &polint_cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+) -> TsFileAnalysis {
+    let key = polint_cache::CacheKey::for_file(
+        file.relative_path.as_str(),
+        file.content_hash.as_str(),
+        config_hash,
+        rule_hash,
+        TS_CACHE_SCHEMA,
+    );
+    if let Some(cached) = cache.read_json_or_miss::<CachedFileAnalysis>(&key)
+        && cached.schema == TS_CACHE_SCHEMA
+    {
+        return TsFileAnalysis {
+            file_id: file.id,
+            diagnostics: cached.diagnostics,
+            facts: Some(cached.facts),
+        };
+    }
+
+    let mut local_db = AnalysisDb::new();
+    let local_file = local_db.add_source_file(
+        file.path.clone(),
+        file.relative_path.clone(),
+        file.language,
+        Arc::clone(&file.source),
+        file.content_hash.clone(),
+    );
+    let mut diagnostics = match parse_ts_file(&mut local_db, local_file) {
+        Ok(file_diagnostics) => file_diagnostics,
+        Err(error) => {
+            return TsFileAnalysis {
+                file_id: file.id,
+                diagnostics: vec![Diagnostic::error(
+                    "parser/ts",
+                    file.relative_path.clone(),
+                    TextRange::point(1, 1),
+                    format!("Failed to parse TS/JS file: {error}"),
+                )],
+                facts: None,
+            };
+        }
+    };
+    let facts = local_db.facts_for_file(local_file);
+    let cached = CachedFileAnalysis {
+        schema: TS_CACHE_SCHEMA.to_string(),
+        diagnostics: diagnostics.clone(),
+        facts: facts.clone(),
+    };
+    if let Err(error) = cache.write_json(&key, &cached) {
+        diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
+    }
+    TsFileAnalysis {
+        file_id: file.id,
+        diagnostics,
+        facts: Some(facts),
+    }
+}
+
+fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
     Diagnostic::warning(
         "internal/cache",
-        db.path_for(file_id),
+        path,
         TextRange::point(1, 1),
         format!("cache write failed: {error}"),
     )
@@ -3239,6 +3297,63 @@ export function Button() {
         );
 
         fs::remove_dir_all(cache_root).ok();
+    }
+
+    #[test]
+    fn ts_parallel_analysis_matches_sequential() {
+        let source = r##"
+import { token } from "./tokens";
+
+export function Button() {
+  return <div data-color="#ff00aa">{token}</div>;
+}
+"##;
+        let cache = polint_cache::Cache::new("", false);
+        let mut sequential = db_with_ts_file("component.tsx", source);
+        let mut parallel = db_with_ts_file("component.tsx", source);
+
+        let sequential_diagnostics =
+            analyze_with_options(&mut sequential, &cache, "config", "rule", false);
+        let parallel_diagnostics =
+            analyze_with_options(&mut parallel, &cache, "config", "rule", true);
+
+        assert_eq!(parallel_diagnostics, sequential_diagnostics);
+        assert_eq!(
+            parallel
+                .functions()
+                .iter()
+                .map(|fact| (&fact.name, fact.cyclomatic_complexity))
+                .collect::<Vec<_>>(),
+            sequential
+                .functions()
+                .iter()
+                .map(|fact| (&fact.name, fact.cyclomatic_complexity))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            parallel
+                .imports()
+                .iter()
+                .map(|fact| fact.path.as_str())
+                .collect::<Vec<_>>(),
+            sequential
+                .imports()
+                .iter()
+                .map(|fact| fact.path.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            parallel
+                .jsx_attributes()
+                .iter()
+                .map(|fact| (&fact.name, fact.value.as_deref()))
+                .collect::<Vec<_>>(),
+            sequential
+                .jsx_attributes()
+                .iter()
+                .map(|fact| (&fact.name, fact.value.as_deref()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
