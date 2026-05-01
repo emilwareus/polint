@@ -1067,6 +1067,142 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 }
 
 #[test]
+fn check_mixed_fixture_handles_go_and_ts_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join("mixed/main.go"),
+        include_str!("../../../tests/fixtures/mixed/main.go"),
+    );
+    write_file(
+        &temp.path().join("mixed/view.ts"),
+        include_str!("../../../tests/fixtures/mixed/view.ts"),
+    );
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["mixed/**"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/go-cyclomatic-complexity", "examples/ts-cyclomatic-complexity"]
+"#,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "fast",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(
+        json.as_array().is_some(),
+        "check output should be JSON array: {json:#?}"
+    );
+
+    let dot = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "imports", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        dot.contains("digraph"),
+        "graph imports DOT output should be a graph: {dot}"
+    );
+    assert!(
+        dot.contains("mixed/view.ts"),
+        "DOT output should include mixed TS source: {dot}"
+    );
+}
+
+#[test]
+fn example_go_branch_obligations_reports_expected_diagnostic() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join("authorize.go"),
+        include_str!("../../../examples/go-branch-obligations/authorize.go"),
+    );
+    write_file(
+        &temp.path().join(".polint.toml"),
+        include_str!("../../../examples/go-branch-obligations/.polint.toml"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "fast",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "examples/go-branch-obligations"),
+        "Go branch-obligations example should emit its configured diagnostic: {json:#?}"
+    );
+}
+
+#[test]
+fn example_ts_design_tokens_reports_raw_colors() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join("Button.tsx"),
+        include_str!("../../../examples/ts-design-tokens/Button.tsx"),
+    );
+    write_file(
+        &temp.path().join(".polint.toml"),
+        include_str!("../../../examples/ts-design-tokens/.polint.toml"),
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "fast",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"),
+        "TS design-token example should emit its configured raw-color diagnostic: {json:#?}"
+    );
+}
+
+#[test]
 fn check_ts_no_raw_colors_dedupes_real_jsx_attribute_literal() {
     let temp = tempfile::tempdir().unwrap();
     write_file(
