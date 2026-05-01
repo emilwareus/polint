@@ -9,7 +9,7 @@
 
 - [x] **FND-01**: The repository contains a Rust 2024 workspace with crates for CLI, config, diagnostics, filesystem, cache, core, SDK, Go adapter, TS adapter, graph helpers, rules, and plugin skeleton.
 - [x] **FND-02**: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` are available as CI-friendly commands.
-- [ ] **FND-03**: The README explains the goal, non-goals, quickstart, custom rule authoring, CI usage, and roadmap.
+- [x] **FND-03**: The README explains the goal, non-goals, quickstart, custom rule authoring, CI usage, and roadmap.
 
 ### CLI
 
@@ -103,7 +103,7 @@
 |-------------|-------|--------|
 | FND-01 | Phase 1 | Complete |
 | FND-02 | Phase 1 | Complete |
-| FND-03 | Phase 10 | Pending |
+| FND-03 | Phase 10 | Complete |
 | CLI-01 | Phase 2 | Complete |
 | CLI-02 | Phase 2 | Complete |
 | CLI-03 | Phase 2 | Complete |

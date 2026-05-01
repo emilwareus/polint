@@ -17,7 +17,7 @@
 | 7 | Cache and Performance | Add safe caching, deterministic parallelism, and profiling. | PERF-01, PERF-02, PERF-03, TEST-01, TEST-04 | 4 |
 | 8 | CI Output and Graph Commands | Add SARIF-like output, exit semantics, explain/test/profile/graph commands, and CI fixtures. | CLI-04, CLI-05, DIAG-03, TEST-02, TEST-03 | 5 |
 | 9 | Plugin Skeleton | Add WIT files, Wasmtime host skeleton, and experimental plugin docs. | PLUG-01, PLUG-02 | 3 |
-| 10 | Docs, Examples, and Release Hardening | Finish README, examples, fixtures, snapshots, and final verification. | FND-03, TEST-01, TEST-02, TEST-03, TEST-04 | 5 |
+| 10 | Docs, Examples, and Release Hardening | 1/4 | In Progress|  |
 
 ## Phase Details
 

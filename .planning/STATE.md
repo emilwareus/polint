@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 10 context gathered
-last_updated: "2026-05-01T16:07:28.384Z"
-last_activity: 2026-05-01 -- Phase 10 planning complete
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-05-01T16:09:06.852Z"
+last_activity: 2026-05-01
 progress:
   total_phases: 10
   completed_phases: 9
   total_plans: 35
-  completed_plans: 31
-  percent: 89
+  completed_plans: 32
+  percent: 91
 ---
 
 # State: exlint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 10 — docs, examples, and release hardening
+**Current focus:** Phase 10 — docs-examples-and-release-hardening
 
 ## Current Status
 
@@ -55,10 +55,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 10 (docs, examples, and release hardening) — READY TO DISCUSS
+Phase: 10 (docs-examples-and-release-hardening) — EXECUTING
 Status: Ready to execute
-Plan: Not started
-Last activity: 2026-05-01 -- Phase 10 planning complete
+Plan: 2 of 4
+Last activity: 2026-05-01
 
 ## Phase Progress
 
@@ -124,6 +124,7 @@ Last activity: 2026-05-01 -- Phase 10 planning complete
 - [Phase 09]: Plugin WIT boundary exposes typed metadata, capabilities, run, typed diagnostics, and narrow host fact queries. — Matches phase context and avoids full AST/source transfer across the sandbox boundary.
 - [Phase 09]: Plugin manifest loading uses typed PluginError variants and manifest-relative component path resolution. — Future plugin CLI surfaces can classify setup failures without parsing free-form error strings.
 - [Phase 09]: Plugin docs are explicit that repo-local Wasm rules are experimental and not executed by polint check in v1. — Prevents overclaiming runtime support while preserving the future sandboxed plugin direction.
+- [Phase 10]: README is the canonical v1 user guide and documents current behavior without unsupported dynamic loading claims. — Closes FND-03 while preserving project truthfulness constraints.
 
 ## Performance Metrics
 
@@ -154,12 +155,13 @@ Last activity: 2026-05-01 -- Phase 10 planning complete
 | Phase 09 P01 | 5 min | 3 tasks | 2 files |
 | Phase 09 P02 | 4 min | 3 tasks | 3 files |
 | Phase 09 P03 | 2 min | 3 tasks | 3 files |
+| Phase 10 P01 | 4 min | 3 tasks | 1 files |
 
 ## Session
 
-**Last Date:** 2026-05-01T16:04:19.855Z
-**Stopped At:** Phase 10 context gathered
-**Resume File:** .planning/phases/10-docs-examples-and-release-hardening/10-CONTEXT.md
+**Last Date:** 2026-05-01T16:09:06.849Z
+**Stopped At:** Completed 10-01-PLAN.md
+**Resume File:** None
 
 ## Important Context For Execution
 
