@@ -122,6 +122,27 @@ fn write_phase6_clean_fixtures(root: &Path) {
     );
 }
 
+fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
+    write_file(
+        &root.join(".polint.toml"),
+        &format!(
+            r##"
+[profiles.phase8]
+rules = ["examples/ts-no-raw-colors"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+severity = "{severity}"
+files = ["**/*.tsx"]
+"##
+        ),
+    );
+    write_file(
+        &root.join("component.tsx"),
+        "export function Button() { return <button style={{ color: \"#ff00aa\" }}>Pay</button>; }\n",
+    );
+}
+
 #[test]
 fn fixture_inputs_cover_requested_rule_triggers() {
     let go_failing = include_str!("../../../tests/fixtures/go/failing/payment.go");
@@ -1162,6 +1183,123 @@ files = ["**/*.tsx"]
         .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
         .unwrap();
     assert_eq!(diagnostic["severity"], "info");
+}
+
+#[test]
+fn explain_known_rule_prints_metadata() {
+    Command::cargo_bin("polint")
+        .unwrap()
+        .args(["explain", "examples/ts-no-raw-colors"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("examples/ts-no-raw-colors"))
+        .stdout(predicate::str::contains("Severity:"));
+}
+
+#[test]
+fn explain_unknown_rule_is_nonfatal_and_clear() {
+    Command::cargo_bin("polint")
+        .unwrap()
+        .args(["explain", "custom/missing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No built-in rule found"));
+}
+
+#[test]
+fn test_rules_json_output_is_parseable() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_raw_color_fixture(temp.path(), "error");
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "test-rules",
+                "--profile",
+                "phase8",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        diagnostics(&json)
+            .iter()
+            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"),
+        "test-rules JSON should contain the raw-color diagnostic: {json:#?}"
+    );
+}
+
+#[test]
+fn check_fail_on_warn_error_none_exit_codes_are_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_raw_color_fixture(temp.path(), "warn");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase8",
+            "--format",
+            "json",
+            "--fail-on",
+            "warn",
+        ])
+        .assert()
+        .failure()
+        .code(1);
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase8",
+            "--format",
+            "json",
+            "--fail-on",
+            "error",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase8",
+            "--format",
+            "json",
+            "--fail-on",
+            "none",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn fatal_config_parse_error_exits_two() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(&temp.path().join(".polint.toml"), "[profiles.phase8\n");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("check")
+        .assert()
+        .failure()
+        .code(2);
 }
 
 #[test]

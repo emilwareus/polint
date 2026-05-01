@@ -134,7 +134,9 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::TestRules(args) => {
-            println!("Running rule tests against the current repository fixtures.");
+            if matches!(args.format, FormatArg::Human) {
+                println!("Running rule tests against the current repository fixtures.");
+            }
             check(std::env::current_dir()?, &args)
         }
         Command::ProfileRules(args) => profile_rules(std::env::current_dir()?, &args),
