@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 10-03-PLAN.md
-last_updated: "2026-05-01T16:14:59.999Z"
+status: verifying
+stopped_at: Completed 10-04-PLAN.md
+last_updated: "2026-05-01T16:17:24.938Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 35
-  completed_plans: 34
-  percent: 97
+  completed_plans: 35
+  percent: 100
 ---
 
 # State: exlint
@@ -56,7 +56,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 ## Current Position
 
 Phase: 10 (docs-examples-and-release-hardening) — EXECUTING
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Plan: 4 of 4
 Last activity: 2026-05-01
 
@@ -129,6 +129,8 @@ Last activity: 2026-05-01
 - [Phase 10]: Runnable examples own minimal local configs. — Each example can be checked in isolation with explicit include globs and profile rule IDs.
 - [Phase 10]: Phase 10 smoke tests use checked-in example configs. — This keeps release proof tied to the same examples users copy.
 - [Phase 10]: Existing property tests remain the TEST-04 traceability source. — Span, diagnostic sorting, discovery, and cache-key invariants are already covered in the owning crates.
+- [Phase 10]: Phase 10 release readiness is command-verified v1 behavior. — The release matrix covers docs inventory, targeted CLI smoke tests, fmt, clippy, and workspace tests without implying publication or future runtime features.
+- [Phase 10]: Post-v1 release and runtime capabilities remain future work. — crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, and automatic repo-local Wasm compilation were intentionally not claimed as implemented.
 
 ## Performance Metrics
 
@@ -162,11 +164,12 @@ Last activity: 2026-05-01
 | Phase 10 P01 | 4 min | 3 tasks | 1 files |
 | Phase 10 P02 | 3 min | 3 tasks | 7 files |
 | Phase 10 P03 | 4 min | 3 tasks | 1 files |
+| Phase 10 P04 | 2 min | 3 tasks | 1 files |
 
 ## Session
 
-**Last Date:** 2026-05-01T16:14:59.996Z
-**Stopped At:** Completed 10-03-PLAN.md
+**Last Date:** 2026-05-01T16:17:24.935Z
+**Stopped At:** Completed 10-04-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
