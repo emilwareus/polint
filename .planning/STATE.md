@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 10-04-PLAN.md
-last_updated: "2026-05-01T16:17:24.938Z"
+status: complete
+stopped_at: Phase 10 complete
+last_updated: "2026-05-01T16:19:16.602Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 10 — docs-examples-and-release-hardening
+**Current focus:** v1.0 milestone complete — ready for milestone closeout
 
 ## Current Status
 
@@ -51,13 +51,14 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
 - Phase 9 completed the experimental WIT plugin boundary, structured manifest/Wasmtime validation skeleton, docs, code review, verification, and security with `threats_open: 0`; see `.planning/phases/09-plugin-skeleton/09-VERIFICATION.md` and `.planning/phases/09-plugin-skeleton/09-SECURITY.md`.
-- Next action: discuss Phase 10 on `main`.
+- Phase 10 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
+- Next action: complete the v1.0 milestone.
 
 ## Current Position
 
-Phase: 10 (docs-examples-and-release-hardening) — EXECUTING
-Status: Phase complete — ready for verification
-Plan: 4 of 4
+Phase: 10 (docs-examples-and-release-hardening) — COMPLETE
+Status: Milestone complete
+Plan: Complete
 Last activity: 2026-05-01
 
 ## Phase Progress
@@ -73,7 +74,7 @@ Last activity: 2026-05-01
 | 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
 | 8 | Complete | 4/4 plans complete; CI output, command contracts, DOT graph commands, verification, and security passed |
 | 9 | Complete | 3/3 plans complete; experimental WIT plugin boundary, manifest validation, docs, verification, and security passed |
-| 10 | Pending | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
+| 10 | Complete | 4/4 plans complete; README, examples, final CLI smoke tests, release verification, code review, and security passed |
 
 ## Decisions Made
 
