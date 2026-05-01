@@ -74,6 +74,14 @@ impl Cache {
         Self::new(repo.as_ref().join(".polint/cache"), enabled)
     }
 
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
     where
         T: for<'de> Deserialize<'de>,
@@ -88,6 +96,13 @@ impl Cache {
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("failed to read cache {}", path.display()))?;
         Ok(Some(serde_json::from_str(&raw)?))
+    }
+
+    pub fn read_json_or_miss<T>(&self, key: &CacheKey) -> Option<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.read_json(key).ok().flatten()
     }
 
     pub fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
@@ -125,6 +140,8 @@ pub fn stable_hash(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::fs;
 
     #[test]
     fn cache_key_changes_with_config() {
@@ -155,5 +172,45 @@ mod tests {
         let b = CacheKey::for_file("src/other.go", "content", "config", "rule", "go-facts-v1");
 
         assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
+    fn disabled_cache_does_not_create_cache_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Cache::default_for_repo(temp.path(), false);
+        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+
+        cache.write_json(&key, &json!({ "ok": true })).unwrap();
+
+        assert!(!cache.root().exists());
+        assert!(!temp.path().join(".polint/cache").exists());
+        assert!(!cache.is_enabled());
+    }
+
+    #[test]
+    fn cache_json_round_trip() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Cache::default_for_repo(temp.path(), true);
+        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let value = json!({ "diagnostics": [], "schema": "go-facts-v1" });
+
+        cache.write_json(&key, &value).unwrap();
+        let restored: serde_json::Value = cache.read_json(&key).unwrap().unwrap();
+
+        assert_eq!(restored, value);
+        assert!(cache.root().exists());
+    }
+
+    #[test]
+    fn invalid_json_can_be_treated_as_miss() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Cache::default_for_repo(temp.path(), true);
+        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        fs::create_dir_all(cache.root()).unwrap();
+        fs::write(cache.path_for(&key), "{not-json").unwrap();
+
+        let restored: Option<serde_json::Value> = cache.read_json_or_miss(&key);
+
+        assert!(restored.is_none());
     }
 }
