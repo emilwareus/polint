@@ -1,0 +1,11 @@
+[workspace]
+include = ["*.tsx"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/ts-no-raw-colors"]
+
+[[rules.config]]
+id = "examples/ts-no-raw-colors"
+severity = "error"
+files = ["*.tsx"]

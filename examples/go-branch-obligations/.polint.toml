@@ -1,0 +1,6 @@
+[workspace]
+include = ["*.go"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/go-branch-obligations"]
