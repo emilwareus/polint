@@ -140,6 +140,7 @@ pub fn stable_hash(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
     use std::fs;
 
@@ -212,5 +213,19 @@ mod tests {
         let restored: Option<serde_json::Value> = cache.read_json_or_miss(&key);
 
         assert!(restored.is_none());
+    }
+
+    proptest! {
+        #[test]
+        fn cache_key_for_file_path_participates_in_stable_id_proptest(
+            left in "[a-z]{1,8}/[a-z]{1,8}\\.go",
+            right in "[a-z]{1,8}/[a-z]{1,8}\\.go",
+        ) {
+            prop_assume!(left != right);
+            let left_key = CacheKey::for_file(&left, "same-content", "config", "rule", "go-facts-v1");
+            let right_key = CacheKey::for_file(&right, "same-content", "config", "rule", "go-facts-v1");
+
+            prop_assert_ne!(left_key.stable_id(), right_key.stable_id());
+        }
     }
 }

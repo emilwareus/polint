@@ -1425,6 +1425,45 @@ fn check_parallel_cached_output_is_deterministic_across_repeated_runs() {
 }
 
 #[test]
+fn check_no_cache_bypasses_cache_reads_and_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase7_cache_fixture(temp.path());
+    let run = |no_cache: bool| {
+        let mut args = vec![
+            "check",
+            "--profile",
+            "phase7",
+            "--format",
+            "json",
+            "--fail-on",
+            "none",
+        ];
+        if no_cache {
+            args.push("--no-cache");
+        }
+        stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(args)
+                .assert()
+                .success(),
+        )
+    };
+
+    let cold = run(false);
+    let cache_files_after_cold = cache_json_count(temp.path());
+    let warm = run(false);
+    let no_cache = run(true);
+    let cache_files_after_no_cache = cache_json_count(temp.path());
+
+    assert!(cache_files_after_cold >= 2);
+    assert_eq!(warm, cold);
+    assert_eq!(no_cache, cold);
+    assert_eq!(cache_files_after_no_cache, cache_files_after_cold);
+}
+
+#[test]
 fn profile_rules_reports_per_rule_timings() {
     let temp = tempfile::tempdir().unwrap();
     write_phase7_cache_fixture(temp.path());
