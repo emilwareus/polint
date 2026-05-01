@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 06-06-PLAN.md
-last_updated: "2026-04-30T10:41:10.787Z"
-last_activity: 2026-04-30
+status: ready
+stopped_at: Phase 6 complete; ready to discuss Phase 7
+last_updated: "2026-05-01T06:57:45.824Z"
+last_activity: 2026-05-01
 progress:
   total_phases: 10
   completed_phases: 6
@@ -18,11 +18,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-04-30)
+See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 06 — sdk-and-example-rules
+**Current focus:** Phase 07 — cache-and-performance
 
 ## Current Status
 
@@ -47,14 +47,15 @@ See: `.planning/PROJECT.md` (updated 2026-04-30)
 - Phase 5 code review passed clean after review fixes; see `.planning/phases/05-typescript-adapter/05-REVIEW.md` and `.planning/phases/05-typescript-adapter/05-REVIEW-FIX.md`.
 - Phase 5 verification passed with no gaps; see `.planning/phases/05-typescript-adapter/05-VERIFICATION.md`.
 - Phase 5 security gate passed with `threats_open: 0`; see `.planning/phases/05-typescript-adapter/05-SECURITY.md`.
-- Next action: discuss Phase 6 on `main`.
+- Phase 6 completed SDK helpers, all eight example rules, CLI fixture proof, snapshots, code review fixes, verification, and security with `threats_open: 0`; see `.planning/phases/06-sdk-and-example-rules/06-VERIFICATION.md` and `.planning/phases/06-sdk-and-example-rules/06-SECURITY.md`.
+- Next action: discuss Phase 7 on `main`.
 
 ## Current Position
 
-Phase: 06 (sdk-and-example-rules) — EXECUTING
-Status: Phase complete — ready for verification
-Plan: 6 of 6
-Last activity: 2026-04-30
+Phase: 07 (cache-and-performance) — READY TO DISCUSS
+Status: Phase 6 complete; ready for Phase 7 discussion
+Plan: Not started
+Last activity: 2026-05-01
 
 ## Phase Progress
 
@@ -65,8 +66,8 @@ Last activity: 2026-04-30
 | 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
 | 4 | Complete | 4/4 plans complete; parser-backed Go facts verified through unit and CLI integration coverage |
 | 5 | Complete | 4/4 plans complete; Oxc-backed TS/JS facts, review fixes, and phase verification passed |
-| 6 | Not Started | SDK and requested example rules have working initial implementation; GSD phase execution not started |
-| 7 | In Progress | Cache crate exists; deeper parse/fact persistence remains |
+| 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
+| 7 | Not Started | Cache crate exists; GSD phase execution not started |
 | 8 | In Progress | SARIF-like output, exit codes, profile-rules, explain, and graph commands exist |
 | 9 | In Progress | WIT and plugin host skeleton exist |
 | 10 | In Progress | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
@@ -135,8 +136,8 @@ Last activity: 2026-04-30
 
 ## Session
 
-**Last Date:** 2026-04-30T10:41:10.784Z
-**Stopped At:** Completed 06-06-PLAN.md
+**Last Date:** 2026-05-01T06:57:45.824Z
+**Stopped At:** Phase 6 complete; ready to discuss Phase 7
 **Resume File:** None
 
 ## Important Context For Execution

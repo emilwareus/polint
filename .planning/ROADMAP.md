@@ -125,6 +125,16 @@ Plans:
 
 **Requirements:** SDK-01, SDK-02, RULE-01, RULE-02, RULE-03, RULE-04, RULE-05, RULE-06, RULE-07, RULE-08, TEST-01, TEST-03
 
+**Plans:** 6/6 plans complete
+
+Plans:
+- [x] 06-01-PLAN.md - Make the public SDK entry point pleasant and complete for Phase 6 rule authors.
+- [x] 06-02-PLAN.md - Add the narrow literal and config foundations needed by the Phase 6 example rules.
+- [x] 06-03-PLAN.md - Harden the SDK-facing non-heuristic example rules.
+- [x] 06-04-PLAN.md - Harden the Go heuristic example rules without overclaiming semantic proof.
+- [x] 06-05-PLAN.md - Prove the requested example rules through CLI integration fixtures.
+- [x] 06-06-PLAN.md - Add representative diagnostic snapshots and complete Phase 6 verification.
+
 **Success criteria:**
 1. `polint-sdk` exposes a documented `Rule` trait, metadata, capabilities, prelude, and `RuleCtx` helpers.
 2. Built-in example rules use the SDK rather than private core shortcuts.
