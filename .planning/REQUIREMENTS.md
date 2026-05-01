@@ -16,8 +16,8 @@
 - [x] **CLI-01**: User can run `polint init` to create `.polint.toml` and `.polint/rules`.
 - [x] **CLI-02**: User can run `polint new-rule <language> <rule-name>` to scaffold a repo-local Rust rule.
 - [x] **CLI-03**: User can run `polint check` with `--profile`, `--format human|json|sarif`, `--no-cache`, and `--fail-on warn|error|none`.
-- [ ] **CLI-04**: User can run `polint explain <rule-id>`, `polint test-rules`, `polint profile-rules`, `polint graph imports --format dot`, and `polint graph function <name> --format dot`.
-- [ ] **CLI-05**: CLI exit codes are `0` for success, `1` for diagnostics at or above fail threshold, and `2` for fatal tool/config/internal errors.
+- [x] **CLI-04**: User can run `polint explain <rule-id>`, `polint test-rules`, `polint profile-rules`, `polint graph imports --format dot`, and `polint graph function <name> --format dot`.
+- [x] **CLI-05**: CLI exit codes are `0` for success, `1` for diagnostics at or above fail threshold, and `2` for fatal tool/config/internal errors.
 
 ### Config and Files
 
@@ -32,7 +32,7 @@
 - [x] **CORE-02**: Core runs rules through a registry, honors capability declarations, deduplicates diagnostics, catches rule panics where practical, and sorts diagnostics deterministically.
 - [x] **DIAG-01**: Diagnostics support severity, labels, suggestions/fixes, evidence, stable fingerprints, and human output.
 - [x] **DIAG-02**: Diagnostics render as JSON.
-- [ ] **DIAG-03**: Diagnostics render as SARIF-like output for CI.
+- [x] **DIAG-03**: Diagnostics render as SARIF-like output for CI.
 
 ### Go Analysis
 
@@ -75,7 +75,7 @@
 
 - [x] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
 - [x] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
-- [ ] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics. Phase 6 completed representative rule-family human and JSON snapshots; SARIF-like and broader CI snapshots remain scheduled for Phase 8.
+- [x] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics. Phase 8 added SARIF-like renderer snapshots and CI output assertions.
 - [x] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
 
 ## v2 Requirements
@@ -107,8 +107,8 @@
 | CLI-01 | Phase 2 | Complete |
 | CLI-02 | Phase 2 | Complete |
 | CLI-03 | Phase 2 | Complete |
-| CLI-04 | Phase 8 | Pending |
-| CLI-05 | Phase 8 | Pending |
+| CLI-04 | Phase 8 | Complete |
+| CLI-05 | Phase 8 | Complete |
 | CFG-01 | Phase 2 | Complete |
 | CFG-02 | Phase 2 | Complete |
 | FS-01 | Phase 2 | Complete |
@@ -117,7 +117,7 @@
 | CORE-02 | Phase 3 | Complete |
 | DIAG-01 | Phase 3 | Complete |
 | DIAG-02 | Phase 2 | Complete |
-| DIAG-03 | Phase 8 | Pending |
+| DIAG-03 | Phase 8 | Complete |
 | GO-01 | Phase 4 | Complete |
 | GO-02 | Phase 4 | Complete |
 | GO-03 | Phase 4 | Complete |
@@ -142,7 +142,7 @@
 | PLUG-02 | Phase 9 | Pending |
 | TEST-01 | Phase 1-9 | Complete |
 | TEST-02 | Phase 2-8 | Complete |
-| TEST-03 | Phase 3-8 | In Progress - Phase 3 human and JSON diagnostic snapshots verified; SARIF-like and broader rule snapshots remain scheduled for later phases |
+| TEST-03 | Phase 3-8 | Complete |
 | TEST-04 | Phase 3-7 | In Progress - Phase 3 span, diagnostic sorting, and discovery include/exclude property tests verified; cache/performance property scope remains scheduled |
 
 **Coverage:**

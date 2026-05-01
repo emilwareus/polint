@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed Phase 08 plans
-last_updated: "2026-05-01T11:34:45.228Z"
+status: Ready to discuss
+stopped_at: Phase 08 complete
+last_updated: "2026-05-01T11:37:08.548Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 08 — ci-output-and-graph-commands
+**Current focus:** Phase 09 — plugin-skeleton
 
 ## Current Status
 
@@ -49,13 +49,14 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 - Phase 5 security gate passed with `threats_open: 0`; see `.planning/phases/05-typescript-adapter/05-SECURITY.md`.
 - Phase 6 completed SDK helpers, all eight example rules, CLI fixture proof, snapshots, code review fixes, verification, and security with `threats_open: 0`; see `.planning/phases/06-sdk-and-example-rules/06-VERIFICATION.md` and `.planning/phases/06-sdk-and-example-rules/06-SECURITY.md`.
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
-- Next action: discuss Phase 8 on `main`.
+- Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
+- Next action: discuss Phase 9 on `main`.
 
 ## Current Position
 
-Phase: 08 (ci-output-and-graph-commands) — EXECUTING
-Status: Phase complete — ready for verification
-Plan: 4 of 4
+Phase: 09 (plugin-skeleton) — READY TO DISCUSS
+Status: Ready to discuss
+Plan: Not started
 Last activity: 2026-05-01
 
 ## Phase Progress
@@ -69,7 +70,7 @@ Last activity: 2026-05-01
 | 5 | Complete | 4/4 plans complete; Oxc-backed TS/JS facts, review fixes, and phase verification passed |
 | 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
 | 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
-| 8 | Not Started | Existing command surface exists; GSD phase discussion is next |
+| 8 | Complete | 4/4 plans complete; CI output, command contracts, DOT graph commands, verification, and security passed |
 | 9 | In Progress | WIT and plugin host skeleton exist |
 | 10 | In Progress | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
 
@@ -115,6 +116,10 @@ Last activity: 2026-05-01
 - [Phase 06-sdk-and-example-rules]: Kept snapshot coverage on built_in_rules instead of private rule structs so tests exercise the public registration path.
 - [Phase 06-sdk-and-example-rules]: Used synthetic AnalysisDb facts for deterministic snapshot data instead of CLI fixtures, keeping snapshots focused on rule diagnostics.
 - [Phase 06-sdk-and-example-rules]: Filtered the all-rule-ID JSON snapshot to the first diagnostic per rule ID so the snapshot proves all eight IDs without duplicating every finding.
+- [Phase 08-ci-output-and-graph-commands]: Kept `test-rules` human prelude text out of JSON/SARIF-like stdout.
+- [Phase 08-ci-output-and-graph-commands]: Kept CI output described as SARIF-like and avoided full SARIF certification claims.
+- [Phase 08-ci-output-and-graph-commands]: Used typed serialization structs for SARIF-like output to avoid feature-dependent JSON field ordering.
+- [Phase 08-ci-output-and-graph-commands]: Kept graph commands DOT-only and syntactic, with missing function names returning valid empty DOT.
 
 ## Performance Metrics
 
@@ -146,8 +151,8 @@ Last activity: 2026-05-01
 ## Session
 
 **Last Date:** 2026-05-01T11:34:45.201Z
-**Stopped At:** Completed Phase 08 plans
-**Resume File:** .planning/phases/08-ci-output-and-graph-commands/08-04-SUMMARY.md
+**Stopped At:** Phase 08 complete
+**Resume File:** .planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md
 
 ## Important Context For Execution
 

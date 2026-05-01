@@ -169,6 +169,14 @@ Plans:
 
 **Requirements:** CLI-04, CLI-05, DIAG-03, TEST-02, TEST-03
 
+**Plans:** 4/4 plans complete
+
+Plans:
+- [x] 08-01-PLAN.md - Lock CLI command contracts and fail-threshold exit codes.
+- [x] 08-02-PLAN.md - Cover SARIF-like CI output fields and snapshots.
+- [x] 08-03-PLAN.md - Cover deterministic DOT import and function graph commands.
+- [x] 08-04-PLAN.md - Run targeted/full verification and record final evidence.
+
 **Success criteria:**
 1. `polint explain`, `test-rules`, `profile-rules`, `graph imports`, and `graph function` are implemented.
 2. SARIF-like output includes rule IDs, locations, messages, severities, and fingerprints.
