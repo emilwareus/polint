@@ -69,7 +69,7 @@
 ### Plugins
 
 - [x] **PLUG-01**: `polint-plugin` contains WIT interface files and Wasmtime loading skeleton.
-- [ ] **PLUG-02**: Plugin docs explain that repo-local Wasm rules are experimental and should query host facts by stable IDs.
+- [x] **PLUG-02**: Plugin docs explain that repo-local Wasm rules are experimental and should query host facts by stable IDs.
 
 ### Testing
 
@@ -139,7 +139,7 @@
 | PERF-02 | Phase 7 | Complete |
 | PERF-03 | Phase 7 | Complete |
 | PLUG-01 | Phase 9 | Complete |
-| PLUG-02 | Phase 9 | Pending |
+| PLUG-02 | Phase 9 | Complete |
 | TEST-01 | Phase 1-9 | Complete |
 | TEST-02 | Phase 2-8 | Complete |
 | TEST-03 | Phase 3-8 | Complete |
