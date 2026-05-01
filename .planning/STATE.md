@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 09-03-PLAN.md; Phase 9 ready for verification closeout
-last_updated: "2026-05-01T13:16:58.216Z"
-last_activity: 2026-05-01
+status: Ready to discuss
+stopped_at: "Phase 09 complete; next command: /gsd-discuss-phase 10 --auto"
+last_updated: "2026-05-01T13:19:03.642Z"
+last_activity: 2026-05-01 -- Phase 09 complete
 progress:
   total_phases: 10
   completed_phases: 9
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 09 — plugin-skeleton
+**Current focus:** Phase 10 — docs, examples, and release hardening
 
 ## Current Status
 
@@ -50,14 +50,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 - Phase 6 completed SDK helpers, all eight example rules, CLI fixture proof, snapshots, code review fixes, verification, and security with `threats_open: 0`; see `.planning/phases/06-sdk-and-example-rules/06-VERIFICATION.md` and `.planning/phases/06-sdk-and-example-rules/06-SECURITY.md`.
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
-- Next action: discuss Phase 9 on `main`.
+- Phase 9 completed the experimental WIT plugin boundary, structured manifest/Wasmtime validation skeleton, docs, code review, verification, and security with `threats_open: 0`; see `.planning/phases/09-plugin-skeleton/09-VERIFICATION.md` and `.planning/phases/09-plugin-skeleton/09-SECURITY.md`.
+- Next action: discuss Phase 10 on `main`.
 
 ## Current Position
 
-Phase: 09 (plugin-skeleton) — EXECUTING
-Status: Phase complete — ready for verification
-Plan: 3 of 3
-Last activity: 2026-05-01
+Phase: 10 (docs, examples, and release hardening) — READY TO DISCUSS
+Status: Ready to discuss
+Plan: Not started
+Last activity: 2026-05-01 -- Phase 09 complete
 
 ## Phase Progress
 
@@ -71,8 +72,8 @@ Last activity: 2026-05-01
 | 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
 | 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
 | 8 | Complete | 4/4 plans complete; CI output, command contracts, DOT graph commands, verification, and security passed |
-| 9 | In Progress | WIT and plugin host skeleton exist |
-| 10 | In Progress | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
+| 9 | Complete | 3/3 plans complete; experimental WIT plugin boundary, manifest validation, docs, verification, and security passed |
+| 10 | Pending | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
 
 ## Decisions Made
 
@@ -156,8 +157,8 @@ Last activity: 2026-05-01
 
 ## Session
 
-**Last Date:** 2026-05-01T13:16:58.209Z
-**Stopped At:** Completed 09-03-PLAN.md; Phase 9 ready for verification closeout
+**Last Date:** 2026-05-01T13:19:03.638Z
+**Stopped At:** Phase 09 complete; next command: /gsd-discuss-phase 10 --auto
 **Resume File:** None
 
 ## Important Context For Execution
