@@ -143,6 +143,34 @@ files = ["**/*.tsx"]
     );
 }
 
+fn write_phase8_graph_fixture(root: &Path) {
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[profiles.full]
+rules = []
+"#,
+    );
+    write_file(
+        &root.join("main.go"),
+        r#"
+package main
+
+import "fmt"
+
+func Authorize() {
+    validateUser()
+    charge()
+    fmt.Println("ok")
+}
+
+func validateUser() {}
+
+func charge() {}
+"#,
+    );
+}
+
 #[test]
 fn fixture_inputs_cover_requested_rule_triggers() {
     let go_failing = include_str!("../../../tests/fixtures/go/failing/payment.go");
@@ -1407,6 +1435,80 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
         .assert()
         .failure()
         .code(1);
+}
+
+#[test]
+fn graph_imports_outputs_deterministic_dot() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_graph_fixture(temp.path());
+
+    let first = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "imports", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+    let second = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "imports", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(first, second);
+    assert!(first.contains("digraph"));
+    assert!(first.contains("main.go"));
+    assert!(first.contains("fmt"));
+}
+
+#[test]
+fn graph_function_outputs_deterministic_dot() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_graph_fixture(temp.path());
+
+    let first = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "function", "Authorize", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+    let second = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "function", "Authorize", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(first, second);
+    assert!(first.contains("digraph"));
+    assert!(first.contains("Authorize"));
+    assert!(first.contains("validateUser"));
+}
+
+#[test]
+fn graph_function_missing_name_is_nonfatal_valid_dot() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_graph_fixture(temp.path());
+
+    let dot = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["graph", "function", "Missing", "--format", "dot"])
+            .assert()
+            .success(),
+    );
+
+    assert!(dot.contains("digraph"));
+    assert!(!dot.contains("Missing"));
 }
 
 #[test]
