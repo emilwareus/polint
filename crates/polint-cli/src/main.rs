@@ -154,9 +154,23 @@ fn init_project(root: PathBuf) -> Result<()> {
 
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
-    let rule_dir = root.join(".polint/rules").join(&rule_name);
+    let rules_dir = root.join(".polint/rules");
+    let rule_dir = rules_dir.join(&rule_name);
+
+    match fs::symlink_metadata(&rule_dir) {
+        Ok(_) => anyhow::bail!("rule already exists: {}", rule_dir.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", rule_dir.display()));
+        }
+    }
+
+    fs::create_dir_all(&rules_dir)
+        .with_context(|| format!("failed to create {}", rules_dir.display()))?;
+    fs::create_dir(&rule_dir)
+        .with_context(|| format!("failed to create {}", rule_dir.display()))?;
     let src_dir = rule_dir.join("src");
-    fs::create_dir_all(&src_dir)?;
+    fs::create_dir(&src_dir).with_context(|| format!("failed to create {}", src_dir.display()))?;
     fs::write(
         rule_dir.join("Cargo.toml"),
         format!(

@@ -498,6 +498,33 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
 }
 
 #[test]
+fn new_rule_rejects_existing_rule_without_overwriting_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let rule_dir = temp.path().join(".polint/rules/demo");
+    let sentinel_manifest = "# sentinel manifest\n";
+    let sentinel_lib = "pub fn sentinel() -> &'static str { \"keep me\" }\n";
+    write_file(&rule_dir.join("Cargo.toml"), sentinel_manifest);
+    write_file(&rule_dir.join("src/lib.rs"), sentinel_lib);
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("rule already exists"));
+
+    assert_eq!(
+        fs::read_to_string(rule_dir.join("Cargo.toml")).unwrap(),
+        sentinel_manifest
+    );
+    assert_eq!(
+        fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap(),
+        sentinel_lib
+    );
+}
+
+#[test]
 fn new_rule_go_creates_sdk_oriented_skeleton() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
