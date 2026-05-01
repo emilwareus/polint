@@ -341,47 +341,128 @@ fn format_range(range: TextRange) -> String {
 }
 
 pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
-    let results: Vec<serde_json::Value> = diagnostics
+    #[derive(Serialize)]
+    struct SarifLog {
+        version: &'static str,
+        #[serde(rename = "$schema")]
+        schema: &'static str,
+        runs: Vec<SarifRun>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRun {
+        tool: SarifTool,
+        results: Vec<SarifResult>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifTool {
+        driver: SarifDriver,
+    }
+
+    #[derive(Serialize)]
+    struct SarifDriver {
+        name: &'static str,
+        #[serde(rename = "informationUri")]
+        information_uri: &'static str,
+    }
+
+    #[derive(Serialize)]
+    struct SarifResult {
+        #[serde(rename = "ruleId")]
+        rule_id: String,
+        level: &'static str,
+        message: SarifMessage,
+        fingerprints: SarifFingerprints,
+        locations: Vec<SarifLocation>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifMessage {
+        text: String,
+    }
+
+    #[derive(Serialize)]
+    struct SarifFingerprints {
+        polint: String,
+    }
+
+    #[derive(Serialize)]
+    struct SarifLocation {
+        #[serde(rename = "physicalLocation")]
+        physical_location: SarifPhysicalLocation,
+    }
+
+    #[derive(Serialize)]
+    struct SarifPhysicalLocation {
+        #[serde(rename = "artifactLocation")]
+        artifact_location: SarifArtifactLocation,
+        region: SarifRegion,
+    }
+
+    #[derive(Serialize)]
+    struct SarifArtifactLocation {
+        uri: String,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRegion {
+        #[serde(rename = "startLine")]
+        start_line: u32,
+        #[serde(rename = "startColumn")]
+        start_column: u32,
+        #[serde(rename = "endLine")]
+        end_line: u32,
+        #[serde(rename = "endColumn")]
+        end_column: u32,
+    }
+
+    let results = diagnostics
         .iter()
-        .map(|diagnostic| {
-            serde_json::json!({
-                "ruleId": diagnostic.rule_id,
-                "level": match diagnostic.severity {
-                    Severity::Info => "note",
-                    Severity::Warn => "warning",
-                    Severity::Error => "error",
+        .map(|diagnostic| SarifResult {
+            rule_id: diagnostic.rule_id.clone(),
+            level: match diagnostic.severity {
+                Severity::Info => "note",
+                Severity::Warn => "warning",
+                Severity::Error => "error",
+            },
+            message: SarifMessage {
+                text: diagnostic.message.clone(),
+            },
+            fingerprints: SarifFingerprints {
+                polint: diagnostic.stable_fingerprint.clone(),
+            },
+            locations: vec![SarifLocation {
+                physical_location: SarifPhysicalLocation {
+                    artifact_location: SarifArtifactLocation {
+                        uri: diagnostic.file.clone(),
+                    },
+                    region: SarifRegion {
+                        start_line: diagnostic.range.start_line,
+                        start_column: diagnostic.range.start_col,
+                        end_line: diagnostic.range.end_line,
+                        end_column: diagnostic.range.end_col,
+                    },
                 },
-                "message": { "text": diagnostic.message },
-                "fingerprints": { "polint": diagnostic.stable_fingerprint },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": diagnostic.file },
-                        "region": {
-                            "startLine": diagnostic.range.start_line,
-                            "startColumn": diagnostic.range.start_col,
-                            "endLine": diagnostic.range.end_line,
-                            "endColumn": diagnostic.range.end_col
-                        }
-                    }
-                }]
-            })
+            }],
         })
         .collect();
 
-    serde_json::to_string_pretty(&serde_json::json!({
-        "version": "2.1.0",
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "polint",
-                    "informationUri": "https://github.com/emilwareus/exlint"
-                }
+    let log = SarifLog {
+        version: "2.1.0",
+        schema: "https://json.schemastore.org/sarif-2.1.0.json",
+        runs: vec![SarifRun {
+            tool: SarifTool {
+                driver: SarifDriver {
+                    name: "polint",
+                    information_uri: "https://github.com/emilwareus/exlint",
+                },
             },
-            "results": results
-        }]
-    }))
-    .unwrap_or_else(|_| "{}".to_string())
+            results,
+        }],
+    };
+
+    serde_json::to_string_pretty(&log).unwrap_or_else(|_| "{}".to_string())
 }
 
 pub fn fingerprint(parts: &[&str]) -> String {
@@ -533,7 +614,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
 
         assert_eq!(parsed.pointer("/version").unwrap(), "2.1.0");
-        assert_eq!(parsed.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
+        assert_eq!(
+            parsed.pointer("/runs/0/tool/driver/name").unwrap(),
+            "polint"
+        );
         assert_eq!(
             parsed.pointer("/runs/0/results/0/ruleId").unwrap(),
             "project/rule"
@@ -558,15 +642,26 @@ mod tests {
 
         insta::assert_snapshot!(rendered, @r###"
         {
+          "version": "2.1.0",
           "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
           "runs": [
             {
+              "tool": {
+                "driver": {
+                  "name": "polint",
+                  "informationUri": "https://github.com/emilwareus/exlint"
+                }
+              },
               "results": [
                 {
+                  "ruleId": "project/rule",
+                  "level": "error",
+                  "message": {
+                    "text": "policy failed"
+                  },
                   "fingerprints": {
                     "polint": "fingerprint-123"
                   },
-                  "level": "error",
                   "locations": [
                     {
                       "physicalLocation": {
@@ -574,29 +669,18 @@ mod tests {
                           "uri": "src/lib.rs"
                         },
                         "region": {
-                          "endColumn": 12,
-                          "endLine": 10,
+                          "startLine": 10,
                           "startColumn": 4,
-                          "startLine": 10
+                          "endLine": 10,
+                          "endColumn": 12
                         }
                       }
                     }
-                  ],
-                  "message": {
-                    "text": "policy failed"
-                  },
-                  "ruleId": "project/rule"
+                  ]
                 }
-              ],
-              "tool": {
-                "driver": {
-                  "informationUri": "https://github.com/emilwareus/exlint",
-                  "name": "polint"
-                }
-              }
+              ]
             }
-          ],
-          "version": "2.1.0"
+          ]
         }
         "###);
     }

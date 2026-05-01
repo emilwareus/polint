@@ -1405,17 +1405,20 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
     );
     assert_eq!(sarif.pointer("/runs/0/results/0/level").unwrap(), "warning");
     assert!(
-        sarif.pointer("/runs/0/results/0/message/text")
+        sarif
+            .pointer("/runs/0/results/0/message/text")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|message| message.contains("Raw color"))
     );
     assert!(
-        sarif.pointer("/runs/0/results/0/fingerprints/polint")
+        sarif
+            .pointer("/runs/0/results/0/fingerprints/polint")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|fingerprint| !fingerprint.is_empty())
     );
     assert_eq!(
-        sarif.pointer("/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri")
+        sarif
+            .pointer("/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri")
             .unwrap(),
         "component.tsx"
     );
