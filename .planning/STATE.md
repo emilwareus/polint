@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-05-01T16:09:06.852Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-05-01T16:12:23.452Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
   completed_phases: 9
   total_plans: 35
-  completed_plans: 32
-  percent: 91
+  completed_plans: 33
+  percent: 94
 ---
 
 # State: exlint
@@ -57,7 +57,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 Phase: 10 (docs-examples-and-release-hardening) — EXECUTING
 Status: Ready to execute
-Plan: 2 of 4
+Plan: 3 of 4
 Last activity: 2026-05-01
 
 ## Phase Progress
@@ -125,6 +125,8 @@ Last activity: 2026-05-01
 - [Phase 09]: Plugin manifest loading uses typed PluginError variants and manifest-relative component path resolution. — Future plugin CLI surfaces can classify setup failures without parsing free-form error strings.
 - [Phase 09]: Plugin docs are explicit that repo-local Wasm rules are experimental and not executed by polint check in v1. — Prevents overclaiming runtime support while preserving the future sandboxed plugin direction.
 - [Phase 10]: README is the canonical v1 user guide and documents current behavior without unsupported dynamic loading claims. — Closes FND-03 while preserving project truthfulness constraints.
+- [Phase 10]: Top-level examples stay compact and command-oriented. — The README carries the broader guide, while example READMEs should be easy to copy and run.
+- [Phase 10]: Runnable examples own minimal local configs. — Each example can be checked in isolation with explicit include globs and profile rule IDs.
 
 ## Performance Metrics
 
@@ -156,11 +158,12 @@ Last activity: 2026-05-01
 | Phase 09 P02 | 4 min | 3 tasks | 3 files |
 | Phase 09 P03 | 2 min | 3 tasks | 3 files |
 | Phase 10 P01 | 4 min | 3 tasks | 1 files |
+| Phase 10 P02 | 3 min | 3 tasks | 7 files |
 
 ## Session
 
-**Last Date:** 2026-05-01T16:09:06.849Z
-**Stopped At:** Completed 10-01-PLAN.md
+**Last Date:** 2026-05-01T16:12:23.450Z
+**Stopped At:** Completed 10-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
