@@ -106,6 +106,14 @@ impl Rule for RequirePaymentErrorTests {
 
 Capabilities let the engine compute only the facts a rule asks for.
 
+## Experimental Wasm plugins
+
+Repo-local Wasm rules are experimental. The `polint-plugin` crate currently provides the WIT rule interface, manifest validation, and optional Wasmtime component-byte validation behind the `wasmtime-host` feature.
+
+`polint check` does not automatically compile, cache, or execute repo-local Wasm rules in v1. The current skeleton is a versionable contract for future sandboxed plugins, not a production plugin runtime.
+
+Future plugins should query host-owned facts through stable IDs such as file IDs, function IDs, and branch IDs. Plugins should not receive full AST JSON, full source text, or large graph payloads.
+
 ## CI
 
 ```yaml

@@ -1,3 +1,14 @@
+//! Experimental Wasm plugin boundary for polint.
+//!
+//! `polint-plugin` currently exposes WIT files, manifest validation, and
+//! optional Wasmtime component-byte validation behind the `wasmtime-host`
+//! feature. Repo-local Wasm rules are experimental: `polint check` does not
+//! automatically compile, cache, or execute Wasm rules in v1.
+//!
+//! Future plugin code should query host-owned facts through stable IDs such as
+//! file IDs, function IDs, and branch IDs. The host boundary should not pass
+//! full AST JSON, full source text, or large graph payloads to plugins.
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
