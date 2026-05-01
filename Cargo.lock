@@ -1741,9 +1741,10 @@ dependencies = [
 name = "polint-plugin"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
  "wasmtime",
  "wit-bindgen 0.57.1",
 ]
