@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-05-01T16:12:23.452Z"
+stopped_at: Completed 10-03-PLAN.md
+last_updated: "2026-05-01T16:14:59.999Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
   completed_phases: 9
   total_plans: 35
-  completed_plans: 33
-  percent: 94
+  completed_plans: 34
+  percent: 97
 ---
 
 # State: exlint
@@ -57,7 +57,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 Phase: 10 (docs-examples-and-release-hardening) — EXECUTING
 Status: Ready to execute
-Plan: 3 of 4
+Plan: 4 of 4
 Last activity: 2026-05-01
 
 ## Phase Progress
@@ -127,6 +127,8 @@ Last activity: 2026-05-01
 - [Phase 10]: README is the canonical v1 user guide and documents current behavior without unsupported dynamic loading claims. — Closes FND-03 while preserving project truthfulness constraints.
 - [Phase 10]: Top-level examples stay compact and command-oriented. — The README carries the broader guide, while example READMEs should be easy to copy and run.
 - [Phase 10]: Runnable examples own minimal local configs. — Each example can be checked in isolation with explicit include globs and profile rule IDs.
+- [Phase 10]: Phase 10 smoke tests use checked-in example configs. — This keeps release proof tied to the same examples users copy.
+- [Phase 10]: Existing property tests remain the TEST-04 traceability source. — Span, diagnostic sorting, discovery, and cache-key invariants are already covered in the owning crates.
 
 ## Performance Metrics
 
@@ -159,11 +161,12 @@ Last activity: 2026-05-01
 | Phase 09 P03 | 2 min | 3 tasks | 3 files |
 | Phase 10 P01 | 4 min | 3 tasks | 1 files |
 | Phase 10 P02 | 3 min | 3 tasks | 7 files |
+| Phase 10 P03 | 4 min | 3 tasks | 1 files |
 
 ## Session
 
-**Last Date:** 2026-05-01T16:12:23.450Z
-**Stopped At:** Completed 10-02-PLAN.md
+**Last Date:** 2026-05-01T16:14:59.996Z
+**Stopped At:** Completed 10-03-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution

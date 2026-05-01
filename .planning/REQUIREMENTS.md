@@ -143,7 +143,7 @@
 | TEST-01 | Phase 1-9 | Complete |
 | TEST-02 | Phase 2-8 | Complete |
 | TEST-03 | Phase 3-8 | Complete |
-| TEST-04 | Phase 3-7 | In Progress - Phase 3 span, diagnostic sorting, and discovery include/exclude property tests verified; cache/performance property scope remains scheduled |
+| TEST-04 | Phase 3-10 | Complete |
 
 **Coverage:**
 - v1 requirements: 43 total
