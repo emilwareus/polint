@@ -28,13 +28,13 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - [x] Provide a public `polint-sdk` with a clean `Rule` trait, capability declarations, high-level `RuleCtx` queries, and helpers for reporting diagnostics. Validated in Phase 6: SDK and Example Rules.
 - [x] Ship example rules that dogfood the same SDK users will use, including Go complexity, TS complexity, Go import boundaries, TS raw color detection, Go branch obligations, Go test suite size, Go assertion-after-action, and configured denied literals. Validated in Phase 6: SDK and Example Rules.
 - [x] Support repo-local Rust rule scaffolding through `polint new-rule` and document the native registration boundary without claiming dynamic loading. Validated in Phase 6: SDK and Example Rules.
+- [x] Add a hash-based cache that can be disabled, deterministic parallel file/parser/rule execution, and per-rule profiling output. Validated in Phase 7: Cache and Performance.
 
 ### Active
 
 - [ ] Finish the remaining CLI surface for custom rules: `polint test-rules`, `polint profile-rules`, `polint explain`, graph export commands, and final exit-code semantics.
 - [ ] Keep file discovery scalable for large repositories.
 - [ ] Harden SARIF-like diagnostics for CI output and final command behavior.
-- [ ] Add a hash-based cache that can be disabled, plus deterministic parallel parsing/rule execution and per-rule profiling.
 - [ ] Add SARIF-like CI output, fail thresholds, exit code semantics, and a GitHub Actions example.
 - [ ] Add a Wasm plugin skeleton with WIT files and Wasmtime host boundaries, clearly marked experimental if not complete.
 - [ ] Provide meaningful unit, integration, snapshot, and property tests for the core behavior.
@@ -62,6 +62,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 - Phase 4 completed on 2026-04-29 through GSD plan execution, code review fixes, and verification on `main`, closing parser-backed Go facts and Go CLI integration coverage without claiming full Go type checking or production graph command hardening.
 - Phase 5 completed on 2026-04-30 through GSD plan execution, code review fixes, and verification on `main`, closing parser-backed TS/JS facts and TS CLI integration coverage without claiming TypeScript semantic type checking, production module resolution, or final graph command hardening.
 - Phase 6 completed on 2026-05-01 through GSD plan execution, code review fixes, verification, and security on `main`, closing the public SDK authoring surface, all eight requested example rules, CLI fixture proof, and representative rule-family snapshots without claiming cache/performance, production SARIF/CI hardening, graph command expansion, plugin loading, or automatic repo-local Rust rule loading.
+- Phase 7 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing the disableable hash cache, cached parser/fact metadata, deterministic Rayon-backed execution, repeated-run output proof, and `profile-rules` timing rows without claiming benchmark-grade speedups.
 
 ## Constraints
 
@@ -79,7 +80,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 |----------|-----------|---------|
 | Use `polint` as the binary/crate prefix inside the `exlint` repository | The prompt explicitly suggests `polint`; keeping the repo as `exlint` preserves the GitHub repository name already created. | Accepted in Phase 1 |
 | Build a smaller complete v1 instead of shallow full breadth | The prompt explicitly prefers working, tested functionality over fake or broad shallow features. | - Pending |
-| Start with a hash-based cache, not Salsa | The prompt allows Salsa to remain behind an abstraction if it slows delivery. A content/config/rule hash cache is simpler to ship safely. | - Pending |
+| Start with a hash-based cache, not Salsa | The prompt allows Salsa to remain behind an abstraction if it slows delivery. A content/config/rule hash cache is simpler to ship safely. | Accepted in Phase 7 |
 | Treat repo-local rule auto-compilation as future/experimental | The prompt requires SDK and scaffolding first, with Wasm skeleton acceptable for the first implementation. | - Pending |
 | Use in-repo GSD planning on `main` | The user wants to use GSD directly in `/Users/emilwareus/Development/exlint` and avoid worktrees. | Accepted in Phase 1 |
 | Close Phase 2 around the first usable CLI loop without overclaiming later commands | `init`, `new-rule`, `check`, config loading, discovery, and JSON output are verified, while explain/test/profile/graph command hardening remains scheduled later. | Accepted in Phase 2 |
@@ -91,6 +92,9 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 | Treat built-in rules as SDK dogfood examples | Phase 6 keeps the requested `examples/...` rules as registered examples with deterministic diagnostics, configuration, and tests rather than a broad lint pack. | Accepted in Phase 6 |
 | Keep heuristic rule claims explicit and bounded | Phase 6 Go branch/test heuristics include `heuristic` wording and evidence labels, avoiding claims of exact semantic coverage. | Accepted in Phase 6 |
 | Keep scaffolded repo-local Rust rules honest and safe | Phase 6 hardens `polint new-rule` against unsafe names and overwrite, while leaving automatic dynamic loading to later phases. | Accepted in Phase 6 |
+| Cache parser facts, not full source text | Phase 7 stores diagnostics and extracted fact metadata keyed by content/config/rule/schema inputs, while avoiding cached full source or AST payloads. | Accepted in Phase 7 |
+| Use deterministic merge boundaries around Rayon work | Phase 7 parallelizes file reads, adapter parsing, and rule execution where safe, then sorts or restores through deterministic boundaries before emitting output. | Accepted in Phase 7 |
+| Treat timing output as local profiling metadata, not benchmarks | Phase 7 `profile-rules` reports parseable elapsed timing rows but tests only assert shape/order/nonnegative values and no fixed speedup claims. | Accepted in Phase 7 |
 
 ## Evolution
 
@@ -110,4 +114,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-01 after Phase 6 verification*
+*Last updated: 2026-05-01 after Phase 7 verification*

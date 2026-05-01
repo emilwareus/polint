@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
+status: discussing
 stopped_at: Completed 07-04-PLAN.md
-last_updated: "2026-05-01T08:21:47.077Z"
+last_updated: "2026-05-01T08:23:46.875Z"
 last_activity: 2026-05-01
 progress:
   total_phases: 10
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 07 — cache-and-performance
+**Current focus:** Phase 08 — ci-output-and-graph-commands
 
 ## Current Status
 
@@ -48,12 +48,13 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 - Phase 5 verification passed with no gaps; see `.planning/phases/05-typescript-adapter/05-VERIFICATION.md`.
 - Phase 5 security gate passed with `threats_open: 0`; see `.planning/phases/05-typescript-adapter/05-SECURITY.md`.
 - Phase 6 completed SDK helpers, all eight example rules, CLI fixture proof, snapshots, code review fixes, verification, and security with `threats_open: 0`; see `.planning/phases/06-sdk-and-example-rules/06-VERIFICATION.md` and `.planning/phases/06-sdk-and-example-rules/06-SECURITY.md`.
-- Next action: discuss Phase 7 on `main`.
+- Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
+- Next action: discuss Phase 8 on `main`.
 
 ## Current Position
 
-Phase: 8
-Status: Phase complete — ready for verification
+Phase: 08 (ci-output-and-graph-commands) — READY TO DISCUSS
+Status: Ready to discuss
 Plan: Not started
 Last activity: 2026-05-01
 
@@ -67,8 +68,8 @@ Last activity: 2026-05-01
 | 4 | Complete | 4/4 plans complete; parser-backed Go facts verified through unit and CLI integration coverage |
 | 5 | Complete | 4/4 plans complete; Oxc-backed TS/JS facts, review fixes, and phase verification passed |
 | 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
-| 7 | Not Started | Cache crate exists; GSD phase execution not started |
-| 8 | In Progress | SARIF-like output, exit codes, profile-rules, explain, and graph commands exist |
+| 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
+| 8 | Not Started | Existing command surface exists; GSD phase discussion is next |
 | 9 | In Progress | WIT and plugin host skeleton exist |
 | 10 | In Progress | README, examples, fixtures, and tests exist; more snapshots/hardening remain |
 
