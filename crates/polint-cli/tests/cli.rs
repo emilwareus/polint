@@ -1348,6 +1348,68 @@ rules = ["examples/ts-no-raw-colors"]
 }
 
 #[test]
+fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
+    let temp = tempfile::tempdir().unwrap();
+    write_phase8_raw_color_fixture(temp.path(), "warn");
+
+    let sarif = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "phase8",
+                "--format",
+                "sarif",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(sarif.pointer("/version").unwrap(), "2.1.0");
+    assert_eq!(sarif.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
+    assert_eq!(
+        sarif.pointer("/runs/0/results/0/ruleId").unwrap(),
+        "examples/ts-no-raw-colors"
+    );
+    assert_eq!(sarif.pointer("/runs/0/results/0/level").unwrap(), "warning");
+    assert!(
+        sarif.pointer("/runs/0/results/0/message/text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|message| message.contains("Raw color"))
+    );
+    assert!(
+        sarif.pointer("/runs/0/results/0/fingerprints/polint")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|fingerprint| !fingerprint.is_empty())
+    );
+    assert_eq!(
+        sarif.pointer("/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri")
+            .unwrap(),
+        "component.tsx"
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase8",
+            "--format",
+            "sarif",
+            "--fail-on",
+            "warn",
+        ])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
 fn check_no_cache_does_not_create_cache_directory() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(

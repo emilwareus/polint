@@ -528,6 +528,80 @@ mod tests {
     }
 
     #[test]
+    fn render_sarif_snapshot_includes_ci_fields() {
+        let rendered = render(OutputFormat::Sarif, &[contract_diagnostic()]);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(parsed.pointer("/version").unwrap(), "2.1.0");
+        assert_eq!(parsed.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
+        assert_eq!(
+            parsed.pointer("/runs/0/results/0/ruleId").unwrap(),
+            "project/rule"
+        );
+        assert_eq!(parsed.pointer("/runs/0/results/0/level").unwrap(), "error");
+        assert_eq!(
+            parsed.pointer("/runs/0/results/0/message/text").unwrap(),
+            "policy failed"
+        );
+        assert_eq!(
+            parsed
+                .pointer("/runs/0/results/0/fingerprints/polint")
+                .unwrap(),
+            "fingerprint-123"
+        );
+        assert_eq!(
+            parsed
+                .pointer("/runs/0/results/0/locations/0/physicalLocation/artifactLocation/uri")
+                .unwrap(),
+            "src/lib.rs"
+        );
+
+        insta::assert_snapshot!(rendered, @r###"
+        {
+          "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+          "runs": [
+            {
+              "results": [
+                {
+                  "fingerprints": {
+                    "polint": "fingerprint-123"
+                  },
+                  "level": "error",
+                  "locations": [
+                    {
+                      "physicalLocation": {
+                        "artifactLocation": {
+                          "uri": "src/lib.rs"
+                        },
+                        "region": {
+                          "endColumn": 12,
+                          "endLine": 10,
+                          "startColumn": 4,
+                          "startLine": 10
+                        }
+                      }
+                    }
+                  ],
+                  "message": {
+                    "text": "policy failed"
+                  },
+                  "ruleId": "project/rule"
+                }
+              ],
+              "tool": {
+                "driver": {
+                  "informationUri": "https://github.com/emilwareus/exlint",
+                  "name": "polint"
+                }
+              }
+            }
+          ],
+          "version": "2.1.0"
+        }
+        "###);
+    }
+
+    #[test]
     fn diagnostic_deserializes_missing_phase3_fields_with_computed_fingerprint() {
         let diagnostic: Diagnostic = serde_json::from_str(
             r#"{
