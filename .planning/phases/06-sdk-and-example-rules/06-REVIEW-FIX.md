@@ -1,8 +1,8 @@
 ---
 phase: 06-sdk-and-example-rules
-fixed_at: 2026-05-01T06:20:58Z
+fixed_at: 2026-05-01T06:31:01Z
 review_path: /Users/emilwareus/Development/exlint/.planning/phases/06-sdk-and-example-rules/06-REVIEW.md
-iteration: 1
+iteration: 2
 findings_in_scope: 2
 fixed: 2
 skipped: 0
@@ -11,9 +11,9 @@ status: all_fixed
 
 # Phase 06: Code Review Fix Report
 
-**Fixed at:** 2026-05-01T06:20:58Z
+**Fixed at:** 2026-05-01T06:31:01Z
 **Source review:** /Users/emilwareus/Development/exlint/.planning/phases/06-sdk-and-example-rules/06-REVIEW.md
-**Iteration:** 1
+**Iteration:** 2
 
 **Summary:**
 - Findings in scope: 2
@@ -22,30 +22,30 @@ status: all_fixed
 
 ## Fixed Issues
 
-### WR-01: JSX raw-color attributes can be reported twice
+### CR-01: `new-rule` accepts path traversal in rule names
 
-**Status:** fixed: requires human verification
-**Files modified:** `crates/polint-rules/src/lib.rs`, `crates/polint-cli/tests/cli.rs`
-**Commit:** dd51952
-**Applied fix:** Replaced exact-span raw-color dedupe with overlap-aware same-file/same-literal dedupe and added regressions for overlapping SDK facts plus a real parser-backed TSX JSX attribute.
+**Status:** fixed
+**Files modified:** `crates/polint-cli/src/main.rs`, `crates/polint-cli/tests/cli.rs`
+**Commit:** b14f049
+**Applied fix:** Added rule-name validation before any scaffold directories are created, rejecting empty names, path components, slashes, and names that would sanitize differently. Added a CLI regression that verifies traversal and unsafe names fail without writing `Cargo.toml`, `src/lib.rs`, nested rule directories, or unsanitized rule directories outside the intended `.polint/rules/<name>` layout.
 
-### WR-02: Some Go rules ignore configured file filters
+### WR-01: Some built-in rules ignore `allow_files`
 
-**Status:** fixed: requires human verification
+**Status:** fixed
 **Files modified:** `crates/polint-rules/src/lib.rs`
-**Commit:** b7a93b1
-**Applied fix:** Added a shared rule-scope file check for Go import boundaries, Go test suite size, and Go assertion-after-action, with regressions for non-matching `files` and matching `allow_files` filters.
+**Commit:** d190784
+**Applied fix:** Switched Go cyclomatic complexity, TS cyclomatic complexity, and Go branch obligations to the shared `file_in_rule_scope` helper so `allow_files` suppresses diagnostics after positive `files` matching. Added focused regressions covering both non-matching `files` and matching `allow_files` for all three rules.
 
 ## Verification
 
-- `cargo test -p polint-rules ts_raw_colors_dedupes_string_and_jsx_attribute_facts`
-- `cargo test -p polint-cli check_ts_no_raw_colors_dedupes_real_jsx_attribute_literal`
-- `cargo test -p polint-rules file_filters`
+- `cargo test -p polint-cli new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir`
+- `cargo test -p polint-rules respects_files_and_allow_files`
+- `cargo test -p polint-cli -p polint-rules`
 - `cargo fmt --check`
-- `cargo test -p polint-rules -p polint-cli`
+- `cargo test --workspace`
 
 ---
 
-_Fixed: 2026-05-01T06:20:58Z_
+_Fixed: 2026-05-01T06:31:01Z_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_
