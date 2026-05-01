@@ -45,3 +45,69 @@ impl PluginHost {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RULE_WIT;
+
+    #[test]
+    fn wit_contract_contains_rule_boundary() {
+        for anchor in [
+            "package polint:rule;",
+            "world rule",
+            "export metadata",
+            "export capabilities",
+            "export run",
+        ] {
+            assert!(
+                RULE_WIT.contains(anchor),
+                "WIT contract is missing anchor {anchor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wit_contract_contains_stable_id_host_queries() {
+        for anchor in [
+            "type file-id = u32",
+            "type function-id = u64",
+            "type branch-id = u64",
+            "report: func",
+            "get-file-path: func",
+            "get-function-name: func",
+            "get-branch-condition: func",
+        ] {
+            assert!(
+                RULE_WIT.contains(anchor),
+                "WIT contract is missing anchor {anchor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wit_contract_contains_typed_metadata_and_diagnostics() {
+        for anchor in [
+            "enum severity",
+            "record rule-metadata",
+            "record diagnostic",
+            "record text-range",
+            "export metadata: func() -> host.rule-metadata",
+            "report: func(diagnostic: diagnostic)",
+        ] {
+            assert!(
+                RULE_WIT.contains(anchor),
+                "WIT contract is missing anchor {anchor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wit_contract_does_not_define_ast_payloads() {
+        for forbidden in ["ast-json", "source-text", "syntax-tree"] {
+            assert!(
+                !RULE_WIT.contains(forbidden),
+                "WIT contract must not expose full AST/source payload {forbidden:?}"
+            );
+        }
+    }
+}
