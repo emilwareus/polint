@@ -211,6 +211,27 @@ pub struct JsxAttributeFact {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFileAnalysis {
+    pub schema: String,
+    pub diagnostics: Vec<Diagnostic>,
+    pub facts: CachedFileFacts,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CachedFileFacts {
+    pub packages: Vec<PackageFact>,
+    pub functions: Vec<FunctionFact>,
+    pub imports: Vec<ImportFact>,
+    pub branches: Vec<BranchObligation>,
+    pub tests: Vec<TestFact>,
+    pub coverage: Vec<CoverageFact>,
+    pub ts_components: Vec<TsComponentFact>,
+    pub ts_classes: Vec<TsClassFact>,
+    pub string_literals: Vec<StringLiteralFact>,
+    pub jsx_attributes: Vec<JsxAttributeFact>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
@@ -350,6 +371,156 @@ impl AnalysisDb {
         self.file(file)
             .map(|file| file.relative_path.clone())
             .unwrap_or_else(|| "<unknown>".to_string())
+    }
+
+    pub fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
+        let branch_ids = self
+            .branches
+            .iter()
+            .filter(|branch| branch.file == file)
+            .map(|branch| branch.id)
+            .collect::<BTreeSet<_>>();
+        CachedFileFacts {
+            packages: self
+                .packages
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            functions: self
+                .functions
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            imports: self
+                .imports
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            branches: self
+                .branches
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            tests: self
+                .tests
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            coverage: self
+                .coverage
+                .iter()
+                .filter(|fact| branch_ids.contains(&fact.branch))
+                .cloned()
+                .collect(),
+            ts_components: self
+                .ts_components
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            ts_classes: self
+                .ts_classes
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            string_literals: self
+                .string_literals
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+            jsx_attributes: self
+                .jsx_attributes
+                .iter()
+                .filter(|fact| fact.file == file)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub fn restore_file_facts(&mut self, file: FileId, facts: CachedFileFacts) {
+        let mut function_ids = BTreeMap::new();
+        let mut branch_ids = BTreeMap::new();
+
+        for mut package in facts.packages {
+            package.file = file;
+            package.span.file = file;
+            self.push_package(package);
+        }
+
+        for mut function in facts.functions {
+            let cached_id = function.id;
+            function.file = file;
+            function.span.file = file;
+            let restored_id = self.push_function(function);
+            function_ids.insert(cached_id, restored_id);
+        }
+
+        for mut import in facts.imports {
+            import.file = file;
+            import.span.file = file;
+            self.push_import(import);
+        }
+
+        for mut branch in facts.branches {
+            let cached_id = branch.id;
+            branch.file = file;
+            branch.function = branch
+                .function
+                .and_then(|function| function_ids.get(&function).copied());
+            branch.decision_span.file = file;
+            let restored_id = self.push_branch(branch);
+            branch_ids.insert(cached_id, restored_id);
+        }
+
+        for mut test in facts.tests {
+            test.file = file;
+            test.function = test
+                .function
+                .and_then(|function| function_ids.get(&function).copied());
+            test.span.file = file;
+            self.push_test(test);
+        }
+
+        for mut coverage in facts.coverage {
+            if let Some(branch) = branch_ids.get(&coverage.branch).copied() {
+                coverage.branch = branch;
+                self.push_coverage(coverage);
+            }
+        }
+
+        for mut component in facts.ts_components {
+            component.file = file;
+            component.function = component
+                .function
+                .and_then(|function| function_ids.get(&function).copied());
+            component.span.file = file;
+            self.push_ts_component(component);
+        }
+
+        for mut class in facts.ts_classes {
+            class.file = file;
+            class.span.file = file;
+            self.push_ts_class(class);
+        }
+
+        for mut literal in facts.string_literals {
+            literal.file = file;
+            literal.span.file = file;
+            self.push_string_literal(literal);
+        }
+
+        for mut attribute in facts.jsx_attributes {
+            attribute.file = file;
+            attribute.span.file = file;
+            self.push_jsx_attribute(attribute);
+        }
     }
 }
 
@@ -1035,6 +1206,131 @@ mod tests {
             end_line: line,
             end_col: 2,
         }
+    }
+
+    #[test]
+    fn cached_file_facts_round_trip_remaps_ids() {
+        let mut source_db = AnalysisDb::new();
+        let source_file = source_db.add_file(
+            PathBuf::from("src/payment.go"),
+            "src/payment.go".to_string(),
+            "package payments\nfunc Authorize() {}".to_string(),
+        );
+        let function = source_db.push_function(FunctionFact {
+            id: FunctionId(999),
+            file: source_file,
+            name: "Authorize".to_string(),
+            span: test_span(source_file, 2),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 2,
+            calls: vec!["audit".to_string()],
+        });
+        let branch = source_db.push_branch(BranchObligation {
+            id: BranchId(999),
+            function: Some(function),
+            file: source_file,
+            decision_span: test_span(source_file, 3),
+            condition_text: "err != nil".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: true,
+            stable_fingerprint: "branch".to_string(),
+        });
+        source_db.push_coverage(CoverageFact {
+            branch,
+            covered: Some(false),
+            source: "static".to_string(),
+        });
+        source_db.push_test(TestFact {
+            file: source_file,
+            function: Some(function),
+            name: "TestAuthorize".to_string(),
+            span: test_span(source_file, 5),
+            evidence_terms: vec!["Authorize".to_string()],
+            assertion_count: 1,
+            subtest_count: 0,
+            table_rows: 0,
+        });
+
+        let cached = source_db.facts_for_file(source_file);
+
+        let mut restored_db = AnalysisDb::new();
+        let target_file = restored_db.add_file(
+            PathBuf::from("src/payment.go"),
+            "src/payment.go".to_string(),
+            "package payments\nfunc Authorize() {}".to_string(),
+        );
+        let existing_function = restored_db.push_function(FunctionFact {
+            id: FunctionId(999),
+            file: target_file,
+            name: "Existing".to_string(),
+            span: test_span(target_file, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        restored_db.push_branch(BranchObligation {
+            id: BranchId(999),
+            function: Some(existing_function),
+            file: target_file,
+            decision_span: test_span(target_file, 1),
+            condition_text: "existing".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: false,
+            stable_fingerprint: "existing".to_string(),
+        });
+
+        restored_db.restore_file_facts(target_file, cached);
+
+        let restored_function = restored_db
+            .functions()
+            .iter()
+            .find(|fact| fact.name == "Authorize")
+            .unwrap();
+        let restored_branch = restored_db
+            .branches()
+            .iter()
+            .find(|fact| fact.stable_fingerprint == "branch")
+            .unwrap();
+        assert_ne!(restored_function.id, function);
+        assert_eq!(restored_branch.function, Some(restored_function.id));
+        assert_eq!(restored_db.coverage().last().unwrap().branch, restored_branch.id);
+        assert_eq!(
+            restored_db.tests().last().unwrap().function,
+            Some(restored_function.id)
+        );
+    }
+
+    #[test]
+    fn cached_file_analysis_does_not_include_source_text() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/secret.go"),
+            "src/secret.go".to_string(),
+            "package main\nconst token = \"super-secret-full-source\"".to_string(),
+        );
+        db.push_package(PackageFact {
+            id: PackageId(999),
+            file,
+            name: "main".to_string(),
+            span: test_span(file, 1),
+            language: Language::Go,
+        });
+
+        let cached = CachedFileAnalysis {
+            schema: "go-facts-v1".to_string(),
+            diagnostics: Vec::new(),
+            facts: db.facts_for_file(file),
+        };
+        let serialized = format!("{cached:?}");
+
+        assert!(!serialized.contains("super-secret-full-source"));
+        assert!(!serialized.contains("source"));
+        assert!(!serialized.contains("ast"));
+        assert!(!serialized.contains("tree"));
     }
 
     #[test]
