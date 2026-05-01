@@ -1718,6 +1718,7 @@ name = "polint-go"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "polint-cache",
  "polint-core",
  "polint-diagnostics",
  "polint-graph",

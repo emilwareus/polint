@@ -292,7 +292,7 @@ fn analyze_and_run(
     parallel: bool,
 ) -> Result<(Vec<polint_diagnostics::Diagnostic>, polint_core::AnalysisDb)> {
     let config = load_config(root)?;
-    let _cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
+    let cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = config_hash(&config);
     let rules = built_in_rules();
     let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
@@ -304,14 +304,18 @@ fn analyze_and_run(
             rule_options_from_config(config.rule_config(&meta.id)),
         );
     }
-    let _rule_digest = rule_hash(&rules, &enabled, &options);
+    let rule_digest = rule_hash(&rules, &enabled, &options);
 
     let mut db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
-    diagnostics.extend(polint_go::analyze(&mut db));
+    diagnostics.extend(polint_go::analyze_with_cache(
+        &mut db,
+        &cache,
+        &config_digest,
+        &rule_digest,
+    ));
     diagnostics.extend(polint_ts::analyze(&mut db));
 
-    let _ = config_digest;
     diagnostics.extend(run_rules(&db, &rules, &options, &enabled, parallel));
     Ok((diagnostics, db))
 }

@@ -1,12 +1,24 @@
 use anyhow::{Context, Result};
 use polint_core::{
-    AnalysisDb, BranchId, BranchObligation, FileId, FunctionFact, FunctionId, ImportFact, Language,
-    PackageFact, Span, StringLiteralFact, TestFact, span_from_byte_range,
+    AnalysisDb, BranchId, BranchObligation, CachedFileAnalysis, FileId, FunctionFact, FunctionId,
+    ImportFact, Language, PackageFact, Span, StringLiteralFact, TestFact, span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange, fingerprint};
 use tree_sitter::{Node, Parser};
 
+const GO_CACHE_SCHEMA: &str = "go-facts-v1";
+
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
+    let cache = polint_cache::Cache::new("", false);
+    analyze_with_cache(db, &cache, "", "")
+}
+
+pub fn analyze_with_cache(
+    db: &mut AnalysisDb,
+    cache: &polint_cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+) -> Vec<Diagnostic> {
     let files: Vec<_> = db
         .files()
         .iter()
@@ -16,8 +28,36 @@ pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
 
     let mut diagnostics = Vec::new();
     for file_id in files {
+        let Some(file) = db.file(file_id).cloned() else {
+            continue;
+        };
+        let key = polint_cache::CacheKey::for_file(
+            file.relative_path.as_str(),
+            file.content_hash.as_str(),
+            config_hash,
+            rule_hash,
+            GO_CACHE_SCHEMA,
+        );
+        if let Some(cached) = cache.read_json_or_miss::<CachedFileAnalysis>(&key)
+            && cached.schema == GO_CACHE_SCHEMA
+        {
+            db.restore_file_facts(file_id, cached.facts);
+            diagnostics.extend(cached.diagnostics);
+            continue;
+        }
+
         match parse_go_file(db, file_id) {
-            Ok(mut file_diagnostics) => diagnostics.append(&mut file_diagnostics),
+            Ok(mut file_diagnostics) => {
+                let cached = CachedFileAnalysis {
+                    schema: GO_CACHE_SCHEMA.to_string(),
+                    diagnostics: file_diagnostics.clone(),
+                    facts: db.facts_for_file(file_id),
+                };
+                if let Err(error) = cache.write_json(&key, &cached) {
+                    file_diagnostics.push(cache_write_diagnostic(db, file_id, error));
+                }
+                diagnostics.append(&mut file_diagnostics);
+            }
             Err(error) => {
                 diagnostics.push(Diagnostic::error(
                     "parser/go",
@@ -29,6 +69,15 @@ pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
         }
     }
     diagnostics
+}
+
+fn cache_write_diagnostic(db: &AnalysisDb, file_id: FileId, error: anyhow::Error) -> Diagnostic {
+    Diagnostic::warning(
+        "internal/cache",
+        db.path_for(file_id),
+        TextRange::point(1, 1),
+        format!("cache write failed: {error}"),
+    )
 }
 
 fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
@@ -1216,7 +1265,9 @@ fn contains_error_word(text: &str) -> bool {
 mod tests {
     use super::*;
     use polint_graph::ImportGraph;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
         let mut db = AnalysisDb::new();
@@ -1226,6 +1277,63 @@ mod tests {
             source.to_string(),
         );
         db
+    }
+
+    fn unique_cache_root() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("polint-go-cache-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn cache_writes_and_restores_go_facts() {
+        let cache_root = unique_cache_root();
+        let cache = polint_cache::Cache::new(&cache_root, true);
+        let source = r#"
+package payment
+
+import "fmt"
+
+func Authorize(user string) error {
+    if user == "" {
+        return fmt.Errorf("blocked")
+    }
+    return nil
+}
+"#;
+        let mut first = db_with_go_file("payment.go", source);
+
+        let first_diagnostics = analyze_with_cache(&mut first, &cache, "config", "rule");
+
+        assert!(first_diagnostics.is_empty());
+        assert!(cache_root.exists());
+        let first_functions = first
+            .functions()
+            .iter()
+            .map(|fact| fact.name.as_str())
+            .collect::<Vec<_>>();
+
+        let mut second = db_with_go_file("payment.go", source);
+        let second_diagnostics = analyze_with_cache(&mut second, &cache, "config", "rule");
+        let second_functions = second
+            .functions()
+            .iter()
+            .map(|fact| fact.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(second_diagnostics, first_diagnostics);
+        assert_eq!(second_functions, first_functions);
+        assert_eq!(second.imports()[0].path, "fmt");
+        assert!(
+            second
+                .string_literals()
+                .iter()
+                .any(|literal| literal.value == "blocked")
+        );
+
+        fs::remove_dir_all(cache_root).ok();
     }
 
     #[test]
