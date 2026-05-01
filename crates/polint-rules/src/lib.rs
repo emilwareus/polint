@@ -47,22 +47,21 @@ impl Rule for GoCyclomaticComplexity {
             .iter()
             .filter(|function| function.language == Language::Go)
         {
-            if function.cyclomatic_complexity > max
-                && file_selected(ctx.options(), &ctx.file_path(function.file))
-            {
+            let file = ctx.file_path(function.file);
+            if function.cyclomatic_complexity > max && file_in_rule_scope(ctx.options(), &file) {
                 diagnostics.push(
                     Diagnostic::warning(
-                    rule_id.clone(),
-                    ctx.file_path(function.file),
-                    function.span.diagnostic_range(),
-                    format!(
-                        "Go function `{}` has cyclomatic complexity {}, max {}.",
-                        function.name, function.cyclomatic_complexity, max
-                    ),
-                )
-                .with_evidence("function", function.name.clone())
-                .with_evidence("complexity", function.cyclomatic_complexity.to_string())
-                .with_help("Split deeply branched behavior into smaller focused functions or table-driven helpers."),
+                        rule_id.clone(),
+                        file,
+                        function.span.diagnostic_range(),
+                        format!(
+                            "Go function `{}` has cyclomatic complexity {}, max {}.",
+                            function.name, function.cyclomatic_complexity, max
+                        ),
+                    )
+                    .with_evidence("function", function.name.clone())
+                    .with_evidence("complexity", function.cyclomatic_complexity.to_string())
+                    .with_help("Split deeply branched behavior into smaller focused functions or table-driven helpers."),
                 );
             }
         }
@@ -95,13 +94,12 @@ impl Rule for TsCyclomaticComplexity {
             .iter()
             .filter(|function| function.language.is_ts_family())
         {
-            if function.cyclomatic_complexity > max
-                && file_selected(ctx.options(), &ctx.file_path(function.file))
-            {
+            let file = ctx.file_path(function.file);
+            if function.cyclomatic_complexity > max && file_in_rule_scope(ctx.options(), &file) {
                 diagnostics.push(
                     Diagnostic::warning(
                         rule_id.clone(),
-                        ctx.file_path(function.file),
+                        file,
                         function.span.diagnostic_range(),
                         format!(
                             "TS/JS function `{}` has cyclomatic complexity {}, max {}.",
@@ -254,7 +252,7 @@ impl Rule for GoBranchObligations {
         let mut diagnostics = Vec::new();
         for branch in ctx.branches() {
             let file = ctx.file_path(branch.file);
-            if !file_selected(ctx.options(), &file) {
+            if !file_in_rule_scope(ctx.options(), &file) {
                 continue;
             }
             if branch.is_error_path
@@ -751,6 +749,40 @@ mod tests {
     }
 
     #[test]
+    fn go_complexity_respects_files_and_allow_files() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payment.go");
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "Authorize".to_string(),
+            span: span(file, 3, 6, 15),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 7,
+            calls: Vec::new(),
+        });
+
+        for options in [
+            RuleOptions {
+                max: Some(6),
+                files: vec!["no-match/**".to_string()],
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                max: Some(6),
+                allow_files: vec!["src/**".to_string()],
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(GoCyclomaticComplexity), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+    }
+
+    #[test]
     fn ts_complexity_uses_configured_max() {
         assert_sdk_prelude_authoring_surface();
 
@@ -808,6 +840,40 @@ mod tests {
                 .any(|evidence| evidence.label == "complexity" && evidence.value == "8")
         );
         assert!(diagnostic.help.is_some());
+    }
+
+    #[test]
+    fn ts_complexity_respects_files_and_allow_files() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/view.tsx");
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "renderView".to_string(),
+            span: span(file, 2, 17, 27),
+            language: Language::Tsx,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 8,
+            calls: Vec::new(),
+        });
+
+        for options in [
+            RuleOptions {
+                max: Some(7),
+                files: vec!["no-match/**".to_string()],
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                max: Some(7),
+                allow_files: vec!["src/**".to_string()],
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(TsCyclomaticComplexity), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
     }
 
     #[test]
@@ -1003,6 +1069,28 @@ mod tests {
                 .as_deref()
                 .is_some_and(|help| help.contains("does not prove exact coverage"))
         );
+    }
+
+    #[test]
+    fn go_branch_obligations_respects_files_and_allow_files() {
+        let mut db = AnalysisDb::new();
+        let file = add_file(&mut db, "src/payments/payment.go");
+        db.push_branch(branch_obligation(file, "err != nil"));
+
+        for options in [
+            RuleOptions {
+                files: vec!["no-match/**".to_string()],
+                ..RuleOptions::default()
+            },
+            RuleOptions {
+                allow_files: vec!["src/payments/**".to_string()],
+                ..RuleOptions::default()
+            },
+        ] {
+            let diagnostics = run_single_rule(Arc::new(GoBranchObligations), &db, options);
+
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
     }
 
     fn go_suite_test_fact(
