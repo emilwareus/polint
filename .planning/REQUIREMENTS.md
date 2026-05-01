@@ -62,9 +62,9 @@
 
 ### Cache and Performance
 
-- [ ] **PERF-01**: Cache hashes file contents, config, and rules, stores parse/fact metadata under `.polint/cache`, and can be disabled with `--no-cache`.
-- [ ] **PERF-02**: Parsing and rule execution run in parallel where safe while output remains deterministic.
-- [ ] **PERF-03**: `polint profile-rules` reports per-rule timing.
+- [x] **PERF-01**: Cache hashes file contents, config, and rules, stores parse/fact metadata under `.polint/cache`, and can be disabled with `--no-cache`.
+- [x] **PERF-02**: Parsing and rule execution run in parallel where safe while output remains deterministic.
+- [x] **PERF-03**: `polint profile-rules` reports per-rule timing.
 
 ### Plugins
 
@@ -76,7 +76,7 @@
 - [x] **TEST-01**: Unit tests cover config parsing, rule discovery, new-rule generation, glob matching, file discovery, spans, diagnostic sorting, Go extraction, TS extraction, rule logic, and cache behavior.
 - [x] **TEST-02**: Integration tests cover init, new-rule, check on clean/failing Go and TS fixtures, JSON output, profiles, exit codes, and cache on/off behavior.
 - [ ] **TEST-03**: Snapshot tests cover human, JSON, and SARIF-like diagnostics. Phase 6 completed representative rule-family human and JSON snapshots; SARIF-like and broader CI snapshots remain scheduled for Phase 8.
-- [ ] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
+- [x] **TEST-04**: Property tests cover span roundtrips, diagnostic sorting determinism, and file discovery exclusions where useful.
 
 ## v2 Requirements
 
@@ -135,9 +135,9 @@
 | RULE-06 | Phase 6 | Complete |
 | RULE-07 | Phase 6 | Complete |
 | RULE-08 | Phase 6 | Complete |
-| PERF-01 | Phase 7 | Pending |
-| PERF-02 | Phase 7 | Pending |
-| PERF-03 | Phase 7 | Pending |
+| PERF-01 | Phase 7 | Complete |
+| PERF-02 | Phase 7 | Complete |
+| PERF-03 | Phase 7 | Complete |
 | PLUG-01 | Phase 9 | Pending |
 | PLUG-02 | Phase 9 | Pending |
 | TEST-01 | Phase 1-9 | Complete |
