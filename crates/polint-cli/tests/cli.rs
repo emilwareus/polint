@@ -1189,6 +1189,42 @@ rules = ["examples/ts-no-raw-colors"]
 }
 
 #[test]
+fn check_no_cache_does_not_create_cache_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join(".polint.toml"),
+        r##"
+[profiles.phase7]
+rules = ["examples/ts-no-raw-colors"]
+"##,
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("component.tsx"),
+        "export const color = \"#ff00aa\";",
+    )
+    .unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "check",
+            "--profile",
+            "phase7",
+            "--format",
+            "json",
+            "--no-cache",
+            "--fail-on",
+            "none",
+        ])
+        .assert()
+        .success();
+
+    assert!(!temp.path().join(".polint/cache").exists());
+}
+
+#[test]
 fn discovery_detects_all_supported_extensions() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(

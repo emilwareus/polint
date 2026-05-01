@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use polint_config::{default_config_toml, load_config};
-use polint_core::{RuleOptions, run_rules};
+use polint_config::{LoadedConfig, default_config_toml, load_config};
+use polint_core::{Rule, RuleOptions, run_rules};
 use polint_diagnostics::{OutputFormat, Severity, dedupe_diagnostics, render};
 use polint_fs::load_analysis_files;
 use polint_graph::{FunctionGraph, ImportGraph};
@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Parser)]
@@ -292,11 +293,7 @@ fn analyze_and_run(
 ) -> Result<(Vec<polint_diagnostics::Diagnostic>, polint_core::AnalysisDb)> {
     let config = load_config(root)?;
     let _cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
-    let mut db = load_analysis_files(&config)?;
-    let mut diagnostics = Vec::new();
-    diagnostics.extend(polint_go::analyze(&mut db));
-    diagnostics.extend(polint_ts::analyze(&mut db));
-
+    let config_digest = config_hash(&config);
     let rules = built_in_rules();
     let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
     let mut options = BTreeMap::<String, RuleOptions>::new();
@@ -307,8 +304,72 @@ fn analyze_and_run(
             rule_options_from_config(config.rule_config(&meta.id)),
         );
     }
+    let _rule_digest = rule_hash(&rules, &enabled, &options);
+
+    let mut db = load_analysis_files(&config)?;
+    let mut diagnostics = Vec::new();
+    diagnostics.extend(polint_go::analyze(&mut db));
+    diagnostics.extend(polint_ts::analyze(&mut db));
+
+    let _ = config_digest;
     diagnostics.extend(run_rules(&db, &rules, &options, &enabled, parallel));
     Ok((diagnostics, db))
+}
+
+fn config_hash(config: &LoadedConfig) -> String {
+    let missing = if config.missing { "missing" } else { "loaded" };
+    let serialized =
+        serde_json::to_string(&config.config).expect("polint config should serialize to JSON");
+    polint_cache::stable_hash(&[missing, &serialized])
+}
+
+fn rule_hash(
+    rules: &[Arc<dyn Rule>],
+    enabled: &BTreeSet<String>,
+    options: &BTreeMap<String, RuleOptions>,
+) -> String {
+    let mut parts = Vec::new();
+    for rule in rules {
+        let meta = rule.meta();
+        if !enabled.is_empty()
+            && !enabled
+                .iter()
+                .any(|pattern| polint_core::rule_id_matches(pattern, &meta.id))
+        {
+            continue;
+        }
+
+        parts.push(format!("rule:{}", meta.id));
+        parts.push(format!("description:{}", meta.description));
+        parts.push(format!("severity:{}", meta.severity));
+        if let Some(options) = options.get(&meta.id) {
+            parts.push(format!("options:{}", deterministic_rule_options(options)));
+        }
+    }
+    let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    polint_cache::stable_hash(&part_refs)
+}
+
+fn deterministic_rule_options(options: &RuleOptions) -> String {
+    let forbidden_imports = options
+        .forbidden_imports
+        .iter()
+        .map(|(source, targets)| format!("{source}->{}", targets.join("|")))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "severity={};files={};allow_files={};allow={};max={};deny={};forbidden_imports={}",
+        options
+            .severity
+            .map(|severity| severity.to_string())
+            .unwrap_or_default(),
+        options.files.join("|"),
+        options.allow_files.join("|"),
+        options.allow.join("|"),
+        options.max.map(|max| max.to_string()).unwrap_or_default(),
+        options.deny.join("|"),
+        forbidden_imports
+    )
 }
 
 fn explain(rule_id: &str) {
