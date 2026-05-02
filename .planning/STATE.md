@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: v1.0 milestone archived
-last_updated: "2026-05-02T07:43:50Z"
+stopped_at: quick task 260502-dql complete
+last_updated: "2026-05-02T07:53:30Z"
 last_activity: 2026-05-02
 progress:
   total_phases: 10
@@ -60,7 +60,13 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-02
+Last activity: 2026-05-02 - Completed quick task 260502-dql: Remove README note that the repository is named exlint now that the repo will be renamed to polint
+
+## Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260502-dql | Remove README note that the repository is named exlint now that the repo will be renamed to polint | 2026-05-02 | this commit | [260502-dql-remove-readme-note-that-the-repository-i](./quick/260502-dql-remove-readme-note-that-the-repository-i/) |
 
 ## Phase Progress
 

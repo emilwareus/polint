@@ -4,8 +4,6 @@ polint is a Rust framework for repo-local static-analysis rules. It is built for
 
 It is not a replacement for ESLint, Biome, Ruff, golangci-lint, rustfmt, gofmt, or formatters. Keep using those tools. Use polint when the policy is local to your repository and should be executable instead of repeated in prompts.
 
-This repository is named `exlint`; the CLI binary and Rust crates use the `polint` name.
-
 ## Why This Exists
 
 AI-assisted coding often violates subtle local conventions. Prompting the agent again and again is unreliable. Encoding those expectations as repo-local rules gives the team a repeatable check that works locally, in CI, and in agent workflows.
