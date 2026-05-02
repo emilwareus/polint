@@ -8,7 +8,7 @@ Minimal Go test fixture for two heuristic test-quality policies:
 Run it from this directory:
 
 ```bash
-polint check --profile fast --format json --fail-on none
+cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `payment_test.go` intentionally calls production-looking code without an

@@ -10,10 +10,10 @@ const danger = "#ff00aa";
 Run the checked-in fixture from this directory:
 
 ```bash
-polint check --profile fast --format json --fail-on none
+cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
-The fixture uses the built-in `examples/ts-no-raw-colors` rule so the example is
+The fixture uses the example `examples/ts-no-raw-colors` rule so the example is
 executable in v1. To start authoring a repo-local version of that policy,
 scaffold a TypeScript/JavaScript rule:
 
@@ -45,5 +45,6 @@ polint test-rules --format json
 ```
 
 Generated repo-local Rust rules are scaffolded for authoring/testing and are not
-automatically compiled or dynamically loaded by `polint check` in v1. Native
-registration and the built-in example rules are the current executable path.
+automatically compiled or dynamically loaded by `polint check` in v1. The
+checked-in examples use `examples/rules` as a local example runner instead of
+shipping these policies as bundled product rules.

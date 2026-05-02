@@ -1,12 +1,12 @@
 # TypeScript Design Tokens Example
 
-`examples/ts-design-tokens` is a TSX fixture for the built-in
-`examples/ts-no-raw-colors` rule.
+`examples/ts-design-tokens` is a TSX fixture for the example
+`examples/ts-no-raw-colors` rule in `examples/rules`.
 
 Run it from this directory:
 
 ```bash
-polint check --profile fast --format json --fail-on none
+cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `Button.tsx` intentionally includes raw color literals:

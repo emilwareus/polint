@@ -24,7 +24,7 @@ Archived milestone records:
 
 ### Validated
 
-- [x] Create a compiling Rust 2024 workspace with clear crate boundaries for CLI, config, diagnostics, filesystem, cache, core analysis, SDK, Go, TS, graph, rules, and plugin support. Validated in Phase 1: Workspace Foundation.
+- [x] Create a compiling Rust 2024 workspace with clear crate boundaries for CLI, config, diagnostics, filesystem, cache, core analysis, SDK, Go, TS, graph, example rules, and plugin support. Validated in Phase 1: Workspace Foundation.
 - [x] Provide the first CLI loop for `polint init`, `polint new-rule`, and `polint check` with profiles, output formats, cache disabling, and fail thresholds. Validated in Phase 2: CLI, Config, and Discovery.
 - [x] Load `.polint.toml` with include/exclude globs, profiles, rule paths, severity overrides, language settings, and sane defaults when config is missing. Validated in Phase 2: CLI, Config, and Discovery.
 - [x] Discover Go, TS, TSX, JS, and JSX files with `.gitignore`, include glob, and exclude glob support. Validated in Phase 2: CLI, Config, and Discovery.
@@ -52,7 +52,7 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 
 ### Out of Scope
 
-- Becoming a comprehensive built-in lint ruleset - the product value is custom rule infrastructure.
+- Becoming a comprehensive bundled lint ruleset - the product value is custom rule infrastructure.
 - Replacing existing language linters or formatters - users should keep ESLint, Biome, golangci-lint, rustfmt, and similar tools.
 - Full Go type checking in the first pass - leave a trait boundary for a future `go/packages` or `go/analysis` sidecar.
 - Full dynamic branch coverage in the first pass - design the model so exact coverage can be added later.
@@ -103,7 +103,7 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 | Keep Go analysis syntax-first and explicit about heuristics | Phase 4 uses tree-sitter facts and conservative error-path heuristics, while full Go type checking and exact coverage remain out of scope for the first pass. | Accepted in Phase 4 |
 | Keep TypeScript analysis syntax-first and explicit about heuristics | Phase 5 uses Oxc syntax facts for TS/JS parsing, declarations, JSX, literals, calls, complexity, and import graph proof, while TypeScript type checking and production module resolution remain out of scope. | Accepted in Phase 5 |
 | Keep the SDK additive and rule-author focused | Phase 6 exposes borrowed `RuleCtx` helpers and SDK prelude exports without replacing the core rule contract or adding a query engine. | Accepted in Phase 6 |
-| Treat built-in rules as SDK dogfood examples | Phase 6 keeps the requested `examples/...` rules as registered examples with deterministic diagnostics, configuration, and tests rather than a broad lint pack. | Accepted in Phase 6 |
+| Keep policy rules out of the shipped CLI | The product is a framework, not a bundled policy pack; example policies live under `examples/rules` and run through the example runner instead of `polint check`. | Accepted in quick task 260502-ehi |
 | Keep heuristic rule claims explicit and bounded | Phase 6 Go branch/test heuristics include `heuristic` wording and evidence labels, avoiding claims of exact semantic coverage. | Accepted in Phase 6 |
 | Keep scaffolded repo-local Rust rules honest and safe | Phase 6 hardens `polint new-rule` against unsafe names and overwrite, while leaving automatic dynamic loading to later phases. | Accepted in Phase 6 |
 | Cache parser facts, not full source text | Phase 7 stores diagnostics and extracted fact metadata keyed by content/config/rule/schema inputs, while avoiding cached full source or AST payloads. | Accepted in Phase 7 |
@@ -135,4 +135,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-02 after v1.0 milestone archive*
+*Last updated: 2026-05-02 after quick task 260502-ehi*

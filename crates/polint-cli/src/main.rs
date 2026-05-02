@@ -5,7 +5,6 @@ use polint_core::{Rule, RuleOptions, run_rules};
 use polint_diagnostics::{OutputFormat, Severity, dedupe_diagnostics, render};
 use polint_fs::load_analysis_files;
 use polint_graph::{FunctionGraph, ImportGraph};
-use polint_rules::{built_in_rules, rule_options_from_config};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -296,16 +295,9 @@ fn analyze_and_run(
     let config = load_config(root)?;
     let cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = config_hash(&config);
-    let rules = built_in_rules();
+    let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
-    let mut options = BTreeMap::<String, RuleOptions>::new();
-    for rule in &rules {
-        let meta = rule.meta();
-        options.insert(
-            meta.id.clone(),
-            rule_options_from_config(config.rule_config(&meta.id)),
-        );
-    }
+    let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = rule_hash(&rules, &enabled, &options);
 
     let mut db = load_analysis_files(&config)?;
@@ -386,34 +378,19 @@ fn deterministic_rule_options(options: &RuleOptions) -> String {
 }
 
 fn explain(rule_id: &str) {
-    for rule in built_in_rules() {
-        let meta = rule.meta();
-        if meta.id == rule_id {
-            println!(
-                "{}\n\nSeverity: {}\n\n{}",
-                meta.id, meta.severity, meta.description
-            );
-            return;
-        }
-    }
-    println!("No built-in rule found for `{rule_id}`. Custom rules use their own metadata.");
+    println!(
+        "No bundled rule found for `{rule_id}`. polint ships no built-in policy rules; repo-local rules own their metadata."
+    );
 }
 
 fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config(&root)?;
     let cache = polint_cache::Cache::default_for_repo(&root, !args.no_cache);
     let config_digest = config_hash(&config);
-    let rules = built_in_rules();
+    let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let mut parser_diagnostics = Vec::new();
     let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
-    let mut all_options = BTreeMap::<String, RuleOptions>::new();
-    for rule in &rules {
-        let meta = rule.meta();
-        all_options.insert(
-            meta.id.clone(),
-            rule_options_from_config(config.rule_config(&meta.id)),
-        );
-    }
+    let all_options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = rule_hash(&rules, &enabled, &all_options);
     let mut db = load_analysis_files(&config)?;
     parser_diagnostics.extend(polint_go::analyze_with_options(
@@ -442,10 +419,7 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             continue;
         }
         let mut options = BTreeMap::new();
-        options.insert(
-            meta.id.clone(),
-            rule_options_from_config(config.rule_config(&meta.id)),
-        );
+        options.insert(meta.id.clone(), RuleOptions::default());
         let start = Instant::now();
         let diagnostics = run_rules(&db, std::slice::from_ref(rule), &options, &enabled, false);
         let elapsed = start.elapsed();
@@ -456,6 +430,9 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             diagnostics.len()
         );
         all_diagnostics.extend(diagnostics);
+    }
+    if rules.is_empty() {
+        println!("No rules registered. polint ships no built-in policy rules.");
     }
 
     Ok(exit_code_for(&all_diagnostics, args.fail_on))

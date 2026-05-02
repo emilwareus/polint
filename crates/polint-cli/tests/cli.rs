@@ -100,6 +100,21 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn example_rules_cmd() -> Command {
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
+    command.args([
+        "run",
+        "--quiet",
+        "--manifest-path",
+        repo_root()
+            .join("examples/rules/Cargo.toml")
+            .to_str()
+            .unwrap(),
+        "--",
+    ]);
+    command
+}
+
 fn write_phase6_failing_fixtures(root: &Path) {
     write_file(
         &root.join("payment.go"),
@@ -243,8 +258,7 @@ files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     write_phase6_failing_fixtures(temp.path());
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -321,8 +335,7 @@ files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     write_phase6_clean_fixtures(temp.path());
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -410,8 +423,7 @@ files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -665,7 +677,7 @@ fn new_rule_generic_uses_sdk_query_helpers() {
 }
 
 #[test]
-fn check_reports_ts_raw_color() {
+fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
         .unwrap()
@@ -679,13 +691,15 @@ fn check_reports_ts_raw_color() {
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["check", "--format", "json"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("examples/ts-no-raw-colors"));
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(json.as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -794,8 +808,7 @@ rules = ["examples/go-branch-obligations"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -849,8 +862,7 @@ files = ["**/*.go"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -988,8 +1000,7 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1051,8 +1062,7 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1098,8 +1108,7 @@ rules = ["examples/go-cyclomatic-complexity", "examples/ts-cyclomatic-complexity
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1206,8 +1215,7 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
         );
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            example_rules_cmd()
                 .current_dir(&example_dir)
                 .args([
                     "check",
@@ -1266,8 +1274,7 @@ export function Button() {
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1313,12 +1320,7 @@ fn check_json_without_config_is_parseable() {
         .stdout(predicate::str::contains("Config not found").not());
     let json = stdout_json(assert);
 
-    assert!(
-        json.as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| { diagnostic["rule_id"] == "examples/ts-no-raw-colors" })
-    );
+    assert_eq!(json.as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -1364,8 +1366,7 @@ files = ["**/*.tsx"]
     .unwrap();
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1390,14 +1391,14 @@ files = ["**/*.tsx"]
 }
 
 #[test]
-fn explain_known_rule_prints_metadata() {
+fn explain_example_rule_reports_no_bundled_metadata() {
     Command::cargo_bin("polint")
         .unwrap()
         .args(["explain", "examples/ts-no-raw-colors"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("examples/ts-no-raw-colors"))
-        .stdout(predicate::str::contains("Severity:"));
+        .stdout(predicate::str::contains("No bundled rule found"))
+        .stdout(predicate::str::contains("ships no built-in policy rules"));
 }
 
 #[test]
@@ -1407,7 +1408,7 @@ fn explain_unknown_rule_is_nonfatal_and_clear() {
         .args(["explain", "custom/missing"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No built-in rule found"));
+        .stdout(predicate::str::contains("No bundled rule found"));
 }
 
 #[test]
@@ -1432,12 +1433,7 @@ fn test_rules_json_output_is_parseable() {
             .success(),
     );
 
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"),
-        "test-rules JSON should contain the raw-color diagnostic: {json:#?}"
-    );
+    assert_eq!(diagnostics(&json).len(), 0);
 }
 
 #[test]
@@ -1445,8 +1441,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
     let temp = tempfile::tempdir().unwrap();
     write_phase8_raw_color_fixture(temp.path(), "warn");
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    example_rules_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1461,8 +1456,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
         .failure()
         .code(1);
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    example_rules_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1476,8 +1470,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
         .assert()
         .success();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    example_rules_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1513,7 +1506,7 @@ fn sarif_no_cache_and_rule_paths_are_supported() {
         temp.path().join(".polint.toml"),
         r#"
 [rules]
-paths = [".polint/rules", "tools/polint-rules"]
+paths = [".polint/rules", "tools/policy-rules"]
 
 [profiles.phase2]
 rules = ["examples/ts-no-raw-colors"]
@@ -1527,8 +1520,7 @@ rules = ["examples/ts-no-raw-colors"]
     .unwrap();
 
     let sarif = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1557,8 +1549,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
     write_phase8_raw_color_fixture(temp.path(), "warn");
 
     let sarif = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1599,8 +1590,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
         "component.tsx"
     );
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    example_rules_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1804,7 +1794,7 @@ fn check_cache_writes_fact_metadata() {
     let temp = tempfile::tempdir().unwrap();
     write_phase7_cache_fixture(temp.path());
 
-    let json = stdout_json(
+    let _json = stdout_json(
         Command::cargo_bin("polint")
             .unwrap()
             .current_dir(temp.path())
@@ -1821,12 +1811,6 @@ fn check_cache_writes_fact_metadata() {
             .success(),
     );
 
-    assert!(
-        json.as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
-    );
     assert!(cache_json_count(temp.path()) >= 2);
     let cache_entry = fs::read_to_string(
         fs::read_dir(temp.path().join(".polint/cache"))
@@ -1945,7 +1929,7 @@ fn check_no_cache_bypasses_cache_reads_and_writes() {
 }
 
 #[test]
-fn profile_rules_reports_per_rule_timings() {
+fn profile_rules_reports_no_registered_rules() {
     let temp = tempfile::tempdir().unwrap();
     write_phase7_cache_fixture(temp.path());
 
@@ -1958,25 +1942,11 @@ fn profile_rules_reports_per_rule_timings() {
             .success(),
     );
 
-    let ts_index = output.find("examples/ts-no-raw-colors").unwrap();
-    let go_index = output.find("examples/go-cyclomatic-complexity").unwrap();
-    assert!(go_index < ts_index);
-    for line in output.lines() {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(fields.len(), 3, "{line}");
-        assert!(fields[0].starts_with("examples/"), "{line}");
-        let elapsed = fields[1]
-            .strip_prefix("elapsed_ms=")
-            .unwrap()
-            .parse::<f64>()
-            .unwrap();
-        assert!(elapsed >= 0.0, "{line}");
-        assert!(fields[2].starts_with("diagnostics="), "{line}");
-    }
+    assert!(output.contains("No rules registered"));
 }
 
 #[test]
-fn profile_rules_honors_fail_on_threshold() {
+fn profile_rules_without_registered_policy_rules_succeeds() {
     let temp = tempfile::tempdir().unwrap();
     write_phase7_cache_fixture(temp.path());
 
@@ -1985,8 +1955,7 @@ fn profile_rules_honors_fail_on_threshold() {
         .current_dir(temp.path())
         .args(["profile-rules", "--profile", "phase7", "--fail-on", "warn"])
         .assert()
-        .failure()
-        .code(1);
+        .success();
 }
 
 #[test]
@@ -2018,8 +1987,7 @@ files = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2077,8 +2045,7 @@ rules = ["examples/ts-no-raw-colors"]
     write_file(&temp.path().join("src/notes.txt"), "#ff00aa\n");
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2115,8 +2082,7 @@ fn discovery_respects_default_excludes() {
     }
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2202,8 +2168,7 @@ fn check_clean_repo_succeeds() {
 
 fn phase3_check_json(root: &Path) -> serde_json::Value {
     stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        example_rules_cmd()
             .current_dir(root)
             .args([
                 "check",

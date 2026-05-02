@@ -5,7 +5,7 @@ Minimal TypeScript fixture for `examples/config-query-no-literal`.
 Run it from this directory:
 
 ```bash
-polint check --profile fast --format json --fail-on none
+cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `query.ts` intentionally contains `legacy-testid`, and the example config denies

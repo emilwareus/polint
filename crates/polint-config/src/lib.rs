@@ -30,22 +30,8 @@ pub struct PolintConfig {
 impl Default for PolintConfig {
     fn default() -> Self {
         let mut profiles = BTreeMap::new();
-        profiles.insert(
-            "fast".to_string(),
-            ProfileConfig {
-                rules: vec![
-                    "custom/*".to_string(),
-                    "examples/ts-no-raw-colors".to_string(),
-                    "examples/config-query-no-literal".to_string(),
-                ],
-            },
-        );
-        profiles.insert(
-            "full".to_string(),
-            ProfileConfig {
-                rules: vec!["custom/*".to_string(), "examples/*".to_string()],
-            },
-        );
+        profiles.insert("fast".to_string(), ProfileConfig { rules: Vec::new() });
+        profiles.insert("full".to_string(), ProfileConfig { rules: Vec::new() });
         Self {
             workspace: WorkspaceConfig::default(),
             rules: RuleSection::default(),
@@ -128,7 +114,7 @@ impl LoadedConfig {
             .get(profile)
             .or_else(|| self.config.profiles.get("fast"))
             .map(|profile| profile.rules.clone())
-            .unwrap_or_else(|| vec!["custom/*".to_string(), "examples/*".to_string()])
+            .unwrap_or_default()
     }
 
     pub fn rule_config(&self, id: &str) -> Option<&RuleConfig> {
@@ -183,33 +169,10 @@ exclude = ["**/vendor/**", "**/node_modules/**", "**/.git/**", "**/target/**", "
 paths = [".polint/rules"]
 
 [profiles.fast]
-rules = [
-  "custom/*",
-  "examples/ts-no-raw-colors",
-  "examples/config-query-no-literal",
-]
+rules = []
 
 [profiles.full]
-rules = [
-  "custom/*",
-  "examples/*",
-]
-
-[[rules.config]]
-id = "examples/go-cyclomatic-complexity"
-severity = "warn"
-max = 12
-
-[[rules.config]]
-id = "examples/ts-cyclomatic-complexity"
-severity = "warn"
-max = 12
-
-[[rules.config]]
-id = "examples/ts-no-raw-colors"
-severity = "error"
-files = ["**/*.{ts,tsx,js,jsx}"]
-allow_files = ["**/theme/**", "**/design-tokens/**"]
+rules = []
 "#
 }
 

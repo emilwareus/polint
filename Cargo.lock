@@ -1658,7 +1658,6 @@ dependencies = [
  "polint-go",
  "polint-graph",
  "polint-plugin",
- "polint-rules",
  "polint-ts",
  "predicates",
  "serde_json",
@@ -1697,6 +1696,25 @@ dependencies = [
  "insta",
  "proptest",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "polint-example-rules"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "globset",
+ "insta",
+ "polint-cache",
+ "polint-config",
+ "polint-core",
+ "polint-diagnostics",
+ "polint-fs",
+ "polint-go",
+ "polint-sdk",
+ "polint-ts",
  "serde_json",
 ]
 
@@ -1747,20 +1765,6 @@ dependencies = [
  "thiserror 2.0.18",
  "wasmtime",
  "wit-bindgen 0.57.1",
-]
-
-[[package]]
-name = "polint-rules"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "globset",
- "insta",
- "polint-config",
- "polint-core",
- "polint-diagnostics",
- "polint-sdk",
- "serde_json",
 ]
 
 [[package]]

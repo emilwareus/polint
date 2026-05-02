@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260502-dto complete
-last_updated: "2026-05-02T08:00:40Z"
+stopped_at: quick task 260502-ehi complete
+last_updated: "2026-05-02T14:40:31Z"
 last_activity: 2026-05-02
 progress:
   total_phases: 10
@@ -60,14 +60,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-02 - Completed quick task 260502-dto: Improve examples with real minimal linted code, README coverage, and CLI e2e tests
+Last activity: 2026-05-02 - Completed quick task 260502-ehi: Remove built-in rules and move example policies into examples
 
 ## Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260502-dql | Remove README note that the repository is named exlint now that the repo will be renamed to polint | 2026-05-02 | a07de50 | [260502-dql-remove-readme-note-that-the-repository-i](./quick/260502-dql-remove-readme-note-that-the-repository-i/) |
-| 260502-dto | Improve examples with real minimal linted code, README coverage, and CLI e2e tests | 2026-05-02 | this commit | [260502-dto-improve-examples-with-real-minimal-linte](./quick/260502-dto-improve-examples-with-real-minimal-linte/) |
+| 260502-dto | Improve examples with real minimal linted code, README coverage, and CLI e2e tests | 2026-05-02 | 10ea4a4 | [260502-dto-improve-examples-with-real-minimal-linte](./quick/260502-dto-improve-examples-with-real-minimal-linte/) |
+| 260502-ehi | Remove built-in rules and move example policies into examples | 2026-05-02 | this commit | [260502-ehi-remove-built-in-rules-and-move-example-r](./quick/260502-ehi-remove-built-in-rules-and-move-example-r/) |
 
 ## Phase Progress
 
@@ -114,7 +115,7 @@ Last activity: 2026-05-02 - Completed quick task 260502-dto: Improve examples wi
 - [Phase 06-sdk-and-example-rules]: Kept literal allow-list support as a narrow additive config field separate from allow_files.
 - [Phase 06-sdk-and-example-rules]: Excluded Go import path string nodes from general string literal facts so ImportFact remains the import source of truth.
 - [Phase 06-sdk-and-example-rules]: Represented TS/JS regex literals as slash-delimited source syntax only, preserving flags without evaluating regex semantics.
-- [Phase 06-sdk-and-example-rules]: Used polint_sdk::prelude::* for production built-in rule authoring while keeping run_rules access limited to focused unit tests.
+- [Phase 06-sdk-and-example-rules]: Used polint_sdk::prelude::* for example rule authoring while keeping run_rules access limited to focused unit tests.
 - [Phase 06-sdk-and-example-rules]: Kept denied regex literal handling syntax-level by reporting the available literal text and matched deny token only.
 - [Phase 06-sdk-and-example-rules]: Deduped raw-color findings by file, byte range, and literal value so overlapping string and JSX facts produce one diagnostic.
 - [Phase 06-sdk-and-example-rules]: Used RuleCtx::branches and RuleCtx::go_tests_for_related_file for Go branch evidence instead of direct AnalysisDb access.
@@ -184,7 +185,7 @@ Last activity: 2026-05-02 - Completed quick task 260502-dto: Improve examples wi
 ## Important Context For Execution
 
 - Do not fake functionality. If a feature remains heuristic or experimental, label it that way.
-- Keep built-in rules as SDK examples, not a comprehensive ruleset.
+- Keep policy rules out of the shipped CLI; example rules live under `examples/rules`.
 - Use deterministic ordering everywhere output can be observed.
 - Prefer a smaller complete v1 over broad shallow behavior.
 - Keep source and GSD planning changes in `/Users/emilwareus/Development/exlint` on `main`.

@@ -1,6 +1,6 @@
 //! `polint-sdk` is the public rule-authoring entry point for Polint.
 //!
-//! Repo-local and built-in rule authors should start with
+//! Repo-local and example rule authors should start with
 //! `use polint_sdk::prelude::*;`. The prelude re-exports the stable core rule
 //! contract, fact types, diagnostics, severity types, and `anyhow::Result`
 //! needed for ordinary rule implementations without depending on `polint-core`

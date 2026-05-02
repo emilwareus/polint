@@ -21,7 +21,7 @@ cargo install --path crates/polint-cli
 During development, run the CLI without installing it:
 
 ```bash
-cargo run -p polint-cli -- check
+cargo run -p polint-cli -- check --fail-on none
 ```
 
 ## Quickstart
@@ -29,8 +29,8 @@ cargo run -p polint-cli -- check
 ```bash
 polint init
 polint new-rule go require-payment-error-tests
-polint check
-polint check --profile full --format json
+polint check --fail-on none
+cargo run --manifest-path examples/rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `polint init` creates:
@@ -43,7 +43,8 @@ polint check --profile full --format json
 
 `polint new-rule go my-policy` creates a repo-local Rust rule skeleton under `.polint/rules/my-policy`.
 
-If config is missing, `polint check` still runs a minimal default and suggests `polint init`.
+If config is missing, `polint check` still runs parser/fact extraction with no
+policy rules and suggests `polint init`.
 
 ## Example Config
 
@@ -56,21 +57,26 @@ exclude = ["**/vendor/**", "**/node_modules/**", "**/*.pb.go"]
 paths = [".polint/rules"]
 
 [profiles.fast]
-rules = ["custom/*", "examples/ts-no-raw-colors"]
+rules = []
 
 [profiles.full]
-rules = ["custom/*", "examples/*"]
+rules = []
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "custom/no-raw-brand-colors"
 severity = "error"
 files = ["apps/web/**/*.{ts,tsx}"]
 allow_files = ["apps/web/src/theme/**", "apps/web/src/design-tokens/**"]
 ```
 
-## Built-In Example Rules
+## No Built-In Policy Rules
 
-The built-ins are SDK dogfood examples, not a comprehensive lint pack:
+polint intentionally ships no built-in policy rules. It provides the host
+infrastructure: discovery, parsing, facts, diagnostics, rule execution, config,
+CI output, graph output, cache, and SDK types.
+
+The copyable rules under `examples/rules` are SDK dogfood examples, not product
+defaults:
 
 - `examples/go-cyclomatic-complexity`
 - `examples/ts-cyclomatic-complexity`
@@ -85,7 +91,7 @@ Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnos
 
 ## Rule Authoring
 
-Generated rules use the same SDK shape as built-in rules:
+Generated rules use the same SDK shape as the example rules:
 
 ```rust
 use polint_sdk::prelude::*;
@@ -118,7 +124,10 @@ impl Rule for RequirePaymentErrorTests {
 }
 ```
 
-Generated repo-local Rust rules are scaffolded for authoring and testing, but they are not automatically compiled or dynamically loaded by `polint check` in v1. Native registration and the built-in example rules are the current executable path.
+Generated repo-local Rust rules are scaffolded for authoring and testing, but
+they are not automatically compiled or dynamically loaded by `polint check` in
+v1. A production host must register native rules itself for now; automatic
+repo-local Wasm compilation/loading remains future work.
 
 ## Capabilities
 
@@ -138,11 +147,11 @@ Capabilities cover facts such as files, functions, imports, Go tests, branch obl
 
 ## Testing Rules
 
-Use `polint test-rules` to run the same analysis path against fixtures:
+Use the example runner to see SDK rules execute against real fixtures:
 
 ```bash
-polint test-rules --format json
-polint test-rules --profile full --format json --fail-on none
+cargo run --manifest-path examples/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo test -p polint-example-rules
 ```
 
 Use `--fail-on warn|error|none` to control CI status. Exit codes are:
@@ -165,12 +174,12 @@ The top-level `examples/` directory contains copyable examples:
 - `examples/go-test-quality` - heuristic Go test-suite size and assertion examples.
 - `examples/ts-complexity` - TypeScript cyclomatic complexity.
 - `examples/ts-design-tokens` - syntax-level raw color detection example.
+- `examples/rules` - SDK rule implementations and the local example runner.
 
-Run examples with an installed binary or through Cargo:
+Run a fixture from that fixture directory:
 
 ```bash
-polint check --profile fast --format json --fail-on none
-cargo run -p polint-cli -- check --profile fast --format json --fail-on none
+cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 ## Experimental Wasm Plugins
@@ -197,7 +206,10 @@ jobs:
       - run: cargo run -p polint-cli -- check --profile full --format sarif > polint.sarif
 ```
 
-CI should prefer `polint check --profile full --format sarif` so the full rule profile runs and output can be uploaded or archived by the CI system. The output is SARIF-like for v1 and intentionally does not claim full SARIF certification.
+CI can run `polint check --profile full --format sarif` for parser diagnostics,
+graph/fact smoke coverage, and any rules registered by a custom host. The
+default CLI has no bundled policy rules. The output is SARIF-like for v1 and
+intentionally does not claim full SARIF certification.
 
 ## Development
 

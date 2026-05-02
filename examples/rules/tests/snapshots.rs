@@ -3,7 +3,7 @@ use polint_core::{
     Language, RuleOptions, Span, StringLiteralFact, TestFact, run_rules,
 };
 use polint_diagnostics::{Diagnostic, OutputFormat, render};
-use polint_rules::built_in_rules;
+use polint_example_rules::example_rules;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -193,15 +193,11 @@ fn phase6_options() -> BTreeMap<String, RuleOptions> {
 
 fn diagnostics_for(rule_ids: &[&str]) -> Vec<Diagnostic> {
     let wanted = rule_ids.iter().copied().collect::<BTreeSet<_>>();
-    let rules = built_in_rules()
+    let rules = example_rules()
         .into_iter()
         .filter(|rule| wanted.contains(rule.meta().id.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(
-        rules.len(),
-        rule_ids.len(),
-        "missing selected built-in rule"
-    );
+    assert_eq!(rules.len(), rule_ids.len(), "missing selected example rule");
 
     let db = phase6_db();
     let enabled = rule_ids

@@ -3,7 +3,7 @@ use polint_diagnostics::fingerprint;
 use polint_sdk::prelude::*;
 use std::sync::Arc;
 
-pub fn built_in_rules() -> Vec<Arc<dyn Rule>> {
+pub fn example_rules() -> Vec<Arc<dyn Rule>> {
     vec![
         Arc::new(GoCyclomaticComplexity),
         Arc::new(TsCyclomaticComplexity),
@@ -658,7 +658,7 @@ mod tests {
             .expect("production source segment exists");
         assert!(
             production_source.contains("use polint_sdk::prelude::*;"),
-            "built-in examples should author through the SDK prelude"
+            "example rules should author through the SDK prelude"
         );
     }
 
