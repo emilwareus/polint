@@ -10,6 +10,16 @@ The product is for engineering teams using AI-assisted development who need exec
 
 Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
+## Current State
+
+v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/discovery loop, deterministic core facts and diagnostics, Go and TypeScript/JavaScript adapters, SDK and example rules, cache/performance support, CI output and graph commands, experimental plugin skeleton, README/examples, and final release verification.
+
+Archived milestone records:
+
+- `.planning/milestones/v1.0-ROADMAP.md`
+- `.planning/milestones/v1.0-REQUIREMENTS.md`
+- `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
+
 ## Requirements
 
 ### Validated
@@ -66,6 +76,7 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 - Phase 8 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing SARIF-like output, final exit semantics, explain/test/profile commands, deterministic DOT graph commands, and CI-facing behavior without claiming certified SARIF.
 - Phase 9 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing the experimental WIT plugin boundary, structured manifest validation, optional Wasmtime component-byte validation, and honest plugin docs without claiming `polint check` plugin execution.
 - Phase 10 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing README, examples, mixed/example CLI smoke tests, final release verification, and v1 requirement traceability without claiming crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, or automatic repo-local Wasm compilation.
+- v1.0 MVP was audited, archived, tagged, and closed on 2026-05-02.
 
 ## Constraints
 
@@ -102,6 +113,10 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 | Keep plugin support validate-only in v1 | Phase 9 validates manifests and optional component bytes but does not execute plugin code from `polint check`. | Accepted in Phase 9 |
 | Make README and examples the v1 user-facing documentation surface | Phase 10 completed concise command-oriented docs and examples instead of creating a separate docs site or publishing automation. | Accepted in Phase 10 |
 
+## Next Milestone Goals
+
+No v1 carryover requirements remain. Next milestone planning should start from fresh requirements with `/gsd-new-milestone`.
+
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
@@ -120,4 +135,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-01 after Phase 10 verification*
+*Last updated: 2026-05-02 after v1.0 milestone archive*

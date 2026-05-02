@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
-status: complete
-stopped_at: Phase 10 complete
-last_updated: "2026-05-01T16:19:16.602Z"
-last_activity: 2026-05-01
+milestone_name: MVP
+status: archived
+stopped_at: v1.0 milestone archived
+last_updated: "2026-05-02T07:43:50Z"
+last_activity: 2026-05-02
 progress:
   total_phases: 10
   completed_phases: 10
@@ -18,18 +18,19 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-01)
+See: `.planning/PROJECT.md` (updated 2026-05-02)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.0 milestone complete — ready for milestone closeout
+**Current focus:** v1.0 archived - ready to start the next milestone
 
 ## Current Status
 
 - Repository root: `/Users/emilwareus/Development/exlint`.
 - Active branch policy: work directly on `main`; do not use GSD worktrees for this project.
 - Planning initialized from `docs/INITIAL_PROMPT.md`.
-- Requirements and roadmap created.
+- v1.0 requirements and full roadmap archived under `.planning/milestones/`.
+- Live `.planning/REQUIREMENTS.md` is intentionally absent until the next milestone is started.
 - Source implementation committed on `main` as `7828215` (`Implement initial polint workspace`).
 - Verification passed: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 - Phase 1 has been closed through GSD plan execution and verification.
@@ -52,14 +53,14 @@ See: `.planning/PROJECT.md` (updated 2026-05-01)
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
 - Phase 9 completed the experimental WIT plugin boundary, structured manifest/Wasmtime validation skeleton, docs, code review, verification, and security with `threats_open: 0`; see `.planning/phases/09-plugin-skeleton/09-VERIFICATION.md` and `.planning/phases/09-plugin-skeleton/09-SECURITY.md`.
 - Phase 10 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
-- Next action: complete the v1.0 milestone.
+- Next action: start the next milestone with `/gsd-new-milestone`.
 
 ## Current Position
 
-Phase: 10 (docs-examples-and-release-hardening) — COMPLETE
-Status: Milestone complete
-Plan: Complete
-Last activity: 2026-05-01
+Milestone: v1.0 MVP - ARCHIVED
+Status: Archived
+Plan: Next milestone not started
+Last activity: 2026-05-02
 
 ## Phase Progress
 
