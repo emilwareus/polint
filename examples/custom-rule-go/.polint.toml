@@ -3,4 +3,4 @@ include = ["authorize.go"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/go-branch-obligations"]
+rules = ["local/require-error-branch-tests"]

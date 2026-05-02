@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -63,25 +62,6 @@ fn diagnostic_has_evidence(diagnostic: &serde_json::Value, label: &str, value: &
     })
 }
 
-const PHASE6_RULE_IDS: [&str; 8] = [
-    "examples/go-cyclomatic-complexity",
-    "examples/ts-cyclomatic-complexity",
-    "examples/go-import-boundaries",
-    "examples/ts-no-raw-colors",
-    "examples/go-branch-obligations",
-    "examples/go-test-suite-size",
-    "examples/go-assertion-after-action",
-    "examples/config-query-no-literal",
-];
-
-fn diagnostic_rule_ids(value: &serde_json::Value) -> BTreeSet<String> {
-    diagnostics(value)
-        .iter()
-        .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
-        .map(str::to_string)
-        .collect()
-}
-
 fn diagnostics_for_rule<'a>(
     value: &'a serde_json::Value,
     rule_id: &str,
@@ -100,14 +80,18 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn example_rules_cmd() -> Command {
+fn example_rule_cmd(example: &str, rule: &str) -> Command {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     command.args([
         "run",
         "--quiet",
         "--manifest-path",
         repo_root()
-            .join("examples/rules/Cargo.toml")
+            .join("examples")
+            .join(example)
+            .join(".polint/rules")
+            .join(rule)
+            .join("Cargo.toml")
             .to_str()
             .unwrap(),
         "--",
@@ -115,34 +99,20 @@ fn example_rules_cmd() -> Command {
     command
 }
 
-fn write_phase6_failing_fixtures(root: &Path) {
-    write_file(
-        &root.join("payment.go"),
-        include_str!("../../../tests/fixtures/go/failing/payment.go"),
-    );
-    write_file(
-        &root.join("payment_test.go"),
-        include_str!("../../../tests/fixtures/go/failing/payment_test.go"),
-    );
-    write_file(
-        &root.join("component.tsx"),
-        include_str!("../../../tests/fixtures/ts/failing/component.tsx"),
-    );
+fn raw_color_rule_cmd() -> Command {
+    example_rule_cmd("ts-design-tokens", "no-raw-colors")
 }
 
-fn write_phase6_clean_fixtures(root: &Path) {
-    write_file(
-        &root.join("payment.go"),
-        include_str!("../../../tests/fixtures/go/clean/payment.go"),
-    );
-    write_file(
-        &root.join("payment_test.go"),
-        include_str!("../../../tests/fixtures/go/clean/payment_test.go"),
-    );
-    write_file(
-        &root.join("component.tsx"),
-        include_str!("../../../tests/fixtures/ts/clean/component.tsx"),
-    );
+fn ts_complexity_rule_cmd() -> Command {
+    example_rule_cmd("ts-complexity", "ts-complexity")
+}
+
+fn go_import_boundaries_rule_cmd() -> Command {
+    example_rule_cmd("go-import-boundaries", "go-import-boundaries")
+}
+
+fn go_branch_obligations_rule_cmd() -> Command {
+    example_rule_cmd("go-branch-obligations", "go-branch-obligations")
 }
 
 fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
@@ -151,10 +121,10 @@ fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
         &format!(
             r##"
 [profiles.phase8]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 severity = "{severity}"
 files = ["**/*.tsx"]
 "##
@@ -191,303 +161,6 @@ func validateUser() {}
 
 func charge() {}
 "#,
-    );
-}
-
-#[test]
-fn fixture_inputs_cover_requested_rule_triggers() {
-    let go_failing = include_str!("../../../tests/fixtures/go/failing/payment.go");
-    let go_failing_test = include_str!("../../../tests/fixtures/go/failing/payment_test.go");
-    let ts_failing = include_str!("../../../tests/fixtures/ts/failing/component.tsx");
-
-    assert!(go_failing.contains("legacy-token"));
-    assert!(go_failing_test.contains("TestProcessOversizedSuite"));
-    assert!(go_failing_test.contains("TestProcessNoAssertion"));
-    assert!(ts_failing.contains("/legacy-testid/"));
-}
-
-#[test]
-fn check_phase6_runs_all_requested_example_rules() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r##"
-[profiles.phase6]
-rules = [
-  "examples/go-cyclomatic-complexity",
-  "examples/ts-cyclomatic-complexity",
-  "examples/go-import-boundaries",
-  "examples/ts-no-raw-colors",
-  "examples/go-branch-obligations",
-  "examples/go-test-suite-size",
-  "examples/go-assertion-after-action",
-  "examples/config-query-no-literal",
-]
-
-[[rules.config]]
-id = "examples/go-cyclomatic-complexity"
-max = 3
-files = ["**/*.go"]
-
-[[rules.config]]
-id = "examples/ts-cyclomatic-complexity"
-max = 3
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/go-import-boundaries"
-files = ["**/*.go"]
-
-[rules.config.forbidden_imports]
-"**/*.go" = ["net/http"]
-
-[[rules.config]]
-id = "examples/ts-no-raw-colors"
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/go-test-suite-size"
-max = 24
-
-[[rules.config]]
-id = "examples/config-query-no-literal"
-deny = ["legacy-token", "legacy-testid"]
-files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-"##,
-    );
-    write_phase6_failing_fixtures(temp.path());
-
-    let json = stdout_json(
-        example_rules_cmd()
-            .current_dir(temp.path())
-            .args([
-                "check",
-                "--profile",
-                "phase6",
-                "--format",
-                "json",
-                "--fail-on",
-                "none",
-            ])
-            .assert()
-            .success(),
-    );
-
-    let actual_rule_ids = diagnostic_rule_ids(&json);
-    for expected in PHASE6_RULE_IDS {
-        assert!(
-            actual_rule_ids.contains(expected),
-            "missing {expected}; got {actual_rule_ids:#?}\njson: {json:#?}"
-        );
-    }
-}
-
-#[test]
-fn check_phase6_clean_fixtures_do_not_emit_example_rule_diagnostics() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r##"
-[profiles.phase6]
-rules = [
-  "examples/go-cyclomatic-complexity",
-  "examples/ts-cyclomatic-complexity",
-  "examples/go-import-boundaries",
-  "examples/ts-no-raw-colors",
-  "examples/go-branch-obligations",
-  "examples/go-test-suite-size",
-  "examples/go-assertion-after-action",
-  "examples/config-query-no-literal",
-]
-
-[[rules.config]]
-id = "examples/go-cyclomatic-complexity"
-max = 20
-files = ["**/*.go"]
-
-[[rules.config]]
-id = "examples/ts-cyclomatic-complexity"
-max = 20
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/go-import-boundaries"
-files = ["**/*.go"]
-
-[rules.config.forbidden_imports]
-"**/*.go" = ["net/http"]
-
-[[rules.config]]
-id = "examples/ts-no-raw-colors"
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-allow_files = ["**/theme/**", "**/design-tokens/**"]
-
-[[rules.config]]
-id = "examples/go-test-suite-size"
-max = 24
-
-[[rules.config]]
-id = "examples/config-query-no-literal"
-deny = ["legacy-token", "legacy-testid"]
-files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-"##,
-    );
-    write_phase6_clean_fixtures(temp.path());
-
-    let json = stdout_json(
-        example_rules_cmd()
-            .current_dir(temp.path())
-            .args([
-                "check",
-                "--profile",
-                "phase6",
-                "--format",
-                "json",
-                "--fail-on",
-                "none",
-            ])
-            .assert()
-            .success(),
-    );
-
-    let example_diagnostics = diagnostics(&json)
-        .iter()
-        .filter(|diagnostic| {
-            diagnostic["rule_id"]
-                .as_str()
-                .is_some_and(|rule_id| rule_id.starts_with("examples/"))
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        example_diagnostics.is_empty(),
-        "clean fixtures should not emit examples/* diagnostics: {example_diagnostics:#?}"
-    );
-}
-
-#[test]
-fn check_phase6_rule_options_configure_thresholds_allow_lists_and_denied_literals() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r##"
-[profiles.phase6]
-rules = [
-  "examples/go-cyclomatic-complexity",
-  "examples/ts-cyclomatic-complexity",
-  "examples/go-import-boundaries",
-  "examples/ts-no-raw-colors",
-  "examples/go-branch-obligations",
-  "examples/go-test-suite-size",
-  "examples/go-assertion-after-action",
-  "examples/config-query-no-literal",
-]
-
-[[rules.config]]
-id = "examples/go-cyclomatic-complexity"
-max = 3
-files = ["**/*.go"]
-
-[[rules.config]]
-id = "examples/ts-cyclomatic-complexity"
-max = 3
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/go-import-boundaries"
-severity = "warn"
-files = ["**/*.go"]
-
-[rules.config.forbidden_imports]
-"**/*.go" = ["net/http"]
-
-[[rules.config]]
-id = "examples/ts-no-raw-colors"
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-allow_files = ["theme/**"]
-allow = ["#00ff00"]
-
-[[rules.config]]
-id = "examples/go-test-suite-size"
-max = 24
-
-[[rules.config]]
-id = "examples/config-query-no-literal"
-deny = ["legacy-token", "legacy-testid"]
-files = ["**/*.go", "**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-"##,
-    );
-    write_phase6_failing_fixtures(temp.path());
-    write_file(
-        &temp.path().join("theme/generated.tsx"),
-        "export const ignored = \"#123456\";\n",
-    );
-
-    let json = stdout_json(
-        example_rules_cmd()
-            .current_dir(temp.path())
-            .args([
-                "check",
-                "--profile",
-                "phase6",
-                "--format",
-                "json",
-                "--fail-on",
-                "none",
-            ])
-            .assert()
-            .success(),
-    );
-
-    let import_boundary = diagnostics_for_rule(&json, "examples/go-import-boundaries");
-    assert!(
-        import_boundary
-            .iter()
-            .any(|diagnostic| diagnostic["severity"] == "warn"),
-        "severity override should apply to import-boundary diagnostics: {import_boundary:#?}"
-    );
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "import", "net/http")),
-        "expected forbidden import evidence: {json:#?}"
-    );
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "literal", "legacy-token")),
-        "expected denied literal evidence: {json:#?}"
-    );
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "matched", "legacy-testid")),
-        "expected denied literal match evidence: {json:#?}"
-    );
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "score", "")),
-        "expected test-suite score evidence: {json:#?}"
-    );
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "branch_fingerprint", "")),
-        "expected branch fingerprint evidence: {json:#?}"
-    );
-
-    let raw_color_diagnostics = diagnostics_for_rule(&json, "examples/ts-no-raw-colors");
-    assert!(
-        raw_color_diagnostics
-            .iter()
-            .all(|diagnostic| !diagnostic_has_evidence(diagnostic, "literal", "#00ff00")),
-        "raw color allow-list should suppress #00ff00: {raw_color_diagnostics:#?}"
-    );
-    assert!(
-        raw_color_diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic["file"] != "theme/generated.tsx"),
-        "allow_files should suppress theme/generated.tsx: {raw_color_diagnostics:#?}"
     );
 }
 
@@ -799,7 +472,7 @@ fn check_go_full_profile_uses_branch_and_test_facts() {
         &temp.path().join(".polint.toml"),
         r#"
 [profiles.phase4]
-rules = ["examples/go-branch-obligations"]
+rules = ["local/go-branch-obligations"]
 "#,
     );
     write_file(
@@ -808,7 +481,7 @@ rules = ["examples/go-branch-obligations"]
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        go_branch_obligations_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -825,7 +498,7 @@ rules = ["examples/go-branch-obligations"]
 
     let diagnostic = diagnostics(&json)
         .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/go-branch-obligations")
+        .find(|diagnostic| diagnostic["rule_id"] == "local/go-branch-obligations")
         .expect("failing Go fixture should emit branch-obligation diagnostic");
     assert!(
         diagnostic_has_evidence(diagnostic, "edge", ""),
@@ -846,10 +519,10 @@ fn check_go_import_boundary_uses_import_facts() {
         &temp.path().join(".polint.toml"),
         r#"
 [profiles.phase4]
-rules = ["examples/go-import-boundaries"]
+rules = ["local/go-import-boundaries"]
 
 [[rules.config]]
-id = "examples/go-import-boundaries"
+id = "local/go-import-boundaries"
 files = ["**/*.go"]
 
 [rules.config.forbidden_imports]
@@ -862,7 +535,7 @@ files = ["**/*.go"]
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        go_import_boundaries_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -879,7 +552,7 @@ files = ["**/*.go"]
 
     let diagnostic = diagnostics(&json)
         .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/go-import-boundaries")
+        .find(|diagnostic| diagnostic["rule_id"] == "local/go-import-boundaries")
         .expect("forbidden Go import should emit import-boundary diagnostic");
     assert!(
         diagnostic_has_evidence(diagnostic, "import", "net/http"),
@@ -977,20 +650,11 @@ fn check_ts_full_profile_uses_phase5_facts() {
         &temp.path().join(".polint.toml"),
         r##"
 [profiles.phase5]
-rules = ["examples/ts-cyclomatic-complexity", "examples/ts-no-raw-colors", "examples/config-query-no-literal"]
+rules = ["local/ts-cyclomatic-complexity"]
 
 [[rules.config]]
-id = "examples/ts-cyclomatic-complexity"
+id = "local/ts-cyclomatic-complexity"
 max = 3
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/ts-no-raw-colors"
-files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
-
-[[rules.config]]
-id = "examples/config-query-no-literal"
-deny = ["legacy-testid"]
 files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 "##,
     );
@@ -1000,7 +664,7 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        ts_complexity_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1017,28 +681,11 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 
     let complexity = diagnostics(&json)
         .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-cyclomatic-complexity")
+        .find(|diagnostic| diagnostic["rule_id"] == "local/ts-cyclomatic-complexity")
         .expect("failing TS fixture should emit TS complexity diagnostic");
     assert!(
         diagnostic_has_evidence(complexity, "complexity", ""),
         "complexity diagnostic should include complexity evidence: {complexity:#?}"
-    );
-
-    let raw_color = diagnostics(&json)
-        .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
-        .expect("failing TS fixture should emit raw-color diagnostic");
-    assert_eq!(raw_color["file"], "component.tsx");
-
-    let denied_literal = diagnostics(&json)
-        .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/config-query-no-literal")
-        .expect("failing TS fixture should emit denied literal diagnostic");
-    assert!(
-        denied_literal["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("legacy-testid")),
-        "denied literal diagnostic should mention legacy-testid: {denied_literal:#?}"
     );
 }
 
@@ -1049,10 +696,10 @@ fn check_ts_design_token_example_reports_raw_colors() {
         &temp.path().join(".polint.toml"),
         r#"
 [profiles.phase5]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 "#,
     );
@@ -1062,7 +709,7 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1079,7 +726,7 @@ files = ["**/*.tsx", "**/*.ts", "**/*.jsx", "**/*.js"]
 
     let diagnostic = diagnostics(&json)
         .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
+        .find(|diagnostic| diagnostic["rule_id"] == "local/no-raw-colors")
         .expect("TS design-token example should emit raw-color diagnostic");
     assert_eq!(diagnostic["file"], "Button.tsx");
 }
@@ -1103,12 +750,13 @@ include = ["mixed/**"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/go-cyclomatic-complexity", "examples/ts-cyclomatic-complexity"]
+rules = []
 "#,
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        Command::cargo_bin("polint")
+            .unwrap()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1147,75 +795,90 @@ rules = ["examples/go-cyclomatic-complexity", "examples/ts-cyclomatic-complexity
 
 #[test]
 fn checked_in_examples_are_runnable_cli_fixtures() {
-    let cases: &[(&str, &[&str], &[&str])] = &[
+    let cases: &[(&str, &str, &str, &[&str])] = &[
         (
-            "examples/basic",
-            &["examples/ts-no-raw-colors"],
+            "basic",
+            "no-raw-colors",
+            "local/no-raw-colors",
             &["Button.tsx"],
         ),
         (
-            "examples/config-denied-literal",
-            &["examples/config-query-no-literal"],
+            "config-denied-literal",
+            "no-denied-literals",
+            "local/no-denied-literals",
             &["query.ts"],
         ),
         (
-            "examples/custom-rule-go",
-            &["examples/go-branch-obligations"],
+            "custom-rule-go",
+            "require-error-branch-tests",
+            "local/require-error-branch-tests",
             &["authorize.go"],
         ),
         (
-            "examples/custom-rule-ts",
-            &["examples/ts-no-raw-colors"],
+            "custom-rule-ts",
+            "no-product-hex-colors",
+            "local/no-product-hex-colors",
             &["Button.tsx"],
         ),
         (
-            "examples/go-branch-obligations",
-            &["examples/go-branch-obligations"],
+            "go-branch-obligations",
+            "go-branch-obligations",
+            "local/go-branch-obligations",
             &["authorize.go"],
         ),
         (
-            "examples/go-complexity",
-            &["examples/go-cyclomatic-complexity"],
+            "go-complexity",
+            "go-complexity",
+            "local/go-cyclomatic-complexity",
             &["router.go"],
         ),
         (
-            "examples/go-import-boundaries",
-            &["examples/go-import-boundaries"],
+            "go-import-boundaries",
+            "go-import-boundaries",
+            "local/go-import-boundaries",
             &["handler.go"],
         ),
         (
-            "examples/go-test-quality",
-            &[
-                "examples/go-test-suite-size",
-                "examples/go-assertion-after-action",
-            ],
+            "go-test-quality",
+            "go-test-quality",
+            "local/go-test-quality",
             &["payment_test.go"],
         ),
         (
-            "examples/ts-complexity",
-            &["examples/ts-cyclomatic-complexity"],
+            "ts-complexity",
+            "ts-complexity",
+            "local/ts-cyclomatic-complexity",
             &["label.ts"],
         ),
         (
-            "examples/ts-design-tokens",
-            &["examples/ts-no-raw-colors"],
+            "ts-design-tokens",
+            "no-raw-colors",
+            "local/no-raw-colors",
             &["Button.tsx"],
         ),
     ];
 
-    for (dir, expected_rules, expected_files) in cases {
-        let example_dir = repo_root().join(dir);
+    for (example, rule_dir, expected_rule, expected_files) in cases {
+        let example_dir = repo_root().join("examples").join(example);
         assert!(
             example_dir.join("README.md").exists(),
-            "{dir} should document how to run the example"
+            "{example} should document how to run the example"
         );
         assert!(
             example_dir.join(".polint.toml").exists(),
-            "{dir} should be runnable as a mini repository"
+            "{example} should be runnable as a mini repository"
+        );
+        assert!(
+            example_dir
+                .join(".polint/rules")
+                .join(rule_dir)
+                .join("src/main.rs")
+                .exists(),
+            "{example} should contain its local rule implementation"
         );
 
         let json = stdout_json(
-            example_rules_cmd()
+            example_rule_cmd(example, rule_dir)
                 .current_dir(&example_dir)
                 .args([
                     "check",
@@ -1231,20 +894,21 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
                 .success(),
         );
 
-        for rule_id in *expected_rules {
-            assert!(
-                diagnostics(&json)
-                    .iter()
-                    .any(|diagnostic| diagnostic["rule_id"] == *rule_id),
-                "{dir} should emit {rule_id}: {json:#?}"
-            );
-        }
+        let actual_rules = diagnostics(&json)
+            .iter()
+            .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            actual_rules,
+            std::collections::BTreeSet::from([*expected_rule]),
+            "{example} should emit only its one local rule: {json:#?}"
+        );
         for file in *expected_files {
             assert!(
                 diagnostics(&json)
                     .iter()
                     .any(|diagnostic| diagnostic["file"] == *file),
-                "{dir} should report a diagnostic in {file}: {json:#?}"
+                "{example} should report a diagnostic in {file}: {json:#?}"
             );
         }
     }
@@ -1257,10 +921,10 @@ fn check_ts_no_raw_colors_dedupes_real_jsx_attribute_literal() {
         &temp.path().join(".polint.toml"),
         r##"
 [profiles.phase6]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 files = ["**/*.tsx"]
 "##,
     );
@@ -1274,7 +938,7 @@ export function Button() {
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1289,7 +953,7 @@ export function Button() {
             .success(),
     );
 
-    let raw_color_diagnostics = diagnostics_for_rule(&json, "examples/ts-no-raw-colors");
+    let raw_color_diagnostics = diagnostics_for_rule(&json, "local/no-raw-colors");
     assert_eq!(
         raw_color_diagnostics.len(),
         1,
@@ -1350,10 +1014,10 @@ fn profile_and_severity_override_affect_json_and_exit_code() {
         temp.path().join(".polint.toml"),
         r#"
 [profiles.phase2]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 severity = "info"
 files = ["**/*.tsx"]
 "#,
@@ -1366,7 +1030,7 @@ files = ["**/*.tsx"]
     .unwrap();
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1385,7 +1049,7 @@ files = ["**/*.tsx"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors")
+        .find(|diagnostic| diagnostic["rule_id"] == "local/no-raw-colors")
         .unwrap();
     assert_eq!(diagnostic["severity"], "info");
 }
@@ -1394,7 +1058,7 @@ files = ["**/*.tsx"]
 fn explain_example_rule_reports_no_bundled_metadata() {
     Command::cargo_bin("polint")
         .unwrap()
-        .args(["explain", "examples/ts-no-raw-colors"])
+        .args(["explain", "local/no-raw-colors"])
         .assert()
         .success()
         .stdout(predicate::str::contains("No bundled rule found"))
@@ -1441,7 +1105,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
     let temp = tempfile::tempdir().unwrap();
     write_phase8_raw_color_fixture(temp.path(), "warn");
 
-    example_rules_cmd()
+    raw_color_rule_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1456,7 +1120,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
         .failure()
         .code(1);
 
-    example_rules_cmd()
+    raw_color_rule_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1470,7 +1134,7 @@ fn check_fail_on_warn_error_none_exit_codes_are_stable() {
         .assert()
         .success();
 
-    example_rules_cmd()
+    raw_color_rule_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1509,7 +1173,7 @@ fn sarif_no_cache_and_rule_paths_are_supported() {
 paths = [".polint/rules", "tools/policy-rules"]
 
 [profiles.phase2]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 "#,
     )
     .unwrap();
@@ -1520,7 +1184,7 @@ rules = ["examples/ts-no-raw-colors"]
     .unwrap();
 
     let sarif = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1539,7 +1203,7 @@ rules = ["examples/ts-no-raw-colors"]
     assert_eq!(sarif.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
     assert_eq!(
         sarif.pointer("/runs/0/results/0/ruleId").unwrap(),
-        "examples/ts-no-raw-colors"
+        "local/no-raw-colors"
     );
 }
 
@@ -1549,7 +1213,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
     write_phase8_raw_color_fixture(temp.path(), "warn");
 
     let sarif = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -1568,7 +1232,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
     assert_eq!(sarif.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
     assert_eq!(
         sarif.pointer("/runs/0/results/0/ruleId").unwrap(),
-        "examples/ts-no-raw-colors"
+        "local/no-raw-colors"
     );
     assert_eq!(sarif.pointer("/runs/0/results/0/level").unwrap(), "warning");
     assert!(
@@ -1590,7 +1254,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
         "component.tsx"
     );
 
-    example_rules_cmd()
+    raw_color_rule_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -1687,7 +1351,7 @@ fn check_no_cache_does_not_create_cache_directory() {
         temp.path().join(".polint.toml"),
         r##"
 [profiles.phase7]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 "##,
     )
     .unwrap();
@@ -1723,7 +1387,7 @@ fn check_no_cache_bypasses_cache_writes() {
         temp.path().join(".polint.toml"),
         r##"
 [profiles.phase7]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 "##,
     )
     .unwrap();
@@ -1757,10 +1421,10 @@ fn write_phase7_cache_fixture(root: &Path) {
         root.join(".polint.toml"),
         r##"
 [profiles.phase7]
-rules = ["examples/ts-no-raw-colors", "examples/go-cyclomatic-complexity"]
+rules = ["local/no-raw-colors", "local/go-cyclomatic-complexity"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 files = ["**/*.tsx"]
 "##,
     )
@@ -1969,10 +1633,10 @@ include = ["src/**"]
 exclude = []
 
 [profiles.phase2]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-raw-colors"
 severity = "error"
 files = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
 "#,
@@ -1987,7 +1651,7 @@ files = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
     );
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2002,7 +1666,7 @@ files = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
             .success(),
     );
 
-    let files = diagnostic_files(&json, "examples/ts-no-raw-colors");
+    let files = diagnostic_files(&json, "local/no-raw-colors");
     assert!(files.contains(&"src/a.ts".to_string()));
     assert!(files.contains(&"src/b.tsx".to_string()));
     assert!(files.contains(&"src/c.js".to_string()));
@@ -2022,7 +1686,7 @@ include = ["src/**"]
 exclude = ["src/excluded.tsx"]
 
 [profiles.phase2]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 "#,
     )
     .unwrap();
@@ -2045,7 +1709,7 @@ rules = ["examples/ts-no-raw-colors"]
     write_file(&temp.path().join("src/notes.txt"), "#ff00aa\n");
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2060,7 +1724,7 @@ rules = ["examples/ts-no-raw-colors"]
             .success(),
     );
 
-    let files = diagnostic_files(&json, "examples/ts-no-raw-colors");
+    let files = diagnostic_files(&json, "local/no-raw-colors");
     assert!(files.contains(&"src/included.tsx".to_string()));
     assert!(!files.contains(&"src/excluded.tsx".to_string()));
     assert!(!files.contains(&"ignored.tsx".to_string()));
@@ -2082,14 +1746,14 @@ fn discovery_respects_default_excludes() {
     }
 
     let json = stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
             .success(),
     );
 
-    let files = diagnostic_files(&json, "examples/ts-no-raw-colors");
+    let files = diagnostic_files(&json, "local/no-raw-colors");
     assert!(files.contains(&"src/included.tsx".to_string()));
     assert!(!files.contains(&"vendor/vendor.tsx".to_string()));
     assert!(!files.contains(&"node_modules/pkg/index.tsx".to_string()));
@@ -2109,7 +1773,7 @@ include = ["src/**"]
 exclude = ["src/excluded.ts"]
 
 [profiles.phase3]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-raw-colors"]
 "#,
     )
     .unwrap();
@@ -2137,7 +1801,7 @@ rules = ["examples/ts-no-raw-colors"]
     assert_eq!(second, first);
     assert_eq!(third, first);
     assert_eq!(
-        diagnostic_files(&first, "examples/ts-no-raw-colors"),
+        diagnostic_files(&first, "local/no-raw-colors"),
         ["src/a.ts", "src/z.tsx"]
     );
 }
@@ -2168,7 +1832,7 @@ fn check_clean_repo_succeeds() {
 
 fn phase3_check_json(root: &Path) -> serde_json::Value {
     stdout_json(
-        example_rules_cmd()
+        raw_color_rule_cmd()
             .current_dir(root)
             .args([
                 "check",

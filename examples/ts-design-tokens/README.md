@@ -1,12 +1,15 @@
 # TypeScript Design Tokens Example
 
-`examples/ts-design-tokens` is a TSX fixture for the example
-`examples/ts-no-raw-colors` rule in `examples/rules`.
+`examples/ts-design-tokens` is a TSX fixture for its local
+`local/no-raw-colors` rule.
+
+This directory is self-contained: the local rule implementation lives at
+`.polint/rules/no-raw-colors/src/main.rs`.
 
 Run it from this directory:
 
 ```bash
-cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path .polint/rules/no-raw-colors/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `Button.tsx` intentionally includes raw color literals:

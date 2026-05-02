@@ -3,9 +3,9 @@ include = ["router.go"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/go-cyclomatic-complexity"]
+rules = ["local/go-cyclomatic-complexity"]
 
 [[rules.config]]
-id = "examples/go-cyclomatic-complexity"
+id = "local/go-cyclomatic-complexity"
 max = 1
 files = ["*.go"]

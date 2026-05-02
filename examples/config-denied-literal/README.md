@@ -1,11 +1,14 @@
 # Config Denied Literal Example
 
-Minimal TypeScript fixture for `examples/config-query-no-literal`.
+Minimal TypeScript fixture for `local/no-denied-literals`.
+
+This directory is self-contained: the local rule implementation lives at
+`.polint/rules/no-denied-literals/src/main.rs`.
 
 Run it from this directory:
 
 ```bash
-cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path .polint/rules/no-denied-literals/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `query.ts` intentionally contains `legacy-testid`, and the example config denies

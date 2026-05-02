@@ -3,4 +3,4 @@ include = ["*.go"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/go-branch-obligations"]
+rules = ["local/go-branch-obligations"]

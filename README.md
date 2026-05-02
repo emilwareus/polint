@@ -30,7 +30,7 @@ cargo run -p polint-cli -- check --fail-on none
 polint init
 polint new-rule go require-payment-error-tests
 polint check --fail-on none
-cargo run --manifest-path examples/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path examples/go-complexity/.polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 `polint init` creates:
@@ -75,17 +75,9 @@ polint intentionally ships no built-in policy rules. It provides the host
 infrastructure: discovery, parsing, facts, diagnostics, rule execution, config,
 CI output, graph output, cache, and SDK types.
 
-The copyable rules under `examples/rules` are SDK dogfood examples, not product
-defaults:
-
-- `examples/go-cyclomatic-complexity`
-- `examples/ts-cyclomatic-complexity`
-- `examples/go-import-boundaries`
-- `examples/ts-no-raw-colors`
-- `examples/go-branch-obligations`
-- `examples/go-test-suite-size`
-- `examples/go-assertion-after-action`
-- `examples/config-query-no-literal`
+The copyable rules under `examples/*/.polint/rules/` are SDK dogfood examples,
+not product defaults. Each example is shaped like a separate repository: it has
+its own fixture source, `.polint.toml`, and one local Rust rule crate.
 
 Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnostics report "No nearby test evidence found"; they do not claim exact coverage.
 
@@ -147,11 +139,12 @@ Capabilities cover facts such as files, functions, imports, Go tests, branch obl
 
 ## Testing Rules
 
-Use the example runner to see SDK rules execute against real fixtures:
+Run any example's local rule crate to see SDK rules execute against real
+fixtures:
 
 ```bash
-cargo run --manifest-path examples/rules/Cargo.toml -- check --profile fast --format json --fail-on none
-cargo test -p polint-example-rules
+cd examples/go-complexity
+cargo run --manifest-path .polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 Use `--fail-on warn|error|none` to control CI status. Exit codes are:
@@ -164,22 +157,21 @@ Use `--fail-on warn|error|none` to control CI status. Exit codes are:
 
 The top-level `examples/` directory contains copyable examples:
 
-- `examples/basic` - smallest runnable TSX raw-color example.
-- `examples/config-denied-literal` - configured denied string literal.
-- `examples/custom-rule-go` - Go repo-local rule skeleton notes backed by real Go code.
-- `examples/custom-rule-ts` - TypeScript/JS rule skeleton notes backed by real TSX code.
-- `examples/go-complexity` - Go cyclomatic complexity.
-- `examples/go-branch-obligations` - heuristic branch-test evidence example.
-- `examples/go-import-boundaries` - configured Go import boundary.
-- `examples/go-test-quality` - heuristic Go test-suite size and assertion examples.
-- `examples/ts-complexity` - TypeScript cyclomatic complexity.
-- `examples/ts-design-tokens` - syntax-level raw color detection example.
-- `examples/rules` - SDK rule implementations and the local example runner.
+- `examples/basic` - smallest runnable TSX raw-color example with `local/no-raw-colors`.
+- `examples/config-denied-literal` - configured denied string literal with `local/no-denied-literals`.
+- `examples/custom-rule-go` - Go repo-local rule host with `local/require-error-branch-tests`.
+- `examples/custom-rule-ts` - TypeScript/JS repo-local rule host with `local/no-product-hex-colors`.
+- `examples/go-complexity` - Go cyclomatic complexity with `local/go-cyclomatic-complexity`.
+- `examples/go-branch-obligations` - heuristic branch-test evidence with `local/go-branch-obligations`.
+- `examples/go-import-boundaries` - configured Go import boundary with `local/go-import-boundaries`.
+- `examples/go-test-quality` - heuristic Go test quality with `local/go-test-quality`.
+- `examples/ts-complexity` - TypeScript cyclomatic complexity with `local/ts-cyclomatic-complexity`.
+- `examples/ts-design-tokens` - syntax-level raw color detection with `local/no-raw-colors`.
 
 Run a fixture from that fixture directory:
 
 ```bash
-cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path .polint/rules/<rule>/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 ## Experimental Wasm Plugins

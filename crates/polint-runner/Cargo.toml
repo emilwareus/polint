@@ -1,0 +1,19 @@
+[package]
+name = "polint-runner"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+polint-cache = { path = "../polint-cache" }
+polint-config = { path = "../polint-config" }
+polint-core = { path = "../polint-core" }
+polint-diagnostics = { path = "../polint-diagnostics" }
+polint-fs = { path = "../polint-fs" }
+polint-go = { path = "../polint-go" }
+polint-ts = { path = "../polint-ts" }
+serde_json.workspace = true

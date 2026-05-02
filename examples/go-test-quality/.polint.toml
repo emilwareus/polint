@@ -3,13 +3,9 @@ include = ["payment_test.go"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/go-test-suite-size", "examples/go-assertion-after-action"]
+rules = ["local/go-test-quality"]
 
 [[rules.config]]
-id = "examples/go-test-suite-size"
+id = "local/go-test-quality"
 max = 0
-files = ["*_test.go"]
-
-[[rules.config]]
-id = "examples/go-assertion-after-action"
 files = ["*_test.go"]

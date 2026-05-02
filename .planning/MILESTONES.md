@@ -40,7 +40,7 @@
 - Experimental Wasm plugin docs now match the implemented WIT and Wasmtime loading skeleton, with full workspace verification passing.
 - README now gives a complete v1 user path for installation, quickstart, config, SDK authoring, rule testing, CI, examples, release checks, and roadmap.
 - Top-level examples now document the quickstart, custom rule authoring helpers, and runnable Go/TS example-rule fixtures with honest v1 limitations.
-- CLI integration coverage now proves mixed Go/TS fixtures and the configured Go/TS example directories run through `polint check`.
+- CLI integration coverage now proves mixed Go/TS fixtures and the configured Go/TS example directories run through their local native rule hosts.
 - Phase 10 closes with README/examples verified, targeted fixture/example CLI tests passing, and the full Rust workspace release matrix clean.
 
 ---

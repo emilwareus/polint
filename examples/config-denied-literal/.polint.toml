@@ -3,9 +3,9 @@ include = ["query.ts"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/config-query-no-literal"]
+rules = ["local/no-denied-literals"]
 
 [[rules.config]]
-id = "examples/config-query-no-literal"
+id = "local/no-denied-literals"
 deny = ["legacy-testid"]
 files = ["*.ts"]

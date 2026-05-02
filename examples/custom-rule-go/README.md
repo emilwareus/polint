@@ -12,15 +12,17 @@ func Authorize(err error) error {
 }
 ```
 
+This directory is self-contained: the local rule implementation lives at
+`.polint/rules/require-error-branch-tests/src/main.rs`.
+
 Run the checked-in fixture from this directory:
 
 ```bash
-cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path .polint/rules/require-error-branch-tests/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
-The fixture uses the example `examples/go-branch-obligations` rule so the
-example is executable in v1. To start authoring a repo-local version of that
-policy, scaffold a Go rule:
+The fixture uses its own `local/require-error-branch-tests` rule. To start
+authoring another repo-local Go policy in a real project, scaffold a Go rule:
 
 ```bash
 polint new-rule go require-payment-error-tests
@@ -41,13 +43,12 @@ for function in ctx.functions() {
 }
 ```
 
-Test the rule fixture path:
+The checked-in rule crate is the executable example. Product `polint check`
+does not automatically compile repo-local Rust rules in v1, so this example
+uses a tiny native rule host under `.polint/rules/require-error-branch-tests`.
+
+Test the product fixture path without local rule registration:
 
 ```bash
 polint test-rules --format json
 ```
-
-Generated repo-local Rust rules are scaffolded for authoring/testing and are not
-automatically compiled or dynamically loaded by `polint check` in v1. The
-checked-in examples use `examples/rules` as a local example runner instead of
-shipping these policies as bundled product rules.

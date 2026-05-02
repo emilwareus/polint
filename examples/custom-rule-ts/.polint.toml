@@ -3,9 +3,9 @@ include = ["Button.tsx"]
 exclude = []
 
 [profiles.fast]
-rules = ["examples/ts-no-raw-colors"]
+rules = ["local/no-product-hex-colors"]
 
 [[rules.config]]
-id = "examples/ts-no-raw-colors"
+id = "local/no-product-hex-colors"
 severity = "error"
 files = ["*.tsx"]

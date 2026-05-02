@@ -12,7 +12,7 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 
 ## Current State
 
-v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/discovery loop, deterministic core facts and diagnostics, Go and TypeScript/JavaScript adapters, SDK and example rules, cache/performance support, CI output and graph commands, experimental plugin skeleton, README/examples, and final release verification.
+v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/discovery loop, deterministic core facts and diagnostics, Go and TypeScript/JavaScript adapters, SDK and self-contained example-local rules, cache/performance support, CI output and graph commands, experimental plugin skeleton, README/examples, and final release verification.
 
 Archived milestone records:
 
@@ -77,6 +77,8 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 - Phase 9 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing the experimental WIT plugin boundary, structured manifest validation, optional Wasmtime component-byte validation, and honest plugin docs without claiming `polint check` plugin execution.
 - Phase 10 completed on 2026-05-01 through GSD plan execution, code review, verification, and security on `main`, closing README, examples, mixed/example CLI smoke tests, final release verification, and v1 requirement traceability without claiming crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, or automatic repo-local Wasm compilation.
 - v1.0 MVP was audited, archived, tagged, and closed on 2026-05-02.
+- Quick task 260502-ehi removed all product built-in policy rules from the CLI while keeping example policies as external rule code.
+- Quick task 260502-qsd made every example self-contained, with one local Rust rule crate under `examples/<name>/.polint/rules/` and no shared example rule pack.
 
 ## Constraints
 
@@ -103,7 +105,7 @@ No active v1 requirements remain after Phase 10 verification. Future work is tra
 | Keep Go analysis syntax-first and explicit about heuristics | Phase 4 uses tree-sitter facts and conservative error-path heuristics, while full Go type checking and exact coverage remain out of scope for the first pass. | Accepted in Phase 4 |
 | Keep TypeScript analysis syntax-first and explicit about heuristics | Phase 5 uses Oxc syntax facts for TS/JS parsing, declarations, JSX, literals, calls, complexity, and import graph proof, while TypeScript type checking and production module resolution remain out of scope. | Accepted in Phase 5 |
 | Keep the SDK additive and rule-author focused | Phase 6 exposes borrowed `RuleCtx` helpers and SDK prelude exports without replacing the core rule contract or adding a query engine. | Accepted in Phase 6 |
-| Keep policy rules out of the shipped CLI | The product is a framework, not a bundled policy pack; example policies live under `examples/rules` and run through the example runner instead of `polint check`. | Accepted in quick task 260502-ehi |
+| Keep policy rules out of the shipped CLI and examples self-contained | The product is a framework, not a bundled policy pack; each example owns one local rule under `examples/<name>/.polint/rules/` and runs it through a native rule host instead of relying on built-in CLI policies. | Accepted in quick tasks 260502-ehi and 260502-qsd |
 | Keep heuristic rule claims explicit and bounded | Phase 6 Go branch/test heuristics include `heuristic` wording and evidence labels, avoiding claims of exact semantic coverage. | Accepted in Phase 6 |
 | Keep scaffolded repo-local Rust rules honest and safe | Phase 6 hardens `polint new-rule` against unsafe names and overwrite, while leaving automatic dynamic loading to later phases. | Accepted in Phase 6 |
 | Cache parser facts, not full source text | Phase 7 stores diagnostics and extracted fact metadata keyed by content/config/rule/schema inputs, while avoiding cached full source or AST payloads. | Accepted in Phase 7 |
@@ -135,4 +137,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-02 after quick task 260502-ehi*
+*Last updated: 2026-05-02 after quick task 260502-qsd*

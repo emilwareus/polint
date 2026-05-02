@@ -7,15 +7,18 @@ inspect. `Button.tsx` intentionally uses a raw color literal:
 const danger = "#ff00aa";
 ```
 
+This directory is self-contained: the local rule implementation lives at
+`.polint/rules/no-product-hex-colors/src/main.rs`.
+
 Run the checked-in fixture from this directory:
 
 ```bash
-cargo run --manifest-path ../rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cargo run --manifest-path .polint/rules/no-product-hex-colors/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
-The fixture uses the example `examples/ts-no-raw-colors` rule so the example is
-executable in v1. To start authoring a repo-local version of that policy,
-scaffold a TypeScript/JavaScript rule:
+The fixture uses its own `local/no-product-hex-colors` rule. To start authoring
+another repo-local TypeScript/JavaScript policy in a real project, scaffold a
+rule:
 
 ```bash
 polint new-rule ts no-product-hex-colors
@@ -38,13 +41,12 @@ for attr in ctx.jsx_attributes() {
 }
 ```
 
-Test the rule fixture path:
+The checked-in rule crate is the executable example. Product `polint check`
+does not automatically compile repo-local Rust rules in v1, so this example
+uses a tiny native rule host under `.polint/rules/no-product-hex-colors`.
+
+Test the product fixture path without local rule registration:
 
 ```bash
 polint test-rules --format json
 ```
-
-Generated repo-local Rust rules are scaffolded for authoring/testing and are not
-automatically compiled or dynamically loaded by `polint check` in v1. The
-checked-in examples use `examples/rules` as a local example runner instead of
-shipping these policies as bundled product rules.
