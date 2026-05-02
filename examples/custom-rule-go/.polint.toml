@@ -1,0 +1,6 @@
+[workspace]
+include = ["authorize.go"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/go-branch-obligations"]

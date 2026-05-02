@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -90,6 +90,14 @@ fn diagnostics_for_rule<'a>(
         .iter()
         .filter(|diagnostic| diagnostic["rule_id"] == rule_id)
         .collect()
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("polint-cli crate should live under crates/")
+        .to_path_buf()
 }
 
 fn write_phase6_failing_fixtures(root: &Path) {
@@ -1129,77 +1137,109 @@ rules = ["examples/go-cyclomatic-complexity", "examples/ts-cyclomatic-complexity
 }
 
 #[test]
-fn example_go_branch_obligations_reports_expected_diagnostic() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join("authorize.go"),
-        include_str!("../../../examples/go-branch-obligations/authorize.go"),
-    );
-    write_file(
-        &temp.path().join(".polint.toml"),
-        include_str!("../../../examples/go-branch-obligations/.polint.toml"),
-    );
+fn checked_in_examples_are_runnable_cli_fixtures() {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "examples/basic",
+            &["examples/ts-no-raw-colors"],
+            &["Button.tsx"],
+        ),
+        (
+            "examples/config-denied-literal",
+            &["examples/config-query-no-literal"],
+            &["query.ts"],
+        ),
+        (
+            "examples/custom-rule-go",
+            &["examples/go-branch-obligations"],
+            &["authorize.go"],
+        ),
+        (
+            "examples/custom-rule-ts",
+            &["examples/ts-no-raw-colors"],
+            &["Button.tsx"],
+        ),
+        (
+            "examples/go-branch-obligations",
+            &["examples/go-branch-obligations"],
+            &["authorize.go"],
+        ),
+        (
+            "examples/go-complexity",
+            &["examples/go-cyclomatic-complexity"],
+            &["router.go"],
+        ),
+        (
+            "examples/go-import-boundaries",
+            &["examples/go-import-boundaries"],
+            &["handler.go"],
+        ),
+        (
+            "examples/go-test-quality",
+            &[
+                "examples/go-test-suite-size",
+                "examples/go-assertion-after-action",
+            ],
+            &["payment_test.go"],
+        ),
+        (
+            "examples/ts-complexity",
+            &["examples/ts-cyclomatic-complexity"],
+            &["label.ts"],
+        ),
+        (
+            "examples/ts-design-tokens",
+            &["examples/ts-no-raw-colors"],
+            &["Button.tsx"],
+        ),
+    ];
 
-    let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args([
-                "check",
-                "--profile",
-                "fast",
-                "--format",
-                "json",
-                "--fail-on",
-                "none",
-            ])
-            .assert()
-            .success(),
-    );
+    for (dir, expected_rules, expected_files) in cases {
+        let example_dir = repo_root().join(dir);
+        assert!(
+            example_dir.join("README.md").exists(),
+            "{dir} should document how to run the example"
+        );
+        assert!(
+            example_dir.join(".polint.toml").exists(),
+            "{dir} should be runnable as a mini repository"
+        );
 
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic["rule_id"] == "examples/go-branch-obligations"),
-        "Go branch-obligations example should emit its configured diagnostic: {json:#?}"
-    );
-}
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(&example_dir)
+                .args([
+                    "check",
+                    "--profile",
+                    "fast",
+                    "--format",
+                    "json",
+                    "--no-cache",
+                    "--fail-on",
+                    "none",
+                ])
+                .assert()
+                .success(),
+        );
 
-#[test]
-fn example_ts_design_tokens_reports_raw_colors() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join("Button.tsx"),
-        include_str!("../../../examples/ts-design-tokens/Button.tsx"),
-    );
-    write_file(
-        &temp.path().join(".polint.toml"),
-        include_str!("../../../examples/ts-design-tokens/.polint.toml"),
-    );
-
-    let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args([
-                "check",
-                "--profile",
-                "fast",
-                "--format",
-                "json",
-                "--fail-on",
-                "none",
-            ])
-            .assert()
-            .success(),
-    );
-
-    assert!(
-        diagnostics(&json)
-            .iter()
-            .any(|diagnostic| diagnostic["rule_id"] == "examples/ts-no-raw-colors"),
-        "TS design-token example should emit its configured raw-color diagnostic: {json:#?}"
-    );
+        for rule_id in *expected_rules {
+            assert!(
+                diagnostics(&json)
+                    .iter()
+                    .any(|diagnostic| diagnostic["rule_id"] == *rule_id),
+                "{dir} should emit {rule_id}: {json:#?}"
+            );
+        }
+        for file in *expected_files {
+            assert!(
+                diagnostics(&json)
+                    .iter()
+                    .any(|diagnostic| diagnostic["file"] == *file),
+                "{dir} should report a diagnostic in {file}: {json:#?}"
+            );
+        }
+    }
 }
 
 #[test]

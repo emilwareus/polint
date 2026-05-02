@@ -1,12 +1,32 @@
 # Custom Go Rule
 
-Scaffold a repo-local Go rule:
+This example shows the kind of Go code a repo-local policy rule can inspect.
+`authorize.go` intentionally has an untested error branch:
+
+```go
+func Authorize(err error) error {
+	if err != nil {
+		return err
+	}
+	return nil
+}
+```
+
+Run the checked-in fixture from this directory:
+
+```bash
+polint check --profile fast --format json --fail-on none
+```
+
+The fixture uses the built-in `examples/go-branch-obligations` rule so the
+example is executable in v1. To start authoring a repo-local version of that
+policy, scaffold a Go rule:
 
 ```bash
 polint new-rule go require-payment-error-tests
 ```
 
-Edit `.polint/rules/require-payment-error-tests/src/lib.rs` and use
+Then edit `.polint/rules/require-payment-error-tests/src/lib.rs` and use
 `ctx.go_tests()` plus `ctx.branch_obligations(function.id)` to connect error
 paths to nearby test evidence:
 

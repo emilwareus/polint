@@ -1,0 +1,13 @@
+[workspace]
+include = ["handler.go"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/go-import-boundaries"]
+
+[[rules.config]]
+id = "examples/go-import-boundaries"
+files = ["*.go"]
+
+[rules.config.forbidden_imports]
+"*.go" = ["net/http"]

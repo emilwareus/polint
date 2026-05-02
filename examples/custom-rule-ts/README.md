@@ -1,6 +1,21 @@
 # Custom TypeScript Rule
 
-Scaffold a repo-local TypeScript/JavaScript rule:
+This example shows the kind of TSX code a repo-local frontend policy can
+inspect. `Button.tsx` intentionally uses a raw color literal:
+
+```tsx
+const danger = "#ff00aa";
+```
+
+Run the checked-in fixture from this directory:
+
+```bash
+polint check --profile fast --format json --fail-on none
+```
+
+The fixture uses the built-in `examples/ts-no-raw-colors` rule so the example is
+executable in v1. To start authoring a repo-local version of that policy,
+scaffold a TypeScript/JavaScript rule:
 
 ```bash
 polint new-rule ts no-product-hex-colors

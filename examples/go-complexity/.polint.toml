@@ -1,0 +1,11 @@
+[workspace]
+include = ["router.go"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/go-cyclomatic-complexity"]
+
+[[rules.config]]
+id = "examples/go-cyclomatic-complexity"
+max = 1
+files = ["*.go"]

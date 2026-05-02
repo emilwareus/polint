@@ -1,21 +1,26 @@
 # Basic Example
 
-Minimal flow for a repository that wants the default fast profile.
+Minimal TSX repository that runs one built-in policy against real source code.
+
+`Button.tsx` intentionally uses a raw color literal:
+
+```tsx
+export function Button() {
+  return <button data-color="#ff00aa">Pay</button>;
+}
+```
+
+Run it from this directory:
 
 ```bash
-polint init
-polint check
-polint check --profile full --format sarif
+polint check --profile fast --format json --fail-on none
 ```
 
 From this repository during development, run the same commands through Cargo:
 
 ```bash
-cargo run -p polint-cli -- init
-cargo run -p polint-cli -- check
-cargo run -p polint-cli -- check --profile full --format sarif
+cargo run -p polint-cli -- check --profile fast --format json --fail-on none
 ```
 
-`polint init` creates `.polint.toml` and a `.polint/rules/` directory. The
-default `polint check` command works even before you add repo-local rules, so it
-is a quick way to verify file discovery and built-in example rules.
+The example uses `examples/ts-no-raw-colors` because it is the smallest useful
+policy to demonstrate: one TSX file, one configured rule, one diagnostic.

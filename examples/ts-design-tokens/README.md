@@ -6,7 +6,7 @@
 Run it from this directory:
 
 ```bash
-polint check --profile fast --format json
+polint check --profile fast --format json --fail-on none
 ```
 
 `Button.tsx` intentionally includes raw color literals:

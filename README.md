@@ -155,17 +155,22 @@ Use `--fail-on warn|error|none` to control CI status. Exit codes are:
 
 The top-level `examples/` directory contains copyable examples:
 
-- `examples/basic` - minimal init/check flow.
-- `examples/custom-rule-go` - Go repo-local rule skeleton and SDK helper notes.
-- `examples/custom-rule-ts` - TypeScript/JS rule skeleton and literal/JSX helper notes.
+- `examples/basic` - smallest runnable TSX raw-color example.
+- `examples/config-denied-literal` - configured denied string literal.
+- `examples/custom-rule-go` - Go repo-local rule skeleton notes backed by real Go code.
+- `examples/custom-rule-ts` - TypeScript/JS rule skeleton notes backed by real TSX code.
+- `examples/go-complexity` - Go cyclomatic complexity.
 - `examples/go-branch-obligations` - heuristic branch-test evidence example.
+- `examples/go-import-boundaries` - configured Go import boundary.
+- `examples/go-test-quality` - heuristic Go test-suite size and assertion examples.
+- `examples/ts-complexity` - TypeScript cyclomatic complexity.
 - `examples/ts-design-tokens` - syntax-level raw color detection example.
 
 Run examples with an installed binary or through Cargo:
 
 ```bash
-polint check --profile fast --format json
-cargo run -p polint-cli -- check --profile fast --format json
+polint check --profile fast --format json --fail-on none
+cargo run -p polint-cli -- check --profile fast --format json --fail-on none
 ```
 
 ## Experimental Wasm Plugins

@@ -1,0 +1,11 @@
+[workspace]
+include = ["label.ts"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/ts-cyclomatic-complexity"]
+
+[[rules.config]]
+id = "examples/ts-cyclomatic-complexity"
+max = 1
+files = ["*.ts"]

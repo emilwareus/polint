@@ -1,0 +1,11 @@
+[workspace]
+include = ["query.ts"]
+exclude = []
+
+[profiles.fast]
+rules = ["examples/config-query-no-literal"]
+
+[[rules.config]]
+id = "examples/config-query-no-literal"
+deny = ["legacy-testid"]
+files = ["*.ts"]
