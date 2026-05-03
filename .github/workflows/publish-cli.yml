@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
@@ -54,7 +54,7 @@ jobs:
           shasum -a 256 "dist/${archive}" > "dist/${archive}.sha256"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
           path: dist/*
@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
