@@ -12,7 +12,26 @@ Rules are code. The framework provides file discovery, Go and TypeScript/JavaScr
 
 ## Installation
 
-From this repository:
+Private main-branch install, using the GitHub CLI:
+
+```bash
+gh auth login
+gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | bash
+```
+
+The installer downloads the latest `polint-main` release asset for your
+OS/architecture, verifies its SHA-256 checksum, and installs `polint` to
+`~/.local/bin` by default. Override the install directory with:
+
+```bash
+gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | POLINT_INSTALL_DIR=/usr/local/bin bash
+```
+
+Release assets are published by GitHub Actions only from pushes to `main`.
+Because the repository is private for now, the installer requires `gh` to be
+authenticated with access to `emilwareus/exlint`.
+
+From a local checkout:
 
 ```bash
 cargo install --path crates/polint-cli

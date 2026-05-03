@@ -1,0 +1,100 @@
+name: Publish CLI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-cli-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset_os }}-${{ matrix.asset_arch }}
+    runs-on: ${{ matrix.runner }}
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            asset_os: linux
+            asset_arch: x86_64
+          - runner: macos-13
+            asset_os: macos
+            asset_arch: x86_64
+          - runner: macos-14
+            asset_os: macos
+            asset_arch: aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build polint
+        run: cargo build --locked --release -p polint-cli
+
+      - name: Package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}.tar.gz"
+          mkdir -p dist package
+          cp target/release/polint package/polint
+          chmod 0755 package/polint
+          tar -C package -czf "dist/${archive}" polint
+          shasum -a 256 "dist/${archive}" > "dist/${archive}.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish polint-main release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: polint-main
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "polint main build" \
+              --notes "Private main-branch CLI build. Updated by GitHub Actions on pushes to main." \
+              --prerelease
+          fi
+          gh release edit "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "polint main build" \
+            --notes "Private main-branch CLI build from ${GITHUB_SHA}. Updated by GitHub Actions on pushes to main." \
+            --prerelease
+
+          gh release upload "${RELEASE_TAG}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber

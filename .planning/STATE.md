@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260503-ba9 complete
-last_updated: "2026-05-03T06:07:30Z"
+stopped_at: quick task 260503-l2p complete
+last_updated: "2026-05-03T13:10:26Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 10
@@ -60,7 +60,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-03 - Completed quick task 260503-ba9: Add multi-rule example with one local rule-pack Cargo manifest
+Last activity: 2026-05-03 - Completed quick task 260503-l2p: Publish main-branch CLI release assets and install script
 
 ## Quick Tasks Completed
 
@@ -72,7 +72,8 @@ Last activity: 2026-05-03 - Completed quick task 260503-ba9: Add multi-rule exam
 | 260502-qsd | Make examples self-contained with one local rule each | 2026-05-02 | 27caa40 | [260502-qsd-make-examples-self-contained-with-one-lo](./quick/260502-qsd-make-examples-self-contained-with-one-lo/) |
 | 260503-a9n | Add clear explanatory comments to self-contained examples | 2026-05-03 | 1dcdc80 | [260503-a9n-add-clear-explanatory-comments-to-self-c](./quick/260503-a9n-add-clear-explanatory-comments-to-self-c/) |
 | 260503-adu | Rewrite example READMEs to remove meta-comments and improve user guidance | 2026-05-03 | f0e57ef | [260503-adu-rewrite-example-readmes-to-remove-meta-c](./quick/260503-adu-rewrite-example-readmes-to-remove-meta-c/) |
-| 260503-ba9 | Add multi-rule example with one local rule-pack Cargo manifest | 2026-05-03 | this commit | [260503-ba9-add-multi-rule-example-with-one-local-ru](./quick/260503-ba9-add-multi-rule-example-with-one-local-ru/) |
+| 260503-ba9 | Add multi-rule example with one local rule-pack Cargo manifest | 2026-05-03 | 23f5622 | [260503-ba9-add-multi-rule-example-with-one-local-ru](./quick/260503-ba9-add-multi-rule-example-with-one-local-ru/) |
+| 260503-l2p | Publish main-branch CLI release assets and install script | 2026-05-03 | this commit | [260503-l2p-publish-main-branch-cli-release-assets-a](./quick/260503-l2p-publish-main-branch-cli-release-assets-a/) |
 
 ## Phase Progress
 
