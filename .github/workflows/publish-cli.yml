@@ -56,7 +56,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/polint" package/polint
           chmod 0755 package/polint
           tar -C package -czf "dist/${archive}" polint
-          shasum -a 256 "dist/${archive}" > "dist/${archive}.sha256"
+          (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
