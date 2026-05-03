@@ -12,6 +12,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
+mod skill;
+
 #[derive(Debug, Parser)]
 #[command(name = "polint")]
 #[command(about = "Repo-local static analysis policy as code.")]
@@ -25,6 +27,8 @@ struct Cli {
 enum Command {
     /// Create .polint.toml and .polint/rules.
     Init,
+    /// Install a repo-local AI-agent skill for using polint.
+    AddSkill(skill::AddSkillArgs),
     /// Scaffold a repo-local Rust rule.
     NewRule(NewRuleArgs),
     /// Run enabled rules.
@@ -121,6 +125,10 @@ fn run() -> Result<u8> {
     match cli.command {
         Command::Init => {
             init_project(std::env::current_dir()?)?;
+            Ok(0)
+        }
+        Command::AddSkill(args) => {
+            skill::add_skill(std::env::current_dir()?, &args)?;
             Ok(0)
         }
         Command::NewRule(args) => {

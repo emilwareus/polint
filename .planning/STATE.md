@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260503-lht complete
-last_updated: "2026-05-03T13:28:35Z"
+stopped_at: quick task 260503-lwv complete
+last_updated: "2026-05-03T13:50:56Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 10
@@ -60,7 +60,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-03 - Completed quick task 260503-lht: Fix release checksum paths for installer
+Last activity: 2026-05-03 - Completed quick task 260503-lwv: Add interactive CLI skill installer for Claude and Codex
 
 ## Quick Tasks Completed
 
@@ -77,6 +77,7 @@ Last activity: 2026-05-03 - Completed quick task 260503-lht: Fix release checksu
 | 260503-l7c | Update publish workflow actions to Node 24 majors | 2026-05-03 | c556f95 | [260503-l7c-update-publish-workflow-actions-to-node-](./quick/260503-l7c-update-publish-workflow-actions-to-node-/) |
 | 260503-leg | Build macOS release targets from the available macOS runner | 2026-05-03 | a7e9d86 | [260503-leg-build-macos-release-targets-from-the-ava](./quick/260503-leg-build-macos-release-targets-from-the-ava/) |
 | 260503-lht | Fix release checksum paths for installer | 2026-05-03 | this commit | [260503-lht-fix-release-checksum-paths-for-installer](./quick/260503-lht-fix-release-checksum-paths-for-installer/) |
+| 260503-lwv | Add interactive CLI skill installer for Claude and Codex | 2026-05-03 | this commit | [260503-lwv-add-interactive-cli-skill-installer-for-](./quick/260503-lwv-add-interactive-cli-skill-installer-for-/) |
 
 ## Phase Progress
 

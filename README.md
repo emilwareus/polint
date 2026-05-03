@@ -47,6 +47,7 @@ cargo run -p polint-cli -- check --fail-on none
 
 ```bash
 polint init
+polint add-skill
 polint new-rule go require-payment-error-tests
 polint check --fail-on none
 cargo run --manifest-path examples/go-complexity/.polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
@@ -64,6 +65,29 @@ cargo run --manifest-path examples/go-complexity/.polint/rules/go-complexity/Car
 
 If config is missing, `polint check` still runs parser/fact extraction with no
 policy rules and suggests `polint init`.
+
+## AI Agent Skills
+
+Install repo-local skill instructions so an AI coding agent knows how to use
+polint and how to write local rules for the current repository:
+
+```bash
+polint add-skill
+```
+
+The command is interactive by default and lets you choose Claude Code, Codex, or
+both. For automation:
+
+```bash
+polint add-skill --agent claude
+polint add-skill --agent codex
+polint add-skill --all
+```
+
+Claude installs to `.claude/skills/polint/SKILL.md`. Codex installs to
+`.agents/skills/polint/SKILL.md` by default, or to `.codex/skills/polint/SKILL.md`
+when that folder already exists in the repository. Existing skills are preserved
+unless you pass `--force`.
 
 ## Example Config
 

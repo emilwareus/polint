@@ -305,6 +305,141 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
 }
 
 #[test]
+fn add_skill_installs_claude_skill_non_interactively() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed Claude Code skill"));
+
+    let skill = temp.path().join(".claude/skills/polint/SKILL.md");
+    let contents = fs::read_to_string(skill).unwrap();
+    assert!(contents.contains("name: polint"));
+    assert!(contents.contains("polint check --profile fast --fail-on none"));
+    assert!(contents.contains("polint ships no built-in"));
+    assert!(contents.contains("use polint_sdk::prelude::*;"));
+}
+
+#[test]
+fn add_skill_installs_codex_skill_to_agents_skills_by_default() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "codex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".agents/skills/polint/SKILL.md"));
+
+    assert!(temp.path().join(".agents/skills/polint/SKILL.md").exists());
+    assert!(!temp.path().join(".codex/skills/polint/SKILL.md").exists());
+}
+
+#[test]
+fn add_skill_uses_existing_codex_skills_folder_when_present() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".codex/skills")).unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "codex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".codex/skills/polint/SKILL.md"));
+
+    assert!(temp.path().join(".codex/skills/polint/SKILL.md").exists());
+    assert!(!temp.path().join(".agents/skills/polint/SKILL.md").exists());
+}
+
+#[test]
+fn add_skill_all_installs_claude_and_codex() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed Claude Code skill"))
+        .stdout(predicate::str::contains("Installed Codex skill"));
+
+    assert!(temp.path().join(".claude/skills/polint/SKILL.md").exists());
+    assert!(temp.path().join(".agents/skills/polint/SKILL.md").exists());
+}
+
+#[test]
+fn add_skill_prompts_when_agent_is_not_provided() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("polint").unwrap();
+    command
+        .current_dir(temp.path())
+        .arg("add-skill")
+        .write_stdin("1\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Install the polint skill"))
+        .stdout(predicate::str::contains("Installed Claude Code skill"));
+
+    assert!(temp.path().join(".claude/skills/polint/SKILL.md").exists());
+    assert!(!temp.path().join(".agents/skills/polint/SKILL.md").exists());
+}
+
+#[test]
+fn add_skill_rejects_existing_skill_unless_force_is_used() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .assert()
+        .success();
+
+    let skill = temp.path().join(".claude/skills/polint/SKILL.md");
+    fs::write(&skill, "sentinel").unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("skill already exists"));
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "sentinel");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude", "--force"])
+        .assert()
+        .success();
+    assert!(fs::read_to_string(skill).unwrap().contains("name: polint"));
+}
+
+#[cfg(unix)]
+#[test]
+fn add_skill_rejects_symlinked_agent_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".claude")).unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to write through symlink",
+        ));
+
+    assert!(!outside.path().join("skills/polint/SKILL.md").exists());
+}
+
+#[test]
 fn new_rule_go_creates_sdk_oriented_skeleton() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
