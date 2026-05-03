@@ -147,6 +147,14 @@ cd examples/go-complexity
 cargo run --manifest-path .polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
+For a repo with multiple local policies, use one rule-pack crate and register
+the rules together:
+
+```bash
+cd examples/multiple-rules
+cargo run --manifest-path .polint/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+```
+
 Use `--fail-on warn|error|none` to control CI status. Exit codes are:
 
 - `0`: no diagnostics at or above the fail threshold
@@ -165,6 +173,7 @@ The top-level `examples/` directory contains copyable examples:
 - `examples/go-branch-obligations` - heuristic branch-test evidence with `local/go-branch-obligations`.
 - `examples/go-import-boundaries` - configured Go import boundary with `local/go-import-boundaries`.
 - `examples/go-test-quality` - heuristic Go test quality with `local/go-test-quality`.
+- `examples/multiple-rules` - one local rule-pack crate registering both `local/no-raw-colors` and `local/go-import-boundaries`.
 - `examples/ts-complexity` - TypeScript cyclomatic complexity with `local/ts-cyclomatic-complexity`.
 - `examples/ts-design-tokens` - syntax-level raw color detection with `local/no-raw-colors`.
 
@@ -172,6 +181,12 @@ Run a fixture from that fixture directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/<rule>/Cargo.toml -- check --profile fast --format json --fail-on none
+```
+
+For `examples/multiple-rules`, run the rule-pack manifest instead:
+
+```bash
+cargo run --manifest-path .polint/rules/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
 ## Experimental Wasm Plugins

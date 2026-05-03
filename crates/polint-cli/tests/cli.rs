@@ -99,6 +99,23 @@ fn example_rule_cmd(example: &str, rule: &str) -> Command {
     command
 }
 
+fn example_rule_pack_cmd(example: &str) -> Command {
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
+    command.args([
+        "run",
+        "--quiet",
+        "--manifest-path",
+        repo_root()
+            .join("examples")
+            .join(example)
+            .join(".polint/rules/Cargo.toml")
+            .to_str()
+            .unwrap(),
+        "--",
+    ]);
+    command
+}
+
 fn raw_color_rule_cmd() -> Command {
     example_rule_cmd("ts-design-tokens", "no-raw-colors")
 }
@@ -911,6 +928,76 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
                 "{example} should report a diagnostic in {file}: {json:#?}"
             );
         }
+    }
+}
+
+#[test]
+fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
+    let example_dir = repo_root().join("examples/multiple-rules");
+    assert!(
+        example_dir.join("README.md").exists(),
+        "multiple-rules should explain the rule-pack structure"
+    );
+    assert!(
+        example_dir.join(".polint.toml").exists(),
+        "multiple-rules should be runnable as a mini repository"
+    );
+    assert!(
+        example_dir.join(".polint/rules/Cargo.toml").exists(),
+        "multiple-rules should use one Cargo manifest for its rule pack"
+    );
+    assert!(
+        example_dir
+            .join(".polint/rules/src/no_raw_colors.rs")
+            .exists(),
+        "multiple-rules should keep no-raw-colors in its own module"
+    );
+    assert!(
+        example_dir
+            .join(".polint/rules/src/go_import_boundaries.rs")
+            .exists(),
+        "multiple-rules should keep go-import-boundaries in its own module"
+    );
+    assert!(
+        !example_dir
+            .join(".polint/rules/no-raw-colors/Cargo.toml")
+            .exists(),
+        "multiple-rules should not create one Cargo package per rule"
+    );
+
+    let json = stdout_json(
+        example_rule_pack_cmd("multiple-rules")
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--profile",
+                "fast",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let actual_rules = diagnostics(&json)
+        .iter()
+        .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        actual_rules,
+        std::collections::BTreeSet::from(["local/go-import-boundaries", "local/no-raw-colors"]),
+        "multiple-rules should emit diagnostics from both registered local rules: {json:#?}"
+    );
+    for file in ["Button.tsx", "handler.go"] {
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .any(|diagnostic| diagnostic["file"] == file),
+            "multiple-rules should report a diagnostic in {file}: {json:#?}"
+        );
     }
 }
 

@@ -1772,6 +1772,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-multiple-rules"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "polint-runner",
+ "polint-sdk",
+]
+
+[[package]]
 name = "polint-example-ts-complexity-rule"
 version = "0.1.0"
 dependencies = [
