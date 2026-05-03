@@ -34,8 +34,11 @@ authenticated with access to `emilwareus/exlint`.
 From a local checkout:
 
 ```bash
-cargo install --path crates/polint-cli
+make install
 ```
+
+This installs the `polint` binary from source using Cargo and the checked-in
+lockfile, normally into `~/.cargo/bin`.
 
 During development, run the CLI without installing it:
 
