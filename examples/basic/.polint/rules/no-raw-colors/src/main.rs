@@ -1,3 +1,7 @@
+// This is the whole policy for the basic example repo.
+// It registers one local rule, local/no-raw-colors, which scans TSX string
+// literals and JSX attributes for raw hex colors. In a real repo this kind of
+// rule would enforce a team convention like "all UI colors come from tokens".
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint_sdk::prelude::*;
 use std::process::ExitCode;

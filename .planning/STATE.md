@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260502-qsd complete
-last_updated: "2026-05-02T17:35:00Z"
-last_activity: 2026-05-02
+stopped_at: quick task 260503-a9n complete
+last_updated: "2026-05-03T05:23:34Z"
+last_activity: 2026-05-03
 progress:
   total_phases: 10
   completed_phases: 10
@@ -60,7 +60,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-02 - Completed quick task 260502-qsd: Make examples self-contained with one local rule each
+Last activity: 2026-05-03 - Completed quick task 260503-a9n: Add clear explanatory comments to self-contained examples
 
 ## Quick Tasks Completed
 
@@ -69,7 +69,8 @@ Last activity: 2026-05-02 - Completed quick task 260502-qsd: Make examples self-
 | 260502-dql | Remove README note that the repository is named exlint now that the repo will be renamed to polint | 2026-05-02 | a07de50 | [260502-dql-remove-readme-note-that-the-repository-i](./quick/260502-dql-remove-readme-note-that-the-repository-i/) |
 | 260502-dto | Improve examples with real minimal linted code, README coverage, and CLI e2e tests | 2026-05-02 | 10ea4a4 | [260502-dto-improve-examples-with-real-minimal-linte](./quick/260502-dto-improve-examples-with-real-minimal-linte/) |
 | 260502-ehi | Remove built-in rules and move example policies into examples | 2026-05-02 | 5701608 | [260502-ehi-remove-built-in-rules-and-move-example-r](./quick/260502-ehi-remove-built-in-rules-and-move-example-r/) |
-| 260502-qsd | Make examples self-contained with one local rule each | 2026-05-02 | this commit | [260502-qsd-make-examples-self-contained-with-one-lo](./quick/260502-qsd-make-examples-self-contained-with-one-lo/) |
+| 260502-qsd | Make examples self-contained with one local rule each | 2026-05-02 | 27caa40 | [260502-qsd-make-examples-self-contained-with-one-lo](./quick/260502-qsd-make-examples-self-contained-with-one-lo/) |
+| 260503-a9n | Add clear explanatory comments to self-contained examples | 2026-05-03 | this commit | [260503-a9n-add-clear-explanatory-comments-to-self-c](./quick/260503-a9n-add-clear-explanatory-comments-to-self-c/) |
 
 ## Phase Progress
 

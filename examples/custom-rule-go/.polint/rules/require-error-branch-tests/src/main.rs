@@ -1,3 +1,8 @@
+// This is the whole policy for the custom-rule-go example repo.
+// It registers one local rule, local/require-error-branch-tests, which looks
+// for Go error branches and asks for nearby test evidence. The check is
+// intentionally heuristic; it demonstrates repo-local policy code, not exact
+// coverage analysis.
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint_sdk::prelude::*;
 use std::process::ExitCode;

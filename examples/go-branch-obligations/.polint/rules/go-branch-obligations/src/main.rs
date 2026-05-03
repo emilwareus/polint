@@ -1,3 +1,7 @@
+// This is the whole policy for the go-branch-obligations example repo.
+// It registers one local rule, local/go-branch-obligations, which reports
+// important Go error branches when nearby tests do not appear to cover them.
+// The matching is heuristic and uses extracted branch/test facts from polint.
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint_sdk::prelude::*;
 use std::process::ExitCode;

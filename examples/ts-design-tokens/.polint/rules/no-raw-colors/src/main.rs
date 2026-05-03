@@ -1,3 +1,7 @@
+// This is the whole policy for the ts-design-tokens example repo.
+// It registers one local rule, local/no-raw-colors, which finds raw color
+// literals in TSX code and asks contributors to use design tokens instead.
+// The rule reads both string literals and JSX attributes, then dedupes overlaps.
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint_sdk::prelude::*;
 use std::process::ExitCode;

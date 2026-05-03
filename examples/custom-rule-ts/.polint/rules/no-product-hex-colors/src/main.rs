@@ -1,3 +1,6 @@
+// This is the whole policy for the custom-rule-ts example repo.
+// It registers one local rule, local/no-product-hex-colors, which catches raw
+// hex colors in product UI code so contributors use local design tokens.
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint_sdk::prelude::*;
 use std::process::ExitCode;
