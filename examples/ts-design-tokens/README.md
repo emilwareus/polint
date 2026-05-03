@@ -1,16 +1,19 @@
 # TypeScript Design Tokens Example
 
-`examples/ts-design-tokens` is a TSX fixture for its local
-`local/no-raw-colors` rule.
+This example models a design-system policy for TSX UI code.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/no-raw-colors/src/main.rs`.
+The policy is `local/no-raw-colors`. It catches raw color literals in strings
+and JSX attributes so contributors move colors into design tokens.
 
-Run it from this directory:
+## Run It
+
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/no-raw-colors/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
+
+## What It Finds
 
 `Button.tsx` intentionally includes raw color literals:
 
@@ -19,6 +22,7 @@ const accent = "#ff00aa";
 <button data-color="#00ff00" />
 ```
 
-The rule detects syntax-level string and JSX color literals. It is useful for
-catching obvious design-token violations, but it does not prove design-token
-semantic correctness or validate that a replacement token exists.
+The expected finding is `local/no-raw-colors`. A real fix would replace both raw
+colors with approved tokens. This is a syntax-level policy: it catches obvious
+violations, but it does not prove that the replacement token exists or is
+semantically correct.

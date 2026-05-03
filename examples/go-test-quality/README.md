@@ -1,19 +1,30 @@
 # Go Test Quality Example
 
-Minimal Go test fixture for one local heuristic test-quality policy:
+This example models a lightweight quality gate for Go tests.
 
-- `local/go-test-quality`
+The policy is `local/go-test-quality`. It flags tests with no obvious assertion
+or error check, and it can also score tests that are growing too large.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/go-test-quality/src/main.rs`.
+## Run It
 
-Run it from this directory:
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/go-test-quality/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
+## What It Finds
+
 `payment_test.go` intentionally calls production-looking code without an
-assertion. The same local rule also computes a tiny heuristic maintainability
-score; the threshold is set to `0` so the fixture emits both diagnostics from
-one rule.
+assertion:
+
+```go
+func TestAuthorize(t *testing.T) {
+	Authorize()
+}
+```
+
+The expected finding is `local/go-test-quality`. In this example the threshold is
+set to `0`, so the same rule also emits its maintainability-score diagnostic. A
+real fix would assert the expected result, check an error, or call `t.Fatal` on
+failure.

@@ -1,15 +1,32 @@
 # Go Complexity Example
 
-Minimal Go fixture for `local/go-cyclomatic-complexity`.
+This example models a simple maintainability policy for Go functions.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/go-complexity/src/main.rs`.
+The policy is `local/go-cyclomatic-complexity`. It reports Go functions whose
+branch count exceeds the configured `max`.
 
-Run it from this directory:
+## Run It
+
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
+## What It Finds
+
 `router.go` intentionally has two branches while the example config sets
-`max = 1`, so the example runner emits one complexity diagnostic.
+`max = 1`:
+
+```go
+if kind == "admin" {
+	return "admin"
+}
+if ready {
+	return "ready"
+}
+```
+
+The expected finding is `local/go-cyclomatic-complexity`. A real fix would split
+the branching behavior into smaller helpers or raise the threshold if the team
+decides the function is acceptable.

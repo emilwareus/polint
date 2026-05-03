@@ -1,15 +1,27 @@
 # Go Import Boundaries Example
 
-Minimal Go fixture for `local/go-import-boundaries`.
+This example models a project-specific architecture boundary.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/go-import-boundaries/src/main.rs`.
+The policy is `local/go-import-boundaries`. It reads forbidden imports from
+`.polint.toml` and reports imports that cross the local boundary.
 
-Run it from this directory:
+## Run It
+
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/go-import-boundaries/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
+## What It Finds
+
 `handler.go` imports `net/http`, and the example config forbids that import for
-the local Go file. This models a project-specific architecture boundary.
+the local Go file:
+
+```go
+import "net/http"
+```
+
+The expected finding is `local/go-import-boundaries`. A real fix would move the
+HTTP dependency behind an allowed package or update the boundary if the import is
+intentional.

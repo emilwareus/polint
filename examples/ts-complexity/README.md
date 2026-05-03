@@ -1,15 +1,33 @@
 # TypeScript Complexity Example
 
-Minimal TypeScript fixture for `local/ts-cyclomatic-complexity`.
+This example models a simple maintainability policy for TypeScript and
+JavaScript functions.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/ts-complexity/src/main.rs`.
+The policy is `local/ts-cyclomatic-complexity`. It reports functions whose
+branch count exceeds the configured `max`.
 
-Run it from this directory:
+## Run It
+
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/ts-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
+## What It Finds
+
 `label.ts` intentionally has two branches while the example config sets
-`max = 1`, so the example runner emits one complexity diagnostic.
+`max = 1`:
+
+```ts
+if (admin) {
+  return "admin";
+}
+if (status === "paid") {
+  return "paid";
+}
+```
+
+The expected finding is `local/ts-cyclomatic-complexity`. A real fix would split
+the decision logic into smaller named helpers or adjust the threshold if the
+team accepts the branch count.

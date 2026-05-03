@@ -1,51 +1,58 @@
 # Custom TypeScript Rule
 
-This example shows the kind of TSX code a repo-local frontend policy can
-inspect. `Button.tsx` intentionally uses a raw color literal:
+This example shows how a frontend policy can inspect TypeScript/TSX literals and
+JSX attributes.
 
-```tsx
-const danger = "#ff00aa";
-```
+The policy is `local/no-product-hex-colors`. It catches raw product colors so
+contributors use design tokens instead of embedding ad hoc color values.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/no-product-hex-colors/src/main.rs`.
+## Run It
 
-Run the checked-in fixture from this directory:
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/no-product-hex-colors/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
-The fixture uses its own `local/no-product-hex-colors` rule. To start authoring
-another repo-local TypeScript/JavaScript policy in a real project, scaffold a
-rule:
+## What It Finds
+
+`Button.tsx` intentionally stores a raw hex value:
+
+```tsx
+const danger = "#ff00aa";
+```
+
+The expected finding is `local/no-product-hex-colors`. A real fix would replace
+`"#ff00aa"` with an approved token such as `tokens.color.danger`.
+
+## Writing A Similar Rule
+
+Start a TypeScript/JavaScript rule in a real project with:
 
 ```bash
 polint new-rule ts no-product-hex-colors
 ```
 
-Use `ctx.string_literals()` and `ctx.jsx_attributes()` to enforce
-project-specific frontend policies such as design-token usage:
+The useful SDK calls for this kind of policy are `ctx.string_literals()` and
+`ctx.jsx_attributes()`:
 
 ```rust
 for literal in ctx.string_literals() {
     if literal.value.starts_with('#') {
-        ctx.warn(&literal.span, "Use a design token instead of a raw color");
-    }
-}
-
-for attr in ctx.jsx_attributes() {
-    if attr.value.as_deref().is_some_and(|value| value.starts_with('#')) {
-        ctx.warn(&attr.span, "Use a design token instead of a raw color");
+        ctx.report(
+            Diagnostic::warning(
+                "local/no-product-hex-colors",
+                ctx.file_path(literal.file),
+                literal.span.diagnostic_range(),
+                "Use a design token instead of a raw color.",
+            )
+            .with_evidence("literal", literal.value.clone()),
+        );
     }
 }
 ```
 
-The checked-in rule crate is the executable example. Product `polint check`
-does not automatically compile repo-local Rust rules in v1, so this example
-uses a tiny native rule host under `.polint/rules/no-product-hex-colors`.
-
-Test the product fixture path without local rule registration:
+Use `polint test-rules` to verify product fixture wiring while you iterate:
 
 ```bash
 polint test-rules --format json

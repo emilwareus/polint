@@ -1,22 +1,28 @@
 # Go Branch Obligations Example
 
-`examples/go-branch-obligations` is a small Go fixture for its local
-`local/go-branch-obligations` rule.
+This example models a team rule for important error paths.
 
-This directory is self-contained: the local rule implementation lives at
-`.polint/rules/go-branch-obligations/src/main.rs`.
+The policy is `local/go-branch-obligations`. It finds Go error branches, then
+looks for nearby test evidence that appears to exercise the same condition.
 
-Run it from this directory:
+## Run It
+
+From this directory:
 
 ```bash
 cargo run --manifest-path .polint/rules/go-branch-obligations/Cargo.toml -- check --profile fast --format json --fail-on none
 ```
 
-The example intentionally has error branches without companion tests. The rule is
-heuristic: it looks for branch obligations and nearby Go test evidence, then
-reports diagnostics such as `No nearby test evidence found` when the local test
-signal is missing.
+## What It Finds
 
-This does not prove exact branch coverage. It is a syntax/fact-level policy
-example for teams that want an executable reminder to add tests around important
-error paths.
+`authorize.go` intentionally has error branches without companion tests:
+
+```go
+if err := charge(amount); err != nil {
+	return err
+}
+```
+
+The expected finding is `local/go-branch-obligations`. The rule is heuristic: it
+does not prove exact coverage. It gives teams an executable reminder to add test
+cases around branches they care about.
