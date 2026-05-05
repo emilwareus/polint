@@ -1,0 +1,38 @@
+name: Publish crates.io
+
+# Publishes workspace crates in dependency order. First-time maintainers: publish
+# manually once or run this with DRY_RUN first; crates.io index lag requires
+# waits between crates (see scripts/publish-crates.sh).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: If true, only smoke dry-run (polint-diagnostics) + print order
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-crates-io
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Dry run (smoke)
+        if: ${{ inputs.dry_run }}
+        run: DRY_RUN=1 ./scripts/publish-crates.sh
+
+      - name: Publish all crates
+        if: ${{ !inputs.dry_run }}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: ./scripts/publish-crates.sh

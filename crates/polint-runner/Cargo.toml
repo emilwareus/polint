@@ -5,15 +5,17 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+readme.workspace = true
+description.workspace = true
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-polint-cache = { path = "../polint-cache" }
-polint-config = { path = "../polint-config" }
-polint-core = { path = "../polint-core" }
-polint-diagnostics = { path = "../polint-diagnostics" }
-polint-fs = { path = "../polint-fs" }
-polint-go = { path = "../polint-go" }
-polint-ts = { path = "../polint-ts" }
+polint-cache = { workspace = true }
+polint-config = { workspace = true }
+polint-core = { workspace = true }
+polint-diagnostics = { workspace = true }
+polint-fs = { workspace = true }
+polint-go = { workspace = true }
+polint-ts = { workspace = true }
 serde_json.workspace = true

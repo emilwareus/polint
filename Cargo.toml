@@ -29,9 +29,11 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/emilwareus/exlint"
 rust-version = "1.94"
 version = "0.1.0"
+description = "polint workspace crate: repo-local static analysis for Go and TypeScript"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
@@ -60,3 +62,15 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
+
+# Path + version: local workspace uses `path`; `cargo publish` uses `version`.
+polint-cache = { path = "crates/polint-cache", version = "0.1.0" }
+polint-config = { path = "crates/polint-config", version = "0.1.0" }
+polint-core = { path = "crates/polint-core", version = "0.1.0" }
+polint-diagnostics = { path = "crates/polint-diagnostics", version = "0.1.0" }
+polint-fs = { path = "crates/polint-fs", version = "0.1.0" }
+polint-go = { path = "crates/polint-go", version = "0.1.0" }
+polint-graph = { path = "crates/polint-graph", version = "0.1.0" }
+polint-runner = { path = "crates/polint-runner", version = "0.1.0" }
+polint-sdk = { path = "crates/polint-sdk", version = "0.1.0" }
+polint-ts = { path = "crates/polint-ts", version = "0.1.0" }

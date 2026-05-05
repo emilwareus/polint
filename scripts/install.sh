@@ -24,20 +24,14 @@ case "$(uname -m)" in
 esac
 
 asset="polint-${os}-${arch}.tar.gz"
+base_url="https://github.com/${repo}/releases/download/${tag}"
 
-if ! command -v gh >/dev/null 2>&1; then
-  cat >&2 <<'EOF'
-polint install: GitHub CLI (`gh`) is required for private release downloads.
-Install it, then run `gh auth login` before retrying.
-EOF
-  exit 1
-fi
-
-if ! gh auth status -h github.com >/dev/null 2>&1; then
-  cat >&2 <<'EOF'
-polint install: `gh` is not authenticated for github.com.
-Run `gh auth login` before retrying.
-EOF
+if command -v curl >/dev/null 2>&1; then
+  fetch() { curl -fsSL "$1" -o "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  fetch() { wget -q "$1" -O "$2"; }
+else
+  echo "polint install: curl or wget is required to download release assets" >&2
   exit 1
 fi
 
@@ -48,12 +42,8 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Downloading ${asset} from ${repo} release ${tag}..."
-gh release download "$tag" \
-  --repo "$repo" \
-  --pattern "$asset" \
-  --pattern "${asset}.sha256" \
-  --dir "$tmp_dir" \
-  --clobber
+fetch "${base_url}/${asset}" "${tmp_dir}/${asset}"
+fetch "${base_url}/${asset}.sha256" "${tmp_dir}/${asset}.sha256"
 
 (
   cd "$tmp_dir"

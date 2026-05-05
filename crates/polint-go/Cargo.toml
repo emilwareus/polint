@@ -5,15 +5,17 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+readme.workspace = true
+description.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-polint-cache = { path = "../polint-cache" }
-polint-core = { path = "../polint-core" }
-polint-diagnostics = { path = "../polint-diagnostics" }
+polint-cache = { workspace = true }
+polint-core = { workspace = true }
+polint-diagnostics = { workspace = true }
 rayon.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
 
 [dev-dependencies]
-polint-graph = { path = "../polint-graph" }
+polint-graph = { workspace = true }

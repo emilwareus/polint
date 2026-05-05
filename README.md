@@ -12,44 +12,53 @@ Rules are code. The framework provides file discovery, Go and TypeScript/JavaScr
 
 ## Installation
 
-Private main-branch install, using the GitHub CLI:
+### From crates.io
+
+With a Rust toolchain installed:
 
 ```bash
-gh auth login
-gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | bash
+cargo install polint-cli --locked
 ```
 
-The installer downloads the latest `polint-main` release asset for your
-OS/architecture, verifies its SHA-256 checksum, and installs `polint` to
-`~/.local/bin` by default. Override the install directory with:
+This installs the `polint` binary into `~/.cargo/bin` (or the default Cargo install root).
+
+### Prebuilt binary (GitHub Releases)
+
+CI publishes rolling assets for tag **`polint-main`** (Linux and macOS, x86_64 and aarch64). The install script downloads the matching archive over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
 
 ```bash
-gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | POLINT_INSTALL_DIR=/usr/local/bin bash
+curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | bash
 ```
 
-Release assets are published by GitHub Actions only from pushes to `main`.
-Because the repository is private for now, the installer requires `gh` to be
-authenticated with access to `emilwareus/exlint`.
+Override the install directory:
 
-From a local checkout:
+```bash
+curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | POLINT_INSTALL_DIR=/usr/local/bin bash
+```
+
+Use another GitHub repo or release tag (for example a fork):
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/yourfork/exlint/main/scripts/install.sh \
+  | POLINT_REPO=yourfork/exlint POLINT_RELEASE_TAG=polint-main bash
+```
+
+You need `curl` or `wget`, plus `shasum` or `sha256sum`, for checksum verification.
+
+### From a local checkout
 
 ```bash
 make install
 ```
 
-This installs the `polint` binary from source using Cargo and the checked-in
-lockfile, normally into `~/.cargo/bin`.
+This installs from `crates/polint-cli` using Cargo and the checked-in lockfile, normally into `~/.cargo/bin`.
 
 ## Try to use it!
 
-Install the latest private `main` build, clone the repository, and run one
-self-contained example:
+Install polint (see above), clone the repository, and run one self-contained example:
 
 ```bash
-gh auth login
-gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | bash
-
-gh repo clone emilwareus/exlint polint
+git clone https://github.com/emilwareus/exlint.git polint
 cd polint/examples/config-denied-literal
 
 polint --version
@@ -62,7 +71,7 @@ built-in policy rules, so examples bring their own repo-local rule code.
 
 Human diagnostics use ANSI colors when stdout is a TTY and `NO_COLOR` is unset. For plain text (e.g. pasting into docs), run `polint check --fail-on none --color never`.
 
-After the installer and clone messages, the final two commands should print (version line first; diagnostic layout like this when using `--color never`):
+After install and clone, the final two commands should print (version line first; diagnostic layout like this when using `--color never`):
 
 ```text
 polint 0.1.0
@@ -336,14 +345,35 @@ CI can run `polint check --format sarif` for parser diagnostics,
 graph/fact smoke coverage, and any rules registered by a custom host. The CLI
 has no bundled policy rules. SARIF output is incremental (subset of the spec); it is still not claimed as fully SARIF-certified.
 
+## GitHub Actions
+
+Workflows in `.github/workflows/`:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | Push/PR to `main` | `cargo fmt`, `clippy -D warnings`, `cargo test` (with `--locked`) |
+| `publish-cli.yml` | Push to `main` | Cross-compile `polint` release binaries (Linux x86_64/aarch64, macOS x86_64/aarch64), upload to the rolling GitHub Release **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
+| `publish-crates.yml` | Manual (`workflow_dispatch`) | Optional crates.io publish via `scripts/publish-crates.sh` |
+
+**Secrets (repository settings)**
+
+| Secret | Required for | Notes |
+|--------|----------------|-------|
+| *(none)* | Binary release / CI | `publish-cli` and `ci` use the default `GITHUB_TOKEN` only. |
+| `CRATES_IO_TOKEN` | `Publish crates.io` workflow when *not* in dry-run | [Create a token](https://crates.io/settings/tokens) on crates.io and add it under **Settings → Secrets and variables → Actions**. Use a token scoped to publish; never commit it. |
+
+**First crates.io publish:** Log in to [crates.io](https://crates.io) with your GitHub account, verify email, then run **Publish crates.io** once with **dry_run** enabled (smoke check), then again with **dry_run** disabled after adding `CRATES_IO_TOKEN`. Crate names must not already be taken by another owner.
+
 ## Development
 
 ```bash
 cargo fmt
 cargo fmt -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
+
+Rust **1.94** is pinned in [`rust-toolchain.toml`](rust-toolchain.toml); `dtolnay/rust-toolchain` picks it up in CI.
 
 ## Release Readiness
 
@@ -351,11 +381,15 @@ Before treating the workspace as release-ready, run:
 
 ```bash
 cargo fmt -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
-Release readiness means the documented v1 behavior is implemented and verified. It does not mean crates.io publication, release tags, exact Go semantics, or dynamic branch coverage are complete.
+Release readiness means the documented v1 behavior is implemented and verified. Semver-tagged releases and deeper analysis features can ship independently.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 ## Roadmap
 
