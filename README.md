@@ -356,6 +356,7 @@ Workflows in `.github/workflows/`:
 | `ci.yml` | Push/PR to `main` | **`rustfmt`** on Ubuntu; on **Ubuntu, Windows, and macOS**: `clippy -D warnings`, full **`cargo test --workspace`**, then an **ignored** integration test that runs **`cargo install`** of `polint-cli` to a temp prefix and **`polint --version`** (models the crates.io install path) |
 | `publish-cli.yml` | Push to `main` | Cross-compile release `polint` (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64), upload to **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
 | `bump-version.yml` | Push to `main` | Bumps **[workspace.package]** patch version and matching `polint-*` dependency pins, refreshes **Cargo.lock**, pushes `chore(release): bump crate version to …` (skips when the commit message is already that, so only one bump per human push) |
+| `publish-crates.yml` | Push to `main` (bump commits only) + **manual** | **Automatic:** after each **bump** commit, publishes all crates to **crates.io** in dependency order (`scripts/publish-crates.sh`). **Manual:** workflow_dispatch for dry-run or ad-hoc publish. |
 
 **Secrets (repository settings)**
 
@@ -363,9 +364,11 @@ Workflows in `.github/workflows/`:
 |--------|----------------|-------|
 | *(none)* | Binary release / CI | `publish-cli` and `ci` use the default `GITHUB_TOKEN` only. |
 | `WORKFLOW_PUSH_TOKEN` | Only if **branch protection** blocks the default `GITHUB_TOKEN` from pushing to `main` | Fine-grained or classic PAT with **contents: write** on this repo (not your default password). Create under [GitHub → Settings → Developer settings → PATs](https://github.com/settings/tokens), add as an Actions secret. If unset, the workflow uses `github.token`. |
-| `CRATES_IO_TOKEN` | `Publish crates.io` workflow when *not* in dry-run | [Create a token](https://crates.io/settings/tokens) on crates.io and add it under **Settings → Secrets and variables → Actions**. Use a token scoped to publish; never commit it. |
+| `CRATES_IO_TOKEN` | **Automated crates.io publishing** (and manual full publish) | [Create a token](https://crates.io/settings/tokens) on crates.io and add it under **Settings → Secrets and variables → Actions**. Without it, the **automatic** publish step **fails** on every bump commit until you add it. Use a publish-scoped token; never commit it. |
 
-**First crates.io publish:** Log in to [crates.io](https://crates.io) with your GitHub account, verify email, then run **Publish crates.io** once with **dry_run** enabled (smoke check), then again with **dry_run** disabled after adding `CRATES_IO_TOKEN`. Crate names must not already be taken by another owner.
+**Release flow on merge to `main`:** (1) Your merge runs **CI** and uploads **prebuilt binaries** (`publish-cli`). (2) **Bump** pushes one commit raising the patch version. (3) That commit runs **CI** and **`publish-cli`** again (binaries match the new version) and **`publish-crates`** uploads the **same version** to crates.io (if `CRATES_IO_TOKEN` is set).
+
+**First crates.io publish:** Log in to [crates.io](https://crates.io) with your GitHub account, verify email, add **`CRATES_IO_TOKEN`**, then merge to `main` (or run **Publish crates.io** manually with dry-run first). Crate names must not already be taken by another owner.
 
 ## Development
 

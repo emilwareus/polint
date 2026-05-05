@@ -1,10 +1,13 @@
 name: Publish crates.io
 
-# Publishes workspace crates in dependency order. First-time maintainers: publish
-# manually once or run this with DRY_RUN first; crates.io index lag requires
-# waits between crates (see scripts/publish-crates.sh).
+# Automatic: on pushes to main whose latest commit is the post-merge version bump
+# (`chore(release): bump crate version`), publishes all workspace crates in order.
+#
+# Manual: workflow_dispatch — dry-run (default) or full publish without waiting for a bump.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -27,12 +30,33 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Dry run (smoke)
-        if: ${{ inputs.dry_run }}
+      - name: Dry run (manual only)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: DRY_RUN=1 ./scripts/publish-crates.sh
 
-      - name: Publish all crates
-        if: ${{ !inputs.dry_run }}
+      - name: Publish all crates (manual, not dry run)
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: ./scripts/publish-crates.sh
+        run: |
+          set -euo pipefail
+          if [[ -z "${CRATES_IO_TOKEN:-}" ]]; then
+            echo "::error::CRATES_IO_TOKEN is not set."
+            exit 1
+          fi
+          ./scripts/publish-crates.sh
+
+      - name: Publish all crates (automatic after bump commit)
+        if: >-
+          github.event_name == 'push'
+          && github.event.head_commit != null
+          && contains(github.event.head_commit.message, 'chore(release): bump crate version')
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CRATES_IO_TOKEN:-}" ]]; then
+            echo "::error::Automated publishing requires CRATES_IO_TOKEN (repo Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          ./scripts/publish-crates.sh
