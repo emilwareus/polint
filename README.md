@@ -8,7 +8,7 @@ It is not a replacement for ESLint, Biome, Ruff, golangci-lint, rustfmt, gofmt, 
 
 AI-assisted coding often violates subtle local conventions. Prompting the agent again and again is unreliable. Encoding those expectations as repo-local rules gives the team a repeatable check that works locally, in CI, and in agent workflows.
 
-Rules are code. The framework provides file discovery, Go and TypeScript/JavaScript parsing, reusable facts, diagnostics, rule testing, profiling, caching, graph output, CI output, and an experimental Wasm plugin boundary.
+Rules are code. The framework provides file discovery, Go and TypeScript/JavaScript parsing, reusable facts, diagnostics, rule testing, profiling, caching, graph output, and CI output.
 
 ## Installation
 
@@ -162,6 +162,37 @@ its own fixture source, `.polint.toml`, and one local Rust rule package
 
 Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnostics report "No nearby test evidence found"; they do not claim exact coverage.
 
+## Analysis roadmap
+
+polint is a **facts-first** analyzer: rules read stable extractions (literals, imports, functions, branches, tests, …) from Go and TS/JS sources today, with room to grow into a deeper analysis engine. The table lists **shipped** scenarios (with example repos that prove them) and **planned** work in rough dependency order.
+
+| Status | Scenario | Notes | Examples |
+|--------|----------|-------|----------|
+| Shipped | TS/JS string & template literals | Span-backed literal facts | [basic](examples/basic/README.md), [ts-design-tokens](examples/ts-design-tokens/README.md), [config-denied-literal](examples/config-denied-literal/README.md) (Go + TS/JS), [custom-rule-ts](examples/custom-rule-ts/README.md) |
+| Shipped | JSX / TSX attributes | Name / value facts | [basic](examples/basic/README.md), [ts-design-tokens](examples/ts-design-tokens/README.md), [custom-rule-ts](examples/custom-rule-ts/README.md), [multiple-rules](examples/multiple-rules/README.md) |
+| Shipped | Config-driven deny lists | `[[rules.config]]` → `deny`, globs | [config-denied-literal](examples/config-denied-literal/README.md) |
+| Shipped | Go import paths & boundaries | Import facts + `forbidden_imports` | [go-import-boundaries](examples/go-import-boundaries/README.md), [multiple-rules](examples/multiple-rules/README.md) |
+| Shipped | Cyclomatic complexity (Go) | Per-function metric | [go-complexity](examples/go-complexity/README.md) |
+| Shipped | Cyclomatic complexity (TS/JS) | Per-function metric | [ts-complexity](examples/ts-complexity/README.md) |
+| Shipped | Go branch / error-path obligations | Heuristic branch facts | [go-branch-obligations](examples/go-branch-obligations/README.md) |
+| Shipped | Go branch policy + test evidence | Branches + test facts (heuristic) | [custom-rule-go](examples/custom-rule-go/README.md) |
+| Shipped | Go test maintainability | Test facts, assertions, thresholds via config | [go-test-quality](examples/go-test-quality/README.md) |
+| Shipped | Several rules in one pack | One `.polint/rules/Cargo.toml`, module per rule | [multiple-rules](examples/multiple-rules/README.md) |
+| Shipped | Minimal TSX starter | Single rule, single diagnostic | [basic](examples/basic/README.md) |
+| Shipped | CLI: JSON/SARIF, cache, profiling, graph | No dedicated example per subcommand | `polint --help` |
+| Planned | Scope-accurate module resolution | Path mapping, package exports, build tags / conditions | — |
+| Planned | Symbol / binding resolution | Definitions, references, re-exports; stable symbol IDs | — |
+| Planned | Type-aware analysis | TS semantic layer; Go `go/types` (or equivalent); syntax vs typed rule tiers | — |
+| Planned | General intra-procedural CFG | First-class per-function graph, not only branch heuristics | — |
+| Planned | Dataflow | Def-use / SSA-style IR; value propagation where types exist | — |
+| Planned | Resolved call graph | Caller → callee symbols; approximate virtual/dynamic dispatch | — |
+| Planned | Interprocedural analysis | Summaries; whole-program or scoped modes; finer-grained invalidation | — |
+| Planned | Taint / source–sink tracking | On top of dataflow + configurable sources/sinks | — |
+| Planned | Alias / points-to (conservative) | Stronger security-style rules when needed | — |
+| Planned | Higher-level rule API | Composable queries, stability guarantees, richer diagnostics provenance | — |
+
+Heuristic and future typed rules should **state their precision tier** in messaging so teams know what they are enforcing.
+
 ## Rule Authoring
 
 Generated rules use the same SDK shape as the example rules. They are runnable
@@ -207,7 +238,7 @@ impl Rule for RequirePaymentErrorTests {
 Repo-local Rust rules are compiled and executed as local Cargo rule hosts for
 now. `polint check` hides that Cargo invocation from normal use, but Rust and
 Cargo still need to be available when a local rule host has not already been
-built. Automatic repo-local Wasm compilation/loading remains future work.
+built.
 
 ## Capabilities
 
@@ -284,14 +315,6 @@ cd examples/multiple-rules
 polint check --format json --fail-on none
 ```
 
-## Experimental Wasm Plugins
-
-Repo-local Wasm rules are experimental. The `polint-plugin` crate currently provides the WIT rule interface, manifest validation, and optional Wasmtime component-byte validation behind the `wasmtime-host` feature.
-
-`polint check` does not automatically compile, cache, or execute repo-local Wasm rules in v1. Rust rule hosts are supported through local Cargo manifests; the Wasm skeleton is a versionable contract for future sandboxed plugins, not a production plugin runtime.
-
-Future plugins should query host-owned facts through stable IDs such as file IDs, function IDs, and branch IDs. Plugins should not receive full AST JSON, full source text, or large graph payloads.
-
 ## CI
 
 ```yaml
@@ -332,7 +355,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Release readiness means the documented v1 behavior is implemented and verified. It does not mean crates.io publication, release tags, exact Go semantics, dynamic branch coverage, or automatic repo-local Wasm rule compilation are complete.
+Release readiness means the documented v1 behavior is implemented and verified. It does not mean crates.io publication, release tags, exact Go semantics, or dynamic branch coverage are complete.
 
 ## Roadmap
 
@@ -340,5 +363,4 @@ Future work:
 
 - Exact Go semantic sidecar through `go/packages` or `go/analysis`.
 - Dynamic branch coverage instrumentation.
-- Repo-local Wasm rule compilation and caching by source hash, SDK version, and target triple.
 - More language adapters after Go and TypeScript/JavaScript stabilize.

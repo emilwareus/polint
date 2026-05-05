@@ -1,16 +1,16 @@
 # Pitfalls Research: exlint
 
-## Pitfall: Overbuilding The Plugin System First
+## Pitfall: Overbuilding Optional Subsystems Before Core
 
 Warning signs:
-- Wasm support blocks basic CLI, SDK, or built-in rule delivery.
-- Plugin APIs require full AST serialization.
+- Secondary hosts or extra toolchains block CLI, SDK, or built-in rule delivery.
+- Rule-facing APIs grow faster than the fact model and diagnostics pipeline.
 
 Prevention:
-- Ship native SDK and built-in example rules first.
-- Add WIT files and Wasmtime host skeleton as experimental.
+- Ship native SDK and example rules first.
+- Keep optional execution surfaces behind clear interfaces and defer them until the core workflow is proven.
 
-Phase mapping: Phase 9.
+Phase mapping: Phase 6 and Phase 10.
 
 ## Pitfall: Building A Generic Ruleset Instead Of A Framework
 

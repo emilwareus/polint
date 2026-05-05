@@ -21,7 +21,7 @@ Because the implementation already exists on `main` at commit `7828215`, Phase 1
 - **D-03:** Do not create or use worktrees for this project; all work happens in `/Users/emilwareus/Development/exlint` on `main`.
 
 ### Crate boundary source of truth
-- **D-04:** Keep the current workspace crate set from `Cargo.toml`: `polint-cli`, `polint-core`, `polint-config`, `polint-diagnostics`, `polint-fs`, `polint-cache`, `polint-sdk`, `polint-go`, `polint-ts`, `polint-graph`, `polint-rules`, and `polint-plugin`.
+- **D-04:** Keep the current workspace crate set from `Cargo.toml`: `polint-cli`, `polint-core`, `polint-config`, `polint-diagnostics`, `polint-fs`, `polint-cache`, `polint-sdk`, `polint-go`, `polint-ts`, `polint-graph`, `polint-runner`, `polint-bench`.
 - **D-05:** The crate responsibilities are defined by `docs/INITIAL_PROMPT.md` and reflected in `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, and `.planning/ROADMAP.md`.
 - **D-06:** Do not collapse crates for short-term simplicity unless verification proves a boundary is actively harmful.
 
@@ -32,7 +32,7 @@ Because the implementation already exists on `main` at commit `7828215`, Phase 1
 
 ### Handoff boundaries
 - **D-10:** Cache persistence wiring belongs to Phase 7, not Phase 1.
-- **D-11:** Custom rule auto-compilation/loading belongs to later SDK/plugin work, not Phase 1.
+- **D-11:** Custom rule auto-compilation/loading belongs to later runner and SDK work, not Phase 1.
 - **D-12:** Go and TypeScript parser precision improvements belong to Phases 4 and 5.
 - **D-13:** Expanded snapshot/property coverage belongs to later testing/hardening work unless a missing test directly blocks Phase 1 confidence.
 

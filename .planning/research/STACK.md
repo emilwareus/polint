@@ -14,7 +14,6 @@
 | Go parsing | `tree-sitter`, `tree-sitter-go` | tree-sitter 0.26.8, tree-sitter-go 0.25.0 | Practical syntax extraction without needing Go type checking in v1. | High |
 | TS/JS parsing | Oxc crates | 0.128.0 | Rust-native high-performance JS/TS parser ecosystem. | Medium |
 | Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import graph precision. Initial v1 can start with syntactic imports. | Medium |
-| Plugin host | `wasmtime`, `wit-bindgen` | wasmtime 44.0.0, wit-bindgen 0.57.1 | Correct direction for sandboxed component-model plugins. Keep skeleton experimental. | Medium |
 | Tests | `insta`, `assert_cmd`, `predicates`, `tempfile`, `pretty_assertions`, `proptest` | Current versions checked | Covers snapshots, CLI integration, fixtures, diffs, and invariants. | High |
 
 ## What Not To Use First
@@ -22,7 +21,7 @@
 - Salsa as a hard dependency for v1 query infrastructure. Keep a cache abstraction and ship the hash-based cache first.
 - Full Go semantic analysis in the first pass. Avoid depending on a sidecar until syntax/fact extraction is stable.
 - A custom JS/TS parser. Oxc is the right default.
-- A plugin system that serializes full ASTs. Use stable IDs and host query APIs.
+- Leaking full AST dumps through public rule APIs. Prefer stable IDs and incremental facts on the host.
 
 ## Version Notes
 

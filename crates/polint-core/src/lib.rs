@@ -570,8 +570,8 @@ pub struct RuleMeta {
 
 /// Fact families a rule wants the host to provide.
 ///
-/// Capabilities are declarative: they let hosts and future plugin loaders know
-/// which analysis facts a rule consumes without changing the `Rule` trait.
+/// Capabilities are declarative: they describe which analysis facts a rule
+/// consumes without changing the `Rule` trait.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Capabilities {
     pub syntax: bool,

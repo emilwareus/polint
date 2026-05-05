@@ -8,7 +8,6 @@ members = [
     "crates/polint-fs",
     "crates/polint-go",
     "crates/polint-graph",
-    "crates/polint-plugin",
     "crates/polint-bench",
     "crates/polint-runner",
     "crates/polint-sdk",
@@ -61,5 +60,3 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
-wasmtime = "44.0.0"
-wit-bindgen = "0.57.1"

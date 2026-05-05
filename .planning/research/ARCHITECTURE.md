@@ -13,7 +13,6 @@
 - `polint-graph`: graph types/helpers around petgraph and DOT export.
 - `polint-rules`: built-in example rules using the SDK.
 - `polint-cache`: content/config/rule hashing and parse/fact cache metadata.
-- `polint-plugin`: WIT and Wasmtime skeleton for future Wasm rules.
 
 ## Data Flow
 
@@ -32,7 +31,7 @@
 2. Core database, SDK trait, registry, runner, and default rules.
 3. Go adapter and Go example rules.
 4. TS adapter and TS example rules.
-5. Caching, profiling, SARIF, and plugin skeleton.
+5. Caching, profiling, and SARIF.
 
 ## Integration Notes
 

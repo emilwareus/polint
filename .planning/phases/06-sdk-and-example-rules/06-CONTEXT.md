@@ -8,7 +8,7 @@
 
 Phase 6 makes rule authoring pleasant and proves the public SDK by implementing and hardening the requested example rules. The phase delivers a documented `polint-sdk` authoring surface, `RuleCtx` helpers for already-collected facts, SDK-oriented built-in example rules, deterministic diagnostics, fixtures, and representative snapshots.
 
-This phase does not add dynamic repo-local Rust compilation, Wasm plugin loading, production graph commands, cache/performance work, TypeScript semantic type checking, Node/TS module resolution, or final SARIF/CI hardening. Those remain later phases.
+This phase does not add dynamic repo-local Rust compilation, production graph commands, cache/performance work, TypeScript semantic type checking, Node/TS module resolution, or final SARIF/CI hardening. Those remain later phases.
 
 </domain>
 
@@ -28,7 +28,7 @@ This phase does not add dynamic repo-local Rust compilation, Wasm plugin loading
 ### Example rule strategy
 - **D-07:** Keep all eight requested rules as built-in SDK dogfood examples with the existing `examples/...` rule IDs: Go complexity, TS complexity, Go import boundaries, TS raw colors, Go branch obligations, Go test suite size, Go assertion-after-action, and config-query denied literals.
 - **D-08:** Example rules should consume SDK-facing APIs rather than private core shortcuts. If a rule needs a fact access pattern that only `AnalysisDb` exposes today, add a narrow `RuleCtx`/SDK helper before using it.
-- **D-09:** Use the current `built_in_rules()` registration path for Phase 6. Do not add dynamic plugin loading or automatic repo-local Rust rule compilation.
+- **D-09:** Use the current `built_in_rules()` registration path for Phase 6. Do not add dynamic repo-local Rust rule compilation.
 - **D-10:** Reuse existing Go/TS fixtures and examples where possible, expanding them only enough to prove each requested rule family.
 
 ### Config and diagnostics
@@ -46,7 +46,7 @@ This phase does not add dynamic repo-local Rust compilation, Wasm plugin loading
 ### Scaffolding and docs
 - **D-19:** Keep `polint new-rule` templates aligned with `polint-sdk::prelude::*`, capabilities, and `RuleCtx` helpers.
 - **D-20:** Add enough SDK docs/examples that a repo-local rule author can understand the trait, metadata, capabilities, options, query helpers, and diagnostic reporting loop.
-- **D-21:** Do not promise that generated repo-local Rust rules are automatically compiled or loaded in v1. Scaffolding and native registration remain the honest boundary until plugin/loader phases.
+- **D-21:** Do not promise that generated repo-local Rust rules are automatically compiled or loaded in v1. Scaffolding and native registration remain the honest boundary until loader work lands.
 
 ### Execution policy
 - **D-22:** Work directly in `/Users/emilwareus/Development/exlint` on `main`; do not create or use GSD worktrees.
@@ -113,7 +113,7 @@ This phase does not add dynamic repo-local Rust compilation, Wasm plugin loading
 - Preserve the existing `examples/...` rule ID naming so prior tests and profiles continue to work.
 - Treat built-in rules as SDK examples, not a comprehensive lint ruleset.
 - Prefer small public helpers that make rule code pleasant over a large new query framework.
-- Keep generated custom rule skeletons honest: they compile-looking and demonstrate SDK shape, but they are not automatically loaded as dynamic plugins in this phase.
+- Keep generated custom rule skeletons honest: they compile-looking and demonstrate SDK shape, but they are not automatically loaded in this phase.
 
 </specifics>
 

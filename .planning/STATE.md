@@ -7,10 +7,10 @@ stopped_at: quick task 260505-ffu complete
 last_updated: "2026-05-05T09:13:52Z"
 last_activity: 2026-05-05
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 35
-  completed_plans: 35
+  total_phases: 9
+  completed_phases: 9
+  total_plans: 32
+  completed_plans: 32
   percent: 100
 ---
 
@@ -51,8 +51,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 - Phase 6 completed SDK helpers, all eight example rules, CLI fixture proof, snapshots, code review fixes, verification, and security with `threats_open: 0`; see `.planning/phases/06-sdk-and-example-rules/06-VERIFICATION.md` and `.planning/phases/06-sdk-and-example-rules/06-SECURITY.md`.
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
-- Phase 9 completed the experimental WIT plugin boundary, structured manifest/Wasmtime validation skeleton, docs, code review, verification, and security with `threats_open: 0`; see `.planning/phases/09-plugin-skeleton/09-VERIFICATION.md` and `.planning/phases/09-plugin-skeleton/09-SECURITY.md`.
-- Phase 10 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
+- Phase 9 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
 - Next action: start the next milestone with `/gsd-new-milestone`.
 
 ## Current Position
@@ -94,8 +93,7 @@ Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check r
 | 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
 | 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
 | 8 | Complete | 4/4 plans complete; CI output, command contracts, DOT graph commands, verification, and security passed |
-| 9 | Complete | 3/3 plans complete; experimental WIT plugin boundary, manifest validation, docs, verification, and security passed |
-| 10 | Complete | 4/4 plans complete; README, examples, final CLI smoke tests, release verification, code review, and security passed |
+| 9 | Complete | 4/4 plans complete; README, examples, release verification, code review, and security passed |
 
 ## Decisions Made
 
@@ -143,16 +141,13 @@ Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check r
 - [Phase 08-ci-output-and-graph-commands]: Kept CI output described as SARIF-like and avoided full SARIF certification claims.
 - [Phase 08-ci-output-and-graph-commands]: Used typed serialization structs for SARIF-like output to avoid feature-dependent JSON field ordering.
 - [Phase 08-ci-output-and-graph-commands]: Kept graph commands DOT-only and syntactic, with missing function names returning valid empty DOT.
-- [Phase 09]: Plugin WIT boundary exposes typed metadata, capabilities, run, typed diagnostics, and narrow host fact queries. — Matches phase context and avoids full AST/source transfer across the sandbox boundary.
-- [Phase 09]: Plugin manifest loading uses typed PluginError variants and manifest-relative component path resolution. — Future plugin CLI surfaces can classify setup failures without parsing free-form error strings.
-- [Phase 09]: Plugin docs are explicit that repo-local Wasm rules are experimental and not executed by polint check in v1. — Prevents overclaiming runtime support while preserving the future sandboxed plugin direction.
-- [Phase 10]: README is the canonical v1 user guide and documents current behavior without unsupported dynamic loading claims. — Closes FND-03 while preserving project truthfulness constraints.
-- [Phase 10]: Top-level examples stay compact and command-oriented. — The README carries the broader guide, while example READMEs should be easy to copy and run.
-- [Phase 10]: Runnable examples own minimal local configs. — Each example can be checked in isolation with explicit include globs and profile rule IDs.
-- [Phase 10]: Phase 10 smoke tests use checked-in example configs. — This keeps release proof tied to the same examples users copy.
-- [Phase 10]: Existing property tests remain the TEST-04 traceability source. — Span, diagnostic sorting, discovery, and cache-key invariants are already covered in the owning crates.
-- [Phase 10]: Phase 10 release readiness is command-verified v1 behavior. — The release matrix covers docs inventory, targeted CLI smoke tests, fmt, clippy, and workspace tests without implying publication or future runtime features.
-- [Phase 10]: Post-v1 release and runtime capabilities remain future work. — crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, and automatic repo-local Wasm compilation were intentionally not claimed as implemented.
+- [Phase 09]: README is the canonical v1 user guide and documents current behavior without unsupported dynamic loading claims. — Closes FND-03 while preserving project truthfulness constraints.
+- [Phase 09]: Top-level examples stay compact and command-oriented. — The README carries the broader guide, while example READMEs should be easy to copy and run.
+- [Phase 09]: Runnable examples own minimal local configs. — Each example can be checked in isolation with explicit include globs and profile rule IDs.
+- [Phase 09]: Phase 9 smoke tests use checked-in example configs. — This keeps release proof tied to the same examples users copy.
+- [Phase 09]: Existing property tests remain the TEST-04 traceability source. — Span, diagnostic sorting, discovery, and cache-key invariants are already covered in the owning crates.
+- [Phase 09]: Phase 9 release readiness is command-verified v1 behavior. — The release matrix covers docs inventory, targeted CLI smoke tests, fmt, clippy, and workspace tests without implying publication or future runtime features.
+- [Phase 09]: Post-v1 release and runtime capabilities remain future work. — crates.io publishing, release tags, exact Go semantics, and dynamic branch coverage were intentionally not claimed as implemented.
 
 ## Performance Metrics
 
@@ -180,13 +175,10 @@ Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check r
 | Phase 08 P02 | 4 min | 3 tasks | 2 files |
 | Phase 08 P03 | 5 min | 3 tasks | 2 files |
 | Phase 08 P04 | 8 min | 3 tasks | 2 files |
-| Phase 09 P01 | 5 min | 3 tasks | 2 files |
-| Phase 09 P02 | 4 min | 3 tasks | 3 files |
-| Phase 09 P03 | 2 min | 3 tasks | 3 files |
-| Phase 10 P01 | 4 min | 3 tasks | 1 files |
-| Phase 10 P02 | 3 min | 3 tasks | 7 files |
-| Phase 10 P03 | 4 min | 3 tasks | 1 files |
-| Phase 10 P04 | 2 min | 3 tasks | 1 files |
+| Phase 09 P01 | 4 min | 3 tasks | 1 files |
+| Phase 09 P02 | 3 min | 3 tasks | 7 files |
+| Phase 09 P03 | 4 min | 3 tasks | 1 files |
+| Phase 09 P04 | 2 min | 3 tasks | 1 files |
 
 ## Session
 

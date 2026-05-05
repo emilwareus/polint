@@ -28,7 +28,7 @@ All formatting, linting, tests, and smoke checks passed after fixing a TS import
 - TS parser invocation through Oxc plus practical extraction for imports, functions/classes, components, string literals, JSX attributes, and complexity.
 - Requested built-in example rules.
 - Human, JSON, and SARIF-like diagnostics.
-- Cache crate and plugin skeleton with WIT.
+- Cache crate.
 - README, examples, fixtures, and integration/unit tests.
 
 ## Remaining Hardening
@@ -37,7 +37,6 @@ All formatting, linting, tests, and smoke checks passed after fixing a TS import
 - Repo-local custom Rust rules are scaffolded but not auto-compiled/loaded.
 - Go and TS fact extraction are intentionally practical/heuristic, not full semantic analysis.
 - Snapshot and property test coverage should be expanded.
-- Wasm plugin support is a skeleton, not a production plugin runtime.
 
 ## Phase 1 Closure Verification
 

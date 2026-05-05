@@ -15,7 +15,7 @@ score: 5/5 requirements verified
 | 2 | Top-level examples are present, configured where runnable, and honest about v1 limitations. | verified | `examples/basic`, `examples/custom-rule-go`, `examples/custom-rule-ts`, `examples/go-branch-obligations`, and `examples/ts-design-tokens` exist. Example docs include `polint check` paths plus dynamic-loading, heuristic, or syntax-level caveats where relevant. |
 | 3 | Mixed Go/TS and configured examples have executable CLI proof. | verified | `check_mixed_fixture_handles_go_and_ts_sources`, `example_go_branch_obligations_reports_expected_diagnostic`, and `example_ts_design_tokens_reports_raw_colors` passed. |
 | 4 | Release verification matrix is clean. | verified | `cargo fmt -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` passed. |
-| 5 | Future work is documented without claiming unsupported v1 behavior. | verified | README and `10-04-SUMMARY.md` identify crates.io publishing, release tags, exact Go semantic sidecar, dynamic branch coverage, and automatic repo-local Wasm compilation as future work. |
+| 5 | Future work is documented without claiming unsupported v1 behavior. | verified | README and `10-04-SUMMARY.md` identify crates.io publishing, release tags, exact Go semantic sidecar, dynamic branch coverage, and automatic repo-local Rust rule compilation as future work. |
 
 ## Required Artifacts
 

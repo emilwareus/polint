@@ -89,12 +89,6 @@ TypeScript/JavaScript parsing:
 * `oxc_semantic = "0.123.0"` if useful for semantic information.
 * `oxc_resolver = "11"` or latest compatible if import resolution is needed.
 
-Plugin/runtime:
-
-* `wasmtime = "44.0.0"` or latest compatible.
-* `wit-bindgen = "0.51.0"` or latest compatible.
-* Wasm plugin support should be designed, but native built-in rules and config rules can be implemented first.
-
 Testing:
 
 * `insta = "1"` latest compatible for snapshot tests.
@@ -123,7 +117,6 @@ polint/
     polint-ts/
     polint-graph/
     polint-rules/
-    polint-plugin/
   tests/
     fixtures/
       go/
@@ -316,13 +309,6 @@ pub trait Rule: Send + Sync {
 * Keep built-in rules focused on proving and dogfooding the custom-rule SDK.
 * Do not try to become a comprehensive ruleset.
 * Built-ins should be examples of what users can write themselves.
-
-`polint-plugin`
-
-* Design Wasm plugin loading.
-* Implement the interfaces and skeleton if time allows.
-* Built-in rules and SDK-based native rules are more important for the first working version.
-* The long-term goal is repo-local rules compiled to Wasm and cached automatically.
 
 Primary architecture:
 
@@ -737,20 +723,8 @@ The first implementation may not fully auto-compile repo-local Rust rules. But t
 * Implement example built-in rules using the same SDK.
 * Add a documented path for registering native rules.
 * Add `polint new-rule`.
-* Add a clear TODO/skeleton for compiling repo-local rules to Wasm and loading them.
 
-Plugin architecture target:
-
-* Use Wasm Component Model via Wasmtime.
-* Define a WIT interface for rules.
-* Host owns ASTs, CFGs, graphs, and facts.
-* Plugins should not receive huge AST JSON blobs.
-* Plugins should call host APIs by stable IDs.
-* Plugins should be sandboxed.
-* Plugins should be cached by source hash, SDK version, and target triple.
-* Start with a skeleton if full implementation is too large.
-
-Do not over-engineer the first pass. Make the rule-authoring experience excellent first.
+Repo-local rules ship as normal Rust packages under `.polint/rules` (see workspace layout). Do not over-engineer the first pass. Make the rule-authoring experience excellent first.
 
 Implementation order:
 
@@ -838,13 +812,6 @@ Phase 8: SARIF and CI
 2. Add GitHub Actions example.
 3. Add nonzero exit code on error-level diagnostics.
 4. Add `--fail-on warn|error|none`.
-
-Phase 9: Plugin skeleton
-
-1. Add WIT interface files.
-2. Add Wasmtime loading skeleton.
-3. Add one tiny example Wasm rule if practical.
-4. Document that repo-local Wasm rules are experimental.
 
 Testing requirements:
 
@@ -1009,7 +976,6 @@ Write a README explaining:
 
    * exact Go semantic sidecar
    * dynamic branch coverage instrumentation
-   * Wasm plugins
    * more languages
 
 Deliverables:

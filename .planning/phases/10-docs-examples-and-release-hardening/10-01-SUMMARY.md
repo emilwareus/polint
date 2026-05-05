@@ -5,8 +5,8 @@ subsystem: docs
 tags: [readme, sdk, ci, release]
 
 requires:
-  - phase: 09-plugin-skeleton
-    provides: "experimental plugin truthfulness and v1 limitations"
+  - phase: 08-ci-output-and-graph-commands
+    provides: "CI output contracts, SARIF-like rendering, and graph commands"
 provides:
   - "Complete v1 README guide"
   - "SDK rule authoring and capabilities documentation"
@@ -17,7 +17,7 @@ tech-stack:
   added: []
   patterns:
     - "README is the primary v1 user-facing document"
-    - "Docs state v1 limits instead of implying dynamic rule/plugin loading"
+    - "Docs state v1 limits instead of implying unsupported dynamic rule loading"
 
 key-files:
   created: []
@@ -56,7 +56,7 @@ completed: 2026-05-01
 - Added installation and quickstart sections with the required `polint init`, `polint new-rule`, and `polint check` path.
 - Added SDK rule authoring, capabilities, and `polint test-rules --format json` documentation.
 - Added examples, CI, development, release readiness, and future roadmap sections.
-- Preserved truthfulness around built-in rules, SARIF-like output, generated repo-local Rust rules, and experimental Wasm plugins.
+- Preserved truthfulness around built-in rules, SARIF-like output, and generated repo-local Rust rules.
 
 ## Task Commits
 
@@ -70,7 +70,7 @@ completed: 2026-05-01
 
 ## Decisions Made
 
-README is the canonical v1 user guide. It documents current functionality, exact commands, and future work without claiming unsupported dynamic loading or production Wasm plugin execution.
+README is the canonical v1 user guide. It documents current functionality, exact commands, and future work without claiming unsupported dynamic loading.
 
 ## Deviations from Plan
 

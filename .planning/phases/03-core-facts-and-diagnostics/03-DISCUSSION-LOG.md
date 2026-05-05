@@ -41,11 +41,11 @@
 | Option | Description | Selected |
 |--------|-------------|----------|
 | Harden current registry/runner | Preserve `Rule`, `RuleMeta`, `Capabilities`, `RuleCtx`, `RuleOptions`, and `run_rules`; add tests for filtering, panic/error containment, capability declarations, dedupe, and deterministic parallel output. | yes |
-| Rewrite around plugin boundaries now | Move toward Wasm/plugin host semantics in Phase 3. | |
+| Rewrite around execution boundaries now | Keep the fact model independent of how rules are loaded; avoid coupling Phase 3 to rule loading mechanics. | |
 | Delay runner hardening to SDK phase | Leave core runner behavior mostly untested until Phase 6. | |
 
 **Auto choice:** Harden current registry/runner.
-**Notes:** Recommended because CORE-02 is explicitly in Phase 3, while plugin and SDK breadth have later phases.
+**Notes:** Recommended because CORE-02 is explicitly in Phase 3, while SDK breadth and dynamic loading have later phases.
 
 ---
 

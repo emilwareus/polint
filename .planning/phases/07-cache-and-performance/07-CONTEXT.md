@@ -8,7 +8,7 @@
 
 Phase 7 makes the existing cache/performance surface real and safe: cache parse/fact metadata under `.polint/cache`, make `--no-cache` fully disable cache reads and writes, run parsing and rule execution in parallel where deterministic output can be preserved, and harden `polint profile-rules` timing output.
 
-This phase does not add production CI/SARIF hardening, graph command expansion, dynamic repo-local rule compilation, plugin artifact caching, external cache services, exact semantic type checking, or speedup claims. Those remain later phases or out of scope.
+This phase does not add production CI/SARIF hardening, graph command expansion, dynamic repo-local rule compilation, external cache services, exact semantic type checking, or speedup claims. Those remain later phases or out of scope.
 
 </domain>
 

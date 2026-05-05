@@ -26,7 +26,7 @@ key-files:
 
 key-decisions:
   - "Phase 10 release readiness is based on docs inventory, targeted CLI smoke tests, fmt, clippy, and full workspace tests."
-  - "crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, and automatic repo-local Wasm compilation remain future work."
+  - "crates.io publishing, release tags, exact Go semantics, dynamic branch coverage, and automatic repo-local Rust rule compilation remain future work."
 
 patterns-established:
   - "Closeout summaries must list command-level verification status."
@@ -56,7 +56,7 @@ completed: 2026-05-01
 - Verified all five example directories exist and their docs include invocation and honesty language.
 - Re-ran the targeted Phase 10 mixed fixture and configured example CLI smoke tests.
 - Ran the final release matrix: formatting, clippy with warnings denied, and full workspace tests.
-- Recorded future work explicitly: crates.io publishing, release tags, exact Go semantic sidecar, dynamic branch coverage, and automatic repo-local Wasm compilation.
+- Recorded future work explicitly: crates.io publishing, release tags, exact Go semantic sidecar, dynamic branch coverage, and automatic repo-local Rust rule compilation.
 
 ## Verification Status
 
@@ -98,7 +98,7 @@ cargo test --workspace
 
 ## Decisions Made
 
-Release readiness is scoped to verified v1 repository behavior. It does not include crates.io publication, release tags, exact Go semantics through a semantic sidecar, dynamic branch coverage, or automatic repo-local Wasm compilation.
+Release readiness is scoped to verified v1 repository behavior. It does not include crates.io publication, release tags, exact Go semantics through a semantic sidecar, dynamic branch coverage, or automatic repo-local Rust rule compilation.
 
 ## Deviations from Plan
 

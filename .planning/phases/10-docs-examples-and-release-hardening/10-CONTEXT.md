@@ -8,7 +8,7 @@
 
 Make exlint/polint understandable, testable, and ready for a first release. This phase closes the public-facing v1 story: README completeness, example directories, fixture coverage, final verification, and honest documentation of what remains future work.
 
-This phase does not add new analysis engines, new rule families, dynamic repo-local rule loading, production plugin execution, crates.io publishing automation, or broad release infrastructure.
+This phase does not add new analysis engines, new rule families, dynamic repo-local rule loading, crates.io publishing automation, or broad release infrastructure.
 
 </domain>
 
@@ -16,10 +16,10 @@ This phase does not add new analysis engines, new rule families, dynamic repo-lo
 ## Implementation Decisions
 
 ### README and user path
-- **D-01:** `[auto]` Treat `README.md` as the primary v1 user-facing document. It should cover what polint is, why it exists, non-goals, install/quickstart, config, SDK rule authoring, capabilities, rule testing, CI, examples, experimental plugins, and roadmap.
+- **D-01:** `[auto]` Treat `README.md` as the primary v1 user-facing document. It should cover what polint is, why it exists, non-goals, install/quickstart, config, SDK rule authoring, capabilities, rule testing, CI, examples, and roadmap.
 - **D-02:** `[auto]` Keep README concise but complete. Prefer runnable commands and small snippets over long prose.
 - **D-03:** `[auto]` Be explicit that built-in `examples/...` rules are SDK dogfood examples, not a comprehensive lint pack.
-- **D-04:** `[auto]` Keep truthfulness constraints from prior phases: syntax/heuristic behavior must be labeled honestly; SARIF remains SARIF-like; Wasm plugins remain experimental and are not run by `polint check` in v1.
+- **D-04:** `[auto]` Keep truthfulness constraints from prior phases: syntax/heuristic behavior must be labeled honestly; SARIF remains SARIF-like.
 
 ### Examples directory
 - **D-05:** `[auto]` Expand the existing top-level `examples/` layout rather than moving examples into crate internals or creating a docs site.
@@ -61,7 +61,6 @@ This phase does not add new analysis engines, new rule families, dynamic repo-lo
 ### Prior decisions
 - `.planning/phases/06-sdk-and-example-rules/06-CONTEXT.md` — SDK authoring, examples-as-dogfood, scaffolding, and rule testing decisions.
 - `.planning/phases/08-ci-output-and-graph-commands/08-CONTEXT.md` — SARIF-like, CLI command, exit-code, and graph-output truthfulness decisions.
-- `.planning/phases/09-plugin-skeleton/09-CONTEXT.md` — experimental Wasm plugin boundary and stable-ID docs decisions.
 
 ### Current user-facing artifacts
 - `README.md` — primary v1 user-facing document to complete.
@@ -76,14 +75,14 @@ This phase does not add new analysis engines, new rule families, dynamic repo-lo
 ## Existing Code Insights
 
 ### Reusable Assets
-- `README.md`: already contains project overview, quickstart, config, built-in example rules, SDK snippet, CI, experimental plugins, and roadmap; it needs final completeness, rule testing, examples, and release-hardening polish.
+- `README.md`: already contains project overview, quickstart, config, built-in example rules, SDK snippet, CI, and roadmap; it needs final completeness, rule testing, examples, and release-hardening polish.
 - `examples/basic/README.md`, `examples/custom-rule-go/README.md`, `examples/custom-rule-ts/README.md`: existing example docs are very short and can be expanded without changing core code.
 - `examples/go-branch-obligations/authorize.go` and `examples/ts-design-tokens/Button.tsx`: source examples exist but need explanatory README/config coverage.
 - `tests/fixtures/go`, `tests/fixtures/ts`, and `tests/fixtures/mixed`: fixture roots exist; mixed fixture is not currently covered by a CLI integration test.
 - `crates/polint-cli/tests/cli.rs`: has helpers for temp repo setup, config writing, parsed JSON assertions, exit-code checks, cache tests, graph tests, and example rule tests.
 
 ### Established Patterns
-- Documentation must not overclaim: built-ins are examples, heuristics are heuristic, SARIF is SARIF-like, and Wasm plugins are experimental.
+- Documentation must not overclaim: built-ins are examples, heuristics are heuristic, and SARIF is SARIF-like.
 - CLI integration tests use `assert_cmd`, `tempfile`, `include_str!`, and parsed JSON assertions rather than shelling out through external scripts.
 - Output determinism remains a core project invariant. New docs/tests should preserve deterministic command examples and expected outputs.
 - Example rules use `examples/...` IDs and the public SDK-facing APIs established in Phase 6.
@@ -116,7 +115,7 @@ This phase does not add new analysis engines, new rule families, dynamic repo-lo
 ## Deferred Ideas
 
 - Actual crates.io publication, release tagging, binary packaging, and generated changelogs belong after v1 readiness is verified.
-- Full automatic repo-local Rust/Wasm rule compilation and caching remains a future semantic/plugin requirement.
+- Full automatic repo-local Rust rule compilation and caching remains future work.
 - Exact Go semantic sidecar, dynamic branch coverage, and additional language adapters remain roadmap items.
 
 </deferred>

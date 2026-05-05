@@ -20,14 +20,14 @@
 - Capability-gated facts so expensive analysis is computed only when rules ask for it.
 - Diagnostics designed for both humans and AI agents.
 - Branch obligation facts that can later connect to dynamic coverage.
-- Clean migration path from native built-ins to sandboxed Wasm plugins.
+- Repo-local rules as ordinary Rust crates, compiled and linked like any workspace or path dependency.
 
 ## Anti-Features
 
 - A comprehensive bundled ruleset competing with existing linters.
 - Misleading certainty from heuristic test-evidence rules.
 - Requiring users to understand parser internals for common rules.
-- Plugin APIs that expose unstable internal AST details.
+- Public rule APIs that expose unstable internal AST details.
 - Nondeterministic output caused by parallel execution.
 
 ## Dependencies Between Features
@@ -37,4 +37,4 @@
 - Example rules depend on SDK ergonomics and adapter facts.
 - Caching depends on stable file/config/rule hashes.
 - SARIF output depends on stable diagnostics.
-- Plugin skeleton depends on stable SDK concepts but not full repo-local compilation.
+- Future analysis tiers (types, deeper graphs) must remain keyed off stable SDK concepts without forcing full AST serialization.

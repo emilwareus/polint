@@ -115,7 +115,7 @@ The existing `main` implementation already contains a working initial CLI/config
 - CLI-04 full hardening for `explain`, `test-rules`, `profile-rules`, and `graph` belongs to Phase 8.
 - CLI-05 complete exit-code semantics belongs to Phase 8, though Phase 2 may verify the basic `check` behavior that already exists.
 - DIAG-03 full SARIF-like CI output belongs to Phase 8.
-- Repo-local custom Rust rule auto-compilation/loading belongs to later SDK/plugin work, not Phase 2.
+- Repo-local custom Rust rule auto-compilation/loading belongs to later runner and SDK work, not Phase 2.
 - Cache read/write persistence and deterministic parallel execution belong to Phase 7.
 - Snapshot and property test expansion belongs to Phases 3, 8, and 10 unless needed for a narrow Phase 2 confidence gap.
 

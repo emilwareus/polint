@@ -16,7 +16,7 @@
 |--------|-------------|----------|
 | Minimal additive public SDK | Keep the current core traits and `polint-sdk::prelude::*`, then add docs/tests/helpers where rule authors need them. Recommended because Phase 3 already stabilized the core rule contract. | x |
 | Core rewrite | Replace the current trait/context structure with a new SDK architecture. Higher churn and not needed for Phase 6. | |
-| Dynamic plugin-first SDK | Design around Wasm or dynamic repo-local loading now. Out of scope until plugin phases. | |
+| Dynamic loading as the default SDK shape | Prioritize dynamic repo-local loading now. Defer to later runner phases. | |
 
 **User's choice:** Auto-selected minimal additive public SDK.
 **Notes:** Preserve `Rule`, `RuleMeta`, `Capabilities`, `RuleCtx`, and `RuleOptions` as the baseline.
@@ -42,10 +42,10 @@
 |--------|-------------|----------|
 | Built-in SDK dogfood examples | Keep the eight requested `examples/...` rule IDs and make their implementations use SDK-facing APIs. Recommended because existing CLI/config/tests already know these IDs. | x |
 | Repo-local generated examples | Move proof primarily into generated `.polint/rules` examples. Useful documentation, but not enough for built-in rule verification. | |
-| Wasm/plugin examples now | Prove rules through the future plugin host. Out of scope for Phase 6. | |
+| Full dynamic compilation proof now | Exercise rules through end-to-end dynamic compilation. Out of scope for Phase 6. | |
 
 **User's choice:** Auto-selected built-in SDK dogfood examples.
-**Notes:** Do not add dynamic plugin loading or repo-local rule compilation in this phase.
+**Notes:** Do not add dynamic loading or repo-local rule compilation in this phase.
 
 ---
 

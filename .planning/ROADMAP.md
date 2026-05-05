@@ -11,7 +11,7 @@ v1.0 is complete and archived. Start the next milestone with `/gsd-new-milestone
 ## Completed Scope
 
 <details>
-<summary>v1.0 MVP - 10 phases, 35 plans</summary>
+<summary>v1.0 MVP - 9 phases, 32 plans</summary>
 
 1. Workspace Foundation
 2. CLI, Config, and Discovery
@@ -21,7 +21,6 @@ v1.0 is complete and archived. Start the next milestone with `/gsd-new-milestone
 6. SDK and Example Rules
 7. Cache and Performance
 8. CI Output and Graph Commands
-9. Plugin Skeleton
-10. Docs, Examples, and Release Hardening
+9. Docs, Examples, and Release Hardening
 
 </details>

@@ -114,7 +114,7 @@ Each task was committed atomically. TDD tasks include RED and GREEN commits.
 ---
 
 **Total deviations:** 1 auto-fixed (1 bug)
-**Impact on plan:** The fix was limited to owned clean fixture evidence. No production rule, CLI, cache, graph, SARIF, or plugin behavior changed.
+**Impact on plan:** The fix was limited to owned clean fixture evidence. No production rule, CLI, cache, graph, SARIF, or loader behavior changed.
 
 ## Issues Encountered
 

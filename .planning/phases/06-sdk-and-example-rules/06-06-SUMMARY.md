@@ -141,7 +141,7 @@ Passed:
 
 ## Next Phase Readiness
 
-Phase 6 is complete from the SDK/example-rule perspective. Later phases can build SARIF/CI hardening, cache/performance behavior, plugin loading, and final docs without needing to revisit Phase 6 rule-family coverage.
+Phase 6 is complete from the SDK/example-rule perspective. Later phases can build SARIF/CI hardening, cache/performance behavior, dynamic rule loading, and final docs without needing to revisit Phase 6 rule-family coverage.
 
 ---
 *Phase: 06-sdk-and-example-rules*

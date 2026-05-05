@@ -35,9 +35,6 @@
 - SARIF-like output now has renderer snapshot coverage and CLI integration proof for CI fields and fail thresholds.
 - Import and function graph DOT exports now have unit and CLI coverage for deterministic, valid output.
 - Phase 8 targeted and full workspace verification passed, with SARIF-like output hardened against feature-dependent JSON field ordering.
-- Experimental plugin WIT contract now has typed metadata, diagnostics, capabilities, and stable-ID host fact queries.
-- Plugin manifest loading now has typed validation, manifest-relative component resolution, and optional Wasmtime byte validation coverage.
-- Experimental Wasm plugin docs now match the implemented WIT and Wasmtime loading skeleton, with full workspace verification passing.
 - README now gives a complete v1 user path for installation, quickstart, config, SDK authoring, rule testing, CI, examples, release checks, and roadmap.
 - Top-level examples now document the quickstart, custom rule authoring helpers, and runnable Go/TS example-rule fixtures with honest v1 limitations.
 - CLI integration coverage now proves mixed Go/TS fixtures and the configured Go/TS example directories run through their local native rule hosts.

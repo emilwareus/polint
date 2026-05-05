@@ -139,7 +139,7 @@ None.
 
 ### Gaps Summary
 
-No blocking gaps found. Phase 6 achieves the SDK/example-rule goal without taking ownership of later-phase SARIF/CI hardening, cache/performance, graph commands, plugin loading, or final documentation.
+No blocking gaps found. Phase 6 achieves the SDK/example-rule goal without taking ownership of later-phase SARIF/CI hardening, cache/performance, graph commands, dynamic rule loading, or final documentation.
 
 ---
 

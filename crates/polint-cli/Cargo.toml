@@ -20,7 +20,6 @@ polint-diagnostics = { path = "../polint-diagnostics" }
 polint-fs = { path = "../polint-fs" }
 polint-go = { path = "../polint-go" }
 polint-graph = { path = "../polint-graph" }
-polint-plugin = { path = "../polint-plugin" }
 polint-ts = { path = "../polint-ts" }
 serde_json.workspace = true
 tracing.workspace = true

@@ -52,7 +52,7 @@
 
 | Option | Description | Selected |
 |--------|-------------|----------|
-| Keep Phase 1 limited to foundation verification | Defer cache persistence, parser precision, custom rule loading, snapshots, and production plugins to later phases. | ✓ |
+| Keep Phase 1 limited to foundation verification | Defer cache persistence, parser precision, custom rule loading, snapshots, and dynamic rule loading to later phases. | ✓ |
 | Pull hardening into Phase 1 | Expand Phase 1 beyond foundation work. | |
 | Defer all follow-up decisions | Leave downstream boundaries unclear. | |
 

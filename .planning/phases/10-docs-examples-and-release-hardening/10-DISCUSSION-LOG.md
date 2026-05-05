@@ -70,5 +70,5 @@
 ## Deferred Ideas
 
 - crates.io publication, release tags, binary packaging, and generated changelogs.
-- Automatic repo-local Rust/Wasm rule compilation and artifact caching.
+- Automatic repo-local Rust rule compilation and artifact caching.
 - Exact Go semantic sidecar, dynamic branch coverage, and additional language adapters.

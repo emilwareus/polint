@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-Phase 8 finishes CI-facing behavior and the remaining CLI command surface for the existing `polint` binary. It hardens `explain`, `test-rules`, `profile-rules`, `graph imports`, `graph function`, SARIF-like output, fail-threshold exit codes, DOT graph output, and the integration/snapshot proof around those behaviors. This phase should not add new language semantics, full TypeScript/Node module resolution, dynamic repo-local Rust rule loading, or Wasm plugin loading.
+Phase 8 finishes CI-facing behavior and the remaining CLI command surface for the existing `polint` binary. It hardens `explain`, `test-rules`, `profile-rules`, `graph imports`, `graph function`, SARIF-like output, fail-threshold exit codes, DOT graph output, and the integration/snapshot proof around those behaviors. This phase should not add new language semantics, full TypeScript/Node module resolution, or dynamic repo-local Rust rule loading.
 
 </domain>
 
@@ -16,7 +16,7 @@ Phase 8 finishes CI-facing behavior and the remaining CLI command surface for th
 ### Command Surface Contracts
 
 - **D-01:** `[auto]` Treat the currently implemented command names as the v1 Phase 8 surface: `polint explain <rule-id>`, `polint test-rules`, `polint profile-rules`, `polint graph imports --format dot`, and `polint graph function <name> --format dot`.
-- **D-02:** `[auto]` Harden behavior around existing command implementations rather than redesigning the CLI. `test-rules` may remain a fixture/profile-oriented harness over the current analysis path; it should not claim dynamic repo-local Rust rule compilation or plugin loading.
+- **D-02:** `[auto]` Harden behavior around existing command implementations rather than redesigning the CLI. `test-rules` may remain a fixture/profile-oriented harness over the current analysis path; it should not claim dynamic repo-local Rust rule compilation.
 - **D-03:** `[auto]` `explain` should be useful and deterministic for built-in example rule IDs. Unknown custom rule IDs should get a clear message and non-fatal behavior unless a stricter contract is already established by tests.
 - **D-04:** `[auto]` `profile-rules` should keep the Phase 7 tab-separated timing rows and variable-duration honesty. Phase 8 may add tests/exit-code hardening, but should not add benchmark loops or fixed speedup claims.
 
@@ -112,7 +112,7 @@ Phase 8 finishes CI-facing behavior and the remaining CLI command surface for th
 ## Specific Ideas
 
 - Keep v1 honest: "SARIF-like" is acceptable; do not overclaim full SARIF certification.
-- Treat `test-rules` as the current fixture/custom-rule harness until plugin or repo-local dynamic loading phases provide a real loader.
+- Treat `test-rules` as the current fixture/custom-rule harness until dynamic repo-local loading work provides a real loader.
 - Empty graph output should be deterministic and valid DOT, not a fatal error, unless graph construction itself fails.
 - Command hardening should favor small focused tests around existing behavior before adding new abstraction.
 
@@ -122,7 +122,7 @@ Phase 8 finishes CI-facing behavior and the remaining CLI command surface for th
 ## Deferred Ideas
 
 - Production Node/TypeScript import resolution for graph edges remains outside Phase 8 unless a narrow syntactic test requires a small adapter improvement.
-- Dynamic repo-local Rust rule compilation/loading remains outside Phase 8; plugin skeleton work belongs to Phase 9 and broader dynamic loading remains future work.
+- Dynamic repo-local Rust rule compilation/loading remains outside Phase 8; broader dynamic loading remains future work.
 - Additional graph formats such as JSON, Mermaid, PNG/SVG, or interactive graph visualization are out of scope.
 - GitHub Actions example can be started only if it naturally belongs to CI output proof; broader docs and examples remain Phase 10.
 

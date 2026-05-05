@@ -63,7 +63,7 @@
 | Full custom rule loading now | Build automatic custom Rust rule compilation/loading in this phase. | |
 
 **User's choice:** Auto-selected recommended default: support the Phase 2 config surface and defer full custom rule loading.
-**Notes:** Rule auto-loading belongs to later SDK/plugin work.
+**Notes:** Rule auto-loading belongs to later runner and SDK work.
 
 ---
 

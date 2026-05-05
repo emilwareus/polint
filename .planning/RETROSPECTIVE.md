@@ -3,8 +3,8 @@
 ## Milestone: v1.0 - MVP
 
 **Shipped:** 2026-05-02
-**Phases:** 10
-**Plans:** 35
+**Phases:** 9
+**Plans:** 32
 
 ### What Was Built
 
@@ -13,7 +13,6 @@
 - Go and TypeScript/JavaScript adapters.
 - SDK and example rules.
 - Cache/performance support, CI output, and graph commands.
-- Experimental plugin skeleton.
 - README, examples, and release verification.
 
 ### What Worked
