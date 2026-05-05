@@ -355,6 +355,14 @@ impl AnalysisDb {
         &self.files
     }
 
+    /// Relative paths as in diagnostics (`SourceFile.relative_path`) → full source text.
+    pub fn sources_by_relative_path(&self) -> BTreeMap<String, Arc<str>> {
+        self.files
+            .iter()
+            .map(|file| (file.relative_path.clone(), Arc::clone(&file.source)))
+            .collect()
+    }
+
     pub fn packages(&self) -> &[PackageFact] {
         &self.packages
     }

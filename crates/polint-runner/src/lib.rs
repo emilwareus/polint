@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use polint_config::{LoadedConfig, load_config};
 use polint_core::{Rule, RuleOptions, run_rules};
-use polint_diagnostics::{OutputFormat, Severity, dedupe_diagnostics, render};
+use polint_diagnostics::{
+    ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, dedupe_diagnostics, render,
+};
 use polint_fs::load_analysis_files;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -34,12 +36,22 @@ struct CheckArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = FormatArg::Human)]
     format: FormatArg,
+    /// ANSI colors for human output (no effect on JSON/SARIF).
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
+    color: ColorArg,
     /// Disable .polint/cache reads and writes.
     #[arg(long)]
     no_cache: bool,
     /// Diagnostic level that fails the process.
     #[arg(long, value_enum, default_value_t = FailOn::Error)]
     fail_on: FailOn,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ColorArg {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -74,15 +86,35 @@ fn run(rules: Vec<Arc<dyn Rule>>) -> Result<u8> {
 }
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
-    let mut diagnostics = analyze_and_run(&root, args, rules)?;
+    let (mut diagnostics, db) = analyze_and_run(&root, args, rules)?;
     diagnostics = dedupe_diagnostics(diagnostics);
+    let source_map = match args.format {
+        FormatArg::Human => db.sources_by_relative_path(),
+        _ => BTreeMap::new(),
+    };
 
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };
-    print!("{}", render(format, &diagnostics));
+    let sources = match args.format {
+        FormatArg::Human => Some(&source_map),
+        _ => None,
+    };
+    let opts = RenderOpts {
+        json: JsonReportMeta {
+            tool_name: "polint-local-rules",
+            tool_version: env!("CARGO_PKG_VERSION"),
+        },
+        color: match args.color {
+            ColorArg::Auto => ColorChoice::Auto,
+            ColorArg::Always => ColorChoice::Always,
+            ColorArg::Never => ColorChoice::Never,
+        },
+        sources,
+    };
+    print!("{}", render(format, &diagnostics, opts));
 
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
@@ -91,7 +123,7 @@ fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
     rules: &[Arc<dyn Rule>],
-) -> Result<Vec<polint_diagnostics::Diagnostic>> {
+) -> Result<(Vec<polint_diagnostics::Diagnostic>, polint_core::AnalysisDb)> {
     let config = load_config_for_check(root, &args.paths)?;
     let cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = config_hash(&config);
@@ -123,7 +155,7 @@ fn analyze_and_run(
         true,
     ));
     diagnostics.extend(run_rules(&db, rules, &options, enabled.as_ref(), true));
-    Ok(diagnostics)
+    Ok((diagnostics, db))
 }
 
 fn selected_rule_patterns(

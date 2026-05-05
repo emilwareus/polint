@@ -19,8 +19,9 @@ polint new-rule ts no-raw-colors
 polint check --profile fast --fail-on none
 ```
 
-Use `polint check --format json` when you need machine-readable diagnostics and
-`polint check --format sarif` for CI upload paths. Use `--fail-on warn`, `error`,
+Use `polint check --format json` when you need machine-readable diagnostics. JSON
+is a versioned report object with a `diagnostics` array (not a bare array at the
+root). Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never` for plain text. Use `polint check --format sarif` for CI upload paths. Use `--fail-on warn`, `error`,
 or `none` to control the exit status.
 
 ## Rule Layout

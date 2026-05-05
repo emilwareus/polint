@@ -1,0 +1,10 @@
+{"run_id":"1777984754-160971000","line":1020,"new":{"module_name":"polint_diagnostics__tests","snapshot_name":"render_human_includes_snippet_when_sources_map_provided","metadata":{"source":"crates/polint-diagnostics/src/lib.rs","assertion_line":1020,"expression":"render(OutputFormat::Human, &[contract_diagnostic()], opts)"},"snapshot":"error[project/rule]: policy failed\n  --> src/lib.rs:10:4-10:12\n     |\n  10 | line 10\n     |    ^^^^\n  label 11:2-11:8: related expression\n  evidence symbol: unsafe_api\n  suggestion: Prefer safe_api here\n  fix: Replace unsafe_api\n    replacement: safe_api()\n  help: Use the safe wrapper before crossing this boundary.\n  fingerprint: fingerprint-123"},"old":{"module_name":"polint_diagnostics__tests","metadata":{},"snapshot":"error[project/rule]: policy failed\n  --> src/lib.rs:10:4-10:12\n   |\n 10 |line 10\n    |    ^^^^^^^\n  label 11:2-11:8: related expression\n  evidence symbol: unsafe_api\n  suggestion: Prefer safe_api here\n  fix: Replace unsafe_api\n    replacement: safe_api()\n  help: Use the safe wrapper before crossing this boundary.\n  fingerprint: fingerprint-123"}}
+{"run_id":"1777984763-226560000","line":1020,"new":null,"old":null}
+{"run_id":"1777984784-448180000","line":1020,"new":null,"old":null}
+{"run_id":"1777984784-448180000","line":979,"new":null,"old":null}
+{"run_id":"1777984784-448180000","line":1049,"new":null,"old":null}
+{"run_id":"1777984784-448180000","line":1155,"new":null,"old":null}
+{"run_id":"1777984846-462763000","line":1013,"new":null,"old":null}
+{"run_id":"1777984846-462763000","line":972,"new":null,"old":null}
+{"run_id":"1777984846-462763000","line":1042,"new":null,"old":null}
+{"run_id":"1777984846-462763000","line":1148,"new":null,"old":null}

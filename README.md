@@ -60,16 +60,20 @@ polint check --fail-on none
 `.polint/rules/no-denied-literals` for you. That is intentional: polint ships no
 built-in policy rules, so examples bring their own repo-local rule code.
 
-After the installer and clone messages, the final two commands should print:
+Human diagnostics use ANSI colors when stdout is a TTY and `NO_COLOR` is unset. For plain text (e.g. pasting into docs), run `polint check --fail-on none --color never`.
+
+After the installer and clone messages, the final two commands should print (version line first; diagnostic layout like this when using `--color never`):
 
 ```text
 polint 0.1.0
-query.ts:4:25-4:40 error local/no-denied-literals
-  Configured denied literal `legacy-testid` found.
+error[local/no-denied-literals]: Configured denied literal `legacy-testid` found.
+  --> query.ts:4:25-4:40
   evidence literal: legacy-testid
   evidence matched: legacy-testid
   help: Replace the literal with an allowed constant or local abstraction.
   fingerprint: e337fbb73d44b2b7
+
+
 ```
 
 ## Quickstart
@@ -241,6 +245,12 @@ Use `--fail-on warn|error|none` to control CI status. Exit codes are:
 - `1`: diagnostics at or above the fail threshold
 - `2`: fatal tool/config/internal error
 
+`--format json` writes a single JSON object (not a bare array): `version` (currently `1`), `tool` (`name`, `version`, from the emitting binary), and `diagnostics` in the same schema as each `Diagnostic` struct. Repo-local rule hosts emit this shape when run with `--format json`. Parse it with `diagnostics_from_json_report` in `polint-diagnostics` or read the `diagnostics` field in your own tooling.
+
+For `--format human`, use `--color auto` (default), `always`, or `never`. Colors follow the common `NO_COLOR` convention when `auto` is selected.
+
+`--format sarif` produces SARIF 2.1 with primary locations, `relatedLocations` for multi-span labels, `fixes` when a replacement text is set, stable fingerprints in `fingerprints.polint/v1`, and stub `rules` entries derived from result `ruleId`s. The log is still intentionally incremental and is not claimed as fully SARIF-certified.
+
 ## Examples
 
 The top-level `examples/` directory contains copyable examples:
@@ -298,8 +308,7 @@ jobs:
 
 CI can run `polint check --format sarif` for parser diagnostics,
 graph/fact smoke coverage, and any rules registered by a custom host. The CLI
-has no bundled policy rules. The output is SARIF-like for v1 and intentionally
-does not claim full SARIF certification.
+has no bundled policy rules. SARIF output is incremental (subset of the spec); it is still not claimed as fully SARIF-certified.
 
 ## Development
 

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{self, IsTerminal};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -242,6 +244,76 @@ pub enum OutputFormat {
     Sarif,
 }
 
+/// Metadata embedded in `--format json` output (`PolintReport.tool`).
+#[derive(Debug, Clone, Copy)]
+pub struct JsonReportMeta<'a> {
+    pub tool_name: &'a str,
+    pub tool_version: &'a str,
+}
+
+/// When to emit ANSI colors for `--format human` (honors `NO_COLOR` when [`ColorChoice::Auto`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorChoice {
+    pub fn use_ansi_colors(self) -> bool {
+        match self {
+            ColorChoice::Never => false,
+            ColorChoice::Always => true,
+            ColorChoice::Auto => {
+                io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOpts<'a> {
+    pub json: JsonReportMeta<'a>,
+    pub color: ColorChoice,
+    /// Indexed by `Diagnostic.file`-style relative paths for human code snippets.
+    pub sources: Option<&'a BTreeMap<String, Arc<str>>>,
+}
+
+/// Tool identity in a [`PolintReport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolintToolInfo {
+    pub name: String,
+    pub version: String,
+}
+
+/// Versioned JSON report for `--format json` and repo-local rule host subprocesses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolintReport {
+    pub version: u32,
+    pub tool: PolintToolInfo,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Serialize)]
+struct PolintReportWire<'a> {
+    version: u32,
+    tool: PolintToolWire<'a>,
+    diagnostics: &'a [Diagnostic],
+}
+
+#[derive(Serialize)]
+struct PolintToolWire<'a> {
+    name: &'a str,
+    version: &'a str,
+}
+
+/// Parse stdout from a `polint-local-rules check --format json` process.
+pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_json::Error> {
+    let report: PolintReport = serde_json::from_str(s)?;
+    Ok(report.diagnostics)
+}
+
 pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     diagnostics.sort_by(|a, b| {
         (
@@ -273,34 +345,252 @@ pub fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
         .collect()
 }
 
-pub fn render(format: OutputFormat, diagnostics: &[Diagnostic]) -> String {
+pub fn render(format: OutputFormat, diagnostics: &[Diagnostic], opts: RenderOpts<'_>) -> String {
     match format {
-        OutputFormat::Human => render_human(diagnostics),
-        OutputFormat::Json => {
-            serde_json::to_string_pretty(diagnostics).unwrap_or_else(|_| "[]".to_string())
-        }
+        OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
+        OutputFormat::Json => render_json(diagnostics, opts.json),
         OutputFormat::Sarif => render_sarif(diagnostics),
     }
 }
 
-pub fn render_human(diagnostics: &[Diagnostic]) -> String {
+fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> String {
+    let wire = PolintReportWire {
+        version: 1,
+        tool: PolintToolWire {
+            name: json_meta.tool_name,
+            version: json_meta.tool_version,
+        },
+        diagnostics,
+    };
+    serde_json::to_string_pretty(&wire).unwrap_or_else(|_| "{}".to_string())
+}
+
+struct HumanPalette {
+    reset: &'static str,
+    bold: &'static str,
+    dim: &'static str,
+    red: &'static str,
+    yellow: &'static str,
+    cyan: &'static str,
+    green: &'static str,
+    magenta: &'static str,
+}
+
+impl HumanPalette {
+    fn new(color: bool) -> Self {
+        if color {
+            Self {
+                reset: "\x1b[0m",
+                bold: "\x1b[1m",
+                dim: "\x1b[2m",
+                red: "\x1b[1;31m",
+                yellow: "\x1b[1;33m",
+                cyan: "\x1b[1;36m",
+                green: "\x1b[1;32m",
+                magenta: "\x1b[1;35m",
+            }
+        } else {
+            Self {
+                reset: "",
+                bold: "",
+                dim: "",
+                red: "",
+                yellow: "",
+                cyan: "",
+                green: "",
+                magenta: "",
+            }
+        }
+    }
+
+    fn severity_paint(&self, severity: Severity) -> &'static str {
+        match severity {
+            Severity::Error => self.red,
+            Severity::Warn => self.yellow,
+            Severity::Info => self.cyan,
+        }
+    }
+}
+
+fn lookup_source<'a>(sources: &'a BTreeMap<String, Arc<str>>, file: &str) -> Option<&'a str> {
+    if let Some(s) = sources.get(file) {
+        return Some(s.as_ref());
+    }
+    let trimmed = file.trim_start_matches("./");
+    if let Some(s) = sources.get(trimmed) {
+        return Some(s.as_ref());
+    }
+    let with_dot = format!("./{trimmed}");
+    sources.get(&with_dot).map(|a| a.as_ref())
+}
+
+/// 1-based column: return byte index at that column (first column is 1).
+fn byte_idx_for_one_based_col(line: &str, col_1based: u32) -> usize {
+    if col_1based <= 1 {
+        return 0;
+    }
+    let mut c = 1_u32;
+    for (idx, _) in line.char_indices() {
+        if c == col_1based {
+            return idx;
+        }
+        c = c.saturating_add(1);
+    }
+    line.len()
+}
+
+fn gutter_width(last_line_no: u32) -> usize {
+    let d = last_line_no.max(1).ilog10() as usize + 1;
+    d.max(3)
+}
+
+fn push_underline_row(
+    out: &mut String,
+    p: &HumanPalette,
+    gutter_w: usize,
+    start_col_1based: u32,
+    line: &str,
+    start_byte: usize,
+    end_byte: usize,
+) {
+    out.push(' ');
+    out.push_str(p.dim);
+    for _ in 0..gutter_w {
+        out.push(' ');
+    }
+    out.push_str(p.reset);
+    out.push(' ');
+    out.push_str(p.dim);
+    out.push('|');
+    out.push_str(p.reset);
+    out.push(' ');
+    out.push_str(p.red);
+    let pad = (start_col_1based.saturating_sub(1)) as usize;
+    for _ in 0..pad {
+        out.push(' ');
+    }
+    let end_byte = end_byte.max(start_byte);
+    let slice = line.get(start_byte..end_byte).unwrap_or("");
+    let n = slice.chars().count().max(1);
+    for _ in 0..n {
+        out.push('^');
+    }
+    out.push_str(p.reset);
+    out.push('\n');
+}
+
+fn push_code_snippet(out: &mut String, p: &HumanPalette, source: &str, range: TextRange) {
+    let lines: Vec<&str> = source.lines().collect();
+    if lines.is_empty() || range.start_line < 1 {
+        return;
+    }
+    let start_idx = (range.start_line - 1) as usize;
+    if start_idx >= lines.len() {
+        return;
+    }
+    let end_idx = (range.end_line.saturating_sub(1) as usize)
+        .min(lines.len() - 1)
+        .max(start_idx);
+    let w = gutter_width((end_idx + 1) as u32);
+
+    out.push_str("  ");
+    out.push_str(p.dim);
+    for _ in 0..w {
+        out.push(' ');
+    }
+    out.push('|');
+    out.push_str(p.reset);
+    out.push('\n');
+
+    for (rel_idx, content) in lines[start_idx..=end_idx].iter().enumerate() {
+        let line_no = (start_idx + rel_idx + 1) as u32;
+        out.push(' ');
+        out.push_str(p.dim);
+        out.push_str(&format!("{:>width$}", line_no, width = w));
+        out.push_str(p.reset);
+        out.push(' ');
+        out.push_str(p.dim);
+        out.push('|');
+        out.push_str(p.reset);
+        out.push(' ');
+        out.push_str(content);
+        out.push('\n');
+    }
+
+    if range.start_line == range.end_line {
+        let line = lines[start_idx];
+        let start_b = byte_idx_for_one_based_col(line, range.start_col);
+        let end_b = if range.end_col > range.start_col {
+            byte_idx_for_one_based_col(line, range.end_col)
+        } else {
+            (start_b
+                + line[start_b..]
+                    .chars()
+                    .next()
+                    .map(|ch| ch.len_utf8())
+                    .unwrap_or(1))
+            .min(line.len())
+        };
+        push_underline_row(out, p, w, range.start_col, line, start_b, end_b);
+    } else {
+        let first = lines[start_idx];
+        let start_b = byte_idx_for_one_based_col(first, range.start_col);
+        push_underline_row(out, p, w, range.start_col, first, start_b, first.len());
+        if end_idx > start_idx {
+            let last = lines[end_idx];
+            let end_b = byte_idx_for_one_based_col(last, range.end_col.max(1));
+            push_underline_row(out, p, w, 1, last, 0, end_b);
+        }
+    }
+}
+
+pub fn render_human(
+    diagnostics: &[Diagnostic],
+    color: ColorChoice,
+    sources: Option<&BTreeMap<String, Arc<str>>>,
+) -> String {
+    let p = HumanPalette::new(color.use_ansi_colors());
     if diagnostics.is_empty() {
-        return "No diagnostics.\n".to_string();
+        return format!("{}No diagnostics.{}\n", p.dim, p.reset);
     }
 
     let mut out = String::new();
     for diagnostic in diagnostics {
+        let sev_word = match diagnostic.severity {
+            Severity::Error => "error",
+            Severity::Warn => "warn",
+            Severity::Info => "info",
+        };
         out.push_str(&format!(
-            "{}:{} {} {}\n  {}\n",
-            diagnostic.file,
-            format_range(diagnostic.range),
-            diagnostic.severity,
+            "{}{}{}{}[{}{}{}]: {}{}\n  {}{}{}{} {}{}{}:{}\n",
+            p.severity_paint(diagnostic.severity),
+            sev_word,
+            p.reset,
+            p.bold,
+            p.magenta,
             diagnostic.rule_id,
-            diagnostic.message
+            p.reset,
+            p.bold,
+            diagnostic.message,
+            p.reset,
+            p.cyan,
+            "-->",
+            p.reset,
+            p.bold,
+            diagnostic.file,
+            p.reset,
+            format_range(diagnostic.range),
         ));
+        if let Some(map) = sources
+            && let Some(src) = lookup_source(map, &diagnostic.file)
+        {
+            push_code_snippet(&mut out, &p, src, diagnostic.range);
+        }
         for label in &diagnostic.labels {
             out.push_str(&format!(
-                "  label {}: {}\n",
+                "  {}label{} {}: {}\n",
+                p.dim,
+                p.reset,
                 format_range(label.range),
                 label.message
             ));
@@ -308,26 +598,32 @@ pub fn render_human(diagnostics: &[Diagnostic]) -> String {
         if !diagnostic.evidence.is_empty() {
             for evidence in &diagnostic.evidence {
                 out.push_str(&format!(
-                    "  evidence {}: {}\n",
-                    evidence.label, evidence.value
+                    "  {}evidence{} {}: {}\n",
+                    p.dim, p.reset, evidence.label, evidence.value
                 ));
             }
         }
         for suggestion in &diagnostic.suggestions {
-            out.push_str(&format!("  suggestion: {}\n", suggestion.message));
+            out.push_str(&format!(
+                "  {}suggestion:{} {}\n",
+                p.dim, p.reset, suggestion.message
+            ));
         }
         if let Some(fix) = &diagnostic.fix {
-            out.push_str(&format!("  fix: {}\n", fix.message));
+            out.push_str(&format!("  {}fix:{} {}\n", p.yellow, p.reset, fix.message));
             if let Some(replacement) = &fix.replacement {
-                out.push_str(&format!("    replacement: {replacement}\n"));
+                out.push_str(&format!(
+                    "    {}replacement:{} {}\n",
+                    p.green, p.reset, replacement
+                ));
             }
         }
         if let Some(help) = &diagnostic.help {
-            out.push_str(&format!("  help: {help}\n"));
+            out.push_str(&format!("  {}help:{} {}\n", p.cyan, p.reset, help));
         }
         out.push_str(&format!(
-            "  fingerprint: {}\n\n",
-            diagnostic.stable_fingerprint
+            "  {}fingerprint: {}{}\n\n",
+            p.dim, diagnostic.stable_fingerprint, p.reset
         ));
     }
     out
@@ -365,6 +661,15 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
         name: &'static str,
         #[serde(rename = "informationUri")]
         information_uri: &'static str,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        rules: Vec<SarifReportingRule>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifReportingRule {
+        id: String,
+        #[serde(rename = "shortDescription")]
+        short_description: SarifMessage,
     }
 
     #[derive(Serialize)]
@@ -375,6 +680,16 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
         message: SarifMessage,
         fingerprints: SarifFingerprints,
         locations: Vec<SarifLocation>,
+        #[serde(rename = "relatedLocations", skip_serializing_if = "Vec::is_empty")]
+        related_locations: Vec<SarifRelatedLocation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fixes: Option<Vec<SarifFix>>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifFingerprints {
+        #[serde(rename = "polint/v1")]
+        polint_v1: String,
     }
 
     #[derive(Serialize)]
@@ -383,14 +698,16 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
     }
 
     #[derive(Serialize)]
-    struct SarifFingerprints {
-        polint: String,
-    }
-
-    #[derive(Serialize)]
     struct SarifLocation {
         #[serde(rename = "physicalLocation")]
         physical_location: SarifPhysicalLocation,
+    }
+
+    #[derive(Serialize)]
+    struct SarifRelatedLocation {
+        #[serde(rename = "physicalLocation")]
+        physical_location: SarifPhysicalLocation,
+        message: SarifMessage,
     }
 
     #[derive(Serialize)]
@@ -417,34 +734,120 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
         end_column: u32,
     }
 
-    let results = diagnostics
+    #[derive(Serialize)]
+    struct SarifFix {
+        description: SarifMessage,
+        #[serde(rename = "artifactChanges")]
+        artifact_changes: Vec<SarifArtifactChange>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifArtifactChange {
+        #[serde(rename = "artifactLocation")]
+        artifact_location: SarifArtifactLocation,
+        replacements: Vec<SarifReplacement>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifReplacement {
+        #[serde(rename = "deletedRegion")]
+        deleted_region: SarifRegion,
+        #[serde(rename = "insertedContent")]
+        inserted_content: SarifArtifactContent,
+    }
+
+    #[derive(Serialize)]
+    struct SarifArtifactContent {
+        text: String,
+    }
+
+    fn region_from(range: TextRange) -> SarifRegion {
+        SarifRegion {
+            start_line: range.start_line,
+            start_column: range.start_col,
+            end_line: range.end_line,
+            end_column: range.end_col,
+        }
+    }
+
+    fn physical(uri: &str, range: TextRange) -> SarifPhysicalLocation {
+        SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation {
+                uri: uri.to_string(),
+            },
+            region: region_from(range),
+        }
+    }
+
+    let mut rule_descriptions: BTreeMap<String, String> = BTreeMap::new();
+    for diagnostic in diagnostics {
+        rule_descriptions
+            .entry(diagnostic.rule_id.clone())
+            .or_insert_with(|| diagnostic.message.clone());
+    }
+    let rules: Vec<SarifReportingRule> = rule_descriptions
+        .into_iter()
+        .map(|(id, text)| SarifReportingRule {
+            id,
+            short_description: SarifMessage { text },
+        })
+        .collect();
+
+    let results: Vec<SarifResult> = diagnostics
         .iter()
-        .map(|diagnostic| SarifResult {
-            rule_id: diagnostic.rule_id.clone(),
-            level: match diagnostic.severity {
-                Severity::Info => "note",
-                Severity::Warn => "warning",
-                Severity::Error => "error",
-            },
-            message: SarifMessage {
-                text: diagnostic.message.clone(),
-            },
-            fingerprints: SarifFingerprints {
-                polint: diagnostic.stable_fingerprint.clone(),
-            },
-            locations: vec![SarifLocation {
-                physical_location: SarifPhysicalLocation {
-                    artifact_location: SarifArtifactLocation {
-                        uri: diagnostic.file.clone(),
+        .map(|diagnostic| {
+            let uri = diagnostic.file.as_str();
+            let related_locations: Vec<SarifRelatedLocation> = diagnostic
+                .labels
+                .iter()
+                .map(|label| SarifRelatedLocation {
+                    physical_location: physical(uri, label.range),
+                    message: SarifMessage {
+                        text: label.message.clone(),
                     },
-                    region: SarifRegion {
-                        start_line: diagnostic.range.start_line,
-                        start_column: diagnostic.range.start_col,
-                        end_line: diagnostic.range.end_line,
-                        end_column: diagnostic.range.end_col,
-                    },
+                })
+                .collect();
+
+            let fixes = diagnostic.fix.as_ref().and_then(|fix| {
+                fix.replacement.as_ref().map(|replacement| {
+                    vec![SarifFix {
+                        description: SarifMessage {
+                            text: fix.message.clone(),
+                        },
+                        artifact_changes: vec![SarifArtifactChange {
+                            artifact_location: SarifArtifactLocation {
+                                uri: uri.to_string(),
+                            },
+                            replacements: vec![SarifReplacement {
+                                deleted_region: region_from(diagnostic.range),
+                                inserted_content: SarifArtifactContent {
+                                    text: replacement.clone(),
+                                },
+                            }],
+                        }],
+                    }]
+                })
+            });
+
+            SarifResult {
+                rule_id: diagnostic.rule_id.clone(),
+                level: match diagnostic.severity {
+                    Severity::Info => "note",
+                    Severity::Warn => "warning",
+                    Severity::Error => "error",
                 },
-            }],
+                message: SarifMessage {
+                    text: diagnostic.message.clone(),
+                },
+                fingerprints: SarifFingerprints {
+                    polint_v1: diagnostic.stable_fingerprint.clone(),
+                },
+                locations: vec![SarifLocation {
+                    physical_location: physical(uri, diagnostic.range),
+                }],
+                related_locations,
+                fixes,
+            }
         })
         .collect();
 
@@ -456,6 +859,7 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
                 driver: SarifDriver {
                     name: "polint",
                     information_uri: "https://github.com/emilwareus/exlint",
+                    rules,
                 },
             },
             results,
@@ -498,6 +902,19 @@ fn diagnostic_fingerprint(rule_id: &str, file: &str, range: TextRange, message: 
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn test_opts() -> RenderOpts<'static> {
+        RenderOpts {
+            json: JsonReportMeta {
+                tool_name: "polint",
+                tool_version: env!("CARGO_PKG_VERSION"),
+            },
+            color: ColorChoice::Never,
+            sources: None,
+        }
+    }
 
     #[test]
     fn sorting_is_deterministic() {
@@ -541,10 +958,26 @@ mod tests {
     }
 
     #[test]
+    fn render_human_always_color_includes_escape_sequences() {
+        let diagnostic = Diagnostic::error("r", "f.go", TextRange::point(1, 1), "oops");
+        let rendered = render_human(&[diagnostic], ColorChoice::Always, None);
+        assert!(
+            rendered.contains("\x1b["),
+            "expected ANSI SGR sequences: {rendered:?}"
+        );
+    }
+
+    #[test]
     fn render_human_snapshot_includes_contract_fields() {
-        insta::assert_snapshot!(render(OutputFormat::Human, &[contract_diagnostic()]), @r###"
-        src/lib.rs:10:4-10:12 error project/rule
-          policy failed
+        insta::assert_snapshot!(
+            render(
+                OutputFormat::Human,
+                &[contract_diagnostic()],
+                test_opts(),
+            ),
+            @r###"
+        error[project/rule]: policy failed
+          --> src/lib.rs:10:4-10:12
           label 11:2-11:8: related expression
           evidence symbol: unsafe_api
           suggestion: Prefer safe_api here
@@ -553,70 +986,133 @@ mod tests {
           help: Use the safe wrapper before crossing this boundary.
           fingerprint: fingerprint-123
 
-        "###);
+        "###,
+        );
+    }
+
+    #[test]
+    fn render_human_includes_snippet_when_sources_map_provided() {
+        let source_text: String = (1..=12)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "src/lib.rs".to_string(),
+            Arc::from(source_text.into_boxed_str()),
+        );
+        let opts = RenderOpts {
+            json: JsonReportMeta {
+                tool_name: "polint",
+                tool_version: env!("CARGO_PKG_VERSION"),
+            },
+            color: ColorChoice::Never,
+            sources: Some(&sources),
+        };
+        insta::assert_snapshot!(
+            render(OutputFormat::Human, &[contract_diagnostic()], opts),
+            @r###"
+        error[project/rule]: policy failed
+          --> src/lib.rs:10:4-10:12
+             |
+          10 | line 10
+             |    ^^^^
+          label 11:2-11:8: related expression
+          evidence symbol: unsafe_api
+          suggestion: Prefer safe_api here
+          fix: Replace unsafe_api
+            replacement: safe_api()
+          help: Use the safe wrapper before crossing this boundary.
+          fingerprint: fingerprint-123
+
+        "###,
+        );
     }
 
     #[test]
     fn render_json_snapshot_is_stable() {
-        let rendered = render(OutputFormat::Json, &[contract_diagnostic()]);
+        let rendered = render(OutputFormat::Json, &[contract_diagnostic()], test_opts());
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        assert_eq!(parsed.as_array().unwrap().len(), 1);
+        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["tool"]["name"], "polint");
+        assert_eq!(parsed["tool"]["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 1);
 
         insta::assert_snapshot!(rendered, @r###"
-        [
-          {
-            "rule_id": "project/rule",
-            "severity": "error",
-            "file": "src/lib.rs",
-            "range": {
-              "start_line": 10,
-              "start_col": 4,
-              "end_line": 10,
-              "end_col": 12
-            },
-            "message": "policy failed",
-            "labels": [
-              {
-                "range": {
-                  "start_line": 11,
-                  "start_col": 2,
-                  "end_line": 11,
-                  "end_col": 8
-                },
-                "message": "related expression"
-              }
-            ],
-            "help": "Use the safe wrapper before crossing this boundary.",
-            "evidence": [
-              {
-                "label": "symbol",
-                "value": "unsafe_api"
-              }
-            ],
-            "suggestions": [
-              {
-                "message": "Prefer safe_api here"
-              }
-            ],
-            "fix": {
-              "message": "Replace unsafe_api",
-              "replacement": "safe_api()"
-            },
-            "stable_fingerprint": "fingerprint-123"
-          }
-        ]
+        {
+          "version": 1,
+          "tool": {
+            "name": "polint",
+            "version": "0.1.0"
+          },
+          "diagnostics": [
+            {
+              "rule_id": "project/rule",
+              "severity": "error",
+              "file": "src/lib.rs",
+              "range": {
+                "start_line": 10,
+                "start_col": 4,
+                "end_line": 10,
+                "end_col": 12
+              },
+              "message": "policy failed",
+              "labels": [
+                {
+                  "range": {
+                    "start_line": 11,
+                    "start_col": 2,
+                    "end_line": 11,
+                    "end_col": 8
+                  },
+                  "message": "related expression"
+                }
+              ],
+              "help": "Use the safe wrapper before crossing this boundary.",
+              "evidence": [
+                {
+                  "label": "symbol",
+                  "value": "unsafe_api"
+                }
+              ],
+              "suggestions": [
+                {
+                  "message": "Prefer safe_api here"
+                }
+              ],
+              "fix": {
+                "message": "Replace unsafe_api",
+                "replacement": "safe_api()"
+              },
+              "stable_fingerprint": "fingerprint-123"
+            }
+          ]
+        }
         "###);
     }
 
     #[test]
+    fn diagnostics_from_json_report_round_trips() {
+        let input = vec![contract_diagnostic()];
+        let json = render(OutputFormat::Json, &input, test_opts());
+        let output = diagnostics_from_json_report(&json).unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
     fn render_sarif_snapshot_includes_ci_fields() {
-        let rendered = render(OutputFormat::Sarif, &[contract_diagnostic()]);
+        let rendered = render(OutputFormat::Sarif, &[contract_diagnostic()], test_opts());
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
 
         assert_eq!(parsed.pointer("/version").unwrap(), "2.1.0");
         assert_eq!(
             parsed.pointer("/runs/0/tool/driver/name").unwrap(),
             "polint"
+        );
+        assert_eq!(
+            parsed.pointer("/runs/0/tool/driver/rules/0/id").unwrap(),
+            "project/rule"
         );
         assert_eq!(
             parsed.pointer("/runs/0/results/0/ruleId").unwrap(),
@@ -629,7 +1125,7 @@ mod tests {
         );
         assert_eq!(
             parsed
-                .pointer("/runs/0/results/0/fingerprints/polint")
+                .pointer("/runs/0/results/0/fingerprints/polint~1v1")
                 .unwrap(),
             "fingerprint-123"
         );
@@ -639,6 +1135,15 @@ mod tests {
                 .unwrap(),
             "src/lib.rs"
         );
+        assert_eq!(
+            parsed
+                .pointer("/runs/0/results/0/relatedLocations/0/physicalLocation/region/startLine",)
+                .and_then(|v| v.as_u64()),
+            Some(11)
+        );
+        assert!(parsed
+            .pointer("/runs/0/results/0/fixes/0/artifactChanges/0/replacements/0/insertedContent/text")
+            .is_some());
 
         insta::assert_snapshot!(rendered, @r###"
         {
@@ -649,7 +1154,15 @@ mod tests {
               "tool": {
                 "driver": {
                   "name": "polint",
-                  "informationUri": "https://github.com/emilwareus/exlint"
+                  "informationUri": "https://github.com/emilwareus/exlint",
+                  "rules": [
+                    {
+                      "id": "project/rule",
+                      "shortDescription": {
+                        "text": "policy failed"
+                      }
+                    }
+                  ]
                 }
               },
               "results": [
@@ -660,7 +1173,7 @@ mod tests {
                     "text": "policy failed"
                   },
                   "fingerprints": {
-                    "polint": "fingerprint-123"
+                    "polint/v1": "fingerprint-123"
                   },
                   "locations": [
                     {
@@ -675,6 +1188,51 @@ mod tests {
                           "endColumn": 12
                         }
                       }
+                    }
+                  ],
+                  "relatedLocations": [
+                    {
+                      "physicalLocation": {
+                        "artifactLocation": {
+                          "uri": "src/lib.rs"
+                        },
+                        "region": {
+                          "startLine": 11,
+                          "startColumn": 2,
+                          "endLine": 11,
+                          "endColumn": 8
+                        }
+                      },
+                      "message": {
+                        "text": "related expression"
+                      }
+                    }
+                  ],
+                  "fixes": [
+                    {
+                      "description": {
+                        "text": "Replace unsafe_api"
+                      },
+                      "artifactChanges": [
+                        {
+                          "artifactLocation": {
+                            "uri": "src/lib.rs"
+                          },
+                          "replacements": [
+                            {
+                              "deletedRegion": {
+                                "startLine": 10,
+                                "startColumn": 4,
+                                "endLine": 10,
+                                "endColumn": 12
+                              },
+                              "insertedContent": {
+                                "text": "safe_api()"
+                              }
+                            }
+                          ]
+                        }
+                      ]
                     }
                   ]
                 }
@@ -728,7 +1286,19 @@ mod tests {
 
     #[test]
     fn render_empty_human_output_is_stable() {
-        assert_eq!(render(OutputFormat::Human, &[]), "No diagnostics.\n");
+        assert_eq!(
+            render(OutputFormat::Human, &[], test_opts()),
+            "No diagnostics.\n"
+        );
+    }
+
+    #[test]
+    fn render_empty_json_report_is_stable() {
+        let rendered = render(OutputFormat::Json, &[], test_opts());
+        let parsed: PolintReport = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.tool.name, "polint");
+        assert!(parsed.diagnostics.is_empty());
     }
 
     #[test]

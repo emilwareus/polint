@@ -15,8 +15,9 @@ pub mod prelude {
         StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
     };
     pub use polint_diagnostics::{
-        Diagnostic, Evidence, Fix, Label, OutputFormat, Severity, Suggestion,
-        TextRange as DiagnosticRange,
+        ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat, PolintReport,
+        PolintToolInfo, RenderOpts, Severity, Suggestion, TextRange as DiagnosticRange,
+        diagnostics_from_json_report,
     };
 }
 

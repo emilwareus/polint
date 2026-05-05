@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use polint_config::{LoadedConfig, default_config_toml, load_config};
 use polint_core::{Rule, RuleOptions, run_rules};
-use polint_diagnostics::{Diagnostic, OutputFormat, Severity, dedupe_diagnostics, render};
+use polint_diagnostics::{
+    ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
+    dedupe_diagnostics, diagnostics_from_json_report, render,
+};
 use polint_fs::load_analysis_files;
 use polint_graph::{FunctionGraph, ImportGraph};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +16,51 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod skill;
+
+fn json_report_meta() -> JsonReportMeta<'static> {
+    JsonReportMeta {
+        tool_name: "polint",
+        tool_version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+fn render_opts<'a>(
+    args: &CheckArgs,
+    sources: Option<&'a BTreeMap<String, Arc<str>>>,
+) -> RenderOpts<'a> {
+    RenderOpts {
+        json: json_report_meta(),
+        color: match args.color {
+            ColorArg::Auto => ColorChoice::Auto,
+            ColorArg::Always => ColorChoice::Always,
+            ColorArg::Never => ColorChoice::Never,
+        },
+        sources,
+    }
+}
+
+fn read_sources_for_diagnostics(
+    root: &Path,
+    diagnostics: &[Diagnostic],
+) -> BTreeMap<String, Arc<str>> {
+    let mut map = BTreeMap::new();
+    for diagnostic in diagnostics {
+        if diagnostic.file.is_empty() || diagnostic.file == "<unknown>" {
+            continue;
+        }
+        if map.contains_key(&diagnostic.file) {
+            continue;
+        }
+        let rel = diagnostic.file.trim_start_matches("./");
+        let path = root.join(rel);
+        if path.metadata().map(|m| m.is_file()).unwrap_or(false)
+            && let Ok(text) = fs::read_to_string(&path)
+        {
+            map.insert(diagnostic.file.clone(), Arc::from(text.into_boxed_str()));
+        }
+    }
+    map
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "polint")]
@@ -65,12 +113,22 @@ struct CheckArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = FormatArg::Human)]
     format: FormatArg,
+    /// ANSI colors for human output (no effect on JSON/SARIF). `auto` uses color only for a tty and when `NO_COLOR` is unset.
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
+    color: ColorArg,
     /// Disable .polint/cache reads and writes.
     #[arg(long)]
     no_cache: bool,
     /// Diagnostic level that fails the process.
     #[arg(long, value_enum, default_value_t = FailOn::Error)]
     fail_on: FailOn,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ColorArg {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -291,14 +349,25 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         return check_local_rule_hosts(&root, args, &local_rule_hosts);
     }
 
-    let (mut diagnostics, _db) = analyze_and_run(&root, args, true)?;
+    let (mut diagnostics, db) = analyze_and_run(&root, args, true)?;
+    let source_map = match args.format {
+        FormatArg::Human => db.sources_by_relative_path(),
+        _ => BTreeMap::new(),
+    };
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };
     diagnostics = dedupe_diagnostics(diagnostics);
-    print!("{}", render(format, &diagnostics));
+    let sources = match args.format {
+        FormatArg::Human => Some(&source_map),
+        _ => None,
+    };
+    print!(
+        "{}",
+        render(format, &diagnostics, render_opts(args, sources))
+    );
 
     if load_config(&root)?.missing && matches!(args.format, FormatArg::Human) {
         println!("Config not found. Run `polint init` to create .polint.toml.");
@@ -478,6 +547,7 @@ fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
         paths: Vec::new(),
         profile: None,
         format: FormatArg::Human,
+        color: ColorArg::Auto,
         no_cache: true,
         fail_on: FailOn::None,
     };
@@ -567,12 +637,24 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     }
 
     diagnostics = dedupe_diagnostics(diagnostics);
+    let source_map = if matches!(args.format, FormatArg::Human) {
+        read_sources_for_diagnostics(root, &diagnostics)
+    } else {
+        BTreeMap::new()
+    };
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };
-    print!("{}", render(format, &diagnostics));
+    let sources = match args.format {
+        FormatArg::Human => Some(&source_map),
+        _ => None,
+    };
+    print!(
+        "{}",
+        render(format, &diagnostics, render_opts(args, sources))
+    );
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
 
@@ -627,9 +709,9 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
             manifest.display()
         )
     })?;
-    serde_json::from_str::<Vec<Diagnostic>>(&stdout).with_context(|| {
+    diagnostics_from_json_report(&stdout).with_context(|| {
         format!(
-            "local rule host did not emit polint JSON diagnostics: {}",
+            "local rule host did not emit polint JSON report: {}",
             manifest.display()
         )
     })

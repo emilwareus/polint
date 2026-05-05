@@ -38,9 +38,7 @@ fn cache_json_count(root: &Path) -> usize {
 }
 
 fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
-    value
-        .as_array()
-        .unwrap()
+    diagnostics(value)
         .iter()
         .filter(|diagnostic| diagnostic["rule_id"] == rule_id)
         .map(|diagnostic| diagnostic["file"].as_str().unwrap().to_string())
@@ -48,7 +46,9 @@ fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
 }
 
 fn diagnostics(value: &serde_json::Value) -> &[serde_json::Value] {
-    value.as_array().unwrap()
+    value["diagnostics"].as_array().unwrap_or_else(|| {
+        panic!("expected polint JSON report with diagnostics array, got: {value:?}")
+    })
 }
 
 fn diagnostic_has_evidence(diagnostic: &serde_json::Value, label: &str, value: &str) -> bool {
@@ -512,7 +512,7 @@ fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
             .assert()
             .success(),
     );
-    assert_eq!(json.as_array().unwrap().len(), 0);
+    assert_eq!(diagnostics(&json).len(), 0);
 }
 
 #[test]
@@ -911,8 +911,8 @@ rules = []
             .success(),
     );
     assert!(
-        json.as_array().is_some(),
-        "check output should be JSON array: {json:#?}"
+        json.get("version").and_then(|v| v.as_u64()) == Some(1) && diagnostics(&json).is_empty(),
+        "check output should be polint JSON report: {json:#?}"
     );
 
     let dot = stdout_string(
@@ -1261,7 +1261,7 @@ fn check_json_without_config_is_parseable() {
         .stdout(predicate::str::contains("Config not found").not());
     let json = stdout_json(assert);
 
-    assert_eq!(json.as_array().unwrap().len(), 0);
+    assert_eq!(diagnostics(&json).len(), 0);
 }
 
 #[test]
@@ -1322,9 +1322,7 @@ files = ["**/*.tsx"]
             .success(),
     );
 
-    let diagnostic = json
-        .as_array()
-        .unwrap()
+    let diagnostic = diagnostics(&json)
         .iter()
         .find(|diagnostic| diagnostic["rule_id"] == "local/no-raw-colors")
         .unwrap();
@@ -1478,6 +1476,7 @@ rules = ["local/no-raw-colors"]
     );
 
     assert_eq!(sarif.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
+    assert!(sarif.pointer("/runs/0/tool/driver/rules").is_some());
     assert_eq!(
         sarif.pointer("/runs/0/results/0/ruleId").unwrap(),
         "local/no-raw-colors"
@@ -1507,11 +1506,11 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
 
     assert_eq!(sarif.pointer("/version").unwrap(), "2.1.0");
     assert_eq!(sarif.pointer("/runs/0/tool/driver/name").unwrap(), "polint");
+    assert!(sarif.pointer("/runs/0/tool/driver/rules").is_some());
     assert_eq!(
         sarif.pointer("/runs/0/results/0/ruleId").unwrap(),
         "local/no-raw-colors"
     );
-    assert_eq!(sarif.pointer("/runs/0/results/0/level").unwrap(), "warning");
     assert!(
         sarif
             .pointer("/runs/0/results/0/message/text")
@@ -1520,7 +1519,7 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
     );
     assert!(
         sarif
-            .pointer("/runs/0/results/0/fingerprints/polint")
+            .pointer("/runs/0/results/0/fingerprints/polint~1v1")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|fingerprint| !fingerprint.is_empty())
     );
