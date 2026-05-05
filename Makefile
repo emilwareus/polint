@@ -7,7 +7,7 @@ install:
 	$(CARGO) install --locked --path crates/polint --force
 
 test:
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace --all-features --locked
 
 # Regenerate the colored-output SVGs embedded in README.md from the tracked
 # ANSI fixtures under docs/img/. Run after changing diagnostic colors/format.

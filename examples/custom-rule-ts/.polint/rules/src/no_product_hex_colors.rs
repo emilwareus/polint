@@ -1,10 +1,9 @@
 // This is the whole policy for the custom-rule-ts example repo.
 // It registers one local rule, local/no-product-hex-colors, which catches raw
 // hex colors in product UI code so contributors use local design tokens.
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint::sdk::prelude::*;
 
-pub struct NoProductHexColors;
+pub(crate) struct NoProductHexColors;
 
 impl Rule for NoProductHexColors {
     fn meta(&self) -> RuleMeta {
@@ -89,28 +88,4 @@ fn is_raw_color(value: &str) -> bool {
     lower.starts_with('#')
         && matches!(lower.len(), 4 | 5 | 7 | 9)
         && lower[1..].chars().all(|ch| ch.is_ascii_hexdigit())
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

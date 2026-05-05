@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod keys;
+
 pub const CACHE_VERSION: &str = "polint-cache-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

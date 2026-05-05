@@ -156,12 +156,14 @@ fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
 
     let tree = GO_PARSER.with(|cell| -> Result<_> {
         let mut slot = cell.borrow_mut();
-        if slot.is_none() {
-            let mut p = Parser::new();
-            p.set_language(&tree_sitter_go::LANGUAGE.into())?;
-            *slot = Some(p);
-        }
-        let parser = slot.as_mut().unwrap();
+        let parser = match slot.as_mut() {
+            Some(parser) => parser,
+            None => {
+                let mut parser = Parser::new();
+                parser.set_language(&tree_sitter_go::LANGUAGE.into())?;
+                slot.insert(parser)
+            }
+        };
         parser
             .parse(source, None)
             .context("tree-sitter returned no parse tree")
@@ -323,19 +325,13 @@ fn push_import_from_node(db: &mut AnalysisDb, file: FileId, source: &str, node: 
 }
 
 fn import_alias(source: &str, spec: Node<'_>, path: Node<'_>) -> Option<String> {
-    let alias = source
-        .get(spec.start_byte()..path.start_byte())?
-        .trim()
+    let raw = source.get(spec.start_byte()..path.start_byte())?.trim();
+    let alias = raw
         .strip_prefix("import")
-        .unwrap_or_else(|| {
-            source
-                .get(spec.start_byte()..path.start_byte())
-                .unwrap_or("")
-        })
+        .unwrap_or(raw)
         .trim()
         .trim_matches('(')
         .trim();
-
     if alias.is_empty() {
         None
     } else {
@@ -925,7 +921,7 @@ fn push_if_branches(
             function_name,
         },
         span,
-        condition.clone(),
+        condition,
         "false",
         false_is_error_path,
     );

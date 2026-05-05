@@ -5,5 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-globset.workspace = true
 polint = { workspace = true }
+
+[lints]
+workspace = true

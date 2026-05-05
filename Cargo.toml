@@ -40,7 +40,6 @@ oxc_semantic = "0.129.0"
 oxc_span = "0.129.0"
 petgraph = "0.8.3"
 predicates = "3.1.4"
-pretty_assertions = "1.4.1"
 proptest = "1.11.0"
 rayon = "1.12.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -55,3 +54,15 @@ tree-sitter-go = "0.25.0"
 
 # Rule packs and tooling depend on the unified `polint` crate (path + version for publish).
 polint = { path = "crates/polint", version = "0.1.2" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+redundant_clone = "warn"
+needless_collect = "warn"
+large_enum_variant = "warn"

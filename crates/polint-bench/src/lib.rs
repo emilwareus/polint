@@ -4,8 +4,9 @@
 //! goes: config, disk+`AnalysisDb`, Go parse/facts, TS parse/facts, `run_rules`.
 
 use anyhow::Result;
+use polint::_bench::analysis_keys::config_hash;
 use polint::_bench::cache;
-use polint::_bench::config::{LoadedConfig, load_config};
+use polint::_bench::config::load_config;
 use polint::_bench::core::{AnalysisDb, Rule, RuleOptions, run_rules};
 use polint::_bench::fs::{LoadSourcesTimings, load_analysis_files_with_timings};
 use polint::_bench::{go, ts};
@@ -87,13 +88,6 @@ impl PipelineBreakdown {
             pct(self.run_rules),
         )
     }
-}
-
-fn config_hash(config: &LoadedConfig) -> String {
-    let missing = if config.missing { "missing" } else { "loaded" };
-    let serialized =
-        serde_json::to_string(&config.config).expect("polint config should serialize to JSON");
-    cache::stable_hash(&[missing, &serialized])
 }
 
 /// Same as `polint check` cold path with **no disk cache**, **no rules**, parallel parsers.

@@ -166,7 +166,7 @@ enum GraphFormat {
     Dot,
 }
 
-pub fn run() -> Result<u8> {
+pub(crate) fn run() -> Result<u8> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
@@ -489,11 +489,11 @@ fn analyze_and_run(
 ) -> Result<(Vec<crate::diagnostics::Diagnostic>, crate::core::AnalysisDb)> {
     let config = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
-    let config_digest = config_hash(&config);
+    let config_digest = crate::cache::keys::config_hash(&config);
     let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
-    let rule_digest = rule_hash(&rules, enabled.as_ref(), &options);
+    let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
 
     let mut db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
@@ -525,62 +525,6 @@ fn selected_rule_patterns(
         .map(|rules| rules.into_iter().collect()))
 }
 
-fn config_hash(config: &LoadedConfig) -> String {
-    let missing = if config.missing { "missing" } else { "loaded" };
-    let serialized =
-        serde_json::to_string(&config.config).expect("polint config should serialize to JSON");
-    crate::cache::stable_hash(&[missing, &serialized])
-}
-
-fn rule_hash(
-    rules: &[Arc<dyn Rule>],
-    enabled: Option<&BTreeSet<String>>,
-    options: &BTreeMap<String, RuleOptions>,
-) -> String {
-    let mut parts = Vec::new();
-    for rule in rules {
-        let meta = rule.meta();
-        if let Some(enabled) = enabled
-            && !enabled
-                .iter()
-                .any(|pattern| crate::core::rule_id_matches(pattern, &meta.id))
-        {
-            continue;
-        }
-
-        parts.push(format!("rule:{}", meta.id));
-        parts.push(format!("description:{}", meta.description));
-        parts.push(format!("severity:{}", meta.severity));
-        if let Some(options) = options.get(&meta.id) {
-            parts.push(format!("options:{}", deterministic_rule_options(options)));
-        }
-    }
-    let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    crate::cache::stable_hash(&part_refs)
-}
-
-fn deterministic_rule_options(options: &RuleOptions) -> String {
-    let forbidden_imports = options
-        .forbidden_imports
-        .iter()
-        .map(|(source, targets)| format!("{source}->{}", targets.join("|")))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "severity={};files={};allow_files={};allow={};max={};deny={};forbidden_imports={}",
-        options
-            .severity
-            .map(|severity| severity.to_string())
-            .unwrap_or_default(),
-        options.files.join("|"),
-        options.allow_files.join("|"),
-        options.allow.join("|"),
-        options.max.map(|max| max.to_string()).unwrap_or_default(),
-        options.deny.join("|"),
-        forbidden_imports
-    )
-}
-
 fn explain(rule_id: &str) {
     println!(
         "No bundled rule found for `{rule_id}`. polint ships no built-in policy rules; repo-local rules own their metadata."
@@ -590,12 +534,12 @@ fn explain(rule_id: &str) {
 fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config_for_check(&root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(&root, !args.no_cache);
-    let config_digest = config_hash(&config);
+    let config_digest = crate::cache::keys::config_hash(&config);
     let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let mut parser_diagnostics = Vec::new();
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();
-    let rule_digest = rule_hash(&rules, enabled.as_ref(), &all_options);
+    let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &all_options);
     let mut db = load_analysis_files(&config)?;
     parser_diagnostics.extend(crate::go::analyze_with_options(
         &mut db,

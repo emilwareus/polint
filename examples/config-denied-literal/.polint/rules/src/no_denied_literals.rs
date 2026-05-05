@@ -1,10 +1,13 @@
 // This is the whole policy for the config-denied-literal example repo.
 // It registers one local rule, local/no-denied-literals, which reads deny-list
 // values from .polint.toml and reports matching Go/TS/JS string literals.
-use globset::{Glob, GlobSet, GlobSetBuilder};
+//
+// `RuleOptions::allow` here is wired to **literal-text** allowlisting via
+// `literal_allowed`, so we use [`file_matches_globs`] for path scoping rather
+// than [`file_in_scope`] (which would treat `allow` entries as paths).
 use polint::sdk::prelude::*;
 
-pub struct NoDeniedLiterals;
+pub(crate) struct NoDeniedLiterals;
 
 impl Rule for NoDeniedLiterals {
     fn meta(&self) -> RuleMeta {
@@ -31,7 +34,7 @@ impl Rule for NoDeniedLiterals {
             .filter(|literal| literal.language.is_ts_family() || literal.language == Language::Go)
         {
             let file = ctx.file_path(literal.file);
-            if !file_in_scope(ctx.options(), &file)
+            if !file_matches_globs(ctx.options(), &file)
                 || literal_allowed(ctx.options(), &literal.value)
             {
                 continue;
@@ -66,28 +69,4 @@ impl Rule for NoDeniedLiterals {
 
 fn literal_allowed(options: &RuleOptions, value: &str) -> bool {
     options.allow.iter().any(|allowed| allowed == value)
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

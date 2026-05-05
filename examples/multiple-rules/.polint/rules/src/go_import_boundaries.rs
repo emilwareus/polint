@@ -1,7 +1,6 @@
-use crate::glob::{file_in_scope, glob_matches};
 use polint::sdk::prelude::*;
 
-pub struct GoImportBoundaries;
+pub(crate) struct GoImportBoundaries;
 
 impl Rule for GoImportBoundaries {
     fn meta(&self) -> RuleMeta {

@@ -2,10 +2,9 @@
 // It registers one local rule, local/no-raw-colors, which scans TSX string
 // literals and JSX attributes for raw hex colors. In a real repo this kind of
 // rule would enforce a team convention like "all UI colors come from tokens".
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint::sdk::prelude::*;
 
-pub struct NoRawColors;
+pub(crate) struct NoRawColors;
 
 impl Rule for NoRawColors {
     fn meta(&self) -> RuleMeta {
@@ -90,29 +89,4 @@ fn is_raw_color(value: &str) -> bool {
     lower.starts_with('#')
         && matches!(lower.len(), 4 | 5 | 7 | 9)
         && lower[1..].chars().all(|ch| ch.is_ascii_hexdigit())
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-        && !options.allow.iter().any(|allowed| allowed == file)
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

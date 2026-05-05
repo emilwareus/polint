@@ -27,7 +27,7 @@ fn installed_polint(root: &Path) -> PathBuf {
 #[test]
 #[ignore = "slow: run in CI with: cargo test -p polint --test cargo_install_smoke --locked -- --ignored"]
 fn cargo_install_to_custom_prefix_runs_version() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir().expect("create tempdir for cargo install smoke");
     let install_root = temp.path();
     let ws = workspace_root();
 

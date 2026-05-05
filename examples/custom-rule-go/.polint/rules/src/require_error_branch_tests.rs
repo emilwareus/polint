@@ -3,10 +3,9 @@
 // for Go error branches and asks for nearby test evidence. The check is
 // intentionally heuristic; it demonstrates repo-local policy code, not exact
 // coverage analysis.
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint::sdk::prelude::*;
 
-pub struct RequireErrorBranchTests;
+pub(crate) struct RequireErrorBranchTests;
 
 impl Rule for RequireErrorBranchTests {
     fn meta(&self) -> RuleMeta {
@@ -48,28 +47,4 @@ impl Rule for RequireErrorBranchTests {
         }
         Ok(())
     }
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

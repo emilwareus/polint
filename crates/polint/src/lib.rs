@@ -41,4 +41,31 @@ pub mod _bench {
     pub mod ts {
         pub use crate::ts::*;
     }
+    #[doc(hidden)]
+    pub mod analysis_keys {
+        use crate::config::LoadedConfig;
+        use crate::core::{Rule, RuleOptions};
+        use std::collections::BTreeMap;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        #[inline]
+        pub fn config_hash(config: &LoadedConfig) -> String {
+            crate::cache::keys::config_hash(config)
+        }
+
+        #[inline]
+        pub fn rule_hash(
+            rules: &[Arc<dyn Rule>],
+            enabled: Option<&BTreeSet<String>>,
+            options: &BTreeMap<String, RuleOptions>,
+        ) -> String {
+            crate::cache::keys::rule_hash(rules, enabled, options)
+        }
+
+        #[inline]
+        pub fn deterministic_rule_options(options: &RuleOptions) -> String {
+            crate::cache::keys::deterministic_rule_options(options)
+        }
+    }
 }

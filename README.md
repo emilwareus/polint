@@ -18,7 +18,7 @@ the rules.
 Say your frontend must use design tokens instead of raw colors. A polint rule in
 your repo can catch the violation and tell the AI agent exactly how to fix it:
 
-![polint diagnostic for a raw-color literal in Button.tsx](docs/img/example-no-raw-colors.svg)
+![polint diagnostic for a raw-color literal in Button.tsx](https://raw.githubusercontent.com/emilwareus/polint/main/docs/img/example-no-raw-colors.svg)
 
 That is the point: the rule does not just fail the code. It injects the missing
 project context back into the agent at the moment it needs to repair the change.
@@ -47,7 +47,7 @@ polint check --color always --fail-on none
 
 Expected output:
 
-![polint check on examples/config-denied-literal showing a denied literal diagnostic](docs/img/example-config-denied-literal.svg)
+![polint check on examples/config-denied-literal showing a denied literal diagnostic](https://raw.githubusercontent.com/emilwareus/polint/main/docs/img/example-config-denied-literal.svg)
 
 ## Use It In Your Repo
 

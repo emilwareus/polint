@@ -2,10 +2,20 @@
 //!
 //! Repo-local and example rule authors should start with
 //! `use polint::sdk::prelude::*;`. The prelude re-exports the stable core rule
-//! contract, fact types, diagnostics, severity types, and `anyhow::Result`
+//! contract, fact types, diagnostics, severity types, scope helpers
+//! ([`scope::file_in_scope`], [`scope::glob_matches`]), and `anyhow::Result`
 //! needed for ordinary rule implementations without depending on `polint::core`
 //! directly.
 
+#![deny(missing_docs)]
+
+pub mod scope;
+
+/// Re-exports of the stable rule-authoring surface.
+///
+/// Importing `use polint::sdk::prelude::*;` is the recommended way to write a rule
+/// — it pulls in the rule contract, the fact types, the diagnostic/severity types,
+/// the path-scoping helpers, and `anyhow::Result` in one star-import.
 pub mod prelude {
     pub use crate::core::{
         AnalysisDb, BranchId, BranchObligation, Capabilities, CoverageFact, FileId, FunctionFact,
@@ -18,6 +28,7 @@ pub mod prelude {
         PolintToolInfo, RenderOpts, Severity, Suggestion, TextRange as DiagnosticRange,
         diagnostics_from_json_report,
     };
+    pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
     pub use anyhow::Result;
 }
 

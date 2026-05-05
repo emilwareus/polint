@@ -314,7 +314,7 @@ pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_js
     Ok(report.diagnostics)
 }
 
-pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
+pub(crate) fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     diagnostics.sort_by(|a, b| {
         (
             a.file.as_str(),
@@ -335,7 +335,7 @@ pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     });
 }
 
-pub fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+pub(crate) fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
     let mut diagnostics = diagnostics;
     sort_diagnostics(&mut diagnostics);
     let mut seen = BTreeSet::new();
@@ -345,7 +345,11 @@ pub fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
         .collect()
 }
 
-pub fn render(format: OutputFormat, diagnostics: &[Diagnostic], opts: RenderOpts<'_>) -> String {
+pub(crate) fn render(
+    format: OutputFormat,
+    diagnostics: &[Diagnostic],
+    opts: RenderOpts<'_>,
+) -> String {
     match format {
         OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
         OutputFormat::Json => render_json(diagnostics, opts.json),
@@ -544,7 +548,7 @@ fn push_code_snippet(out: &mut String, p: &HumanPalette, source: &str, range: Te
     }
 }
 
-pub fn render_human(
+pub(crate) fn render_human(
     diagnostics: &[Diagnostic],
     color: ColorChoice,
     sources: Option<&BTreeMap<String, Arc<str>>>,
@@ -636,7 +640,7 @@ fn format_range(range: TextRange) -> String {
     )
 }
 
-pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
+pub(crate) fn render_sarif(diagnostics: &[Diagnostic]) -> String {
     #[derive(Serialize)]
     struct SarifLog {
         version: &'static str,
@@ -869,7 +873,7 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
     serde_json::to_string_pretty(&log).unwrap_or_else(|_| "{}".to_string())
 }
 
-pub fn fingerprint(parts: &[&str]) -> String {
+pub(crate) fn fingerprint(parts: &[&str]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for part in parts {
         for byte in part.as_bytes() {

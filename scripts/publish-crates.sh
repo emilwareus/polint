@@ -28,7 +28,7 @@ fi
 
 for p in "${PACKAGES[@]}"; do
   echo "Publishing ${p}..."
-  cargo publish -p "$p" --token "${CRATES_IO_TOKEN}"
+  cargo publish -p "$p" --locked --token "${CRATES_IO_TOKEN}"
 done
 
 echo "Done. Verify: https://crates.io/crates/polint"

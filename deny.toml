@@ -1,0 +1,41 @@
+# cargo-deny configuration for the polint workspace.
+#
+# Run locally: `cargo deny --all-features --locked check`
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Crates we ship to crates.io are MIT (`workspace.package.license`).
+# Allow the permissive licenses commonly seen in the dependency tree; reject
+# anything else until a maintainer reviews the addition.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+# `publish = false` workspace members (examples, polint-bench) intentionally
+# don't carry a license field — they are illustrative repo content, not crates.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

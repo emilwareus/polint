@@ -3,37 +3,50 @@ use petgraph::dot::{Config, Dot};
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::BTreeMap;
 
+/// Look up `key` in `nodes`, otherwise allocate a single owned `String` for the
+/// petgraph node weight. Avoids the redundant double-clone pattern that
+/// `entry(...).or_insert_with(...)` produces when the key and the new node
+/// label are the same string.
+fn ensure_node<'k>(
+    nodes: &mut BTreeMap<&'k str, NodeIndex>,
+    graph: &mut DiGraph<String, ()>,
+    key: &'k str,
+) -> NodeIndex {
+    if let Some(&idx) = nodes.get(key) {
+        return idx;
+    }
+    let idx = graph.add_node(key.to_string());
+    nodes.insert(key, idx);
+    idx
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct ImportGraph {
-    graph: DiGraph<String, String>,
+pub(crate) struct ImportGraph {
+    graph: DiGraph<String, ()>,
 }
 
 impl ImportGraph {
-    pub fn from_db(db: &AnalysisDb) -> Self {
-        let mut graph = DiGraph::<String, String>::new();
-        let mut nodes: BTreeMap<String, NodeIndex> = BTreeMap::new();
+    pub(crate) fn from_db(db: &AnalysisDb) -> Self {
+        let mut graph = DiGraph::<String, ()>::new();
+        let mut nodes: BTreeMap<&str, NodeIndex> = BTreeMap::new();
 
         for file in db.files() {
-            nodes
-                .entry(file.relative_path.clone())
-                .or_insert_with(|| graph.add_node(file.relative_path.clone()));
+            ensure_node(&mut nodes, &mut graph, file.relative_path.as_str());
         }
 
         for import in db.imports() {
-            let from = db.path_for(import.file);
-            let from_idx = *nodes
-                .entry(from.clone())
-                .or_insert_with(|| graph.add_node(from.clone()));
-            let to_idx = *nodes
-                .entry(import.path.clone())
-                .or_insert_with(|| graph.add_node(import.path.clone()));
-            graph.add_edge(from_idx, to_idx, import.path.clone());
+            let from_path = db
+                .file(import.file)
+                .map_or("<unknown>", |file| file.relative_path.as_str());
+            let from_idx = ensure_node(&mut nodes, &mut graph, from_path);
+            let to_idx = ensure_node(&mut nodes, &mut graph, import.path.as_str());
+            graph.add_edge(from_idx, to_idx, ());
         }
 
         Self { graph }
     }
 
-    pub fn to_dot(&self) -> String {
+    pub(crate) fn to_dot(&self) -> String {
         format!(
             "{:?}",
             Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
@@ -42,35 +55,31 @@ impl ImportGraph {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct FunctionGraph {
-    graph: DiGraph<String, String>,
+pub(crate) struct FunctionGraph {
+    graph: DiGraph<String, ()>,
 }
 
 impl FunctionGraph {
-    pub fn from_db(db: &AnalysisDb, function_name: &str) -> Self {
-        let mut graph = DiGraph::<String, String>::new();
-        let mut nodes = BTreeMap::<String, NodeIndex>::new();
+    pub(crate) fn from_db(db: &AnalysisDb, function_name: &str) -> Self {
+        let mut graph = DiGraph::<String, ()>::new();
+        let mut nodes = BTreeMap::<&str, NodeIndex>::new();
 
         for function in db
             .functions()
             .iter()
             .filter(|function| function.name == function_name)
         {
-            let root = *nodes
-                .entry(function.name.clone())
-                .or_insert_with(|| graph.add_node(function.name.clone()));
+            let root = ensure_node(&mut nodes, &mut graph, function.name.as_str());
             for call in &function.calls {
-                let call_idx = *nodes
-                    .entry(call.clone())
-                    .or_insert_with(|| graph.add_node(call.clone()));
-                graph.add_edge(root, call_idx, "calls".to_string());
+                let call_idx = ensure_node(&mut nodes, &mut graph, call.as_str());
+                graph.add_edge(root, call_idx, ());
             }
         }
 
         Self { graph }
     }
 
-    pub fn to_dot(&self) -> String {
+    pub(crate) fn to_dot(&self) -> String {
         format!(
             "{:?}",
             Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
@@ -79,13 +88,19 @@ impl FunctionGraph {
 }
 
 // Placeholders for future CFG / file-graph DOT export (CLI graph command).
-#[allow(dead_code)]
-pub fn cfg_to_dot(_db: &AnalysisDb, _function: FunctionId) -> String {
+#[expect(
+    dead_code,
+    reason = "Reserved for a future `polint graph` command; not wired yet."
+)]
+pub(crate) fn cfg_to_dot(_db: &AnalysisDb, _function: FunctionId) -> String {
     "digraph cfg {\n  \"entry\" -> \"exit\";\n}\n".to_string()
 }
 
-#[allow(dead_code)]
-pub fn file_node_label(db: &AnalysisDb, file: FileId) -> String {
+#[expect(
+    dead_code,
+    reason = "Reserved for future graph export; ImportGraph uses paths directly today."
+)]
+pub(crate) fn file_node_label(db: &AnalysisDb, file: FileId) -> String {
     db.path_for(file)
 }
 

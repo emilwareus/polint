@@ -1,7 +1,6 @@
-use crate::glob::file_in_scope;
 use polint::sdk::prelude::*;
 
-pub struct NoRawColors;
+pub(crate) struct NoRawColors;
 
 impl Rule for NoRawColors {
     fn meta(&self) -> RuleMeta {

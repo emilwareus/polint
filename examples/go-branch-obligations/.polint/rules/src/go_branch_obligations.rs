@@ -2,10 +2,9 @@
 // It registers one local rule, local/go-branch-obligations, which reports
 // important Go error branches when nearby tests do not appear to cover them.
 // The matching is heuristic and uses extracted branch/test facts from polint.
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint::sdk::prelude::*;
 
-pub struct GoBranchObligations;
+pub(crate) struct GoBranchObligations;
 
 impl Rule for GoBranchObligations {
     fn meta(&self) -> RuleMeta {
@@ -64,28 +63,4 @@ fn evidence_matches_condition(condition: &str, term: &str) -> bool {
     let term_lower = term.to_ascii_lowercase();
     !term_lower.is_empty()
         && (condition_lower.contains(&term_lower) || term_lower.contains(&condition_lower))
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

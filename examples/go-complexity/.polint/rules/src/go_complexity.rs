@@ -1,10 +1,9 @@
 // This is the whole policy for the go-complexity example repo.
 // It registers one local rule, local/go-cyclomatic-complexity, which warns when
 // a Go function's extracted cyclomatic complexity exceeds the configured max.
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use polint::sdk::prelude::*;
 
-pub struct GoComplexity;
+pub(crate) struct GoComplexity;
 
 impl Rule for GoComplexity {
     fn meta(&self) -> RuleMeta {
@@ -51,28 +50,4 @@ impl Rule for GoComplexity {
         }
         Ok(())
     }
-}
-
-fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
-    (options.files.is_empty()
-        || options
-            .files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file)))
-        && !options
-            .allow_files
-            .iter()
-            .any(|pattern| glob_matches(pattern, file))
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    build_one(pattern)
-        .map(|glob| glob.is_match(value) || glob.is_match(format!("./{value}")))
-        .unwrap_or_else(|| value.contains(pattern.trim_matches('*')))
-}
-
-fn build_one(pattern: &str) -> Option<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(Glob::new(pattern).ok()?);
-    builder.build().ok()
 }

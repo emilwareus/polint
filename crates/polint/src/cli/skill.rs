@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Args, Clone)]
-pub struct AddSkillArgs {
+pub(crate) struct AddSkillArgs {
     /// AI agent to install the skill for. Repeat to install for multiple agents.
     #[arg(long = "agent", value_enum)]
     agents: Vec<SkillAgent>,
@@ -26,7 +26,7 @@ enum SkillAgent {
     Codex,
 }
 
-pub fn add_skill(root: PathBuf, args: &AddSkillArgs) -> Result<()> {
+pub(crate) fn add_skill(root: PathBuf, args: &AddSkillArgs) -> Result<()> {
     let agents = selected_agents(args)?;
     for agent in agents {
         let skill_path = install_skill(&root, agent, args.force)?;

@@ -1516,7 +1516,7 @@ mod tests {
             file: go_file,
             function: Some(go_function),
             name: "TestCharge".to_string(),
-            span: go_span.clone(),
+            span: go_span,
             evidence_terms: vec!["err".to_string()],
             assertion_count: 1,
             subtest_count: 0,
