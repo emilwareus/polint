@@ -2,7 +2,9 @@
 set -euo pipefail
 
 repo="${POLINT_REPO:-emilwareus/exlint}"
-tag="${POLINT_RELEASE_TAG:-polint-main}"
+# Default: latest stable GitHub Release (semver tags from the Release workflow).
+# Override with e.g. POLINT_RELEASE_TAG=v0.2.0 for a specific tag.
+tag="${POLINT_RELEASE_TAG:-latest}"
 install_dir="${POLINT_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
@@ -24,7 +26,11 @@ case "$(uname -m)" in
 esac
 
 asset="polint-${os}-${arch}.tar.gz"
-base_url="https://github.com/${repo}/releases/download/${tag}"
+if [[ "${tag}" == "latest" ]]; then
+  base_url="https://github.com/${repo}/releases/latest/download"
+else
+  base_url="https://github.com/${repo}/releases/download/${tag}"
+fi
 
 if command -v curl >/dev/null 2>&1; then
   fetch() { curl -fsSL "$1" -o "$2"; }

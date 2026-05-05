@@ -24,13 +24,13 @@ This installs the `polint` binary into `~/.cargo/bin` (or the default Cargo inst
 
 ### Prebuilt binary (GitHub Releases)
 
-CI publishes rolling assets for tag **`polint-main`** (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64 as a `.tar.gz` containing `polint.exe`). **Unix:** the install script downloads the matching archive over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
+Maintainers ship **versioned** archives on each semver GitHub Release **`vX.Y.Z`** (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64 as a `.tar.gz` containing `polint` or `polint.exe`) via the **Release** workflow. **Unix:** the install script downloads from **`releases/latest`** over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | bash
 ```
 
-**Windows:** use `cargo install polint-cli --locked`, or download `polint-windows-x86_64.tar.gz` from that release, extract `polint.exe`, and place it on your `PATH`.
+**Windows:** use `cargo install polint-cli --locked`, or download `polint-windows-x86_64.tar.gz` from the [latest release](https://github.com/emilwareus/exlint/releases/latest), extract `polint.exe`, and place it on your `PATH`.
 
 Override the install directory:
 
@@ -38,11 +38,11 @@ Override the install directory:
 curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | POLINT_INSTALL_DIR=/usr/local/bin bash
 ```
 
-Use another GitHub repo or release tag (for example a fork):
+Use another GitHub repo or release tag (for example a fork or a specific **`vX.Y.Z`**):
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/yourfork/exlint/main/scripts/install.sh \
-  | POLINT_REPO=yourfork/exlint POLINT_RELEASE_TAG=polint-main bash
+  | POLINT_REPO=yourfork/exlint POLINT_RELEASE_TAG=v0.2.0 bash
 ```
 
 You need `curl` or `wget`, plus `shasum` or `sha256sum`, for checksum verification.
@@ -354,21 +354,18 @@ Workflows in `.github/workflows/`:
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | Push/PR to `main` | **`rustfmt`** on Ubuntu; on **Ubuntu, Windows, and macOS**: `clippy -D warnings`, full **`cargo test --workspace`**, then an **ignored** integration test that runs **`cargo install`** of `polint-cli` to a temp prefix and **`polint --version`** (models the crates.io install path) |
-| `publish-cli.yml` | Push to `main` | Cross-compile release `polint` (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64), upload to **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
-| `bump-version.yml` | Push to `main` | Bumps **[workspace.package]** patch version and matching `polint-*` dependency pins, refreshes **Cargo.lock**, pushes `chore(release): bump crate version to …` (skips when the commit message is already that, so only one bump per human push) |
-| `publish-crates.yml` | Push to `main` (bump commits only) + **manual** | **Automatic:** after each **bump** commit, publishes all crates to **crates.io** in dependency order (`scripts/publish-crates.sh`). **Manual:** workflow_dispatch for dry-run or ad-hoc publish. |
+| `release.yml` | **Manual** (`workflow_dispatch` on `main`) | **Release only:** patch **`scripts/bump-workspace-version.py`**, commit and push to **`main`**, annotated tag **`vX.Y.Z`**, **crates.io** publish (optional), and **CLI archives** on that tag’s GitHub Release (both optional inputs default to on). Prebuilt installs use **`releases/latest`** (see **`scripts/install.sh`**) |
 
 **Secrets (repository settings)**
 
 | Secret | Required for | Notes |
 |--------|----------------|-------|
-| *(none)* | Binary release / CI | `publish-cli` and `ci` use the default `GITHUB_TOKEN` only. |
-| `WORKFLOW_PUSH_TOKEN` | Only if **branch protection** blocks the default `GITHUB_TOKEN` from pushing to `main` | Fine-grained or classic PAT with **contents: write** on this repo (not your default password). Create under [GitHub → Settings → Developer settings → PATs](https://github.com/settings/tokens), add as an Actions secret. If unset, the workflow uses `github.token`. |
-| `CRATES_IO_TOKEN` | **Automated crates.io publishing** (and manual full publish) | [Create a token](https://crates.io/settings/tokens) on crates.io and add it under **Settings → Secrets and variables → Actions**. Without it, the **automatic** publish step **fails** on every bump commit until you add it. Use a publish-scoped token; never commit it. |
+| *(none)* | CI | `ci.yml` uses the default `GITHUB_TOKEN` only. |
+| *(none)* | **`release.yml`** (typical) | `GITHUB_TOKEN` can push tags and manage releases if branch protection allows it. |
+| `WORKFLOW_PUSH_TOKEN` | **`release.yml`** when **`main`** is protected | Optional PAT with **contents: write** (and permission to bypass or push to protected **`main`**) so the bump commit and tag push succeed. |
+| `CRATES_IO_TOKEN` | **`release.yml`** with **Publish crates** on | [Create a token](https://crates.io/settings/tokens) on crates.io; add under **Secrets and variables → Actions**. Publish-scoped; never commit it. |
 
-**Release flow on merge to `main`:** (1) Your merge runs **CI** and uploads **prebuilt binaries** (`publish-cli`). (2) **Bump** pushes one commit raising the patch version. (3) That commit runs **CI** and **`publish-cli`** again (binaries match the new version) and **`publish-crates`** uploads the **same version** to crates.io (if `CRATES_IO_TOKEN` is set).
-
-**First crates.io publish:** Log in to [crates.io](https://crates.io) with your GitHub account, verify email, add **`CRATES_IO_TOKEN`**, then merge to `main` (or run **Publish crates.io** manually with dry-run first). Crate names must not already be taken by another owner.
+**Ship a version:** Run **Actions → Release → Run workflow** on **`main`**. That bumps the workspace **patch** version (via **`scripts/bump-workspace-version.py`**), pushes to **`main`**, creates **`vX.Y.Z`**, and—with both inputs left on—publishes to crates.io and uploads CLI archives to that GitHub Release. Turn off **Publish crates** or **Build CLI** if you only want bump+tag or only one publish step. To **smoke-test** the crates.io ordered publish without uploading, run **`DRY_RUN=1 ./scripts/publish-crates.sh`** locally first.
 
 ## Development
 

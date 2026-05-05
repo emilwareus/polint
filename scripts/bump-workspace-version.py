@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Bump the patch version in the root workspace Cargo.toml.
 
-Updates:
-  - [workspace.package] version
-  - each `polint-* = { path = ..., version = "..." }` entry to match
+Updates [workspace.package] version and each polint-* entry under
+[workspace.dependencies]. Prints the new version on stdout.
 
-Prints the new version on stdout (for CI). Exits with error if parsing fails.
+Used by `.github/workflows/release.yml`; also safe to run locally, then
+`cargo build --workspace` and commit Cargo.toml + Cargo.lock.
 """
 
 from __future__ import annotations
