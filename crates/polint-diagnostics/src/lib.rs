@@ -1039,12 +1039,13 @@ mod tests {
         assert_eq!(parsed["tool"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 1);
 
-        insta::assert_snapshot!(rendered, @r###"
+        let normalized = rendered.replace(env!("CARGO_PKG_VERSION"), "<PKG_VERSION>");
+        insta::assert_snapshot!(normalized, @r###"
         {
           "version": 1,
           "tool": {
             "name": "polint",
-            "version": "0.1.0"
+            "version": "<PKG_VERSION>"
           },
           "diagnostics": [
             {

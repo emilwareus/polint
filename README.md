@@ -355,13 +355,14 @@ Workflows in `.github/workflows/`:
 |----------|---------|---------|
 | `ci.yml` | Push/PR to `main` | **`rustfmt`** on Ubuntu; on **Ubuntu, Windows, and macOS**: `clippy -D warnings`, full **`cargo test --workspace`**, then an **ignored** integration test that runs **`cargo install`** of `polint-cli` to a temp prefix and **`polint --version`** (models the crates.io install path) |
 | `publish-cli.yml` | Push to `main` | Cross-compile release `polint` (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64), upload to **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
-| `publish-crates.yml` | Manual (`workflow_dispatch`) | Optional crates.io publish via `scripts/publish-crates.sh` |
+| `bump-version.yml` | Push to `main` | Bumps **[workspace.package]** patch version and matching `polint-*` dependency pins, refreshes **Cargo.lock**, pushes `chore(release): bump crate version to …` (skips when the commit message is already that, so only one bump per human push) |
 
 **Secrets (repository settings)**
 
 | Secret | Required for | Notes |
 |--------|----------------|-------|
 | *(none)* | Binary release / CI | `publish-cli` and `ci` use the default `GITHUB_TOKEN` only. |
+| `WORKFLOW_PUSH_TOKEN` | Only if **branch protection** blocks the default `GITHUB_TOKEN` from pushing to `main` | Fine-grained or classic PAT with **contents: write** on this repo (not your default password). Create under [GitHub → Settings → Developer settings → PATs](https://github.com/settings/tokens), add as an Actions secret. If unset, the workflow uses `github.token`. |
 | `CRATES_IO_TOKEN` | `Publish crates.io` workflow when *not* in dry-run | [Create a token](https://crates.io/settings/tokens) on crates.io and add it under **Settings → Secrets and variables → Actions**. Use a token scoped to publish; never commit it. |
 
 **First crates.io publish:** Log in to [crates.io](https://crates.io) with your GitHub account, verify email, then run **Publish crates.io** once with **dry_run** enabled (smoke check), then again with **dry_run** disabled after adding `CRATES_IO_TOKEN`. Crate names must not already be taken by another owner.

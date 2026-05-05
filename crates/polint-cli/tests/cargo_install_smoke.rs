@@ -52,7 +52,11 @@ fn cargo_install_to_custom_prefix_runs_version() {
     );
 
     let bin = installed_polint(install_root);
-    assert!(bin.exists(), "expected installed binary at {}", bin.display());
+    assert!(
+        bin.exists(),
+        "expected installed binary at {}",
+        bin.display()
+    );
 
     let output = Command::new(&bin)
         .arg("--version")

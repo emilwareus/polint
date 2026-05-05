@@ -212,8 +212,7 @@ fn new_rule_creates_skeleton() {
         "expected one pack manifest at .polint/rules/Cargo.toml"
     );
     assert!(
-        temp
-            .path()
+        temp.path()
             .join(".polint/rules/src/branch_error_paths.rs")
             .exists()
     );
@@ -250,7 +249,10 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
             "{rule_name:?} must not create stray module paths"
         );
         assert!(
-            !temp.path().join(".polint/rules/src/branch_error_paths.rs").exists(),
+            !temp
+                .path()
+                .join(".polint/rules/src/branch_error_paths.rs")
+                .exists(),
             "{rule_name:?} must not create underscored module files"
         );
     }
@@ -272,7 +274,10 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
         .failure()
         .stderr(predicate::str::contains("rule already exists"));
 
-    assert_eq!(fs::read_to_string(rules.join("src/demo.rs")).unwrap(), sentinel);
+    assert_eq!(
+        fs::read_to_string(rules.join("src/demo.rs")).unwrap(),
+        sentinel
+    );
 }
 
 #[test]

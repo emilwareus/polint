@@ -1,6 +1,6 @@
 [package]
 name = "polint-example-custom-go-rule"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 

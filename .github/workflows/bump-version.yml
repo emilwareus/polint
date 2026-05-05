@@ -1,0 +1,55 @@
+name: Bump crate version
+
+# After each push to main, bump [workspace.package] patch version and polint-*
+# workspace dependency pins, refresh Cargo.lock, and push one commit.
+# Bump commits are skipped to avoid an infinite loop.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-version-main
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.head_commit != null
+      && !contains(github.event.head_commit.message, 'chore(release): bump crate version')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.WORKFLOW_PUSH_TOKEN != '' && secrets.WORKFLOW_PUSH_TOKEN || github.token }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          new=$(python3 scripts/bump-workspace-version.py)
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh Cargo.lock
+        run: cargo build --workspace
+
+      - name: Commit and push
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          if git diff --staged --quiet; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(release): bump crate version to ${NEW_VERSION}"
+          git push

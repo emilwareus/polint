@@ -235,7 +235,8 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
         Ok(_) => anyhow::bail!("rule already exists: {}", module_path.display()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", module_path.display()));
+            return Err(error)
+                .with_context(|| format!("failed to inspect {}", module_path.display()));
         }
     }
 
@@ -286,14 +287,16 @@ fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
         format!(
             r#"[package]
 name = "polint-local-rules"
-version = "0.1.0"
+version = "{version}"
 edition = "2024"
 publish = false
 
 [dependencies]
 polint-runner = {{ path = "{prefix}polint-runner" }}
 polint-sdk = {{ path = "{prefix}polint-sdk" }}
-"#
+"#,
+            version = env!("CARGO_PKG_VERSION"),
+            prefix = prefix,
         ),
     )
     .with_context(|| format!("failed to write {}", rules_dir.join("Cargo.toml").display()))?;

@@ -153,11 +153,7 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
 fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
     let (source, language, path) = {
         let file = db.file(file_id).context("missing source file")?;
-        (
-            Arc::clone(&file.source),
-            file.language,
-            file.path.clone(),
-        )
+        (Arc::clone(&file.source), file.language, file.path.clone())
     };
     let source = source.as_ref();
     let allocator = Allocator::default();
