@@ -40,12 +40,6 @@ make install
 This installs the `polint` binary from source using Cargo and the checked-in
 lockfile, normally into `~/.cargo/bin`.
 
-During development, run the CLI without installing it:
-
-```bash
-cargo run -p polint-cli -- check --fail-on none
-```
-
 ## Try to use it!
 
 Install the latest private `main` build, clone the repository, and run one
@@ -59,11 +53,11 @@ gh repo clone emilwareus/exlint polint
 cd polint/examples/config-denied-literal
 
 polint --version
-cargo run --quiet --manifest-path .polint/rules/no-denied-literals/Cargo.toml -- check --profile fast --fail-on none
+polint check --fail-on none
 ```
 
-The example command runs the local rule host in
-`.polint/rules/no-denied-literals`. That is intentional: polint ships no
+`polint check` discovers and runs the local rule host in
+`.polint/rules/no-denied-literals` for you. That is intentional: polint ships no
 built-in policy rules, so examples bring their own repo-local rule code.
 
 After the installer and clone messages, the final two commands should print:
@@ -85,7 +79,7 @@ polint init
 polint add-skill
 polint new-rule go require-payment-error-tests
 polint check --fail-on none
-cargo run --manifest-path examples/go-complexity/.polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check src --fail-on none
 ```
 
 `polint init` creates:
@@ -98,8 +92,9 @@ cargo run --manifest-path examples/go-complexity/.polint/rules/go-complexity/Car
 
 `polint new-rule go my-policy` creates a repo-local Rust rule skeleton under `.polint/rules/my-policy`.
 
-If config is missing, `polint check` still runs parser/fact extraction with no
-policy rules and suggests `polint init`.
+If config is missing, `polint check` uses normal workspace defaults, no
+profiles, and `.polint/rules` for local rule discovery. If no local rules are
+present, it only runs parser/fact extraction and suggests `polint init`.
 
 ## AI Agent Skills
 
@@ -134,18 +129,19 @@ exclude = ["**/vendor/**", "**/node_modules/**", "**/*.pb.go"]
 [rules]
 paths = [".polint/rules"]
 
-[profiles.fast]
-rules = []
-
-[profiles.full]
-rules = []
-
 [[rules.config]]
 id = "custom/no-raw-brand-colors"
 severity = "error"
 files = ["apps/web/**/*.{ts,tsx}"]
 allow_files = ["apps/web/src/theme/**", "apps/web/src/design-tokens/**"]
+
+[profiles.web]
+rules = ["custom/no-raw-brand-colors"]
 ```
+
+Profiles are optional named subsets. `polint check` with no `--profile` runs
+every discovered rule. `polint check --profile web` runs only `[profiles.web]`;
+an unknown profile is an error. Profile names are arbitrary.
 
 ## No Built-In Policy Rules
 
@@ -161,10 +157,17 @@ Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnos
 
 ## Rule Authoring
 
-Generated rules use the same SDK shape as the example rules:
+Generated rules use the same SDK shape as the example rules. They are runnable
+local rule hosts that `polint check` can discover under `.polint/rules`:
 
 ```rust
 use polint_sdk::prelude::*;
+use std::process::ExitCode;
+use std::sync::Arc;
+
+fn main() -> ExitCode {
+    polint_runner::run_cli(vec![Arc::new(RequirePaymentErrorTests)])
+}
 
 pub struct RequirePaymentErrorTests;
 
@@ -194,10 +197,10 @@ impl Rule for RequirePaymentErrorTests {
 }
 ```
 
-Generated repo-local Rust rules are scaffolded for authoring and testing, but
-they are not automatically compiled or dynamically loaded by `polint check` in
-v1. A production host must register native rules itself for now; automatic
-repo-local Wasm compilation/loading remains future work.
+Repo-local Rust rules are compiled and executed as local Cargo rule hosts for
+now. `polint check` hides that Cargo invocation from normal use, but Rust and
+Cargo still need to be available when a local rule host has not already been
+built. Automatic repo-local Wasm compilation/loading remains future work.
 
 ## Capabilities
 
@@ -217,20 +220,19 @@ Capabilities cover facts such as files, functions, imports, Go tests, branch obl
 
 ## Testing Rules
 
-Run any example's local rule crate to see SDK rules execute against real
-fixtures:
+Run any example to see SDK rules execute against real fixtures:
 
 ```bash
 cd examples/go-complexity
-cargo run --manifest-path .polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 For a repo with multiple local policies, use one rule-pack crate and register
-the rules together:
+the rules together. `polint check` discovers the rule-pack manifest:
 
 ```bash
 cd examples/multiple-rules
-cargo run --manifest-path .polint/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 Use `--fail-on warn|error|none` to control CI status. Exit codes are:
@@ -258,20 +260,22 @@ The top-level `examples/` directory contains copyable examples:
 Run a fixture from that fixture directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/<rule>/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
-For `examples/multiple-rules`, run the rule-pack manifest instead:
+For `examples/multiple-rules`, the same command discovers the rule-pack
+manifest:
 
 ```bash
-cargo run --manifest-path .polint/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+cd examples/multiple-rules
+polint check --format json --fail-on none
 ```
 
 ## Experimental Wasm Plugins
 
 Repo-local Wasm rules are experimental. The `polint-plugin` crate currently provides the WIT rule interface, manifest validation, and optional Wasmtime component-byte validation behind the `wasmtime-host` feature.
 
-`polint check` does not automatically compile, cache, or execute repo-local Wasm rules in v1. The current skeleton is a versionable contract for future sandboxed plugins, not a production plugin runtime.
+`polint check` does not automatically compile, cache, or execute repo-local Wasm rules in v1. Rust rule hosts are supported through local Cargo manifests; the Wasm skeleton is a versionable contract for future sandboxed plugins, not a production plugin runtime.
 
 Future plugins should query host-owned facts through stable IDs such as file IDs, function IDs, and branch IDs. Plugins should not receive full AST JSON, full source text, or large graph payloads.
 
@@ -288,13 +292,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo run -p polint-cli -- check --profile full --format sarif > polint.sarif
+      - run: make install
+      - run: polint check --format sarif > polint.sarif
 ```
 
-CI can run `polint check --profile full --format sarif` for parser diagnostics,
-graph/fact smoke coverage, and any rules registered by a custom host. The
-default CLI has no bundled policy rules. The output is SARIF-like for v1 and
-intentionally does not claim full SARIF certification.
+CI can run `polint check --format sarif` for parser diagnostics,
+graph/fact smoke coverage, and any rules registered by a custom host. The CLI
+has no bundled policy rules. The output is SARIF-like for v1 and intentionally
+does not claim full SARIF certification.
 
 ## Development
 

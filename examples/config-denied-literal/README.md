@@ -11,7 +11,7 @@ The policy is `local/no-denied-literals`. It reads the `deny` list from
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/no-denied-literals/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

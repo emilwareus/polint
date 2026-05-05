@@ -11,7 +11,7 @@ important error paths to be covered before code is merged.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/require-error-branch-tests/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

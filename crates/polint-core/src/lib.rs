@@ -975,7 +975,7 @@ pub fn run_rules(
     db: &AnalysisDb,
     rules: &[Arc<dyn Rule>],
     options: &BTreeMap<String, RuleOptions>,
-    enabled: &BTreeSet<String>,
+    enabled: Option<&BTreeSet<String>>,
     parallel: bool,
 ) -> Vec<Diagnostic> {
     let run_one = |rule: &Arc<dyn Rule>| {
@@ -989,7 +989,7 @@ pub fn run_rules(
                 )];
             }
         };
-        if !enabled.is_empty()
+        if let Some(enabled) = enabled
             && !enabled
                 .iter()
                 .any(|pattern| rule_id_matches(pattern, &meta.id))
@@ -1787,11 +1787,27 @@ mod tests {
         );
         let enabled = BTreeSet::from(["examples/*".to_string()]);
 
-        let diagnostics = run_rules(&db, &rules, &options, &enabled, false);
+        let diagnostics = run_rules(&db, &rules, &options, Some(&enabled), false);
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, "examples/allowed");
         assert_eq!(diagnostics[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn run_rules_none_selection_runs_all_and_empty_selection_runs_none() {
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![
+            Arc::new(TestRule::report("examples/one", Severity::Warn, "one")),
+            Arc::new(TestRule::report("examples/two", Severity::Warn, "two")),
+        ];
+
+        let all = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+        assert_eq!(all.len(), 2);
+
+        let empty = BTreeSet::new();
+        let none = run_rules(&db, &rules, &BTreeMap::new(), Some(&empty), false);
+        assert!(none.is_empty());
     }
 
     #[test]
@@ -1802,7 +1818,7 @@ mod tests {
             Arc::new(TestRule::panic("examples/panic")),
         ];
 
-        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
 
         assert_eq!(
             diagnostics
@@ -1833,7 +1849,7 @@ mod tests {
         let db = AnalysisDb::new();
         let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(TestRule::meta_panic())];
 
-        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, "internal/unknown");
@@ -1856,8 +1872,8 @@ mod tests {
             ),
         ];
 
-        let sequential = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
-        let parallel = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), true);
+        let sequential = run_rules(&db, &rules, &BTreeMap::new(), None, false);
+        let parallel = run_rules(&db, &rules, &BTreeMap::new(), None, true);
 
         assert_eq!(parallel, sequential);
     }
@@ -1878,7 +1894,7 @@ mod tests {
             )),
         ];
 
-        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), &BTreeSet::new(), false);
+        let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].stable_fingerprint, "same-fingerprint");

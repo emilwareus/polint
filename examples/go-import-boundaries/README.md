@@ -10,7 +10,7 @@ The policy is `local/go-import-boundaries`. It reads forbidden imports from
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/go-import-boundaries/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

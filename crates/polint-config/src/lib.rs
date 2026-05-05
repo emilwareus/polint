@@ -15,7 +15,7 @@ pub enum ConfigError {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolintConfig {
     #[serde(default)]
     pub workspace: WorkspaceConfig,
@@ -25,20 +25,6 @@ pub struct PolintConfig {
     pub profiles: BTreeMap<String, ProfileConfig>,
     #[serde(default)]
     pub languages: LanguageConfig,
-}
-
-impl Default for PolintConfig {
-    fn default() -> Self {
-        let mut profiles = BTreeMap::new();
-        profiles.insert("fast".to_string(), ProfileConfig { rules: Vec::new() });
-        profiles.insert("full".to_string(), ProfileConfig { rules: Vec::new() });
-        Self {
-            workspace: WorkspaceConfig::default(),
-            rules: RuleSection::default(),
-            profiles,
-            languages: LanguageConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,12 +44,21 @@ impl Default for WorkspaceConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleSection {
     #[serde(default = "default_rule_paths")]
     pub paths: Vec<String>,
     #[serde(default)]
     pub config: Vec<RuleConfig>,
+}
+
+impl Default for RuleSection {
+    fn default() -> Self {
+        Self {
+            paths: default_rule_paths(),
+            config: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,13 +103,14 @@ pub struct LoadedConfig {
 }
 
 impl LoadedConfig {
-    pub fn profile_rules(&self, profile: &str) -> Vec<String> {
-        self.config
-            .profiles
-            .get(profile)
-            .or_else(|| self.config.profiles.get("fast"))
-            .map(|profile| profile.rules.clone())
-            .unwrap_or_default()
+    pub fn profile_rules(&self, profile: Option<&str>) -> Result<Option<Vec<String>>> {
+        let Some(profile) = profile else {
+            return Ok(None);
+        };
+        let Some(config) = self.config.profiles.get(profile) else {
+            anyhow::bail!("profile `{profile}` is not defined in .polint.toml");
+        };
+        Ok(Some(config.rules.clone()))
     }
 
     pub fn rule_config(&self, id: &str) -> Option<&RuleConfig> {
@@ -167,12 +163,6 @@ exclude = ["**/vendor/**", "**/node_modules/**", "**/.git/**", "**/target/**", "
 
 [rules]
 paths = [".polint/rules"]
-
-[profiles.fast]
-rules = []
-
-[profiles.full]
-rules = []
 "#
 }
 
@@ -223,7 +213,58 @@ mod tests {
     #[test]
     fn default_config_parses() {
         let config: PolintConfig = toml::from_str(default_config_toml()).unwrap();
-        assert!(config.profiles.contains_key("fast"));
+        assert_eq!(config.rules.paths, vec![".polint/rules"]);
+        assert!(config.profiles.is_empty());
+    }
+
+    #[test]
+    fn default_config_has_no_profiles() {
+        let loaded = LoadedConfig {
+            root: PathBuf::from("."),
+            path: None,
+            config: PolintConfig::default(),
+            missing: true,
+        };
+
+        assert!(loaded.config.profiles.is_empty());
+        assert_eq!(loaded.profile_rules(None).unwrap(), None);
+        assert!(loaded.profile_rules(Some("missing")).is_err());
+    }
+
+    #[test]
+    fn missing_rules_section_uses_default_rule_path() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[profiles.local]
+rules = ["local/example"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.rules.paths, vec![".polint/rules"]);
+    }
+
+    #[test]
+    fn profile_selection_requires_exact_name() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[profiles.local]
+rules = ["local/example"]
+"#,
+        )
+        .unwrap();
+        let config = LoadedConfig {
+            root: PathBuf::from("."),
+            path: Some(PathBuf::from(".polint.toml")),
+            config,
+            missing: false,
+        };
+
+        assert_eq!(config.profile_rules(None).unwrap(), None);
+        assert_eq!(
+            config.profile_rules(Some("local")).unwrap(),
+            Some(vec!["local/example".to_string()])
+        );
+        assert!(config.profile_rules(Some("missing")).is_err());
     }
 
     #[test]

@@ -17,7 +17,7 @@ and review without creating a separate Cargo package per rule.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

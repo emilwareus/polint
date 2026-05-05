@@ -10,7 +10,7 @@ and JSX attributes so contributors move colors into design tokens.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/no-raw-colors/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

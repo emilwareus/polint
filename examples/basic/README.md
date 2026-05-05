@@ -11,7 +11,7 @@ code so a team can keep colors in design tokens or theme variables.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/no-raw-colors/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

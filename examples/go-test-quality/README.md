@@ -10,7 +10,7 @@ or error check, and it can also score tests that are growing too large.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/go-test-quality/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

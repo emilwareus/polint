@@ -10,7 +10,7 @@ branch count exceeds the configured `max`.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/go-complexity/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

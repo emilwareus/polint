@@ -25,9 +25,12 @@ enum Command {
 
 #[derive(Debug, Args, Clone)]
 struct CheckArgs {
-    /// Profile from .polint.toml.
-    #[arg(long, default_value = "fast")]
-    profile: String,
+    /// Files or directories to check. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Named profile from .polint.toml. When omitted, all registered rules run.
+    #[arg(long)]
+    profile: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value_t = FormatArg::Human)]
     format: FormatArg,
@@ -89,10 +92,10 @@ fn analyze_and_run(
     args: &CheckArgs,
     rules: &[Arc<dyn Rule>],
 ) -> Result<Vec<polint_diagnostics::Diagnostic>> {
-    let config = load_config(root)?;
+    let config = load_config_for_check(root, &args.paths)?;
     let cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = config_hash(&config);
-    let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
+    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let mut options = BTreeMap::<String, RuleOptions>::new();
     for rule in rules {
         let meta = rule.meta();
@@ -101,7 +104,7 @@ fn analyze_and_run(
             rule_options_from_config(config.rule_config(&meta.id)),
         );
     }
-    let rule_digest = rule_hash(rules, &enabled, &options);
+    let rule_digest = rule_hash(rules, enabled.as_ref(), &options);
 
     let mut db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
@@ -119,8 +122,49 @@ fn analyze_and_run(
         &rule_digest,
         true,
     ));
-    diagnostics.extend(run_rules(&db, rules, &options, &enabled, true));
+    diagnostics.extend(run_rules(&db, rules, &options, enabled.as_ref(), true));
     Ok(diagnostics)
+}
+
+fn selected_rule_patterns(
+    config: &LoadedConfig,
+    profile: Option<&str>,
+) -> Result<Option<BTreeSet<String>>> {
+    Ok(config
+        .profile_rules(profile)?
+        .map(|rules| rules.into_iter().collect()))
+}
+
+fn load_config_for_check(root: &Path, paths: &[PathBuf]) -> Result<LoadedConfig> {
+    let mut config = load_config(root)?;
+    if !paths.is_empty() {
+        config.config.workspace.include = paths
+            .iter()
+            .map(|path| check_path_pattern(root, path))
+            .collect();
+    }
+    Ok(config)
+}
+
+fn check_path_pattern(root: &Path, path: &Path) -> String {
+    let display_path = if path.is_absolute() {
+        path.strip_prefix(root).unwrap_or(path)
+    } else {
+        path
+    };
+    let normalized = display_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string();
+    if normalized.contains(['*', '?', '[', ']', '{', '}']) {
+        return normalized;
+    }
+    if root.join(&normalized).is_dir() || normalized.ends_with('/') {
+        format!("{}/**", normalized.trim_end_matches('/'))
+    } else {
+        normalized
+    }
 }
 
 fn config_hash(config: &LoadedConfig) -> String {
@@ -132,13 +176,13 @@ fn config_hash(config: &LoadedConfig) -> String {
 
 fn rule_hash(
     rules: &[Arc<dyn Rule>],
-    enabled: &BTreeSet<String>,
+    enabled: Option<&BTreeSet<String>>,
     options: &BTreeMap<String, RuleOptions>,
 ) -> String {
     let mut parts = Vec::new();
     for rule in rules {
         let meta = rule.meta();
-        if !enabled.is_empty()
+        if let Some(enabled) = enabled
             && !enabled
                 .iter()
                 .any(|pattern| polint_core::rule_id_matches(pattern, &meta.id))

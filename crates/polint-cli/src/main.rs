@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use polint_config::{LoadedConfig, default_config_toml, load_config};
 use polint_core::{Rule, RuleOptions, run_rules};
-use polint_diagnostics::{OutputFormat, Severity, dedupe_diagnostics, render};
+use polint_diagnostics::{Diagnostic, OutputFormat, Severity, dedupe_diagnostics, render};
 use polint_fs::load_analysis_files;
 use polint_graph::{FunctionGraph, ImportGraph};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -56,9 +56,12 @@ struct NewRuleArgs {
 
 #[derive(Debug, Args, Clone)]
 struct CheckArgs {
-    /// Profile from .polint.toml.
-    #[arg(long, default_value = "fast")]
-    profile: String,
+    /// Files or directories to check. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Named profile from .polint.toml. When omitted, all discovered rules run.
+    #[arg(long)]
+    profile: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value_t = FormatArg::Human)]
     format: FormatArg,
@@ -189,17 +192,15 @@ name = "polint-rule-{}"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
+polint-runner = {{ path = "../../../crates/polint-runner" }}
 polint-sdk = {{ path = "../../../crates/polint-sdk" }}
 "#,
             rule_name
         ),
     )?;
     fs::write(
-        src_dir.join("lib.rs"),
+        src_dir.join("main.rs"),
         rule_template(&args.language, &rule_name),
     )?;
     println!("Created rule skeleton at {}", rule_dir.display());
@@ -253,6 +254,12 @@ fn rule_template(language: &str, rule_name: &str) -> String {
     };
     format!(
         r#"use polint_sdk::prelude::*;
+use std::process::ExitCode;
+use std::sync::Arc;
+
+fn main() -> ExitCode {{
+    polint_runner::run_cli(vec![Arc::new({struct_name})])
+}}
 
 pub struct {struct_name};
 
@@ -279,6 +286,11 @@ impl Rule for {struct_name} {{
 }
 
 fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
+    let local_rule_hosts = discover_local_rule_hosts(&root)?;
+    if !local_rule_hosts.is_empty() {
+        return check_local_rule_hosts(&root, args, &local_rule_hosts);
+    }
+
     let (mut diagnostics, _db) = analyze_and_run(&root, args, true)?;
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
@@ -300,13 +312,13 @@ fn analyze_and_run(
     args: &CheckArgs,
     parallel: bool,
 ) -> Result<(Vec<polint_diagnostics::Diagnostic>, polint_core::AnalysisDb)> {
-    let config = load_config(root)?;
+    let config = load_config_for_check(root, &args.paths)?;
     let cache = polint_cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = config_hash(&config);
     let rules: Vec<Arc<dyn Rule>> = Vec::new();
-    let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
+    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
-    let rule_digest = rule_hash(&rules, &enabled, &options);
+    let rule_digest = rule_hash(&rules, enabled.as_ref(), &options);
 
     let mut db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
@@ -325,8 +337,17 @@ fn analyze_and_run(
         parallel,
     ));
 
-    diagnostics.extend(run_rules(&db, &rules, &options, &enabled, parallel));
+    diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
     Ok((diagnostics, db))
+}
+
+fn selected_rule_patterns(
+    config: &LoadedConfig,
+    profile: Option<&str>,
+) -> Result<Option<BTreeSet<String>>> {
+    Ok(config
+        .profile_rules(profile)?
+        .map(|rules| rules.into_iter().collect()))
 }
 
 fn config_hash(config: &LoadedConfig) -> String {
@@ -338,13 +359,13 @@ fn config_hash(config: &LoadedConfig) -> String {
 
 fn rule_hash(
     rules: &[Arc<dyn Rule>],
-    enabled: &BTreeSet<String>,
+    enabled: Option<&BTreeSet<String>>,
     options: &BTreeMap<String, RuleOptions>,
 ) -> String {
     let mut parts = Vec::new();
     for rule in rules {
         let meta = rule.meta();
-        if !enabled.is_empty()
+        if let Some(enabled) = enabled
             && !enabled
                 .iter()
                 .any(|pattern| polint_core::rule_id_matches(pattern, &meta.id))
@@ -392,14 +413,14 @@ fn explain(rule_id: &str) {
 }
 
 fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
-    let config = load_config(&root)?;
+    let config = load_config_for_check(&root, &args.paths)?;
     let cache = polint_cache::Cache::default_for_repo(&root, !args.no_cache);
     let config_digest = config_hash(&config);
     let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let mut parser_diagnostics = Vec::new();
-    let enabled: BTreeSet<String> = config.profile_rules(&args.profile).into_iter().collect();
+    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();
-    let rule_digest = rule_hash(&rules, &enabled, &all_options);
+    let rule_digest = rule_hash(&rules, enabled.as_ref(), &all_options);
     let mut db = load_analysis_files(&config)?;
     parser_diagnostics.extend(polint_go::analyze_with_options(
         &mut db,
@@ -419,7 +440,7 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
 
     for rule in &rules {
         let meta = rule.meta();
-        if !enabled.is_empty()
+        if let Some(enabled) = &enabled
             && !enabled
                 .iter()
                 .any(|pattern| polint_core::rule_id_matches(pattern, &meta.id))
@@ -429,7 +450,13 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         let mut options = BTreeMap::new();
         options.insert(meta.id.clone(), RuleOptions::default());
         let start = Instant::now();
-        let diagnostics = run_rules(&db, std::slice::from_ref(rule), &options, &enabled, false);
+        let diagnostics = run_rules(
+            &db,
+            std::slice::from_ref(rule),
+            &options,
+            enabled.as_ref(),
+            false,
+        );
         let elapsed = start.elapsed();
         println!(
             "{}\telapsed_ms={:.3}\tdiagnostics={}",
@@ -448,7 +475,8 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
 
 fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
     let args = CheckArgs {
-        profile: "full".to_string(),
+        paths: Vec::new(),
+        profile: None,
         format: FormatArg::Human,
         no_cache: true,
         fail_on: FailOn::None,
@@ -468,6 +496,143 @@ fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
         }
     }
     Ok(0)
+}
+
+fn load_config_for_check(root: &Path, paths: &[PathBuf]) -> Result<LoadedConfig> {
+    let mut config = load_config(root)?;
+    if !paths.is_empty() {
+        config.config.workspace.include = paths
+            .iter()
+            .map(|path| check_path_pattern(root, path))
+            .collect();
+    }
+    Ok(config)
+}
+
+fn check_path_pattern(root: &Path, path: &Path) -> String {
+    let display_path = if path.is_absolute() {
+        path.strip_prefix(root).unwrap_or(path)
+    } else {
+        path
+    };
+    let normalized = display_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string();
+    if normalized.contains(['*', '?', '[', ']', '{', '}']) {
+        return normalized;
+    }
+    if root.join(&normalized).is_dir() || normalized.ends_with('/') {
+        format!("{}/**", normalized.trim_end_matches('/'))
+    } else {
+        normalized
+    }
+}
+
+fn discover_local_rule_hosts(root: &Path) -> Result<Vec<PathBuf>> {
+    let config = load_config(root)?;
+    let mut manifests = BTreeSet::new();
+    for rule_path in &config.config.rules.paths {
+        let directory = root.join(rule_path);
+        let pack_manifest = directory.join("Cargo.toml");
+        if pack_manifest.is_file() {
+            manifests.insert(pack_manifest);
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let manifest = entry.path().join("Cargo.toml");
+            if manifest.is_file() {
+                manifests.insert(manifest);
+            }
+        }
+    }
+    Ok(manifests.into_iter().collect())
+}
+
+fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) -> Result<u8> {
+    let config = load_config_for_check(root, &args.paths)?;
+    selected_rule_patterns(&config, args.profile.as_deref())?;
+
+    let mut diagnostics = Vec::new();
+    for manifest in manifests {
+        diagnostics.extend(run_local_rule_host(root, manifest, args)?);
+    }
+
+    diagnostics = dedupe_diagnostics(diagnostics);
+    let format = match args.format {
+        FormatArg::Human => OutputFormat::Human,
+        FormatArg::Json => OutputFormat::Json,
+        FormatArg::Sarif => OutputFormat::Sarif,
+    };
+    print!("{}", render(format, &diagnostics));
+    Ok(exit_code_for(&diagnostics, args.fail_on))
+}
+
+fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result<Vec<Diagnostic>> {
+    let cargo = std::env::var("POLINT_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
+    let mut command = ProcessCommand::new(&cargo);
+    command.current_dir(root).args([
+        "run",
+        "--quiet",
+        "--manifest-path",
+        manifest
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))?,
+        "--",
+        "check",
+        "--format",
+        "json",
+        "--fail-on",
+        "none",
+    ]);
+    if let Some(profile) = &args.profile {
+        command.args(["--profile", profile]);
+    }
+    if args.no_cache {
+        command.arg("--no-cache");
+    }
+    command.args(args.paths.iter().map(|path| path.as_os_str()));
+
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run local rule host {} with `{cargo}`",
+            manifest.display()
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "local rule host failed: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            output.status,
+            stdout.trim(),
+            stderr.trim()
+        );
+    }
+
+    let stdout = String::from_utf8(output.stdout).with_context(|| {
+        format!(
+            "local rule host emitted non-UTF-8 output: {}",
+            manifest.display()
+        )
+    })?;
+    serde_json::from_str::<Vec<Diagnostic>>(&stdout).with_context(|| {
+        format!(
+            "local rule host did not emit polint JSON diagnostics: {}",
+            manifest.display()
+        )
+    })
 }
 
 fn exit_code_for(diagnostics: &[polint_diagnostics::Diagnostic], fail_on: FailOn) -> u8 {

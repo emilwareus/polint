@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260505-e2y complete
-last_updated: "2026-05-05T08:09:44Z"
+stopped_at: quick task 260505-ffu complete
+last_updated: "2026-05-05T09:13:52Z"
 last_activity: 2026-05-05
 progress:
   total_phases: 10
@@ -60,7 +60,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-05 - Completed quick task 260505-e2y: Add README try-it workflow and verify it
+Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check run repo-local rule hosts directly
 
 ## Quick Tasks Completed
 
@@ -79,7 +79,8 @@ Last activity: 2026-05-05 - Completed quick task 260505-e2y: Add README try-it w
 | 260503-lht | Fix release checksum paths for installer | 2026-05-03 | b528398 | [260503-lht-fix-release-checksum-paths-for-installer](./quick/260503-lht-fix-release-checksum-paths-for-installer/) |
 | 260503-lwv | Add interactive CLI skill installer for Claude and Codex | 2026-05-03 | ec606b2 | [260503-lwv-add-interactive-cli-skill-installer-for-](./quick/260503-lwv-add-interactive-cli-skill-installer-for-/) |
 | 260503-p7f | Add make install command for source installs | 2026-05-03 | 4da0454 | [260503-p7f-add-make-install-command-for-source-inst](./quick/260503-p7f-add-make-install-command-for-source-inst/) |
-| 260505-e2y | Add README try-it workflow and verify it | 2026-05-05 | this commit | [260505-e2y-add-readme-try-it-workflow-and-verify-it](./quick/260505-e2y-add-readme-try-it-workflow-and-verify-it/) |
+| 260505-e2y | Add README try-it workflow and verify it | 2026-05-05 | 763b9b1 | [260505-e2y-add-readme-try-it-workflow-and-verify-it](./quick/260505-e2y-add-readme-try-it-workflow-and-verify-it/) |
+| 260505-ffu | Make polint check run repo-local rule hosts directly | 2026-05-05 | uncommitted | [260505-ffu-make-polint-check-run-repo-local-rule-ho](./quick/260505-ffu-make-polint-check-run-repo-local-rule-ho/) |
 
 ## Phase Progress
 

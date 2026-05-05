@@ -99,23 +99,6 @@ fn example_rule_cmd(example: &str, rule: &str) -> Command {
     command
 }
 
-fn example_rule_pack_cmd(example: &str) -> Command {
-    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
-    command.args([
-        "run",
-        "--quiet",
-        "--manifest-path",
-        repo_root()
-            .join("examples")
-            .join(example)
-            .join(".polint/rules/Cargo.toml")
-            .to_str()
-            .unwrap(),
-        "--",
-    ]);
-    command
-}
-
 fn raw_color_rule_cmd() -> Command {
     example_rule_cmd("ts-design-tokens", "no-raw-colors")
 }
@@ -157,7 +140,7 @@ fn write_phase8_graph_fixture(root: &Path) {
     write_file(
         &root.join(".polint.toml"),
         r#"
-[profiles.full]
+[profiles.phase8]
 rules = []
 "#,
     );
@@ -233,7 +216,7 @@ fn new_rule_creates_skeleton() {
     );
     assert!(
         temp.path()
-            .join(".polint/rules/branch-error-paths/src/lib.rs")
+            .join(".polint/rules/branch-error-paths/src/main.rs")
             .exists()
     );
 }
@@ -256,8 +239,8 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
             "{rule_name:?} must not write Cargo.toml outside .polint/rules"
         );
         assert!(
-            !temp.path().join("src/lib.rs").exists(),
-            "{rule_name:?} must not write src/lib.rs outside .polint/rules"
+            !temp.path().join("src/main.rs").exists(),
+            "{rule_name:?} must not write src/main.rs outside .polint/rules"
         );
         assert!(
             !temp.path().join(".polint/rules/Cargo.toml").exists(),
@@ -282,9 +265,9 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
     let temp = tempfile::tempdir().unwrap();
     let rule_dir = temp.path().join(".polint/rules/demo");
     let sentinel_manifest = "# sentinel manifest\n";
-    let sentinel_lib = "pub fn sentinel() -> &'static str { \"keep me\" }\n";
+    let sentinel_main = "pub fn sentinel() -> &'static str { \"keep me\" }\n";
     write_file(&rule_dir.join("Cargo.toml"), sentinel_manifest);
-    write_file(&rule_dir.join("src/lib.rs"), sentinel_lib);
+    write_file(&rule_dir.join("src/main.rs"), sentinel_main);
 
     Command::cargo_bin("polint")
         .unwrap()
@@ -299,8 +282,8 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
         sentinel_manifest
     );
     assert_eq!(
-        fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap(),
-        sentinel_lib
+        fs::read_to_string(rule_dir.join("src/main.rs")).unwrap(),
+        sentinel_main
     );
 }
 
@@ -318,7 +301,7 @@ fn add_skill_installs_claude_skill_non_interactively() {
     let skill = temp.path().join(".claude/skills/polint/SKILL.md");
     let contents = fs::read_to_string(skill).unwrap();
     assert!(contents.contains("name: polint"));
-    assert!(contents.contains("polint check --profile fast --fail-on none"));
+    assert!(contents.contains("polint check --fail-on none"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint_sdk::prelude::*;"));
 }
@@ -451,13 +434,16 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
 
     let rule_dir = temp.path().join(".polint/rules/branch-error-paths");
     assert!(rule_dir.join("Cargo.toml").exists());
-    let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
-    assert!(lib.contains("id: \"custom/branch-error-paths\""));
-    assert!(lib.contains("use polint_sdk::prelude::*;"));
-    assert!(lib.contains(".go_tests().branch_obligations()"));
-    assert!(lib.contains("ctx.go_tests_for_file(file.id)"));
-    assert!(lib.contains("ctx.branch_obligations_for_file(file.id)"));
-    assert!(!lib.contains("polint_core::"));
+    let manifest = fs::read_to_string(rule_dir.join("Cargo.toml")).unwrap();
+    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    assert!(manifest.contains("polint-runner"));
+    assert!(main.contains("polint_runner::run_cli"));
+    assert!(main.contains("id: \"custom/branch-error-paths\""));
+    assert!(main.contains("use polint_sdk::prelude::*;"));
+    assert!(main.contains(".go_tests().branch_obligations()"));
+    assert!(main.contains("ctx.go_tests_for_file(file.id)"));
+    assert!(main.contains("ctx.branch_obligations_for_file(file.id)"));
+    assert!(!main.contains("polint_core::"));
 }
 
 #[test]
@@ -472,13 +458,14 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
 
     let rule_dir = temp.path().join(".polint/rules/no-raw-brand-colors");
     assert!(rule_dir.join("Cargo.toml").exists());
-    let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
-    assert!(lib.contains("id: \"custom/no-raw-brand-colors\""));
-    assert!(lib.contains("use polint_sdk::prelude::*;"));
-    assert!(lib.contains(".string_literals().jsx_attributes()"));
-    assert!(lib.contains("ctx.string_literals_for_file(file.id)"));
-    assert!(lib.contains("ctx.jsx_attributes_for_file(file.id)"));
-    assert!(!lib.contains("polint_core::"));
+    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    assert!(main.contains("polint_runner::run_cli"));
+    assert!(main.contains("id: \"custom/no-raw-brand-colors\""));
+    assert!(main.contains("use polint_sdk::prelude::*;"));
+    assert!(main.contains(".string_literals().jsx_attributes()"));
+    assert!(main.contains("ctx.string_literals_for_file(file.id)"));
+    assert!(main.contains("ctx.jsx_attributes_for_file(file.id)"));
+    assert!(!main.contains("polint_core::"));
 }
 
 #[test]
@@ -493,12 +480,13 @@ fn new_rule_generic_uses_sdk_query_helpers() {
 
     let rule_dir = temp.path().join(".polint/rules/domain-names");
     assert!(rule_dir.join("Cargo.toml").exists());
-    let lib = fs::read_to_string(rule_dir.join("src/lib.rs")).unwrap();
-    assert!(lib.contains("id: \"custom/domain-names\""));
-    assert!(lib.contains("use polint_sdk::prelude::*;"));
-    assert!(lib.contains(".syntax()"));
-    assert!(lib.contains("ctx.functions_for_file(file.id)"));
-    assert!(!lib.contains("polint_core::"));
+    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    assert!(main.contains("polint_runner::run_cli"));
+    assert!(main.contains("id: \"custom/domain-names\""));
+    assert!(main.contains("use polint_sdk::prelude::*;"));
+    assert!(main.contains(".syntax()"));
+    assert!(main.contains("ctx.functions_for_file(file.id)"));
+    assert!(!main.contains("polint_core::"));
 }
 
 #[test]
@@ -618,7 +606,7 @@ rules = []
 }
 
 #[test]
-fn check_go_full_profile_uses_branch_and_test_facts() {
+fn check_go_named_profile_uses_branch_and_test_facts() {
     let temp = tempfile::tempdir().unwrap();
     write_file(
         &temp.path().join(".polint.toml"),
@@ -796,7 +784,7 @@ rules = []
 }
 
 #[test]
-fn check_ts_full_profile_uses_phase5_facts() {
+fn check_ts_named_profile_uses_phase5_facts() {
     let temp = tempfile::tempdir().unwrap();
     write_file(
         &temp.path().join(".polint.toml"),
@@ -901,7 +889,7 @@ fn check_mixed_fixture_handles_go_and_ts_sources() {
 include = ["mixed/**"]
 exclude = []
 
-[profiles.fast]
+[profiles.mixed]
 rules = []
 "#,
     );
@@ -913,7 +901,7 @@ rules = []
             .args([
                 "check",
                 "--profile",
-                "fast",
+                "mixed",
                 "--format",
                 "json",
                 "--fail-on",
@@ -1030,12 +1018,11 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
         );
 
         let json = stdout_json(
-            example_rule_cmd(example, rule_dir)
+            Command::cargo_bin("polint")
+                .unwrap()
                 .current_dir(&example_dir)
                 .args([
                     "check",
-                    "--profile",
-                    "fast",
                     "--format",
                     "json",
                     "--no-cache",
@@ -1064,6 +1051,50 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             );
         }
     }
+}
+
+#[test]
+fn check_with_local_rule_host_respects_positional_paths() {
+    let example_dir = repo_root().join("examples/config-denied-literal");
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "query.ts",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostic_files(&json, "local/no-denied-literals"),
+        vec!["query.ts".to_string()]
+    );
+
+    let empty = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "README.md",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(diagnostics(&empty).is_empty());
 }
 
 #[test]
@@ -1101,12 +1132,11 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
     );
 
     let json = stdout_json(
-        example_rule_pack_cmd("multiple-rules")
+        Command::cargo_bin("polint")
+            .unwrap()
             .current_dir(&example_dir)
             .args([
                 "check",
-                "--profile",
-                "fast",
                 "--format",
                 "json",
                 "--no-cache",
@@ -1134,6 +1164,31 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
             "multiple-rules should report a diagnostic in {file}: {json:#?}"
         );
     }
+}
+
+#[test]
+fn check_with_unknown_profile_is_an_error() {
+    let example_dir = repo_root().join("examples/config-denied-literal");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(&example_dir)
+        .args(["check", "--profile", "missing", "--fail-on", "none"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "profile `missing` is not defined in .polint.toml",
+        ));
+}
+
+#[test]
+fn check_rejects_unknown_config_flag() {
+    Command::cargo_bin("polint")
+        .unwrap()
+        .args(["check", "--config"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument '--config'"));
 }
 
 #[test]

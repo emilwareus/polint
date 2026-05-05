@@ -11,7 +11,7 @@ contributors use design tokens instead of embedding ad hoc color values.
 From this directory:
 
 ```bash
-cargo run --manifest-path .polint/rules/no-product-hex-colors/Cargo.toml -- check --profile fast --format json --fail-on none
+polint check --format json --fail-on none
 ```
 
 ## What It Finds

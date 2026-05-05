@@ -179,7 +179,7 @@ policy rules; every policy belongs to the repository that needs it.
 polint init
 polint new-rule go require-error-branch-tests
 polint new-rule ts no-raw-colors
-polint check --profile fast --fail-on none
+polint check --fail-on none
 ```
 
 Use `polint check --format json` when you need machine-readable diagnostics and
@@ -193,10 +193,10 @@ Single-rule repositories usually use one Cargo manifest per rule:
 ```text
 .polint.toml
 .polint/
-  rules/
+      rules/
     no-raw-colors/
       Cargo.toml
-      src/lib.rs
+      src/main.rs
 ```
 
 For multiple local rules that should be compiled and run together, use one
@@ -206,11 +206,18 @@ shape.
 
 ## Writing A Rule
 
-Start with `use polint_sdk::prelude::*;`, give the rule a stable local ID, declare
-only the facts it needs in `capabilities`, then report diagnostics from `run`.
+Start with `use polint_sdk::prelude::*;`, register the rule with
+`polint_runner::run_cli`, give the rule a stable local ID, declare only the facts
+it needs in `capabilities`, then report diagnostics from `run`.
 
 ```rust
 use polint_sdk::prelude::*;
+use std::process::ExitCode;
+use std::sync::Arc;
+
+fn main() -> ExitCode {{
+    polint_runner::run_cli(vec![Arc::new(NoRawColors)])
+}}
 
 struct NoRawColors;
 
@@ -248,7 +255,9 @@ impl Rule for NoRawColors {{
 
 ## Config Pattern
 
-Keep the profile explicit so CI and local runs execute the same policies:
+Profiles are explicit named subsets. `polint check` with no `--profile` runs
+every discovered rule. Add a named profile only when the repository explicitly
+needs a subset, and treat unknown profile names as errors:
 
 ```toml
 [workspace]
@@ -257,9 +266,6 @@ exclude = ["**/node_modules/**", "**/vendor/**"]
 
 [rules]
 paths = [".polint/rules"]
-
-[profiles.fast]
-rules = ["local/no-raw-colors"]
 
 [[rules.config]]
 id = "local/no-raw-colors"
