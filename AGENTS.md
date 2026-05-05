@@ -1,9 +1,9 @@
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**exlint**
+**polint**
 
-exlint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
+polint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
 
 The product is for engineering teams using AI-assisted development who need executable project-specific policies instead of repeating local conventions in prompts. It is not a replacement for ESLint, Ruff, Biome, golangci-lint, or formatters; it is a framework for checks that those generic tools cannot know.
 

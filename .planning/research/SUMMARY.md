@@ -1,4 +1,4 @@
-# Research Summary: exlint
+# Research Summary: polint
 
 ## Key Findings
 

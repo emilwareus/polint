@@ -27,22 +27,22 @@ This installs the `polint` binary into `~/.cargo/bin` (or the default Cargo inst
 Maintainers ship **versioned** archives on each semver GitHub Release **`vX.Y.Z`** (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64 as a `.tar.gz` containing `polint` or `polint.exe`) via the **Release** workflow. **Unix:** the install script downloads from **`releases/latest`** over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | bash
+curl -sSfL https://raw.githubusercontent.com/emilwareus/polint/main/scripts/install.sh | bash
 ```
 
-**Windows:** use `cargo install polint-cli --locked`, or download `polint-windows-x86_64.tar.gz` from the [latest release](https://github.com/emilwareus/exlint/releases/latest), extract `polint.exe`, and place it on your `PATH`.
+**Windows:** use `cargo install polint-cli --locked`, or download `polint-windows-x86_64.tar.gz` from the [latest release](https://github.com/emilwareus/polint/releases/latest), extract `polint.exe`, and place it on your `PATH`.
 
 Override the install directory:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | POLINT_INSTALL_DIR=/usr/local/bin bash
+curl -sSfL https://raw.githubusercontent.com/emilwareus/polint/main/scripts/install.sh | POLINT_INSTALL_DIR=/usr/local/bin bash
 ```
 
 Use another GitHub repo or release tag (for example a fork or a specific **`vX.Y.Z`**):
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/yourfork/exlint/main/scripts/install.sh \
-  | POLINT_REPO=yourfork/exlint POLINT_RELEASE_TAG=v0.2.0 bash
+curl -sSfL https://raw.githubusercontent.com/yourfork/polint/main/scripts/install.sh \
+  | POLINT_REPO=yourfork/polint POLINT_RELEASE_TAG=v0.2.0 bash
 ```
 
 You need `curl` or `wget`, plus `shasum` or `sha256sum`, for checksum verification.
@@ -60,7 +60,7 @@ This installs from `crates/polint-cli` using Cargo and the checked-in lockfile, 
 Install polint (see above), clone the repository, and run one self-contained example:
 
 ```bash
-git clone https://github.com/emilwareus/exlint.git polint
+git clone https://github.com/emilwareus/polint.git polint
 cd polint/examples/config-denied-literal
 
 polint --version

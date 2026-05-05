@@ -1,4 +1,4 @@
-# Stack Research: exlint
+# Stack Research: polint
 
 ## Recommended Stack
 

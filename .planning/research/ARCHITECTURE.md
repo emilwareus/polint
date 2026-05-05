@@ -1,4 +1,4 @@
-# Architecture Research: exlint
+# Architecture Research: polint
 
 ## Component Boundaries
 

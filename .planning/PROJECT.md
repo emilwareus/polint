@@ -1,8 +1,8 @@
-# exlint
+# polint
 
 ## What This Is
 
-exlint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
+polint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
 
 The product is for engineering teams using AI-assisted development who need executable project-specific policies instead of repeating local conventions in prompts. It is not a replacement for ESLint, Ruff, Biome, golangci-lint, or formatters; it is a framework for checks that those generic tools cannot know.
 
@@ -61,8 +61,8 @@ No active v1 requirements remain after Phase 9 verification. Future work is trac
 - The implementation target is Rust 2024 on stable Rust. Current local toolchain check: `rustc 1.94.0` and `cargo 1.94.0`.
 - Current crate checks with `cargo search` on 2026-04-28 found compatible latest versions for the requested baseline: `clap 4.6.1`, `serde 1.0.228`, `serde_json 1.0.149`, `toml 1.1.2+spec-1.1.0`, `anyhow 1.0.102`, `thiserror 2.0.18`, `rayon 1.12.0`, `ignore 0.4.25`, `globset 0.4.18`, `petgraph 0.8.3`, `tree-sitter 0.26.8`, `tree-sitter-go 0.25.0`, Oxc `0.128.0`, `oxc_resolver 11.19.1`, `insta 1.47.2`, `assert_cmd 2.2.1`, `predicates 3.1.4`, `tempfile 3.27.0`, and `proptest 1.11.0`.
 - The initial project prompt lives at `docs/INITIAL_PROMPT.md`.
-- The source repository and GSD planning both live at `/Users/emilwareus/Development/exlint` on branch `main`.
-- The suggested project name in the prompt is `polint`, so the binary and crate names use `polint-*` while the repository remains `exlint`.
+- The source repository on GitHub is **`https://github.com/emilwareus/polint`**; this checkout and GSD planning live under **`/Users/emilwareus/Development/exlint`** on branch `main` until the local directory is renamed.
+- The public CLI and crate names use the **`polint-*`** prefix, consistent with the repository name.
 - Phase 1 completed on 2026-04-28 through GSD plan execution and verification on `main`.
 - Phase 2 completed on 2026-04-28 through GSD plan execution and verification on `main`.
 - Phase 3 completed on 2026-04-28 through GSD plan execution and verification on `main`, closing deterministic discovery, core facts/runner, and the Phase 3 diagnostic contract without claiming Go/TS semantic extraction, cache/performance, production SARIF, or broad CLI hardening.
@@ -90,11 +90,11 @@ No active v1 requirements remain after Phase 9 verification. Future work is trac
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Use `polint` as the binary/crate prefix inside the `exlint` repository | The prompt explicitly suggests `polint`; keeping the repo as `exlint` preserves the GitHub repository name already created. | Accepted in Phase 1 |
+| Use the `polint` binary/crate prefix and **`emilwareus/polint`** as the GitHub repository | The product is polint end-to-end; the Rust crates stay `polint-*`. | Accepted (repo rename) |
 | Build a smaller complete v1 instead of shallow full breadth | The prompt explicitly prefers working, tested functionality over fake or broad shallow features. | Accepted in Phase 9 |
 | Start with a hash-based cache, not Salsa | The prompt allows Salsa to remain behind an abstraction if it slows delivery. A content/config/rule hash cache is simpler to ship safely. | Accepted in Phase 7 |
 | Treat repo-local rule auto-compilation as future work | Full auto-compilation is not required for v1; scaffolding and explicit Cargo integration are enough. | Accepted in Phase 6 |
-| Use in-repo GSD planning on `main` | The user wants to use GSD directly in `/Users/emilwareus/Development/exlint` and avoid worktrees. | Accepted in Phase 1 |
+| Use in-repo GSD planning on `main` | GSD runs in this checkout on `main`; avoid worktrees. | Accepted in Phase 1 |
 | Close Phase 2 around the first usable CLI loop without overclaiming later commands | `init`, `new-rule`, `check`, config loading, discovery, and JSON output are verified, while explain/test/profile/graph command hardening remains scheduled later. | Accepted in Phase 2 |
 | Treat Phase 3 stable IDs as deterministic within a run | File discovery now sorts root-relative paths before `AnalysisDb::add_file`, and cross-run externally visible identity remains fingerprint-based where needed. | Accepted in Phase 3 |
 | Snapshot the JSON diagnostic renderer output directly | Workspace-wide `serde_json/preserve_order` can change `Value` object reserialization order; parseability is still verified separately while snapshots pin CLI-facing renderer output. | Accepted in Phase 3 |

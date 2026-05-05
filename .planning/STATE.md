@@ -14,7 +14,7 @@ progress:
   percent: 100
 ---
 
-# State: exlint
+# State: polint
 
 ## Project Reference
 
@@ -26,7 +26,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 
 ## Current Status
 
-- Repository root: `/Users/emilwareus/Development/exlint`.
+- **GitHub:** `emilwareus/polint` (public repository name).
+- Local checkout (this machine): `/Users/emilwareus/Development/exlint`.
 - Active branch policy: work directly on `main`; do not use GSD worktrees for this project.
 - Planning initialized from `docs/INITIAL_PROMPT.md`.
 - v1.0 requirements and full roadmap archived under `.planning/milestones/`.

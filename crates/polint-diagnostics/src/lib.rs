@@ -858,7 +858,7 @@ pub fn render_sarif(diagnostics: &[Diagnostic]) -> String {
             tool: SarifTool {
                 driver: SarifDriver {
                     name: "polint",
-                    information_uri: "https://github.com/emilwareus/exlint",
+                    information_uri: "https://github.com/emilwareus/polint",
                     rules,
                 },
             },
@@ -1155,7 +1155,7 @@ mod tests {
               "tool": {
                 "driver": {
                   "name": "polint",
-                  "informationUri": "https://github.com/emilwareus/exlint",
+                  "informationUri": "https://github.com/emilwareus/polint",
                   "rules": [
                     {
                       "id": "project/rule",

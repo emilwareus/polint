@@ -1,4 +1,4 @@
-# Pitfalls Research: exlint
+# Pitfalls Research: polint
 
 ## Pitfall: Overbuilding Optional Subsystems Before Core
 

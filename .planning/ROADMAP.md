@@ -1,4 +1,4 @@
-# Roadmap: exlint
+# Roadmap: polint
 
 ## Milestones
 

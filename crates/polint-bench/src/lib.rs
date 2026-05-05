@@ -130,7 +130,7 @@ pub fn cold_analyze_breakdown(
     Ok((breakdown, db))
 }
 
-/// Discover `examples/*/\.polint.toml` from the exlint repo root (parent of `crates/`).
+/// Discover `examples/*/\.polint.toml` from the polint repo root (parent of `crates/`).
 pub fn example_repo_roots(repo_root: &Path) -> Result<Vec<PathBuf>> {
     let examples = repo_root.join("examples");
     let mut roots = Vec::new();

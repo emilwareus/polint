@@ -1,4 +1,4 @@
-# Feature Research: exlint
+# Feature Research: polint
 
 ## Table Stakes
 
