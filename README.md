@@ -18,12 +18,7 @@ the rules.
 Say your frontend must use design tokens instead of raw colors. A polint rule in
 your repo can catch the violation and tell the AI agent exactly how to fix it:
 
-```ansi
-[1;31merror[0m[1m[[1;35mlocal/no-raw-colors[0m]: [1mRaw color literal `#1d4ed8` should use a design token.
-  [0m[1;36m-->[0m [1mButton.tsx[0m:12:23-12:32
-  [2mevidence[0m token_source: apps/web/src/theme/tokens.css
-  [1;36mhelp:[0m Use `var(--color-action-primary)`. Do not define new colors in feature code.
-```
+![polint diagnostic for a raw-color literal in Button.tsx](docs/img/example-no-raw-colors.svg)
 
 That is the point: the rule does not just fail the code. It injects the missing
 project context back into the agent at the moment it needs to repair the change.
@@ -52,17 +47,7 @@ polint check --color always --fail-on none
 
 Expected output:
 
-```ansi
-[1;31merror[0m[1m[[1;35mlocal/no-denied-literals[0m]: [1mConfigured denied literal `legacy-testid` found.
-  [0m[1;36m-->[0m [1mquery.ts[0m:4:25-4:40
-  [2m   |[0m
- [2m  4[0m [2m|[0m export const selector = "legacy-testid";
- [2m   [0m [2m|[0m [1;31m                        ^^^^^^^^^^^^^^^[0m
-  [2mevidence[0m literal: legacy-testid
-  [2mevidence[0m matched: legacy-testid
-  [1;36mhelp:[0m Replace the literal with an allowed constant or local abstraction.
-  [2mfingerprint: e337fbb73d44b2b7[0m
-```
+![polint check on examples/config-denied-literal showing a denied literal diagnostic](docs/img/example-config-denied-literal.svg)
 
 ## Use It In Your Repo
 

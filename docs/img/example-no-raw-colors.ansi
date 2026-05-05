@@ -1,0 +1,7 @@
+[1;31merror[0m[1m[[1;35mlocal/no-raw-colors[0m]: [1mRaw color literal `#1d4ed8` should use a design token.
+  [0m[1;36m-->[0m [1mButton.tsx[0m:12:23-12:32
+  [2m   |[0m
+ [2m 12[0m [2m|[0m   <button style={{ background: "#1d4ed8" }}>Save</button>
+ [2m   [0m [2m|[0m [1;31m                      ^^^^^^^^^[0m
+  [2mevidence[0m token_source: apps/web/src/theme/tokens.css
+  [1;36mhelp:[0m Use `var(--color-action-primary)`. Do not define new colors in feature code.

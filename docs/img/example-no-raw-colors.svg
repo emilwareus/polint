@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 773 220" role="img" aria-label="polint check --color always">
+<defs><style>.t { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace; font-size: 14px; }</style></defs>
+<rect width="100%" height="100%" rx="8" ry="8" fill="#1e1e2e"/>
+<rect x="0" y="0" width="773" height="36" fill="#181825" rx="8" ry="8"/>
+<rect x="0" y="28" width="773" height="8" fill="#181825"/>
+<circle cx="18" cy="18" r="6" fill="#f38ba8"/>
+<circle cx="36" cy="18" r="6" fill="#f9e2af"/>
+<circle cx="54" cy="18" r="6" fill="#a6e3a1"/>
+<text x="386" y="22" class="t" fill="#9399b2" text-anchor="middle">polint check --color always</text>
+<text x="22" y="72" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#f38ba8" font-weight="bold">error</tspan>
+<tspan fill="#cdd6f4" font-weight="bold">[</tspan>
+<tspan fill="#cba6f7" font-weight="bold">local/no-raw-colors</tspan>
+<tspan fill="#cdd6f4">]: </tspan>
+<tspan fill="#cdd6f4" font-weight="bold">Raw color literal `#1d4ed8` should use a design token.</tspan>
+</text>
+<text x="22" y="92" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4" font-weight="bold">  </tspan>
+<tspan fill="#94e2d5" font-weight="bold">--&gt;</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" font-weight="bold">Button.tsx</tspan>
+<tspan fill="#cdd6f4">:12:23-12:32</tspan>
+</text>
+<text x="22" y="112" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">   |</tspan>
+</text>
+<text x="22" y="132" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55"> 12</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">|</tspan>
+<tspan fill="#cdd6f4">   &lt;button style={{ background: &quot;#1d4ed8&quot; }}&gt;Save&lt;/button&gt;</tspan>
+</text>
+<text x="22" y="152" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">   </tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">|</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#f38ba8" font-weight="bold">                      ^^^^^^^^^</tspan>
+</text>
+<text x="22" y="172" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">evidence</tspan>
+<tspan fill="#cdd6f4"> token_source: apps/web/src/theme/tokens.css</tspan>
+</text>
+<text x="22" y="192" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#94e2d5" font-weight="bold">help:</tspan>
+<tspan fill="#cdd6f4"> Use `var(--color-action-primary)`. Do not define new colors in feature code.</tspan>
+</text>
+</svg>

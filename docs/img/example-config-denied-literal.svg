@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 747 280" role="img" aria-label="polint check --color always">
+<defs><style>.t { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace; font-size: 14px; }</style></defs>
+<rect width="100%" height="100%" rx="8" ry="8" fill="#1e1e2e"/>
+<rect x="0" y="0" width="747" height="36" fill="#181825" rx="8" ry="8"/>
+<rect x="0" y="28" width="747" height="8" fill="#181825"/>
+<circle cx="18" cy="18" r="6" fill="#f38ba8"/>
+<circle cx="36" cy="18" r="6" fill="#f9e2af"/>
+<circle cx="54" cy="18" r="6" fill="#a6e3a1"/>
+<text x="373" y="22" class="t" fill="#9399b2" text-anchor="middle">polint check --color always</text>
+<text x="22" y="72" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#f38ba8" font-weight="bold">error</tspan>
+<tspan fill="#cdd6f4" font-weight="bold">[</tspan>
+<tspan fill="#cba6f7" font-weight="bold">local/no-denied-literals</tspan>
+<tspan fill="#cdd6f4">]: </tspan>
+<tspan fill="#cdd6f4" font-weight="bold">Configured denied literal `legacy-testid` found.</tspan>
+</text>
+<text x="22" y="92" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4" font-weight="bold">  </tspan>
+<tspan fill="#94e2d5" font-weight="bold">--&gt;</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" font-weight="bold">query.ts</tspan>
+<tspan fill="#cdd6f4">:4:25-4:40</tspan>
+</text>
+<text x="22" y="112" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">   |</tspan>
+</text>
+<text x="22" y="132" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">  4</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">|</tspan>
+<tspan fill="#cdd6f4"> export const selector = &quot;legacy-testid&quot;;</tspan>
+</text>
+<text x="22" y="152" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">   </tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">|</tspan>
+<tspan fill="#cdd6f4"> </tspan>
+<tspan fill="#f38ba8" font-weight="bold">                        ^^^^^^^^^^^^^^^</tspan>
+</text>
+<text x="22" y="172" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">evidence</tspan>
+<tspan fill="#cdd6f4"> literal: legacy-testid</tspan>
+</text>
+<text x="22" y="192" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">evidence</tspan>
+<tspan fill="#cdd6f4"> matched: legacy-testid</tspan>
+</text>
+<text x="22" y="212" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#94e2d5" font-weight="bold">help:</tspan>
+<tspan fill="#cdd6f4"> Replace the literal with an allowed constant or local abstraction.</tspan>
+</text>
+<text x="22" y="232" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan fill="#cdd6f4">  </tspan>
+<tspan fill="#cdd6f4" opacity="0.55">fingerprint: e337fbb73d44b2b7</tspan>
+</text>
+<text x="22" y="252" class="t" fill="#cdd6f4" xml:space="preserve">
+<tspan> </tspan>
+</text>
+</svg>
