@@ -56,8 +56,8 @@ polint --version
 polint check --fail-on none
 ```
 
-`polint check` discovers and runs the local rule host in
-`.polint/rules/no-denied-literals` for you. That is intentional: polint ships no
+`polint check` discovers and runs the local rule host at `.polint/rules/`
+(`Cargo.toml` + `src/main.rs`) for you. That is intentional: polint ships no
 built-in policy rules, so examples bring their own repo-local rule code.
 
 Human diagnostics use ANSI colors when stdout is a TTY and `NO_COLOR` is unset. For plain text (e.g. pasting into docs), run `polint check --fail-on none --color never`.
@@ -94,7 +94,9 @@ polint check src --fail-on none
   rules/
 ```
 
-`polint new-rule go my-policy` creates a repo-local Rust rule skeleton under `.polint/rules/my-policy`.
+`polint new-rule go my-policy` adds `src/my_policy.rs` to the rule pack under
+`.polint/rules/` and registers it from `src/main.rs` (creating the pack manifest
+when needed).
 
 If config is missing, `polint check` uses normal workspace defaults, no
 profiles, and `.polint/rules` for local rule discovery. If no local rules are
@@ -155,7 +157,8 @@ CI output, graph output, cache, and SDK types.
 
 The copyable rules under `examples/*/.polint/rules/` are SDK dogfood examples,
 not product defaults. Each example is shaped like a separate repository: it has
-its own fixture source, `.polint.toml`, and one local Rust rule crate.
+its own fixture source, `.polint.toml`, and one local Rust rule package
+(`Cargo.toml` at `.polint/rules/` with one module file per rule under `src/`).
 
 Heuristic rules say so in diagnostics. For example, Go branch-obligation diagnostics report "No nearby test evidence found"; they do not claim exact coverage.
 

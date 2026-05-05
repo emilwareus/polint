@@ -1,0 +1,10 @@
+[package]
+name = "polint-example-custom-go-rule"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+globset = "0.4.18"
+polint-runner = { path = "../../../../crates/polint-runner" }
+polint-sdk = { path = "../../../../crates/polint-sdk" }

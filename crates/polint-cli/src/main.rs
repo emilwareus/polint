@@ -10,6 +10,7 @@ use polint_fs::load_analysis_files;
 use polint_graph::{FunctionGraph, ImportGraph};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 use std::sync::Arc;
@@ -226,42 +227,156 @@ fn init_project(root: PathBuf) -> Result<()> {
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let rules_dir = root.join(".polint/rules");
-    let rule_dir = rules_dir.join(&rule_name);
+    let module = rust_module_name(&rule_name);
+    let struct_name = to_pascal_case(&rule_name);
+    let module_path = rules_dir.join("src").join(format!("{module}.rs"));
 
-    match fs::symlink_metadata(&rule_dir) {
-        Ok(_) => anyhow::bail!("rule already exists: {}", rule_dir.display()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    match fs::symlink_metadata(&module_path) {
+        Ok(_) => anyhow::bail!("rule already exists: {}", module_path.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", rule_dir.display()));
+            return Err(error).with_context(|| format!("failed to inspect {}", module_path.display()));
         }
     }
 
-    fs::create_dir_all(&rules_dir)
+    fs::create_dir_all(rules_dir.join("src"))
         .with_context(|| format!("failed to create {}", rules_dir.display()))?;
-    fs::create_dir(&rule_dir)
-        .with_context(|| format!("failed to create {}", rule_dir.display()))?;
-    let src_dir = rule_dir.join("src");
-    fs::create_dir(&src_dir).with_context(|| format!("failed to create {}", src_dir.display()))?;
+
+    let pack_toml = rules_dir.join("Cargo.toml");
+    if !pack_toml.is_file() {
+        write_pack_cargo_toml(&rules_dir)?;
+        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+    } else if !rules_dir.join("src/main.rs").is_file() {
+        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+    } else {
+        prepend_pack_mod_use(&rules_dir, &module, &struct_name)?;
+        append_rule_to_run_cli_vec(&rules_dir, &struct_name)?;
+    }
+
     fs::write(
-        rule_dir.join("Cargo.toml"),
+        &module_path,
+        rule_module_template(&args.language, &rule_name, &struct_name),
+    )?;
+    println!("Created rule module {}", module_path.display());
+    Ok(())
+}
+
+fn rust_module_name(rule_name: &str) -> String {
+    rule_name.replace('-', "_")
+}
+
+fn polint_deps_path_prefix(rules_dir: &Path) -> String {
+    let mut dir = rules_dir.to_path_buf();
+    let mut up = 0usize;
+    loop {
+        if dir.join("crates/polint-sdk").is_dir() {
+            return format!("{}crates/", "../".repeat(up));
+        }
+        if !dir.pop() {
+            return "../../crates/".to_string();
+        }
+        up += 1;
+    }
+}
+
+fn write_pack_cargo_toml(rules_dir: &Path) -> Result<()> {
+    let prefix = polint_deps_path_prefix(rules_dir);
+    fs::write(
+        rules_dir.join("Cargo.toml"),
         format!(
             r#"[package]
-name = "polint-rule-{}"
+name = "polint-local-rules"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
-polint-runner = {{ path = "../../../crates/polint-runner" }}
-polint-sdk = {{ path = "../../../crates/polint-sdk" }}
-"#,
-            rule_name
+polint-runner = {{ path = "{prefix}polint-runner" }}
+polint-sdk = {{ path = "{prefix}polint-sdk" }}
+"#
         ),
-    )?;
-    fs::write(
-        src_dir.join("main.rs"),
-        rule_template(&args.language, &rule_name),
-    )?;
-    println!("Created rule skeleton at {}", rule_dir.display());
+    )
+    .with_context(|| format!("failed to write {}", rules_dir.join("Cargo.toml").display()))?;
+    Ok(())
+}
+
+fn write_initial_pack_main(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+    let initial = format!(
+        r#"mod {module};
+use {module}::{struct_name};
+
+use std::process::ExitCode;
+use std::sync::Arc;
+
+fn main() -> ExitCode {{
+    polint_runner::run_cli(vec![
+        Arc::new({struct_name}),
+    ])
+}}
+"#
+    );
+    fs::write(rules_dir.join("src/main.rs"), initial).with_context(|| {
+        format!(
+            "failed to write {}",
+            rules_dir.join("src/main.rs").display()
+        )
+    })?;
+    Ok(())
+}
+
+fn prepend_pack_mod_use(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+    let main_path = rules_dir.join("src/main.rs");
+    let mut src = fs::read_to_string(&main_path)
+        .with_context(|| format!("failed to read {}", main_path.display()))?;
+    let mod_decl = format!("mod {module};");
+    let use_decl = format!("use {module}::{struct_name};");
+    if !src.contains(&mod_decl) {
+        src.insert_str(0, &format!("{mod_decl}\n{use_decl}\n\n"));
+        fs::write(&main_path, src)?;
+    }
+    Ok(())
+}
+
+fn append_rule_to_run_cli_vec(rules_dir: &Path, struct_name: &str) -> Result<()> {
+    let main_path = rules_dir.join("src/main.rs");
+    let src = fs::read_to_string(&main_path)
+        .with_context(|| format!("failed to read {}", main_path.display()))?;
+    let needle = "polint_runner::run_cli(vec![";
+    let start = src.find(needle).with_context(|| {
+        format!(
+            "{} must call polint_runner::run_cli(vec![...])",
+            main_path.display()
+        )
+    })?;
+    let inner_start = start + needle.len();
+    let mut depth = 1u32;
+    let mut end = None;
+    for (i, ch) in src[inner_start..].char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(inner_start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.with_context(|| format!("unclosed vec![ in {}", main_path.display()))?;
+    let inner = &src[inner_start..end];
+    let trimmed = inner.trim_end();
+    let new_inner = if trimmed.is_empty() {
+        format!("\n        Arc::new({struct_name}),\n    ")
+    } else {
+        format!("{trimmed}\n        Arc::new({struct_name}),\n    ")
+    };
+    let mut new_src = String::new();
+    new_src.push_str(&src[..inner_start]);
+    new_src.push_str(&new_inner);
+    new_src.push_str(&src[end..]);
+    fs::write(&main_path, new_src)?;
     Ok(())
 }
 
@@ -281,8 +396,7 @@ fn validate_rule_name(name: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn rule_template(language: &str, rule_name: &str) -> String {
-    let struct_name = to_pascal_case(rule_name);
+fn rule_module_template(language: &str, rule_name: &str, struct_name: &str) -> String {
     let capability = match language {
         "go" => ".go_tests().branch_obligations()",
         "ts" | "tsx" | "js" | "jsx" => ".string_literals().jsx_attributes()",
@@ -312,12 +426,6 @@ fn rule_template(language: &str, rule_name: &str) -> String {
     };
     format!(
         r#"use polint_sdk::prelude::*;
-use std::process::ExitCode;
-use std::sync::Arc;
-
-fn main() -> ExitCode {{
-    polint_runner::run_cli(vec![Arc::new({struct_name})])
-}}
 
 pub struct {struct_name};
 
@@ -604,24 +712,9 @@ fn discover_local_rule_hosts(root: &Path) -> Result<Vec<PathBuf>> {
     let config = load_config(root)?;
     let mut manifests = BTreeSet::new();
     for rule_path in &config.config.rules.paths {
-        let directory = root.join(rule_path);
-        let pack_manifest = directory.join("Cargo.toml");
-        if pack_manifest.is_file() {
-            manifests.insert(pack_manifest);
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let manifest = entry.path().join("Cargo.toml");
-            if manifest.is_file() {
-                manifests.insert(manifest);
-            }
+        let manifest = root.join(rule_path).join("Cargo.toml");
+        if manifest.is_file() {
+            manifests.insert(manifest);
         }
     }
     Ok(manifests.into_iter().collect())

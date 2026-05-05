@@ -26,21 +26,18 @@ or `none` to control the exit status.
 
 ## Rule Layout
 
-Single-rule repositories usually use one Cargo manifest per rule:
+Repo-local rules live in **one** Rust package under `.polint/rules/`:
 
 ```text
 .polint.toml
-.polint/
-  rules/
-    no-raw-colors/
-      Cargo.toml
-      src/lib.rs
+.polint/rules/Cargo.toml
+.polint/rules/src/main.rs          # calls polint_runner::run_cli(vec![...])
+.polint/rules/src/my_rule.rs       # one module per rule (pub struct + impl Rule)
 ```
 
-For multiple local rules that should be compiled and run together, use one
-rule-pack Cargo manifest under `.polint/rules/Cargo.toml` and register each rule
-from that host. See `examples/multiple-rules` in the polint repository for the
-shape.
+`polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs` and wires it
+into `src/main.rs`. See `examples/multiple-rules` in the polint repo for several
+rules in one pack.
 
 ## Writing A Rule
 

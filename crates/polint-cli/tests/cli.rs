@@ -80,7 +80,7 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn example_rule_cmd(example: &str, rule: &str) -> Command {
+fn example_rule_cmd(example: &str) -> Command {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     command.args([
         "run",
@@ -89,9 +89,7 @@ fn example_rule_cmd(example: &str, rule: &str) -> Command {
         repo_root()
             .join("examples")
             .join(example)
-            .join(".polint/rules")
-            .join(rule)
-            .join("Cargo.toml")
+            .join(".polint/rules/Cargo.toml")
             .to_str()
             .unwrap(),
         "--",
@@ -100,19 +98,19 @@ fn example_rule_cmd(example: &str, rule: &str) -> Command {
 }
 
 fn raw_color_rule_cmd() -> Command {
-    example_rule_cmd("ts-design-tokens", "no-raw-colors")
+    example_rule_cmd("ts-design-tokens")
 }
 
 fn ts_complexity_rule_cmd() -> Command {
-    example_rule_cmd("ts-complexity", "ts-complexity")
+    example_rule_cmd("ts-complexity")
 }
 
 fn go_import_boundaries_rule_cmd() -> Command {
-    example_rule_cmd("go-import-boundaries", "go-import-boundaries")
+    example_rule_cmd("go-import-boundaries")
 }
 
 fn go_branch_obligations_rule_cmd() -> Command {
-    example_rule_cmd("go-branch-obligations", "go-branch-obligations")
+    example_rule_cmd("go-branch-obligations")
 }
 
 fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
@@ -210,15 +208,16 @@ fn new_rule_creates_skeleton() {
         .success();
 
     assert!(
-        temp.path()
-            .join(".polint/rules/branch-error-paths/Cargo.toml")
-            .exists()
+        temp.path().join(".polint/rules/Cargo.toml").exists(),
+        "expected one pack manifest at .polint/rules/Cargo.toml"
     );
     assert!(
-        temp.path()
-            .join(".polint/rules/branch-error-paths/src/main.rs")
+        temp
+            .path()
+            .join(".polint/rules/src/branch_error_paths.rs")
             .exists()
     );
+    assert!(temp.path().join(".polint/rules/src/main.rs").exists());
 }
 
 #[test]
@@ -247,15 +246,12 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
             "{rule_name:?} must not write into .polint/rules directly"
         );
         assert!(
-            !temp.path().join(".polint/rules/nested/rule").exists(),
-            "{rule_name:?} must not create nested rule directories"
+            !temp.path().join(".polint/rules/src/nested").exists(),
+            "{rule_name:?} must not create stray module paths"
         );
         assert!(
-            !temp
-                .path()
-                .join(".polint/rules/branch_error_paths")
-                .exists(),
-            "{rule_name:?} must not create unsanitized rule directories"
+            !temp.path().join(".polint/rules/src/branch_error_paths.rs").exists(),
+            "{rule_name:?} must not create underscored module files"
         );
     }
 }
@@ -263,11 +259,10 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
 #[test]
 fn new_rule_rejects_existing_rule_without_overwriting_files() {
     let temp = tempfile::tempdir().unwrap();
-    let rule_dir = temp.path().join(".polint/rules/demo");
-    let sentinel_manifest = "# sentinel manifest\n";
-    let sentinel_main = "pub fn sentinel() -> &'static str { \"keep me\" }\n";
-    write_file(&rule_dir.join("Cargo.toml"), sentinel_manifest);
-    write_file(&rule_dir.join("src/main.rs"), sentinel_main);
+    let rules = temp.path().join(".polint/rules");
+    fs::create_dir_all(rules.join("src")).unwrap();
+    let sentinel = "// sentinel module\n";
+    fs::write(rules.join("src/demo.rs"), sentinel).unwrap();
 
     Command::cargo_bin("polint")
         .unwrap()
@@ -277,14 +272,7 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
         .failure()
         .stderr(predicate::str::contains("rule already exists"));
 
-    assert_eq!(
-        fs::read_to_string(rule_dir.join("Cargo.toml")).unwrap(),
-        sentinel_manifest
-    );
-    assert_eq!(
-        fs::read_to_string(rule_dir.join("src/main.rs")).unwrap(),
-        sentinel_main
-    );
+    assert_eq!(fs::read_to_string(rules.join("src/demo.rs")).unwrap(), sentinel);
 }
 
 #[test]
@@ -432,18 +420,19 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
         .assert()
         .success();
 
-    let rule_dir = temp.path().join(".polint/rules/branch-error-paths");
-    assert!(rule_dir.join("Cargo.toml").exists());
-    let manifest = fs::read_to_string(rule_dir.join("Cargo.toml")).unwrap();
-    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    let rules = temp.path().join(".polint/rules");
+    assert!(rules.join("Cargo.toml").exists());
+    let manifest = fs::read_to_string(rules.join("Cargo.toml")).unwrap();
+    let module = fs::read_to_string(rules.join("src/branch_error_paths.rs")).unwrap();
+    let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(manifest.contains("polint-runner"));
     assert!(main.contains("polint_runner::run_cli"));
-    assert!(main.contains("id: \"custom/branch-error-paths\""));
-    assert!(main.contains("use polint_sdk::prelude::*;"));
-    assert!(main.contains(".go_tests().branch_obligations()"));
-    assert!(main.contains("ctx.go_tests_for_file(file.id)"));
-    assert!(main.contains("ctx.branch_obligations_for_file(file.id)"));
-    assert!(!main.contains("polint_core::"));
+    assert!(module.contains("id: \"custom/branch-error-paths\""));
+    assert!(module.contains("use polint_sdk::prelude::*;"));
+    assert!(module.contains(".go_tests().branch_obligations()"));
+    assert!(module.contains("ctx.go_tests_for_file(file.id)"));
+    assert!(module.contains("ctx.branch_obligations_for_file(file.id)"));
+    assert!(!module.contains("polint_core::"));
 }
 
 #[test]
@@ -456,16 +445,16 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
         .assert()
         .success();
 
-    let rule_dir = temp.path().join(".polint/rules/no-raw-brand-colors");
-    assert!(rule_dir.join("Cargo.toml").exists());
-    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    let rules = temp.path().join(".polint/rules");
+    let module = fs::read_to_string(rules.join("src/no_raw_brand_colors.rs")).unwrap();
+    let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(main.contains("polint_runner::run_cli"));
-    assert!(main.contains("id: \"custom/no-raw-brand-colors\""));
-    assert!(main.contains("use polint_sdk::prelude::*;"));
-    assert!(main.contains(".string_literals().jsx_attributes()"));
-    assert!(main.contains("ctx.string_literals_for_file(file.id)"));
-    assert!(main.contains("ctx.jsx_attributes_for_file(file.id)"));
-    assert!(!main.contains("polint_core::"));
+    assert!(module.contains("id: \"custom/no-raw-brand-colors\""));
+    assert!(module.contains("use polint_sdk::prelude::*;"));
+    assert!(module.contains(".string_literals().jsx_attributes()"));
+    assert!(module.contains("ctx.string_literals_for_file(file.id)"));
+    assert!(module.contains("ctx.jsx_attributes_for_file(file.id)"));
+    assert!(!module.contains("polint_core::"));
 }
 
 #[test]
@@ -478,15 +467,15 @@ fn new_rule_generic_uses_sdk_query_helpers() {
         .assert()
         .success();
 
-    let rule_dir = temp.path().join(".polint/rules/domain-names");
-    assert!(rule_dir.join("Cargo.toml").exists());
-    let main = fs::read_to_string(rule_dir.join("src/main.rs")).unwrap();
+    let rules = temp.path().join(".polint/rules");
+    let module = fs::read_to_string(rules.join("src/domain_names.rs")).unwrap();
+    let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(main.contains("polint_runner::run_cli"));
-    assert!(main.contains("id: \"custom/domain-names\""));
-    assert!(main.contains("use polint_sdk::prelude::*;"));
-    assert!(main.contains(".syntax()"));
-    assert!(main.contains("ctx.functions_for_file(file.id)"));
-    assert!(!main.contains("polint_core::"));
+    assert!(module.contains("id: \"custom/domain-names\""));
+    assert!(module.contains("use polint_sdk::prelude::*;"));
+    assert!(module.contains(".syntax()"));
+    assert!(module.contains("ctx.functions_for_file(file.id)"));
+    assert!(!module.contains("polint_core::"));
 }
 
 #[test]
@@ -938,67 +927,67 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
     let cases: &[(&str, &str, &str, &[&str])] = &[
         (
             "basic",
-            "no-raw-colors",
+            "no_raw_colors.rs",
             "local/no-raw-colors",
             &["Button.tsx"],
         ),
         (
             "config-denied-literal",
-            "no-denied-literals",
+            "no_denied_literals.rs",
             "local/no-denied-literals",
             &["query.ts"],
         ),
         (
             "custom-rule-go",
-            "require-error-branch-tests",
+            "require_error_branch_tests.rs",
             "local/require-error-branch-tests",
             &["authorize.go"],
         ),
         (
             "custom-rule-ts",
-            "no-product-hex-colors",
+            "no_product_hex_colors.rs",
             "local/no-product-hex-colors",
             &["Button.tsx"],
         ),
         (
             "go-branch-obligations",
-            "go-branch-obligations",
+            "go_branch_obligations.rs",
             "local/go-branch-obligations",
             &["authorize.go"],
         ),
         (
             "go-complexity",
-            "go-complexity",
+            "go_complexity.rs",
             "local/go-cyclomatic-complexity",
             &["router.go"],
         ),
         (
             "go-import-boundaries",
-            "go-import-boundaries",
+            "go_import_boundaries.rs",
             "local/go-import-boundaries",
             &["handler.go"],
         ),
         (
             "go-test-quality",
-            "go-test-quality",
+            "go_test_quality.rs",
             "local/go-test-quality",
             &["payment_test.go"],
         ),
         (
             "ts-complexity",
-            "ts-complexity",
+            "ts_complexity.rs",
             "local/ts-cyclomatic-complexity",
             &["label.ts"],
         ),
         (
             "ts-design-tokens",
-            "no-raw-colors",
+            "no_raw_colors.rs",
             "local/no-raw-colors",
             &["Button.tsx"],
         ),
     ];
 
-    for (example, rule_dir, expected_rule, expected_files) in cases {
+    for (example, rule_module, expected_rule, expected_files) in cases {
         let example_dir = repo_root().join("examples").join(example);
         assert!(
             example_dir.join("README.md").exists(),
@@ -1010,11 +999,10 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
         );
         assert!(
             example_dir
-                .join(".polint/rules")
-                .join(rule_dir)
-                .join("src/main.rs")
+                .join(".polint/rules/src")
+                .join(rule_module)
                 .exists(),
-            "{example} should contain its local rule implementation"
+            "{example} should contain its local rule implementation ({rule_module})"
         );
 
         let json = stdout_json(
