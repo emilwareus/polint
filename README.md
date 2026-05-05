@@ -46,6 +46,38 @@ During development, run the CLI without installing it:
 cargo run -p polint-cli -- check --fail-on none
 ```
 
+## Try to use it!
+
+Install the latest private `main` build, clone the repository, and run one
+self-contained example:
+
+```bash
+gh auth login
+gh api --method GET -H "Accept: application/vnd.github.v3.raw+json" repos/emilwareus/exlint/contents/scripts/install.sh -f ref=main | bash
+
+gh repo clone emilwareus/exlint polint
+cd polint/examples/config-denied-literal
+
+polint --version
+cargo run --quiet --manifest-path .polint/rules/no-denied-literals/Cargo.toml -- check --profile fast --fail-on none
+```
+
+The example command runs the local rule host in
+`.polint/rules/no-denied-literals`. That is intentional: polint ships no
+built-in policy rules, so examples bring their own repo-local rule code.
+
+After the installer and clone messages, the final two commands should print:
+
+```text
+polint 0.1.0
+query.ts:4:25-4:40 error local/no-denied-literals
+  Configured denied literal `legacy-testid` found.
+  evidence literal: legacy-testid
+  evidence matched: legacy-testid
+  help: Replace the literal with an allowed constant or local abstraction.
+  fingerprint: e337fbb73d44b2b7
+```
+
 ## Quickstart
 
 ```bash
