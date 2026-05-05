@@ -24,11 +24,13 @@ This installs the `polint` binary into `~/.cargo/bin` (or the default Cargo inst
 
 ### Prebuilt binary (GitHub Releases)
 
-CI publishes rolling assets for tag **`polint-main`** (Linux and macOS, x86_64 and aarch64). The install script downloads the matching archive over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
+CI publishes rolling assets for tag **`polint-main`** (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64 as a `.tar.gz` containing `polint.exe`). **Unix:** the install script downloads the matching archive over HTTPS, verifies SHA-256, and installs to `~/.local/bin` by default:
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/emilwareus/exlint/main/scripts/install.sh | bash
 ```
+
+**Windows:** use `cargo install polint-cli --locked`, or download `polint-windows-x86_64.tar.gz` from that release, extract `polint.exe`, and place it on your `PATH`.
 
 Override the install directory:
 
@@ -351,8 +353,8 @@ Workflows in `.github/workflows/`:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `ci.yml` | Push/PR to `main` | `cargo fmt`, `clippy -D warnings`, `cargo test` (with `--locked`) |
-| `publish-cli.yml` | Push to `main` | Cross-compile `polint` release binaries (Linux x86_64/aarch64, macOS x86_64/aarch64), upload to the rolling GitHub Release **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
+| `ci.yml` | Push/PR to `main` | **`rustfmt`** on Ubuntu; on **Ubuntu, Windows, and macOS**: `clippy -D warnings`, full **`cargo test --workspace`**, then an **ignored** integration test that runs **`cargo install`** of `polint-cli` to a temp prefix and **`polint --version`** (models the crates.io install path) |
+| `publish-cli.yml` | Push to `main` | Cross-compile release `polint` (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64), upload to **[`polint-main`](https://github.com/emilwareus/exlint/releases/tag/polint-main)** |
 | `publish-crates.yml` | Manual (`workflow_dispatch`) | Optional crates.io publish via `scripts/publish-crates.sh` |
 
 **Secrets (repository settings)**
@@ -371,6 +373,8 @@ cargo fmt
 cargo fmt -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+# Same release install path CI exercises (slow; compiles polint-cli in release):
+cargo test -p polint-cli --test cargo_install_smoke --locked -- --ignored
 ```
 
 Rust **1.94** is pinned in [`rust-toolchain.toml`](rust-toolchain.toml); `dtolnay/rust-toolchain` picks it up in CI.

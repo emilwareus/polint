@@ -26,18 +26,27 @@ jobs:
             asset_os: linux
             asset_arch: x86_64
             target: x86_64-unknown-linux-gnu
+            binary_name: polint
           - runner: ubuntu-latest
             asset_os: linux
             asset_arch: aarch64
             target: aarch64-unknown-linux-gnu
+            binary_name: polint
           - runner: macos-14
             asset_os: macos
             asset_arch: x86_64
             target: x86_64-apple-darwin
+            binary_name: polint
           - runner: macos-14
             asset_os: macos
             asset_arch: aarch64
             target: aarch64-apple-darwin
+            binary_name: polint
+          - runner: windows-latest
+            asset_os: windows
+            asset_arch: x86_64
+            target: x86_64-pc-windows-msvc
+            binary_name: polint.exe
 
     steps:
       - name: Checkout
@@ -63,9 +72,12 @@ jobs:
           set -euo pipefail
           archive="polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}.tar.gz"
           mkdir -p dist package
-          cp "target/${{ matrix.target }}/release/polint" package/polint
-          chmod 0755 package/polint
-          tar -C package -czf "dist/${archive}" polint
+          bin="${{ matrix.binary_name }}"
+          cp "target/${{ matrix.target }}/release/${bin}" "package/${bin}"
+          if [[ "${bin}" == polint ]]; then
+            chmod 0755 "package/${bin}"
+          fi
+          tar -C package -czf "dist/${archive}" "${bin}"
           (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
 
       - name: Upload build artifact
@@ -100,7 +112,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "polint main build" \
-              --notes "Rolling prebuilt CLI for \`main\` (Linux/macOS, x86_64 and aarch64). Updated by GitHub Actions on pushes to \`main\`. [Install from source or binary.](https://github.com/${GITHUB_REPOSITORY}#installation)" \
+              --notes "Rolling prebuilt CLI for \`main\` (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64). Updated on pushes to \`main\`. Most users: [README](https://github.com/${GITHUB_REPOSITORY}#installation) (\`cargo install\` or install script for Unix)." \
               --prerelease
           fi
           gh release edit "${RELEASE_TAG}" \

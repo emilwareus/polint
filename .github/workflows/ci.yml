@@ -13,20 +13,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
+  fmt:
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
+
+  clippy-test-install:
+    name: ${{ matrix.os }} — clippy, test, cargo install smoke
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
         run: cargo test --workspace --locked
+
+      - name: cargo install smoke (release install + --version)
+        run: cargo test -p polint-cli --test cargo_install_smoke --locked -- --ignored

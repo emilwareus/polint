@@ -1,0 +1,8 @@
+* text=auto
+
+# Stable formatting / CI across Windows runners
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+.gitattributes text eol=lf
+.github/**/*.yml text eol=lf
