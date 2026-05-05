@@ -4,7 +4,7 @@
 // intentionally heuristic; it demonstrates repo-local policy code, not exact
 // coverage analysis.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct RequireErrorBranchTests;
 

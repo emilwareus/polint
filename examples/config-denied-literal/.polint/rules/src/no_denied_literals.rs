@@ -2,7 +2,7 @@
 // It registers one local rule, local/no-denied-literals, which reads deny-list
 // values from .polint.toml and reports matching Go/TS/JS string literals.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct NoDeniedLiterals;
 

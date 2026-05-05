@@ -61,18 +61,18 @@ Core dependencies:
 
 * `clap = "4.6.1"` with derive support for CLI parsing.
 * `serde = "1.0.228"` with derive.
-* `serde_json = "1.0"` latest compatible.
-* `toml = "0.9.8"` for config parsing.
-* `anyhow = "1.0"` latest compatible for application errors.
-* `thiserror = "2.0"` latest compatible for typed library errors.
-* `tracing = "0.1"` latest compatible.
-* `tracing-subscriber = "0.3"` latest compatible.
-* `rayon = "1.11.0"` or latest compatible for parallel execution.
+* `serde_json = "1.0.149"`.
+* `toml = "1.1.2"` for config parsing.
+* `anyhow = "1.0.102"` for application errors.
+* `thiserror = "2.0.18"` for typed library errors.
+* `tracing = "0.1.44"`.
+* `tracing-subscriber = "0.3.23"`.
+* `rayon = "1.12.0"` for parallel execution.
 * `ignore = "0.4.25"` for fast repo walking with `.gitignore` support.
-* `globset = "0.4"` latest compatible for file matching.
-* `walkdir = "2"` only if needed; prefer `ignore`.
+* `globset = "0.4.18"` for file matching.
+* `walkdir = "2.5.0"` only if needed; prefer `ignore`.
 * `petgraph = "0.8.3"` for import graphs, call graphs, CFGs, and DOT export.
-* `salsa = "0.26.1"` or latest compatible for incremental computation, if practical. If Salsa integration slows delivery, implement a simpler hash-based cache first and leave Salsa behind an abstraction.
+* `salsa = "0.26.2"` if practical for incremental computation. If Salsa integration slows delivery, implement a simpler hash-based cache first and leave Salsa behind an abstraction.
 
 Go parsing:
 
@@ -82,12 +82,12 @@ Go parsing:
 TypeScript/JavaScript parsing:
 
 * Prefer Oxc crates, because Oxc is Rust-native and designed for high-performance JS/TS tooling.
-* `oxc_parser = "0.123.0"` or latest compatible.
-* `oxc_ast = "0.123.0"` or matching latest compatible.
-* `oxc_span = "0.123.0"` or matching latest compatible.
-* `oxc_allocator = "0.123.0"` or matching latest compatible.
-* `oxc_semantic = "0.123.0"` if useful for semantic information.
-* `oxc_resolver = "11"` or latest compatible if import resolution is needed.
+* `oxc_parser = "0.129.0"`.
+* `oxc_ast = "0.129.0"`.
+* `oxc_span = "0.129.0"`.
+* `oxc_allocator = "0.129.0"`.
+* `oxc_semantic = "0.129.0"` if useful for semantic information.
+* `oxc_resolver = "11.19.1"` if import resolution is needed.
 
 Testing:
 

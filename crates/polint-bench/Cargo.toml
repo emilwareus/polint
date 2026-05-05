@@ -17,10 +17,5 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-polint-cache = { workspace = true }
-polint-config = { workspace = true }
-polint-core = { workspace = true }
-polint-fs = { workspace = true }
-polint-go = { workspace = true }
-polint-ts = { workspace = true }
+polint = { workspace = true, features = ["bench"] }
 serde_json.workspace = true

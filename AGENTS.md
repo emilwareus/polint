@@ -3,7 +3,7 @@
 
 **polint**
 
-polint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
+polint is a high-performance Rust framework for writing repo-local static-analysis rules across multiple languages. Adapters today cover **Go** (tree-sitter) and **TypeScript / JavaScript** (Oxc); more languages can be added through the same adapter contract. polint gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
 
 The product is for engineering teams using AI-assisted development who need executable project-specific policies instead of repeating local conventions in prompts. It is not a replacement for ESLint, Ruff, Biome, golangci-lint, or formatters; it is a framework for checks that those generic tools cannot know.
 
@@ -12,7 +12,7 @@ The product is for engineering teams using AI-assisted development who need exec
 ### Constraints
 
 - **Stack**: Rust workspace with Rust 2024 edition - required by the prompt and fits performance/static-analysis needs.
-- **Language support**: Go and TypeScript/JavaScript first - more languages should be addable through adapters.
+- **Language support**: multi-language framework. Today: Go (tree-sitter) and TypeScript/JavaScript (Oxc). New languages added through the adapter contract.
 - **Parser choices**: tree-sitter-go for Go and Oxc for TS/JS - requested baseline and current crate ecosystem fit.
 - **Performance**: Use deterministic parallelism and avoid cloning large source strings - large repo support is a core requirement.
 - **Reliability**: Parser errors and rule panics should become diagnostics or controlled internal errors, not crashes.
@@ -34,7 +34,7 @@ The product is for engineering teams using AI-assisted development who need exec
 | File discovery | `ignore`, `globset` | ignore 0.4.25, globset 0.4.18 | Fast walking with `.gitignore` support and reliable glob matching. | High |
 | Graphs | `petgraph` | 0.8.3 | Suitable for import graphs, call graph skeletons, CFG representation, and DOT export. | High |
 | Go parsing | `tree-sitter`, `tree-sitter-go` | tree-sitter 0.26.8, tree-sitter-go 0.25.0 | Practical syntax extraction without needing Go type checking in v1. | High |
-| TS/JS parsing | Oxc crates | 0.128.0 | Rust-native high-performance JS/TS parser ecosystem. | Medium |
+| TS/JS parsing | Oxc crates | 0.129.0 | Rust-native high-performance JS/TS parser ecosystem. | Medium |
 | Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import graph precision. Initial v1 can start with syntactic imports. | Medium |
 | Tests | `insta`, `assert_cmd`, `predicates`, `tempfile`, `pretty_assertions`, `proptest` | Current versions checked | Covers snapshots, CLI integration, fixtures, diffs, and invariants. | High |
 ## What Not To Use First

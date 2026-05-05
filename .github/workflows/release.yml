@@ -31,7 +31,7 @@ jobs:
       version: ${{ steps.metadata.outputs.version }}
       tag: ${{ steps.metadata.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.WORKFLOW_PUSH_TOKEN != '' && secrets.WORKFLOW_PUSH_TOKEN || github.token }}
@@ -83,7 +83,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.publish_crates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.bump-and-tag.outputs.tag }}
 
@@ -136,7 +136,7 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.bump-and-tag.outputs.tag }}
 
@@ -151,7 +151,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build polint
-        run: cargo build --locked --release -p polint-cli --target ${{ matrix.target }}
+        run: cargo build --locked --release -p polint --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
@@ -167,7 +167,7 @@ jobs:
           tar -C package -czf "dist/${archive}" "${bin}"
           (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
           path: dist/*
@@ -179,7 +179,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.publish_cli
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -205,5 +205,5 @@ jobs:
             gh release create "${TAG}" "${files[@]}" \
               --repo "${REPO}" \
               --title "polint ${VERSION}" \
-              --notes "Install: \`cargo install polint-cli --locked\` at **${VERSION}**, or use a \`polint-*\` archive below. See [README](https://github.com/${REPO}#installation)."
+              --notes "Install: \`cargo install polint --locked\` at **${VERSION}**, or use a \`polint-*\` archive below. See [README](https://github.com/${REPO}#installation)."
           fi

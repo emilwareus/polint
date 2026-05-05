@@ -2,7 +2,7 @@
 
 ## What This Is
 
-polint is a high-performance Rust framework for writing repo-local static-analysis rules. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
+polint is a high-performance Rust framework for writing repo-local static-analysis rules across multiple languages. Adapters today cover **Go** (tree-sitter) and **TypeScript / JavaScript** (Oxc); more languages can be added through the same adapter contract. It initially supports Go and TypeScript/JavaScript and gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
 
 The product is for engineering teams using AI-assisted development who need executable project-specific policies instead of repeating local conventions in prompts. It is not a replacement for ESLint, Ruff, Biome, golangci-lint, or formatters; it is a framework for checks that those generic tools cannot know.
 
@@ -79,7 +79,7 @@ No active v1 requirements remain after Phase 9 verification. Future work is trac
 ## Constraints
 
 - **Stack**: Rust workspace with Rust 2024 edition - required by the prompt and fits performance/static-analysis needs.
-- **Language support**: Go and TypeScript/JavaScript first - more languages should be addable through adapters.
+- **Language support**: multi-language framework. Adapters today: Go (tree-sitter) and TypeScript/JavaScript (Oxc). New languages plug in through the adapter contract.
 - **Parser choices**: tree-sitter-go for Go and Oxc for TS/JS - requested baseline and current crate ecosystem fit.
 - **Performance**: Use deterministic parallelism and avoid cloning large source strings - large repo support is a core requirement.
 - **Reliability**: Parser errors and rule panics should become diagnostics or controlled internal errors, not crashes.

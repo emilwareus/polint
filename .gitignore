@@ -23,3 +23,6 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 **/.polint/cache/**
+
+# Local polint scaffold smoke dirs (validation / manual testing)
+_scaffold_smoke_*/

@@ -6,5 +6,4 @@ publish = false
 
 [dependencies]
 globset.workspace = true
-polint-runner = { workspace = true }
-polint-sdk = { workspace = true }
+polint = { workspace = true }

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Bump the patch version in the root workspace Cargo.toml.
 
-Updates [workspace.package] version and each polint-* entry under
-[workspace.dependencies]. Prints the new version on stdout.
+Updates [workspace.package] version and the `polint = { path = ..., version = ... }`
+entry under [workspace.dependencies]. Prints the new version on stdout.
 
 Used by `.github/workflows/release.yml`; also safe to run locally, then
 `cargo build --workspace` and commit Cargo.toml + Cargo.lock.
@@ -60,13 +60,16 @@ def main() -> None:
         sys.exit(1)
 
     text, n = re.subn(
-        rf'^(polint-\w+ = {{ path = "[^"]+", version = "){old_re}("\s*\}})',
+        rf'^(polint = {{ path = "crates/polint", version = "){old_re}("\s*\}})',
         rf"\g<1>{new_ver}\2",
         text,
         flags=re.MULTILINE,
     )
-    if n == 0:
-        print("error: no polint-* workspace dependency versions updated", file=sys.stderr)
+    if n != 1:
+        print(
+            "error: expected exactly one `polint` workspace dependency version to update",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     cargo_path.write_text(text, encoding="utf-8")

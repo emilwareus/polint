@@ -4,9 +4,11 @@
 //! goes: config, disk+`AnalysisDb`, Go parse/facts, TS parse/facts, `run_rules`.
 
 use anyhow::Result;
-use polint_config::{LoadedConfig, load_config};
-use polint_core::{AnalysisDb, RuleOptions, run_rules};
-use polint_fs::{LoadSourcesTimings, load_analysis_files_with_timings};
+use polint::_bench::cache;
+use polint::_bench::config::{LoadedConfig, load_config};
+use polint::_bench::core::{AnalysisDb, Rule, RuleOptions, run_rules};
+use polint::_bench::fs::{LoadSourcesTimings, load_analysis_files_with_timings};
+use polint::_bench::{go, ts};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -91,7 +93,7 @@ fn config_hash(config: &LoadedConfig) -> String {
     let missing = if config.missing { "missing" } else { "loaded" };
     let serialized =
         serde_json::to_string(&config.config).expect("polint config should serialize to JSON");
-    polint_cache::stable_hash(&[missing, &serialized])
+    cache::stable_hash(&[missing, &serialized])
 }
 
 /// Same as `polint check` cold path with **no disk cache**, **no rules**, parallel parsers.
@@ -104,23 +106,21 @@ pub fn cold_analyze_breakdown(
     let t0 = Instant::now();
     let config = load_config(root)?;
     let config_digest = config_hash(&config);
-    let rules: Vec<Arc<dyn polint_core::Rule>> = Vec::new();
+    let rules: Vec<Arc<dyn Rule>> = Vec::new();
     let options = BTreeMap::<String, RuleOptions>::new();
-    let rule_digest = polint_cache::stable_hash(&[] as &[&str]);
-    let cache = polint_cache::Cache::default_for_repo(root, false);
+    let rule_digest = cache::stable_hash(&[] as &[&str]);
+    let cache = cache::Cache::default_for_repo(root, false);
     breakdown.config_and_hashes = t0.elapsed();
 
     let (mut db, load_timings) = load_analysis_files_with_timings(&config)?;
     breakdown.load_sources = load_timings;
 
     let t2 = Instant::now();
-    let _ =
-        polint_go::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, parallel);
+    let _ = go::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, parallel);
     breakdown.go_analysis = t2.elapsed();
 
     let t3 = Instant::now();
-    let _ =
-        polint_ts::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, parallel);
+    let _ = ts::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, parallel);
     breakdown.ts_analysis = t3.elapsed();
 
     let t4 = Instant::now();

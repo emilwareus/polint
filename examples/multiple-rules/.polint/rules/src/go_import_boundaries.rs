@@ -1,5 +1,5 @@
 use crate::glob::{file_in_scope, glob_matches};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct GoImportBoundaries;
 

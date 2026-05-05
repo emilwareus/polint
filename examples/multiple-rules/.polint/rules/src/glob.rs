@@ -1,5 +1,5 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::RuleOptions;
+use polint::sdk::prelude::RuleOptions;
 
 pub fn file_in_scope(options: &RuleOptions, file: &str) -> bool {
     (options.files.is_empty()

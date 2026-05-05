@@ -2,7 +2,7 @@
 // It registers one local rule, local/ts-cyclomatic-complexity, which warns when
 // a TS/JS function's extracted cyclomatic complexity exceeds the configured max.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct TsComplexity;
 

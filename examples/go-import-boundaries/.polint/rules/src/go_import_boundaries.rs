@@ -2,7 +2,7 @@
 // It registers one local rule, local/go-import-boundaries, which reads
 // forbidden import boundaries from .polint.toml and reports matching Go imports.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct GoImportBoundaries;
 

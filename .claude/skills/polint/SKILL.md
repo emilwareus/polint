@@ -31,7 +31,7 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 ```text
 .polint.toml
 .polint/rules/Cargo.toml
-.polint/rules/src/main.rs          # calls polint_runner::run_cli(vec![...])
+.polint/rules/src/main.rs          # calls polint::runner::run_cli(vec![...])
 .polint/rules/src/my_rule.rs       # one module per rule (pub struct + impl Rule)
 ```
 
@@ -41,11 +41,11 @@ rules in one pack.
 
 ## Writing A Rule
 
-Start with `use polint_sdk::prelude::*;`, give the rule a stable local ID, declare
+Start with `use polint::sdk::prelude::*;`, give the rule a stable local ID, declare
 only the facts it needs in `capabilities`, then report diagnostics from `run`.
 
 ```rust
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 struct NoRawColors;
 

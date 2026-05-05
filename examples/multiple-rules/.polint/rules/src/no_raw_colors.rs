@@ -1,5 +1,5 @@
 use crate::glob::file_in_scope;
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct NoRawColors;
 

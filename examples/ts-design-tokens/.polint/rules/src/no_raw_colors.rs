@@ -3,7 +3,7 @@
 // literals in TSX code and asks contributors to use design tokens instead.
 // The rule reads both string literals and JSX attributes, then dedupes overlaps.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct NoRawColors;
 

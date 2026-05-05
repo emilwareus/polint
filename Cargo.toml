@@ -1,17 +1,7 @@
 [workspace]
 members = [
-    "crates/polint-cache",
-    "crates/polint-cli",
-    "crates/polint-config",
-    "crates/polint-core",
-    "crates/polint-diagnostics",
-    "crates/polint-fs",
-    "crates/polint-go",
-    "crates/polint-graph",
+    "crates/polint",
     "crates/polint-bench",
-    "crates/polint-runner",
-    "crates/polint-sdk",
-    "crates/polint-ts",
     "examples/basic/.polint/rules",
     "examples/config-denied-literal/.polint/rules",
     "examples/custom-rule-go/.polint/rules",
@@ -31,9 +21,9 @@ edition = "2024"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/emilwareus/polint"
-rust-version = "1.94"
+rust-version = "1.95"
 version = "0.1.2"
-description = "polint workspace crate: repo-local static analysis for Go and TypeScript"
+description = "polint workspace crate: multi-language repo-local static analysis (Go and TypeScript/JavaScript today)"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
@@ -42,12 +32,12 @@ clap = { version = "4.6.1", features = ["derive"] }
 globset = "0.4.18"
 ignore = "0.4.25"
 insta = "1.47.2"
-oxc_allocator = "0.128.0"
-oxc_ast = "0.128.0"
-oxc_parser = "0.128.0"
+oxc_allocator = "0.129.0"
+oxc_ast = "0.129.0"
+oxc_parser = "0.129.0"
 oxc_resolver = "11.19.1"
-oxc_semantic = "0.128.0"
-oxc_span = "0.128.0"
+oxc_semantic = "0.129.0"
+oxc_span = "0.129.0"
 petgraph = "0.8.3"
 predicates = "3.1.4"
 pretty_assertions = "1.4.1"
@@ -63,14 +53,5 @@ tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
 
-# Path + version: local workspace uses `path`; `cargo publish` uses `version`.
-polint-cache = { path = "crates/polint-cache", version = "0.1.2" }
-polint-config = { path = "crates/polint-config", version = "0.1.2" }
-polint-core = { path = "crates/polint-core", version = "0.1.2" }
-polint-diagnostics = { path = "crates/polint-diagnostics", version = "0.1.2" }
-polint-fs = { path = "crates/polint-fs", version = "0.1.2" }
-polint-go = { path = "crates/polint-go", version = "0.1.2" }
-polint-graph = { path = "crates/polint-graph", version = "0.1.2" }
-polint-runner = { path = "crates/polint-runner", version = "0.1.2" }
-polint-sdk = { path = "crates/polint-sdk", version = "0.1.2" }
-polint-ts = { path = "crates/polint-ts", version = "0.1.2" }
+# Rule packs and tooling depend on the unified `polint` crate (path + version for publish).
+polint = { path = "crates/polint", version = "0.1.2" }

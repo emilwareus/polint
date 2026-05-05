@@ -2,7 +2,7 @@
 // It registers one local rule, local/go-cyclomatic-complexity, which warns when
 // a Go function's extracted cyclomatic complexity exceeds the configured max.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct GoComplexity;
 

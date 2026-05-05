@@ -2,7 +2,7 @@
 // It registers one local rule, local/go-test-quality, which heuristically flags
 // oversized Go tests and tests with no obvious assertion or error check.
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use polint_sdk::prelude::*;
+use polint::sdk::prelude::*;
 
 pub struct GoTestQuality;
 
