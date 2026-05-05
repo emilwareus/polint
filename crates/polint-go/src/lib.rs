@@ -1,14 +1,20 @@
 use anyhow::{Context, Result};
 use polint_core::{
     AnalysisDb, BranchId, BranchObligation, CachedFileAnalysis, FileId, FunctionFact, FunctionId,
-    ImportFact, Language, PackageFact, Span, StringLiteralFact, TestFact, span_from_byte_range,
+    ImportFact, Language, PackageFact, SourceFile, Span, StringLiteralFact, TestFact,
+    span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange, fingerprint};
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::sync::Arc;
 use tree_sitter::{Node, Parser};
 
 const GO_CACHE_SCHEMA: &str = "go-facts-v1";
+
+thread_local! {
+    static GO_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
+}
 
 pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     let cache = polint_cache::Cache::new("", false);
@@ -31,11 +37,10 @@ pub fn analyze_with_options(
     rule_hash: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    let files: Vec<_> = db
+    let files: Vec<&SourceFile> = db
         .files()
         .iter()
         .filter(|file| file.language == Language::Go)
-        .cloned()
         .collect();
 
     let mut results = if parallel {
@@ -68,7 +73,7 @@ struct GoFileAnalysis {
 }
 
 fn analyze_go_source_file(
-    file: &polint_core::SourceFile,
+    file: &SourceFile,
     cache: &polint_cache::Cache,
     config_hash: &str,
     rule_hash: &str,
@@ -139,18 +144,24 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
 }
 
 fn parse_go_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
-    let source = db
-        .file(file_id)
-        .context("missing source file")?
-        .source
-        .clone();
-    let source = source.as_ref();
+    let source_owned = {
+        let file = db.file(file_id).context("missing source file")?;
+        Arc::clone(&file.source)
+    };
+    let source = source_owned.as_ref();
 
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_go::LANGUAGE.into())?;
-    let tree = parser
-        .parse(source, None)
-        .context("tree-sitter returned no parse tree")?;
+    let tree = GO_PARSER.with(|cell| -> Result<_> {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            let mut p = Parser::new();
+            p.set_language(&tree_sitter_go::LANGUAGE.into())?;
+            *slot = Some(p);
+        }
+        let parser = slot.as_mut().unwrap();
+        parser
+            .parse(source, None)
+            .context("tree-sitter returned no parse tree")
+    })?;
     let root = tree.root_node();
     let mut diagnostics = Vec::new();
 

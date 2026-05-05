@@ -6,6 +6,7 @@ use polint_core::{AnalysisDb, Language, SourceFile};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -55,12 +56,39 @@ pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
     Ok(files)
 }
 
-pub fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
-    load_analysis_files_parallel(config)
+/// Fine-grained timings for [`load_analysis_files_with_timings`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoadSourcesTimings {
+    /// `ignore` walk, language filter, glob include/exclude, stable sort.
+    pub discover: Duration,
+    /// Parallel `read_to_string` for all discovered paths.
+    pub read_parallel: Duration,
+    /// Sequential `AnalysisDb::add_file` (content hash + file records).
+    pub fingerprint_and_push: Duration,
 }
 
-fn load_analysis_files_parallel(config: &LoadedConfig) -> Result<AnalysisDb> {
-    let loaded = discover_files(config)?
+impl LoadSourcesTimings {
+    pub fn total(&self) -> Duration {
+        self.discover + self.read_parallel + self.fingerprint_and_push
+    }
+}
+
+pub fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
+    Ok(load_analysis_files_with_timings(config)?.0)
+}
+
+/// Same as [`load_analysis_files`], plus per-subphase timings (for profiling).
+pub fn load_analysis_files_with_timings(
+    config: &LoadedConfig,
+) -> Result<(AnalysisDb, LoadSourcesTimings)> {
+    let mut timings = LoadSourcesTimings::default();
+
+    let t0 = Instant::now();
+    let discovered = discover_files(config)?;
+    timings.discover = t0.elapsed();
+
+    let t1 = Instant::now();
+    let loaded = discovered
         .into_par_iter()
         .map(|file| {
             let source = fs::read_to_string(&file.path)
@@ -68,12 +96,16 @@ fn load_analysis_files_parallel(config: &LoadedConfig) -> Result<AnalysisDb> {
             Ok((file, source))
         })
         .collect::<Result<Vec<_>>>()?;
+    timings.read_parallel = t1.elapsed();
 
+    let t2 = Instant::now();
     let mut db = AnalysisDb::new();
     for (file, source) in loaded {
         db.add_file(file.path, file.relative_path, source);
     }
-    Ok(db)
+    timings.fingerprint_and_push = t2.elapsed();
+
+    Ok((db, timings))
 }
 
 #[cfg(test)]
@@ -254,7 +286,7 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
         write_file(temp.path().join("cmd/main.go"), "package main\n");
 
         let config = load_config(temp.path()).unwrap();
-        let db = load_analysis_files_parallel(&config).unwrap();
+        let db = load_analysis_files(&config).unwrap();
         let ids = db
             .files()
             .iter()
@@ -275,7 +307,7 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
         write_file(temp.path().join("c/util.js"), "export const c = 1;");
 
         let config = load_config(temp.path()).unwrap();
-        let parallel = load_analysis_files_parallel(&config).unwrap();
+        let parallel = load_analysis_files(&config).unwrap();
         let sequential = load_analysis_files_sequential(&config).unwrap();
         let parallel_paths = parallel
             .files()

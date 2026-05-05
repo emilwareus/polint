@@ -12,7 +12,8 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use polint_core::{
     AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
-    Language, Span, StringLiteralFact, TsClassFact, TsComponentFact, span_from_byte_range,
+    Language, SourceFile, Span, StringLiteralFact, TsClassFact, TsComponentFact,
+    span_from_byte_range,
 };
 use polint_diagnostics::{Diagnostic, TextRange};
 use rayon::prelude::*;
@@ -43,11 +44,10 @@ pub fn analyze_with_options(
     rule_hash: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    let files: Vec<_> = db
+    let files: Vec<&SourceFile> = db
         .files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .cloned()
         .collect();
 
     let mut results = if parallel {
@@ -80,7 +80,7 @@ struct TsFileAnalysis {
 }
 
 fn analyze_ts_source_file(
-    file: &polint_core::SourceFile,
+    file: &SourceFile,
     cache: &polint_cache::Cache,
     config_hash: &str,
     rule_hash: &str,
@@ -151,10 +151,17 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
 }
 
 fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
-    let file = db.file(file_id).context("missing source file")?.clone();
-    let source = file.source.as_ref();
+    let (source, language, path) = {
+        let file = db.file(file_id).context("missing source file")?;
+        (
+            Arc::clone(&file.source),
+            file.language,
+            file.path.clone(),
+        )
+    };
+    let source = source.as_ref();
     let allocator = Allocator::default();
-    let source_type = parse_source_type(&file.path);
+    let source_type = parse_source_type(&path);
     let parsed = Parser::new(&allocator, source, source_type).parse();
     let mut diagnostics = Vec::new();
 
@@ -192,7 +199,7 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
     }
 
     let import_count = db.imports().len();
-    extract_from_program(db, file_id, source, file.language, &parsed.program);
+    extract_from_program(db, file_id, source, language, &parsed.program);
     if db.imports().len() == import_count {
         let mut module_requests = parsed
             .module_record
@@ -212,7 +219,7 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
                 file_id,
                 path,
                 span_from_oxc(file_id, source, statement_span),
-                file.language,
+                language,
             );
         }
     }
@@ -3552,16 +3559,18 @@ class store {}
     #[test]
     fn parses_ts_source_from_shared_arc_without_full_source_clone() {
         let production_source = include_str!("lib.rs");
-        let borrowed_source_access = ["file.source", ".as_ref()"].concat();
-        let full_source_clone = ["file.source", ".to_string()"].concat();
-
+        let production_only = production_source
+            .split("mod tests {")
+            .next()
+            .expect("lib.rs should contain mod tests");
         assert!(
-            production_source.contains(&borrowed_source_access),
-            "parse_ts_file should borrow from SourceFile.source"
+            production_only.contains("Arc::clone(&file.source)"),
+            "parse_ts_file should refcount Arc<str> (O(1)) instead of copying the buffer"
         );
+        let forbidden = concat!("file.source", ".to_string()");
         assert!(
-            !production_source.contains(&full_source_clone),
-            "parse_ts_file should not clone the full source string"
+            !production_only.contains(forbidden),
+            "parse_ts_file should not allocate a full String copy of the source"
         );
     }
 

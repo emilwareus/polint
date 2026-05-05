@@ -9,6 +9,7 @@ members = [
     "crates/polint-go",
     "crates/polint-graph",
     "crates/polint-plugin",
+    "crates/polint-bench",
     "crates/polint-runner",
     "crates/polint-sdk",
     "crates/polint-ts",
