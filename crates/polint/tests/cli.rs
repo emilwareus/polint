@@ -19,6 +19,41 @@ fn init_creates_config() {
 
     assert!(temp.path().join(".polint.toml").exists());
     assert!(temp.path().join(".polint/rules").exists());
+    assert!(temp.path().join(".polint/rules/src").exists());
+    assert!(temp.path().join(".polint/cache").exists());
+    let nested_gitignore = fs::read_to_string(temp.path().join(".polint/.gitignore")).unwrap();
+    assert!(
+        nested_gitignore.contains("cache/"),
+        "{nested_gitignore:?}"
+    );
+    let toolchain = fs::read_to_string(temp.path().join("rust-toolchain.toml")).unwrap();
+    assert!(
+        toolchain.contains("channel = \"1.95\""),
+        "{toolchain:?}"
+    );
+}
+
+#[test]
+fn init_does_not_overwrite_existing_rust_toolchain() {
+    let temp = tempfile::tempdir().unwrap();
+    let tc = temp.path().join("rust-toolchain.toml");
+    fs::write(
+        &tc,
+        "# sentinel-toolchain\n[toolchain]\nchannel = \"1.94.0\"\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&tc).unwrap(),
+        "# sentinel-toolchain\n[toolchain]\nchannel = \"1.94.0\"\n"
+    );
 }
 
 #[test]
@@ -35,10 +70,35 @@ fn init_does_not_overwrite_existing_config() {
         .success();
 
     assert!(temp.path().join(".polint/rules").exists());
+    assert!(temp.path().join(".polint/rules/src").exists());
+    assert!(temp.path().join(".polint/cache").exists());
+    assert!(temp.path().join(".polint/.gitignore").exists());
     assert_eq!(
         fs::read_to_string(config).unwrap(),
         "# sentinel\n[workspace]\ninclude = [\"src/**\"]\n"
     );
+    let toolchain = fs::read_to_string(temp.path().join("rust-toolchain.toml")).unwrap();
+    assert!(toolchain.contains("channel = \"1.95\""), "{toolchain:?}");
+}
+
+#[test]
+fn init_appends_cache_to_existing_polint_gitignore() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_dir = temp.path().join(".polint");
+    fs::create_dir_all(&polint_dir).unwrap();
+    fs::write(polint_dir.join(".gitignore"), "# keep\nother/\n").unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let gi = fs::read_to_string(polint_dir.join(".gitignore")).unwrap();
+    assert!(gi.contains("# keep"));
+    assert!(gi.contains("other/"));
+    assert!(gi.contains("cache/"));
 }
 
 #[test]
