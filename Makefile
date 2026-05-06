@@ -15,7 +15,7 @@ lint:
 
 # `rustdoc` same as CI doc job (workspace, -D warnings).
 doc:
-	RUSTDOCFLAGS=-D warnings $(CARGO) doc --workspace --all-features --no-deps --locked
+	RUSTDOCFLAGS='-D warnings' $(CARGO) doc --workspace --all-features --no-deps --locked
 
 # Mirrors CI: release `cargo install` + `polint --version` (slow; uses --ignored test).
 install-smoke:

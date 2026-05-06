@@ -22,15 +22,9 @@ fn init_creates_config() {
     assert!(temp.path().join(".polint/rules/src").exists());
     assert!(temp.path().join(".polint/cache").exists());
     let nested_gitignore = fs::read_to_string(temp.path().join(".polint/.gitignore")).unwrap();
-    assert!(
-        nested_gitignore.contains("cache/"),
-        "{nested_gitignore:?}"
-    );
+    assert!(nested_gitignore.contains("cache/"), "{nested_gitignore:?}");
     let toolchain = fs::read_to_string(temp.path().join("rust-toolchain.toml")).unwrap();
-    assert!(
-        toolchain.contains("channel = \"1.95\""),
-        "{toolchain:?}"
-    );
+    assert!(toolchain.contains("channel = \"1.95\""), "{toolchain:?}");
 }
 
 #[test]
