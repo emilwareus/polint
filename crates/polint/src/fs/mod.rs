@@ -67,10 +67,12 @@ pub struct LoadSourcesTimings {
 }
 
 impl LoadSourcesTimings {
-    /// Sum of all sub-phase durations. Only compiled when consumed (in-crate
-    /// `cfg(test)` callers, or `polint-bench` via `feature = "bench"`); avoiding
-    /// `#[allow(dead_code)]` keeps the dead-code lint live for everything else.
+    /// Sum of all sub-phase durations. Called from `polint-bench` when built with
+    /// `feature = "bench"`; `cargo test -p polint` does not enable that feature, so
+    /// `unreachable_pub` is suppressed for this method.
     #[cfg(any(test, feature = "bench"))]
+    #[cfg_attr(all(test, not(feature = "bench")), allow(dead_code))] // only `polint-bench` calls `.total()`
+    #[allow(unreachable_pub)]
     pub fn total(&self) -> Duration {
         self.discover + self.read_parallel + self.fingerprint_and_push
     }
