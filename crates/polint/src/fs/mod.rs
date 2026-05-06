@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum FsError {
+pub(crate) enum FsError {
     #[error("failed to strip root prefix for {path}")]
     StripPrefix { path: PathBuf },
 }
 
-pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
+pub(crate) fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
     let include = config.include_set()?;
     let exclude = config.exclude_set()?;
     let mut files = Vec::new();
@@ -54,7 +54,8 @@ pub fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
     Ok(files)
 }
 
-/// Fine-grained timings for [`load_analysis_files_with_timings`].
+/// Fine-grained timings for [`load_analysis_files_with_timings`] (`polint::_bench::fs` / `polint-bench`).
+#[allow(unreachable_pub)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoadSourcesTimings {
     /// `ignore` walk, language filter, glob include/exclude, stable sort.
@@ -75,11 +76,12 @@ impl LoadSourcesTimings {
     }
 }
 
-pub fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
+pub(crate) fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
     Ok(load_analysis_files_with_timings(config)?.0)
 }
 
-/// Same as [`load_analysis_files`], plus per-subphase timings (for profiling).
+/// Same as in-module `load_analysis_files`, plus per-subphase timings (for profiling).
+#[allow(unreachable_pub)]
 pub fn load_analysis_files_with_timings(
     config: &LoadedConfig,
 ) -> Result<(AnalysisDb, LoadSourcesTimings)> {
@@ -122,9 +124,9 @@ fn load_analysis_files_sequential(config: &LoadedConfig) -> Result<AnalysisDb> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DiscoveredFile {
-    pub path: PathBuf,
-    pub relative_path: String,
+pub(crate) struct DiscoveredFile {
+    pub(crate) path: PathBuf,
+    pub(crate) relative_path: String,
 }
 
 fn matches_any(globs: &GlobSet, relative_path: &str) -> bool {

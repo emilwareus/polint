@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum ConfigError {
+pub(crate) enum ConfigError {
     #[error("invalid glob `{glob}`: {source}")]
     InvalidGlob {
         glob: String,
@@ -16,23 +16,23 @@ pub enum ConfigError {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PolintConfig {
+pub(crate) struct PolintConfig {
     #[serde(default)]
-    pub workspace: WorkspaceConfig,
+    pub(crate) workspace: WorkspaceConfig,
     #[serde(default)]
-    pub rules: RuleSection,
+    pub(crate) rules: RuleSection,
     #[serde(default)]
-    pub profiles: BTreeMap<String, ProfileConfig>,
+    pub(crate) profiles: BTreeMap<String, ProfileConfig>,
     #[serde(default)]
-    pub languages: LanguageConfig,
+    pub(crate) languages: LanguageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceConfig {
+pub(crate) struct WorkspaceConfig {
     #[serde(default = "default_include")]
-    pub include: Vec<String>,
+    pub(crate) include: Vec<String>,
     #[serde(default = "default_exclude")]
-    pub exclude: Vec<String>,
+    pub(crate) exclude: Vec<String>,
 }
 
 impl Default for WorkspaceConfig {
@@ -45,11 +45,11 @@ impl Default for WorkspaceConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleSection {
+pub(crate) struct RuleSection {
     #[serde(default = "default_rule_paths")]
-    pub paths: Vec<String>,
+    pub(crate) paths: Vec<String>,
     #[serde(default)]
-    pub config: Vec<RuleConfig>,
+    pub(crate) config: Vec<RuleConfig>,
 }
 
 impl Default for RuleSection {
@@ -62,47 +62,50 @@ impl Default for RuleSection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleConfig {
-    pub id: String,
+pub(crate) struct RuleConfig {
+    pub(crate) id: String,
     #[serde(default)]
-    pub severity: Option<String>,
+    pub(crate) severity: Option<String>,
     #[serde(default)]
-    pub files: Vec<String>,
+    pub(crate) files: Vec<String>,
     #[serde(default)]
-    pub allow_files: Vec<String>,
+    pub(crate) allow_files: Vec<String>,
     #[serde(default)]
-    pub allow: Vec<String>,
+    pub(crate) allow: Vec<String>,
     #[serde(default)]
-    pub max: Option<u32>,
+    pub(crate) max: Option<u32>,
     #[serde(default)]
-    pub deny: Vec<String>,
+    pub(crate) deny: Vec<String>,
     #[serde(default)]
-    pub forbidden_imports: BTreeMap<String, Vec<String>>,
+    pub(crate) forbidden_imports: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProfileConfig {
+pub(crate) struct ProfileConfig {
     #[serde(default)]
-    pub rules: Vec<String>,
+    pub(crate) rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LanguageConfig {
+pub(crate) struct LanguageConfig {
     #[serde(default)]
-    pub go: BTreeMap<String, toml::Value>,
+    pub(crate) go: BTreeMap<String, toml::Value>,
     #[serde(default)]
-    pub ts: BTreeMap<String, toml::Value>,
+    pub(crate) ts: BTreeMap<String, toml::Value>,
 }
 
+/// Loaded `.polint.toml` (path + parsed config). Fields are crate-private; this type exists so
+/// `load_config` and `polint::_bench::analysis_keys` can use it in public `bench` API surfaces.
+#[allow(unreachable_pub)]
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
-    pub root: PathBuf,
-    pub config: PolintConfig,
-    pub missing: bool,
+    pub(crate) root: PathBuf,
+    pub(crate) config: PolintConfig,
+    pub(crate) missing: bool,
 }
 
 impl LoadedConfig {
-    pub fn profile_rules(&self, profile: Option<&str>) -> Result<Option<Vec<String>>> {
+    pub(crate) fn profile_rules(&self, profile: Option<&str>) -> Result<Option<Vec<String>>> {
         let Some(profile) = profile else {
             return Ok(None);
         };
@@ -112,11 +115,11 @@ impl LoadedConfig {
         Ok(Some(config.rules.clone()))
     }
 
-    pub fn rule_config(&self, id: &str) -> Option<&RuleConfig> {
+    pub(crate) fn rule_config(&self, id: &str) -> Option<&RuleConfig> {
         self.config.rules.config.iter().find(|rule| rule.id == id)
     }
 
-    pub fn include_set(&self) -> Result<GlobSet> {
+    pub(crate) fn include_set(&self) -> Result<GlobSet> {
         if self.config.workspace.include.is_empty() {
             build_glob_set(&["**/*".to_string()])
         } else {
@@ -124,11 +127,12 @@ impl LoadedConfig {
         }
     }
 
-    pub fn exclude_set(&self) -> Result<GlobSet> {
+    pub(crate) fn exclude_set(&self) -> Result<GlobSet> {
         build_glob_set(&self.config.workspace.exclude)
     }
 }
 
+#[allow(unreachable_pub)]
 pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
     let root = root.as_ref().to_path_buf();
     let path = root.join(".polint.toml");
@@ -151,7 +155,7 @@ pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
     })
 }
 
-pub fn default_config_toml() -> &'static str {
+pub(crate) fn default_config_toml() -> &'static str {
     r#"# polint is for repo-local engineering policy as code.
 
 [workspace]
@@ -163,7 +167,7 @@ paths = [".polint/rules"]
 "#
 }
 
-pub fn build_glob_set(patterns: &[String]) -> Result<GlobSet> {
+pub(crate) fn build_glob_set(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         add_glob(&mut builder, pattern)?;

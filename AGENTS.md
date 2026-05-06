@@ -48,13 +48,22 @@ The product is for engineering teams using AI-assisted development who need exec
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
-Conventions not yet established. Will populate as patterns emerge during development.
+### Public API and visibility
+
+Everything **public** is a **liability**: semver, documentation, stability expectations, and review surface all attach to names users and tools can import. Default to the **narrowest** visibility that still works (`private` → `pub(super)` / `pub(in path)` → `pub(crate)` → `pub` only when crossing an intentional boundary).
+
+- **Supported rule-author surface:** `polint::sdk` (including `prelude` and `scope`) and `polint::runner`, plus what those modules deliberately document and re-export. Treat `core`, `cache`, `config`, `fs`, `go`, `ts`, `graph`, `cli`, and other crate-root modules as **implementation detail** unless a change explicitly promotes something to the SDK.
+- **Inside `crates/polint`:** use **`pub(crate)`** for anything shared across internal modules but not meant for downstream crates. Use bare **`pub`** only when a name must be visible outside its defining module *and* that visibility is intentional (e.g. items in `sdk` / `runner`, or the unstable **`polint::_bench`** tree behind **`feature = "bench"`** for `polint-bench` only).
+- **`pub use` re-exports:** treat each one as widening the API; prefer small, curated surfaces over large barrel re-exports.
+- **Linting:** the workspace enables **`unreachable_pub`**. If it fires, **fix visibility** (usually `pub` → `pub(crate)` or tightening module `pub`) rather than weakening the lint, unless there is a documented false positive.
+
+Bench-only and internal hooks should stay namespaced (**`_bench`**, **`#[doc(hidden)]`**) and must not be presented as a supported extension API for rule packs.
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-Architecture not yet mapped. Follow existing patterns found in the codebase.
+Architecture not yet mapped. Follow existing patterns found in the codebase. For **crate visibility and public API discipline**, follow the Conventions above and [`docs/API-VISIBILITY-PLAN.md`](docs/API-VISIBILITY-PLAN.md) when tightening `pub` / `pub(crate)` boundaries.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->

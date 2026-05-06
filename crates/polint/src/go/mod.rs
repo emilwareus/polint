@@ -5,4 +5,8 @@ mod adapter;
 #[cfg(test)]
 mod tests;
 
-pub use adapter::*;
+/// Re-export for `polint::_bench::go`; use `crate::go::analyze_with_options` in-tree.
+#[allow(unreachable_pub)]
+pub use adapter::analyze_with_options;
+#[cfg(test)]
+pub(crate) use adapter::{analyze, analyze_with_cache};

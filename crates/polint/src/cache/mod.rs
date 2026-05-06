@@ -5,21 +5,21 @@ use std::path::{Path, PathBuf};
 
 pub(crate) mod keys;
 
-pub const CACHE_VERSION: &str = "polint-cache-v1";
+pub(crate) const CACHE_VERSION: &str = "polint-cache-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheKey {
-    pub file_hash: String,
-    pub config_hash: String,
-    pub rule_hash: String,
-    pub version: String,
-    pub schema: String,
+pub(crate) struct CacheKey {
+    pub(crate) file_hash: String,
+    pub(crate) config_hash: String,
+    pub(crate) rule_hash: String,
+    pub(crate) version: String,
+    pub(crate) schema: String,
 }
 
 impl CacheKey {
     /// Test-only constructor — production code uses [`CacheKey::for_file`].
     #[cfg(test)]
-    pub fn new(
+    pub(crate) fn new(
         file_hash: impl Into<String>,
         config_hash: impl Into<String>,
         rule_hash: impl Into<String>,
@@ -33,7 +33,7 @@ impl CacheKey {
         }
     }
 
-    pub fn for_file(
+    pub(crate) fn for_file(
         relative_path: &str,
         content_hash: &str,
         config_hash: &str,
@@ -49,7 +49,7 @@ impl CacheKey {
         }
     }
 
-    pub fn stable_id(&self) -> String {
+    pub(crate) fn stable_id(&self) -> String {
         stable_hash(&[
             &self.file_hash,
             &self.config_hash,
@@ -60,6 +60,8 @@ impl CacheKey {
     }
 }
 
+/// Disk-backed JSON cache (used from adapters in-tree; `polint::_bench::cache` for `polint-bench`).
+#[allow(unreachable_pub)]
 #[derive(Debug, Clone)]
 pub struct Cache {
     root: PathBuf,
@@ -67,28 +69,30 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(root: impl AsRef<Path>, enabled: bool) -> Self {
+    pub(crate) fn new(root: impl AsRef<Path>, enabled: bool) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
             enabled,
         }
     }
 
+    /// Used by `polint-bench` (`feature = "bench"`) and in-crate callers.
+    #[allow(unreachable_pub)]
     pub fn default_for_repo(repo: impl AsRef<Path>, enabled: bool) -> Self {
         Self::new(repo.as_ref().join(".polint/cache"), enabled)
     }
 
     #[cfg(test)]
-    pub fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
 
     #[cfg(test)]
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
+    pub(crate) fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -104,14 +108,14 @@ impl Cache {
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
-    pub fn read_json_or_miss<T>(&self, key: &CacheKey) -> Option<T>
+    pub(crate) fn read_json_or_miss<T>(&self, key: &CacheKey) -> Option<T>
     where
         T: for<'de> Deserialize<'de>,
     {
         self.read_json(key).ok().flatten()
     }
 
-    pub fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
+    pub(crate) fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
     where
         T: Serialize,
     {
@@ -130,6 +134,8 @@ impl Cache {
     }
 }
 
+/// Deterministic cache key component hash (also used by `polint-bench` via `_bench::cache`).
+#[allow(unreachable_pub)]
 pub fn stable_hash(parts: &[&str]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for part in parts {

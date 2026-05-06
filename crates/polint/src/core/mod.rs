@@ -212,10 +212,10 @@ pub struct JsxAttributeFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedFileAnalysis {
-    pub schema: String,
-    pub diagnostics: Vec<Diagnostic>,
-    pub facts: CachedFileFacts,
+pub(crate) struct CachedFileAnalysis {
+    pub(crate) schema: String,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) facts: CachedFileFacts,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -957,32 +957,31 @@ impl<'a> RuleCtx<'a> {
 /// Production runs use [`run_rules`] directly with `&[Arc<dyn Rule>]`.
 #[cfg(test)]
 #[derive(Default)]
-pub struct RuleRegistry {
+pub(crate) struct RuleRegistry {
     rules: Vec<Arc<dyn Rule>>,
 }
 
 #[cfg(test)]
 impl RuleRegistry {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn register<R>(&mut self, rule: R)
+    pub(crate) fn register<R>(&mut self, rule: R)
     where
         R: Rule + 'static,
     {
         self.rules.push(Arc::new(rule));
     }
 
-    pub fn register_box(&mut self, rule: Arc<dyn Rule>) {
-        self.rules.push(rule);
-    }
-
-    pub fn rules(&self) -> &[Arc<dyn Rule>] {
+    pub(crate) fn rules(&self) -> &[Arc<dyn Rule>] {
         &self.rules
     }
 }
 
+// Intentionally `pub` (not `pub(crate)`): `polint::_bench::core` glob-re-exports this for
+// `polint-bench`, an external crate. `unreachable_pub` does not follow that path.
+#[allow(unreachable_pub)]
 pub fn run_rules(
     db: &AnalysisDb,
     rules: &[Arc<dyn Rule>],
@@ -1052,7 +1051,7 @@ fn internal_rule_error_for_id(db: &AnalysisDb, rule_id: &str, message: String) -
     )
 }
 
-pub fn rule_id_matches(pattern: &str, rule_id: &str) -> bool {
+pub(crate) fn rule_id_matches(pattern: &str, rule_id: &str) -> bool {
     if pattern == "*" {
         return true;
     }
@@ -1062,7 +1061,7 @@ pub fn rule_id_matches(pattern: &str, rule_id: &str) -> bool {
     pattern == rule_id
 }
 
-pub fn span_from_byte_range(
+pub(crate) fn span_from_byte_range(
     file: FileId,
     source: &str,
     start_byte: usize,
@@ -1083,7 +1082,7 @@ pub fn span_from_byte_range(
     }
 }
 
-pub fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
+pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
     let mut line = 1_u32;
     let mut col = 1_u32;
     let limit = byte_offset.min(source.len());

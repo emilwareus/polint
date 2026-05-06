@@ -57,7 +57,7 @@ polint = { path = "crates/polint", version = "0.1.2" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unreachable_pub = "warn"
+unreachable_pub = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

@@ -199,7 +199,7 @@ fn check_path_pattern(root: &Path, path: &Path) -> String {
     }
 }
 
-pub fn rule_options_from_config(config: Option<&crate::config::RuleConfig>) -> RuleOptions {
+pub(crate) fn rule_options_from_config(config: Option<&crate::config::RuleConfig>) -> RuleOptions {
     let Some(config) = config else {
         return RuleOptions::default();
     };

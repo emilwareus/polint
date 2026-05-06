@@ -24,23 +24,29 @@ pub(crate) mod ts;
 /// Internal surfaces for `polint-bench` (`feature = "bench"`). Not part of the supported API.
 #[cfg(feature = "bench")]
 pub mod _bench {
+    /// Narrow surface for `polint-bench`: not a general `pub use crate::cache::*`.
     pub mod cache {
-        pub use crate::cache::*;
+        pub use crate::cache::{Cache, stable_hash};
     }
+
     pub mod config {
-        pub use crate::config::*;
+        pub use crate::config::{LoadedConfig, load_config};
     }
+
     pub mod core {
-        pub use crate::core::*;
+        pub use crate::core::{AnalysisDb, Rule, RuleOptions, run_rules};
     }
+
     pub mod fs {
-        pub use crate::fs::*;
+        pub use crate::fs::{LoadSourcesTimings, load_analysis_files_with_timings};
     }
+
     pub mod go {
-        pub use crate::go::*;
+        pub use crate::go::analyze_with_options;
     }
+
     pub mod ts {
-        pub use crate::ts::*;
+        pub use crate::ts::analyze_with_options;
     }
     #[doc(hidden)]
     pub mod analysis_keys {

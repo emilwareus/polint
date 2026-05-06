@@ -25,14 +25,14 @@ const TS_CACHE_SCHEMA: &str = "ts-facts-v1";
 
 /// Convenience wrapper used by TS-adapter unit tests (no cache, sequential).
 #[cfg(test)]
-pub fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
+pub(crate) fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
     let cache = crate::cache::Cache::new("", false);
     analyze_with_options(db, &cache, "", "", false)
 }
 
 /// Sequential, cache-aware analysis used by TS-adapter unit tests only.
 #[cfg(test)]
-pub fn analyze_with_cache(
+pub(crate) fn analyze_with_cache(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
     config_hash: &str,
@@ -41,6 +41,8 @@ pub fn analyze_with_cache(
     analyze_with_options(db, cache, config_hash, rule_hash, false)
 }
 
+// `pub` for `polint::_bench::ts` / `polint-bench`, not for direct downstream use.
+#[allow(unreachable_pub)]
 pub fn analyze_with_options(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
