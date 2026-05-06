@@ -150,6 +150,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Ensure cross target std is installed
+        run: rustup target add ${{ matrix.target }}
+
       - name: Build polint
         run: cargo build --locked --release -p polint --target ${{ matrix.target }}
 
