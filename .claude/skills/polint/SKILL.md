@@ -62,7 +62,7 @@ impl Rule for NoRawColors {
         Capabilities::new().string_literals().jsx_attributes()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         for literal in ctx.string_literals() {
             if literal.value.starts_with('#') {
                 ctx.report(

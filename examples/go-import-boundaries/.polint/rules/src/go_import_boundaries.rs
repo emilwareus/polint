@@ -18,7 +18,7 @@ impl Rule for GoImportBoundaries {
         Capabilities::new().imports()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();
         for import in ctx

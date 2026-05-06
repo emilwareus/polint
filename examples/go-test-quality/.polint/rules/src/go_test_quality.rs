@@ -19,7 +19,7 @@ impl Rule for GoTestQuality {
         Capabilities::new().go_tests().test_suite_metrics()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         let max = ctx.options().max.unwrap_or(24);
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();

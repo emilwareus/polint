@@ -3,9 +3,9 @@
 //! Repo-local and example rule authors should start with
 //! `use polint::sdk::prelude::*;`. The prelude re-exports the stable core rule
 //! contract, fact types, diagnostics, severity types, scope helpers
-//! ([`scope::file_in_scope`], [`scope::glob_matches`]), and `anyhow::Result`
-//! needed for ordinary rule implementations without depending on `polint::core`
-//! directly.
+//! ([`scope::file_in_scope`], [`scope::glob_matches`]), and [`RuleResult`](prelude::RuleResult)
+//! ([`RuleError`](prelude::RuleError)) for [`crate::core::Rule::run`] without depending on
+//! `polint::core` directly.
 
 #![deny(missing_docs)]
 
@@ -15,7 +15,7 @@ pub mod scope;
 ///
 /// Importing `use polint::sdk::prelude::*;` is the recommended way to write a rule
 /// — it pulls in the rule contract, the fact types, the diagnostic/severity types,
-/// the path-scoping helpers, and `anyhow::Result` in one star-import.
+/// the path-scoping helpers, and [`RuleResult`](crate::sdk::prelude::RuleResult) in one star-import.
 pub mod prelude {
     pub use crate::core::{
         AnalysisDb, BranchId, BranchObligation, Capabilities, CoverageFact, FileId, FunctionFact,
@@ -28,8 +28,8 @@ pub mod prelude {
         PolintToolInfo, RenderOpts, Severity, Suggestion, TextRange as DiagnosticRange,
         diagnostics_from_json_report,
     };
+    pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
-    pub use anyhow::Result;
 }
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ mod tests {
                 .jsx_attributes()
         }
 
-        fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+        fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
             assert!(ctx.files().is_empty());
             assert_eq!(ctx.import_edges().count(), 0);
             ctx.warn(&Span::point(FileId(0), 1, 1), "prelude warning");

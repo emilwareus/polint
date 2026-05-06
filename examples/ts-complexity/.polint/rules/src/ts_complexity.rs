@@ -18,7 +18,7 @@ impl Rule for TsComplexity {
         Capabilities::new().syntax()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         let max = ctx.options().max.unwrap_or(12);
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();

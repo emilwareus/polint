@@ -22,7 +22,7 @@ impl Rule for NoDeniedLiterals {
         Capabilities::new().string_literals()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         if ctx.options().deny.is_empty() {
             return Ok(());
         }

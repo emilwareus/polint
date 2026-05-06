@@ -440,7 +440,7 @@ impl Rule for {struct_name} {{
         Capabilities::new(){capability}
     }}
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {{
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {{
 {query_example}
         Ok(())
     }}

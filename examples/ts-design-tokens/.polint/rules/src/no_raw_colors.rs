@@ -19,7 +19,7 @@ impl Rule for NoRawColors {
         Capabilities::new().string_literals().jsx_attributes()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();
         let mut seen = Vec::new();

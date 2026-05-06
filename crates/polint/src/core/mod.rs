@@ -1,7 +1,7 @@
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
-use anyhow::Result;
+use crate::rule_error::RuleResult;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -661,7 +661,7 @@ impl Capabilities {
 pub trait Rule: Send + Sync {
     fn meta(&self) -> RuleMeta;
     fn capabilities(&self) -> Capabilities;
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()>;
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult;
 }
 
 /// Resolved per-rule options from configuration.
@@ -1210,7 +1210,7 @@ mod tests {
             self.capabilities
         }
 
-        fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+        fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
             if !self.delay.is_zero() {
                 thread::sleep(self.delay);
             }
@@ -1229,7 +1229,7 @@ mod tests {
                     );
                     Ok(())
                 }
-                TestRuleBehavior::Error => Err(anyhow!("intentional rule error")),
+                TestRuleBehavior::Error => Err(anyhow!("intentional rule error").into()),
                 TestRuleBehavior::Panic => panic!("intentional rule panic"),
                 TestRuleBehavior::MetaPanic => panic!("intentional metadata panic"),
             }

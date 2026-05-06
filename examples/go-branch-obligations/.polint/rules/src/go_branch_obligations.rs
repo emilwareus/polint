@@ -20,7 +20,7 @@ impl Rule for GoBranchObligations {
         Capabilities::new().branch_obligations().go_tests()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> Result<()> {
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
         let rule_id = self.meta().id;
         let mut diagnostics = Vec::new();
         for branch in ctx.branches() {

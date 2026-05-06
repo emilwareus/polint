@@ -46,3 +46,9 @@ git commit -am "chore(release): bump crate version to <new>"
 ```
 
 Then either run **Release** to take it from there, or push a tag yourself.
+
+## Rule pack API changes (SDK)
+
+When upgrading the `polint` dependency in `.polint/rules/`, align rule code with the current SDK:
+
+- **`Rule::run` return type:** use `RuleResult` (from `polint::sdk::prelude::*`) instead of `anyhow::Result<()>`. Errors are still created with `anyhow!` / `bail!` and converted with `.into()` where needed. The host maps `RuleError` to internal diagnostics the same way as before.

@@ -4,9 +4,7 @@ Source: streams [A](rust-audit-incoming/stream-a-polint-internal.md), [B](rust-a
 
 ## State of the codebase
 
-Wave 1, Wave 2, and the bulk of Wave 3 (SDK scope helpers, supply-chain CI, graph clone reduction, doc-warnings job, lint policy escalation) are now **implemented** (see [Done](#done-implemented-2026-05-05) below).
-
-Remaining open Wave 3 items are limited to **typed rule errors** (W3-4, breaking change) and **splitting `go`/`ts` modules** (W3-6, large refactor). Both deserve their own design discussion before opening a PR.
+Wave 1, Wave 2, and Wave 3 (including **W3-4** rule-boundary errors and **W3-6** `go`/`ts` file split) are now **implemented** (see [Done](#done-implemented-2026-05-05) below). Optional follow-up: finer-grained `go`/`ts` submodules (`parse`, `imports`, …) beyond the adapter/tests split.
 
 ## Verification gate
 
@@ -71,13 +69,8 @@ cargo test --workspace --all-features --locked
 | **W3-3** | ✅ **`polint::sdk::scope::{file_in_scope, file_matches_globs, glob_matches}`** is the canonical helper; re-exported via **`sdk::prelude`**. All 9 example rule files dropped their copy/pasted helpers and **`globset`** dependency. **`config-denied-literal`** uses **`file_matches_globs`** (which intentionally omits the **`allow`** clause). |
 | **W3-5** | ✅ **`#![deny(missing_docs)]`** on **`polint::sdk`**; module-level docs on every SDK item. Whole-crate **`deny(missing_docs)`** still deferred for `core`/`diagnostics`. |
 | **W3-7** | ✅ CI now runs **`EmbarkStudios/cargo-deny-action@v2 check --all-features --locked`** with [`deny.toml`](../deny.toml) (advisories + licenses + bans + sources). New **`doc`** job runs **`cargo doc --no-deps`** with **`RUSTDOCFLAGS=-D warnings`**. |
-
-### Wave 3 deferred
-
-| ID | Notes |
-|----|--------|
-| **W3-4** | Library error type at the rule boundary (typed `RuleError` via **`thiserror`**). Breaking change for downstream rule packs; needs minor-version bump and migration note. |
-| **W3-6** | Splitting `go/mod.rs` (~1.4k LoC + tests) and `ts/mod.rs` (~3.2k LoC + tests). Pure structural refactor; defer until adapter changes are otherwise needed to avoid pointless merge-conflict churn. |
+| **W3-4** | ✅ **`Rule::run` → `RuleResult`**; **`RuleError`** (`#[derive(thiserror::Error)]` newtype over **`anyhow::Error`**, transparent). Prelude exports **`RuleResult` / `RuleError`**; examples and scaffolds migrated. Migration: [`docs/RELEASING.md`](../docs/RELEASING.md#rule-pack-api-changes-sdk). |
+| **W3-6** | ✅ **`go`/`ts`**: thin **`mod.rs`**, production code in **`adapter.rs`**, **`#[cfg(test)]`** body in **`tests.rs`** (same behavior as monolithic **`mod.rs`**; not yet split into `parse`/`imports`/… files). |
 
 ---
 
@@ -288,4 +281,4 @@ Add `cargo deny check` (or `cargo audit`) and Dependabot config. Skill-aligned h
 
 1. **PR 1 — Wave 1** (W1-1 → W1-2 → W1-3 → W1-4). Single coherent diff: dedupe cache helpers, then patch the panic surfaces in the now-single location, then close the example-helper drift. Ships behavior-preserving fixes.
 2. **PR 2 — Wave 2** (W2-1 … W2-6). All CI/Makefile/lints; touches no library code paths.
-3. **PR 3 — Wave 3, item by item.** W3-1 and W3-7 are safe to land first; W3-4 and W3-5 deserve their own design discussion before opening a PR.
+3. **PR 3 — Wave 3, item by item.** (Historical.) W3-4 / W3-6 have since landed; optional deeper adapter splits remain out-of-band.
