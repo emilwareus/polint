@@ -81,6 +81,24 @@ Profiles are explicit:
 - Unknown profiles are errors.
 - Profile names are arbitrary. There is no default profile.
 
+## Machine contract (JSON)
+
+Stable JSON reports (`polint check --format json`) match the schema at
+[docs/schemas/polint-report-v1.json](docs/schemas/polint-report-v1.json). Emitters
+also set a top-level `schema` URL when using current polint. Diagnostics are
+deduplicated and sorted deterministically; `--only-rule` and `--max-diagnostics`
+apply after that pipeline for emitted reports. `--max-diagnostics` does not hide
+failures from `--fail-on` (see [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md)).
+
+## Versions
+
+| Item | Where it is defined |
+|------|---------------------|
+| CLI and `polint` crate version | Workspace `version` in the repo root `Cargo.toml` |
+| Published crate | `polint` on crates.io |
+| Minimum supported Rust | `rust-version` in workspace `Cargo.toml` |
+| Generated rule packs | Rust edition **2024** (`polint new-rule` template) |
+
 ## CI
 
 ```yaml
@@ -101,6 +119,9 @@ jobs:
 ## More
 
 - [Examples](examples/)
+- [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
+- [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
+- [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)
 - [Release process](docs/RELEASING.md)
 

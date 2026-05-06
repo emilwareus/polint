@@ -11,6 +11,13 @@
 
 pub mod scope;
 
+use crate::core::{FileId, RuleCtx, TestFact};
+
+/// Collects [`TestFact`] references for `file` (same facts as [`RuleCtx::go_tests_for_file`], materialized).
+pub fn collect_go_tests<'a>(ctx: &'a RuleCtx<'_>, file: FileId) -> Vec<&'a TestFact> {
+    ctx.go_tests_for_file(file).collect()
+}
+
 /// Re-exports of the stable rule-authoring surface.
 ///
 /// Importing `use polint::sdk::prelude::*;` is the recommended way to write a rule
@@ -24,11 +31,12 @@ pub mod prelude {
         StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
     };
     pub use crate::diagnostics::{
-        ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat, PolintReport,
-        PolintToolInfo, RenderOpts, Severity, Suggestion, TextRange as DiagnosticRange,
-        diagnostics_from_json_report,
+        ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
+        POLINT_REPORT_JSON_SCHEMA_V1_URL, PolintReport, PolintToolInfo, RenderOpts, Severity,
+        Suggestion, TextRange as DiagnosticRange, diagnostics_from_json_report,
     };
     pub use crate::rule_error::{RuleError, RuleResult};
+    pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }
 
@@ -76,6 +84,7 @@ mod tests {
         assert!(capabilities.jsx_attributes);
 
         let mut ctx = RuleCtx::new(&db, rule.meta(), RuleOptions::default());
+        assert!(collect_go_tests(&ctx, FileId(0)).is_empty());
         rule.run(&mut ctx).expect("prelude rule runs");
         let diagnostics = ctx.into_diagnostics();
         assert_eq!(diagnostics.len(), 1);

@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use tree_sitter::{Node, Parser};
 
-const GO_CACHE_SCHEMA: &str = "go-facts-v1";
+const GO_CACHE_SCHEMA: &str = "go-facts-v2";
 
 thread_local! {
     static GO_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
@@ -582,6 +582,7 @@ fn go_test_fact(
         evidence_terms: go_test_evidence_terms(source, body),
         assertion_count: go_assertion_count(source, body),
         subtest_count: go_subtest_count(source, body),
+        subtest_names: go_subtest_literal_names(source, body),
         table_rows: go_table_rows(source, body),
     }
 }
@@ -595,6 +596,28 @@ fn go_subtest_count(source: &str, body: Node<'_>) -> u32 {
         }
     });
     count
+}
+
+fn go_subtest_literal_names(source: &str, body: Node<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    visit_named_descendants(body, &mut |node| {
+        if node.kind() != "call_expression" {
+            return;
+        }
+        if call_callee(source, node).as_deref() != Some("t.Run") {
+            return;
+        }
+        let Some(args) = node.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(first) = args.named_child(0) else {
+            return;
+        };
+        if let Some(name) = unquote_go_string_literal(source, first) {
+            names.push(name);
+        }
+    });
+    names
 }
 
 fn go_assertion_count(source: &str, body: Node<'_>) -> u32 {
@@ -1330,4 +1353,34 @@ fn error_value_looks_error(value: &str) -> bool {
 fn contains_error_word(text: &str) -> bool {
     text.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         .any(|word| word == "error")
+}
+
+#[cfg(test)]
+mod subtest_name_tests {
+    use super::*;
+    use crate::core::AnalysisDb;
+
+    #[test]
+    fn harvests_literal_t_run_names() {
+        let src = r#"
+package foo
+
+import "testing"
+
+func TestFoo(t *testing.T) {
+    t.Run("case_a", func(t *testing.T) {})
+    t.Run(`case_b`, func(t *testing.T) {})
+}
+"#;
+        let mut db = AnalysisDb::new();
+        let fid = db.add_file(
+            std::path::PathBuf::from("x_test.go"),
+            "x_test.go".to_string(),
+            src.to_string(),
+        );
+        let _ = parse_go_file(&mut db, fid).unwrap();
+        let names: Vec<_> = db.tests()[0].subtest_names.clone();
+        assert_eq!(names, vec!["case_a".to_string(), "case_b".to_string()]);
+        assert_eq!(db.tests()[0].subtest_count, 2);
+    }
 }

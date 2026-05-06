@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260505-ffu complete
-last_updated: "2026-05-05T09:13:52Z"
-last_activity: 2026-05-05
+stopped_at: quick task 260506-iuu complete
+last_updated: "2026-05-06T11:34:37Z"
+last_activity: 2026-05-06
 progress:
   total_phases: 9
   completed_phases: 9
@@ -60,7 +60,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check run repo-local rule hosts directly
+Last activity: 2026-05-06 - Completed quick task 260506-iuu: Fix staged review findings for agent-quality changes
 
 ## Quick Tasks Completed
 
@@ -81,6 +81,7 @@ Last activity: 2026-05-05 - Completed quick task 260505-ffu: Make polint check r
 | 260503-p7f | Add make install command for source installs | 2026-05-03 | 4da0454 | [260503-p7f-add-make-install-command-for-source-inst](./quick/260503-p7f-add-make-install-command-for-source-inst/) |
 | 260505-e2y | Add README try-it workflow and verify it | 2026-05-05 | 763b9b1 | [260505-e2y-add-readme-try-it-workflow-and-verify-it](./quick/260505-e2y-add-readme-try-it-workflow-and-verify-it/) |
 | 260505-ffu | Make polint check run repo-local rule hosts directly | 2026-05-05 | uncommitted | [260505-ffu-make-polint-check-run-repo-local-rule-ho](./quick/260505-ffu-make-polint-check-run-repo-local-rule-ho/) |
+| 260506-iuu | Fix staged review findings for agent-quality changes | 2026-05-06 | uncommitted | [260506-iuu-fix-staged-review-findings-for-agent-qua](./quick/260506-iuu-fix-staged-review-findings-for-agent-qua/) |
 
 ## Phase Progress
 

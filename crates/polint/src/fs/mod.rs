@@ -1,5 +1,6 @@
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language};
+use crate::path_context::PathContextIndex;
 use anyhow::{Context, Result};
 use globset::GlobSet;
 use ignore::WalkBuilder;
@@ -67,10 +68,8 @@ pub struct LoadSourcesTimings {
 }
 
 impl LoadSourcesTimings {
-    /// Sum of all sub-phase durations. Only compiled when consumed (in-crate
-    /// `cfg(test)` callers, or `polint-bench` via `feature = "bench"`); avoiding
-    /// `#[allow(dead_code)]` keeps the dead-code lint live for everything else.
-    #[cfg(any(test, feature = "bench"))]
+    /// Sum of all sub-phase durations for `polint-bench`.
+    #[cfg(feature = "bench")]
     pub fn total(&self) -> Duration {
         self.discover + self.read_parallel + self.fingerprint_and_push
     }
@@ -106,6 +105,11 @@ pub fn load_analysis_files_with_timings(
     let mut db = AnalysisDb::new();
     for (file, source) in loaded {
         db.add_file(file.path, file.relative_path, source);
+    }
+    let rel_paths: Vec<String> = db.files().iter().map(|f| f.relative_path.clone()).collect();
+    let path_ix = PathContextIndex::build(&config.config.path_contexts, &rel_paths);
+    if !config.config.path_contexts.pairs.is_empty() {
+        db.set_path_contexts(path_ix);
     }
     timings.fingerprint_and_push = t2.elapsed();
 

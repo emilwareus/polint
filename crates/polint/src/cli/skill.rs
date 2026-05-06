@@ -182,9 +182,14 @@ polint new-rule ts no-raw-colors
 polint check --fail-on none
 ```
 
-Use `polint check --format json` when you need machine-readable diagnostics and
-`polint check --format sarif` for CI upload paths. Use `--fail-on warn`, `error`,
-or `none` to control the exit status.
+Use `polint check --format json` when you need machine-readable diagnostics. JSON
+is a versioned report object with a `diagnostics` array (not a bare array at the
+root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
+Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
+for plain text. Use `polint check --format sarif` for CI upload paths. Use
+`--fail-on warn`, `error`, or `none` to control the exit status. Use
+`polint explain go-test --file … --test …` to print one harvested `TestFact` as
+JSON when debugging Go tests.
 
 ## Rule Layout
 

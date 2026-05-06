@@ -50,6 +50,39 @@ jobs:
       - name: cargo install smoke (release install + --version)
         run: cargo test -p polint --test cargo_install_smoke --locked -- --ignored
 
+  sarif:
+    name: SARIF fixture + Code Scanning upload
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build polint (debug)
+        run: cargo build -p polint --locked
+      - name: Emit SARIF from example workspace
+        run: |
+          ../../target/debug/polint check --format sarif --fail-on none > polint-results.sarif
+        working-directory: examples/ts-design-tokens
+      - name: Validate SARIF shape
+        run: |
+          python3 - <<'PY'
+          import json
+
+          with open('examples/ts-design-tokens/polint-results.sarif') as f:
+              sarif = json.load(f)
+          assert sarif["version"] == "2.1.0"
+          for rule in sarif["runs"][0]["tool"]["driver"].get("rules", []):
+              assert "tags" not in rule
+              assert "polint" in rule.get("properties", {}).get("tags", [])
+          PY
+      - name: Upload SARIF
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: examples/ts-design-tokens/polint-results.sarif
+
   doc:
     name: rustdoc (-D warnings)
     runs-on: ubuntu-latest

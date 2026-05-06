@@ -159,6 +159,9 @@ pub struct BranchObligation {
     pub stable_fingerprint: String,
 }
 
+/// Facts harvested from Go test functions (`TestXxx`, benchmarks, fuzz) in `_test.go` files.
+///
+/// See the polint repository's `docs/facts/go-tests.md` for field semantics and harvester limits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestFact {
     pub file: FileId,
@@ -168,6 +171,8 @@ pub struct TestFact {
     pub evidence_terms: Vec<String>,
     pub assertion_count: u32,
     pub subtest_count: u32,
+    /// Literal string names from direct `t.Run("name", ...)` calls (first argument only).
+    pub subtest_names: Vec<String>,
     pub table_rows: u32,
 }
 
@@ -245,6 +250,7 @@ pub struct AnalysisDb {
     ts_classes: Vec<TsClassFact>,
     string_literals: Vec<StringLiteralFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
+    path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
 impl AnalysisDb {
@@ -349,6 +355,18 @@ impl AnalysisDb {
 
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
         self.files.get(id.0 as usize)
+    }
+
+    pub(crate) fn set_path_contexts(&mut self, index: crate::path_context::PathContextIndex) {
+        self.path_contexts = Some(index);
+    }
+
+    /// Repo-relative paths paired with `relative_path` (see `.polint.toml` `[path_contexts]`).
+    pub fn path_context_related(&self, pair_name: &str, relative_path: &str) -> Vec<String> {
+        self.path_contexts
+            .as_ref()
+            .map(|ix| ix.related_paths(pair_name, relative_path))
+            .unwrap_or_default()
     }
 
     pub fn files(&self) -> &[SourceFile] {
@@ -789,6 +807,15 @@ impl<'a> RuleCtx<'a> {
     /// Returns Go test facts for a file without cloning facts.
     pub fn go_tests_for_file(&self, file: FileId) -> impl Iterator<Item = &TestFact> + '_ {
         self.db.tests().iter().filter(move |test| test.file == file)
+    }
+
+    /// Paths paired with `file`'s relative path under the named `[path_contexts]` rule.
+    pub fn path_context_related(&self, pair_name: &str, file: FileId) -> Vec<String> {
+        let Some(source) = self.source_file(file) else {
+            return Vec::new();
+        };
+        self.db
+            .path_context_related(pair_name, &source.relative_path)
     }
 
     /// Returns Go tests related to a source file.
@@ -1289,6 +1316,7 @@ mod tests {
             evidence_terms: vec!["Authorize".to_string()],
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
 
@@ -1519,6 +1547,7 @@ mod tests {
             evidence_terms: vec!["err".to_string()],
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
         db.push_ts_component(TsComponentFact {
@@ -1684,6 +1713,7 @@ mod tests {
             evidence_terms: Vec::new(),
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
         db.push_test(TestFact {
@@ -1694,6 +1724,7 @@ mod tests {
             evidence_terms: Vec::new(),
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
         db.push_test(TestFact {
@@ -1704,6 +1735,7 @@ mod tests {
             evidence_terms: Vec::new(),
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
 
@@ -2084,6 +2116,7 @@ mod tests {
             evidence_terms: vec!["render".to_string()],
             assertion_count: 1,
             subtest_count: 0,
+            subtest_names: Vec::new(),
             table_rows: 0,
         });
         db.push_coverage(CoverageFact {

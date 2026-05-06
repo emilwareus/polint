@@ -18,6 +18,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod fs;
 pub(crate) mod go;
 pub(crate) mod graph;
+pub(crate) mod path_context;
 pub(crate) mod rule_error;
 pub(crate) mod ts;
 

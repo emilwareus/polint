@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json",
+  "title": "PolintReport",
+  "description": "Machine output from `polint check --format json` and from repo-local `polint-local-rules check --format json`. Diagnostics are sorted for stable ordering (see README / sort_diagnostics).",
+  "type": "object",
+  "required": ["version", "tool", "diagnostics"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Report format version; bump when fields change incompatibly."
+    },
+    "schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional URL of this JSON Schema (added by polint for discoverability)."
+    },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "`polint` or `polint-local-rules` depending on emitter."
+        },
+        "version": {
+          "type": "string",
+          "description": "Semver of the emitting binary."
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "textRange": {
+      "type": "object",
+      "required": ["start_line", "start_col", "end_line", "end_col"],
+      "additionalProperties": false,
+      "properties": {
+        "start_line": { "type": "integer", "minimum": 0 },
+        "start_col": { "type": "integer", "minimum": 0 },
+        "end_line": { "type": "integer", "minimum": 0 },
+        "end_col": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "severity",
+        "file",
+        "range",
+        "message",
+        "labels",
+        "help",
+        "evidence",
+        "suggestions",
+        "fix",
+        "stable_fingerprint"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "file": { "type": "string" },
+        "range": { "$ref": "#/$defs/textRange" },
+        "message": { "type": "string" },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["range", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "range": { "$ref": "#/$defs/textRange" },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        "help": { "type": ["string", "null"] },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": "string" }
+            }
+          }
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "additionalProperties": false,
+            "properties": {
+              "message": { "type": "string" }
+            }
+          }
+        },
+        "fix": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["message", "replacement"],
+          "properties": {
+            "message": { "type": "string" },
+            "replacement": { "type": ["string", "null"] }
+          }
+        },
+        "stable_fingerprint": { "type": "string" }
+      }
+    }
+  }
+}
