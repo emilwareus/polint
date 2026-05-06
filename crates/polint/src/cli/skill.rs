@@ -319,9 +319,10 @@ fn dedupe_agents(agents: &[SkillAgent]) -> Vec<SkillAgent> {
         .collect()
 }
 
+/// Repo-relative path for human-facing stdout (always `/` so copy-paste and tests match every OS).
 fn display_relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
-        .display()
-        .to_string()
+        .to_string_lossy()
+        .replace('\\', "/")
 }
