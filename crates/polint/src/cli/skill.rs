@@ -211,6 +211,8 @@ rules in one pack.
 Start with `use polint::sdk::prelude::*;`, register the rule with
 `polint::runner::run_cli`, give the rule a stable local ID, declare only the facts
 it needs in `capabilities`, then report diagnostics from `run`.
+Use `ctx.options().settings` for rule-specific TOML fields that are not covered
+by the common shortcuts (`max`, `deny`, `forbidden_imports`, etc.).
 
 ```rust
 use polint::sdk::prelude::*;
@@ -282,6 +284,8 @@ allow_files = ["src/theme/**"]
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
+- Use raw `RuleCtx` facts for project-specific logic; examples are consumers of the SDK, not special internal entry points.
+- For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.
 "#

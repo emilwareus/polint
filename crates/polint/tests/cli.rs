@@ -6,6 +6,28 @@ use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
 
+fn point_generated_rule_pack_at_local_polint(root: &Path) {
+    let manifest_path = root.join(".polint/rules/Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let dep_line = format!(r#"polint = {{ path = "{polint_path}" }}"#);
+    let rewritten = manifest
+        .lines()
+        .map(|line| {
+            if line.starts_with("polint = ") {
+                dep_line.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
+}
+
 #[test]
 fn init_creates_config() {
     let temp = tempfile::tempdir().unwrap();
@@ -381,6 +403,132 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     assert!(module.contains(".syntax()"));
     assert!(module.contains("ctx.functions_for_file(file.id)"));
     assert!(!module.contains("crate::core::"));
+}
+
+#[test]
+fn external_generated_rule_uses_sdk_facts_settings_and_reports_diagnostic() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-todo-literals"])
+        .assert()
+        .success();
+
+    point_generated_rule_pack_at_local_polint(temp.path());
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+
+[profiles.sdk]
+rules = ["custom/no-todo-literals"]
+
+[[rules.config]]
+id = "custom/no-todo-literals"
+severity = "warn"
+files = ["src/**/*.ts"]
+token = "TODO"
+message = "Configured forbidden literal found."
+"#,
+    );
+    write_file(
+        &temp.path().join(".polint/rules/src/no_todo_literals.rs"),
+        r#"use polint::sdk::prelude::*;
+
+pub struct NoTodoLiterals;
+
+impl Rule for NoTodoLiterals {
+    fn meta(&self) -> RuleMeta {
+        RuleMeta {
+            id: "custom/no-todo-literals".to_string(),
+            description: "Reject configured placeholder literals.".to_string(),
+            severity: Severity::Warn,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new().string_literals()
+    }
+
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let token = ctx
+            .options()
+            .settings
+            .get("token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("TODO")
+            .to_string();
+        let message = ctx
+            .options()
+            .settings
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Forbidden literal found.")
+            .to_string();
+        let rule_id = self.meta().id;
+        let mut diagnostics = Vec::new();
+
+        for literal in ctx.string_literals() {
+            let file = ctx.file_path(literal.file);
+            if file_in_scope(ctx.options(), &file) && literal.value == token {
+                diagnostics.push(
+                    Diagnostic::warning(
+                        rule_id.clone(),
+                        file,
+                        literal.span.diagnostic_range(),
+                        message.clone(),
+                    )
+                    .with_evidence("token", token.clone()),
+                );
+            }
+        }
+
+        for diagnostic in diagnostics {
+            ctx.report(diagnostic);
+        }
+        Ok(())
+    }
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const status = "TODO";"#,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--profile",
+                "sdk",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "custom/no-todo-literals");
+    assert_eq!(diagnostics.len(), 1, "{json:#?}");
+    assert_eq!(diagnostics[0]["file"], "src/component.ts");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "Configured forbidden literal found."
+    );
+    assert!(diagnostic_has_evidence(diagnostics[0], "token", "TODO"));
 }
 
 #[test]

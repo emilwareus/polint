@@ -74,6 +74,13 @@ Rule packs live in your repo:
       no_raw_colors.rs
 ```
 
+Rules should use the public SDK (`polint::sdk::prelude::*`) and runner
+(`polint::runner::run_cli`) only. The fact reference in
+[docs/facts/](docs/facts/) describes the raw building blocks available to rule
+authors: functions, imports, branches, Go tests, TS/JS facts, literals, and JSX
+attributes. Rule-specific TOML fields that are not one of the common shortcuts
+are available through `ctx.options().settings`.
+
 Profiles are explicit:
 
 - `polint check` runs every discovered rule.

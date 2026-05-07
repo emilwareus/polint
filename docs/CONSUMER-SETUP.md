@@ -44,6 +44,29 @@ Optional map in `.polint.toml`:
 
 Values become SARIF `reportingDescriptor.helpUri` for matching `rule_id`s.
 
+## Rule-specific settings
+
+Each `[[rules.config]]` table supports common shortcuts (`severity`, `files`,
+`allow_files`, `allow`, `max`, `deny`, `forbidden_imports`) plus arbitrary
+rule-owned fields. Unknown fields are preserved in `ctx.options().settings`.
+
+```toml
+[[rules.config]]
+id = "local/no-placeholder-literals"
+files = ["src/**/*.ts"]
+literal = "TODO"
+message = "Replace placeholder literals before merging."
+```
+
+```rust
+let literal = ctx
+    .options()
+    .settings
+    .get("literal")
+    .and_then(|value| value.as_str())
+    .unwrap_or("TODO");
+```
+
 ## Monorepo path pairing
 
 Optional section pairs left/right path shapes that share a context segment (same

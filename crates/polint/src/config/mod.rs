@@ -82,6 +82,8 @@ pub(crate) struct RuleConfig {
     pub(crate) deny: Vec<String>,
     #[serde(default)]
     pub(crate) forbidden_imports: BTreeMap<String, Vec<String>>,
+    #[serde(flatten)]
+    pub(crate) settings: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -322,6 +324,34 @@ id = "examples/ts-no-raw-colors"
         .unwrap();
 
         assert!(config.rules.config[0].allow.is_empty());
+    }
+
+    #[test]
+    fn rule_config_preserves_custom_settings() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[[rules.config]]
+id = "local/require-wrapper"
+files = ["src/**"]
+required_prefix = "safe_"
+owners = ["payments", "platform"]
+[rules.config.thresholds]
+warn = 2
+error = 5
+"#,
+        )
+        .unwrap();
+
+        let rule = &config.rules.config[0];
+        assert_eq!(rule.files, vec!["src/**"]);
+        assert_eq!(rule.settings["required_prefix"].as_str(), Some("safe_"));
+        assert_eq!(rule.settings["owners"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            rule.settings["thresholds"]
+                .get("error")
+                .and_then(toml::Value::as_integer),
+            Some(5)
+        );
     }
 
     #[test]

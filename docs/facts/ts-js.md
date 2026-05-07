@@ -1,0 +1,59 @@
+# TypeScript / JavaScript Facts
+
+TS/JS facts are produced by the Oxc adapter. Rules usually combine function,
+import, literal, JSX attribute, component, and class facts.
+
+## Component Facts
+
+`TsComponentFact` describes a syntax-level component-like function.
+
+| Field | Meaning |
+|-------|---------|
+| `file` | Stable `FileId` for the source file. |
+| `function` | Owning function ID when known. |
+| `name` | Component-like name. |
+| `span` | Source span for the component-like syntax. |
+
+## Class Facts
+
+`TsClassFact` describes a class declaration or expression where the adapter can
+extract a name.
+
+| Field | Meaning |
+|-------|---------|
+| `file` | Stable `FileId` for the source file. |
+| `name` | Class name. |
+| `span` | Source span for the class. |
+| `is_exported` | Syntax-level exported signal. |
+| `is_component_like` | Heuristic component-like signal, not React type analysis. |
+
+## Limits
+
+- These facts do not use TypeScript type checking.
+- Component detection is heuristic.
+- Export detection is syntactic.
+- Invalid syntax can produce parser diagnostics and fewer facts.
+
+## Small Rule Shape
+
+```rust
+use polint::sdk::prelude::*;
+
+fn require_exported_component_name(ctx: &mut RuleCtx<'_>) {
+    let mut diagnostics = Vec::new();
+    for class in ctx.ts_classes() {
+        let file = ctx.file_path(class.file);
+        if class.is_component_like && !class.is_exported && file_in_scope(ctx.options(), &file) {
+            diagnostics.push(Diagnostic::warning(
+                "local/export-components",
+                file,
+                class.span.diagnostic_range(),
+                format!("Component-like class `{}` is not exported.", class.name),
+            ));
+        }
+    }
+    for diagnostic in diagnostics {
+        ctx.report(diagnostic);
+    }
+}
+```

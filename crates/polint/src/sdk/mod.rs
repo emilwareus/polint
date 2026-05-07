@@ -27,7 +27,7 @@ pub mod prelude {
     pub use crate::core::{
         AnalysisDb, BranchId, BranchObligation, Capabilities, CoverageFact, FileId, FunctionFact,
         FunctionId, ImportFact, ImportId, JsxAttributeFact, Language, NodeId, PackageFact,
-        PackageId, Rule, RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span,
+        PackageId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span,
         StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
     };
     pub use crate::diagnostics::{

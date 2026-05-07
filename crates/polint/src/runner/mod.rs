@@ -231,6 +231,7 @@ pub(crate) fn rule_options_from_config(config: Option<&crate::config::RuleConfig
         max: config.max,
         deny: config.deny.clone(),
         forbidden_imports: config.forbidden_imports.clone(),
+        settings: config.settings.clone(),
     }
 }
 

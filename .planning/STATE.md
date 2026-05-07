@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: MVP
 status: archived
-stopped_at: quick task 260506-iuu complete
-last_updated: "2026-05-06T11:34:37Z"
-last_activity: 2026-05-06
+stopped_at: quick task 260507-rap complete
+last_updated: "2026-05-07T08:55:00Z"
+last_activity: 2026-05-07
 progress:
   total_phases: 9
   completed_phases: 9
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.0 archived - ready to start the next milestone
+**Current focus:** post-v1 rule-authoring platform hardening
 
 ## Current Status
 
@@ -53,14 +53,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
 - Phase 9 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
-- Next action: start the next milestone with `/gsd-new-milestone`.
+- Next action: review/commit the rule-authoring platform hardening changes, then
+  start the next milestone with `/gsd-new-milestone` when ready.
 
 ## Current Position
 
 Milestone: v1.0 MVP - ARCHIVED
 Status: Archived
 Plan: Next milestone not started
-Last activity: 2026-05-06 - Completed quick task 260506-iuu: Fix staged review findings for agent-quality changes
+Last activity: 2026-05-07 - Completed quick task 260507-rap: Rule authoring platform hardening
 
 ## Quick Tasks Completed
 
@@ -82,6 +83,7 @@ Last activity: 2026-05-06 - Completed quick task 260506-iuu: Fix staged review f
 | 260505-e2y | Add README try-it workflow and verify it | 2026-05-05 | 763b9b1 | [260505-e2y-add-readme-try-it-workflow-and-verify-it](./quick/260505-e2y-add-readme-try-it-workflow-and-verify-it/) |
 | 260505-ffu | Make polint check run repo-local rule hosts directly | 2026-05-05 | uncommitted | [260505-ffu-make-polint-check-run-repo-local-rule-ho](./quick/260505-ffu-make-polint-check-run-repo-local-rule-ho/) |
 | 260506-iuu | Fix staged review findings for agent-quality changes | 2026-05-06 | uncommitted | [260506-iuu-fix-staged-review-findings-for-agent-qua](./quick/260506-iuu-fix-staged-review-findings-for-agent-qua/) |
+| 260507-rap | Rule authoring platform hardening | 2026-05-07 | uncommitted | [260507-rap-rule-authoring-platform-hardening](./quick/260507-rap-rule-authoring-platform-hardening/) |
 
 ## Phase Progress
 
@@ -191,6 +193,7 @@ Last activity: 2026-05-06 - Completed quick task 260506-iuu: Fix staged review f
 ## Important Context For Execution
 
 - Do not fake functionality. If a feature remains heuristic or experimental, label it that way.
+- Treat repo-local rule packs as external SDK consumers: tests for rule-authoring features should prove public `polint::sdk` / `polint::runner` usage from a temp repo whenever practical.
 - Keep policy rules out of the shipped CLI; each example owns exactly one local rule crate under `examples/*/.polint/rules/`.
 - Use deterministic ordering everywhere output can be observed.
 - Prefer a smaller complete v1 over broad shallow behavior.
