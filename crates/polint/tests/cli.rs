@@ -193,6 +193,8 @@ fn add_skill_installs_claude_skill_non_interactively() {
     let contents = fs::read_to_string(skill).unwrap();
     assert!(contents.contains("name: polint"));
     assert!(contents.contains("polint check --fail-on none"));
+    assert!(contents.contains("docs/schemas/polint-report-v1.json"));
+    assert!(contents.contains("polint explain go-test --file"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
 }
@@ -1224,7 +1226,7 @@ files = ["**/*.tsx"]
 fn explain_example_rule_reports_no_bundled_metadata() {
     Command::cargo_bin("polint")
         .unwrap()
-        .args(["explain", "local/no-raw-colors"])
+        .args(["explain", "rule", "local/no-raw-colors"])
         .assert()
         .success()
         .stdout(predicate::str::contains("No bundled rule found"))
@@ -1235,10 +1237,147 @@ fn explain_example_rule_reports_no_bundled_metadata() {
 fn explain_unknown_rule_is_nonfatal_and_clear() {
     Command::cargo_bin("polint")
         .unwrap()
-        .args(["explain", "custom/missing"])
+        .args(["explain", "rule", "custom/missing"])
         .assert()
         .success()
         .stdout(predicate::str::contains("No bundled rule found"));
+}
+
+#[test]
+fn check_max_diagnostics_truncates_sorted_json_in_example_repo() {
+    let root = repo_root().join("examples/ts-design-tokens");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&root)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--max-diagnostics",
+                "1",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics(&json).len(), 1);
+}
+
+#[test]
+fn check_max_diagnostics_does_not_hide_failing_diagnostics() {
+    let root = repo_root().join("examples/ts-design-tokens");
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(&root)
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--fail-on",
+            "error",
+            "--max-diagnostics",
+            "0",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_only_rule_filters_out_diagnostics_when_pattern_matches_nothing() {
+    let root = repo_root().join("examples/ts-design-tokens");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&root)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+                "--only-rule",
+                "absent/nope",
+            ])
+            .assert()
+            .success(),
+    );
+    assert!(diagnostics(&json).is_empty());
+}
+
+#[test]
+fn explain_go_test_prints_harvested_fact_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["**/*.go"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("demo_test.go"),
+        r#"
+package demo
+
+import "testing"
+
+func TestHello(t *testing.T) {
+    t.Run("sub", func(t *testing.T) {})
+}
+"#,
+    );
+    let assert = Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "explain",
+            "go-test",
+            "--file",
+            "demo_test.go",
+            "--test",
+            "TestHello",
+        ])
+        .assert()
+        .success();
+    let stdout = stdout_string(assert);
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["name"], "TestHello");
+    let names = value["subtest_names"].as_array().unwrap();
+    assert!(names.contains(&serde_json::Value::String("sub".to_string())));
+}
+
+#[test]
+fn init_new_rule_and_check_json_smoke() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["new-rule", "generic", "agent-smoke"])
+        .assert()
+        .success();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn cookbook_golden_empty_report_fragment_is_valid_polint_json() {
+    let raw = include_str!("fixtures/cookbook-empty-report-fragment.json");
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(raw).unwrap();
+    assert_eq!(report.version, 1);
+    assert!(report.diagnostics.is_empty());
 }
 
 #[test]

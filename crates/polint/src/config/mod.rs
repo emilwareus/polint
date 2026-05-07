@@ -25,6 +25,10 @@ pub(crate) struct PolintConfig {
     pub(crate) profiles: BTreeMap<String, ProfileConfig>,
     #[serde(default)]
     pub(crate) languages: LanguageConfig,
+    #[serde(default)]
+    pub(crate) sarif: SarifConfig,
+    #[serde(default)]
+    pub(crate) path_contexts: PathContextsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +96,30 @@ pub(crate) struct LanguageConfig {
     pub(crate) go: BTreeMap<String, toml::Value>,
     #[serde(default)]
     pub(crate) ts: BTreeMap<String, toml::Value>,
+}
+
+/// Optional SARIF enrichment for GitHub Code Scanning and similar tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SarifConfig {
+    /// Map `rule_id` → help URI (`reportingDescriptor.helpUri`).
+    #[serde(default)]
+    pub(crate) rule_help_uri: BTreeMap<String, String>,
+}
+
+/// Optional path pairing: same context segment between `left_*` and `right_*` path shapes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct PathContextsConfig {
+    #[serde(default)]
+    pub(crate) pairs: Vec<PathContextPair>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PathContextPair {
+    pub(crate) name: String,
+    pub(crate) left_before_ctx: String,
+    pub(crate) left_after_ctx: String,
+    pub(crate) right_before_ctx: String,
+    pub(crate) right_after_ctx: String,
 }
 
 /// Loaded `.polint.toml` (path + parsed config). Fields are crate-private; this type exists so
@@ -294,5 +322,29 @@ id = "examples/ts-no-raw-colors"
         .unwrap();
 
         assert!(config.rules.config[0].allow.is_empty());
+    }
+
+    #[test]
+    fn sarif_rule_help_uri_and_path_contexts_parse() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[sarif.rule_help_uri]
+"local/a" = "https://docs.example/a"
+
+[[path_contexts.pairs]]
+name = "svc_ports"
+left_before_ctx = "internal/"
+left_after_ctx = "/service/"
+right_before_ctx = "internal/"
+right_after_ctx = "/ports/"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.sarif.rule_help_uri["local/a"],
+            "https://docs.example/a"
+        );
+        assert_eq!(config.path_contexts.pairs.len(), 1);
+        assert_eq!(config.path_contexts.pairs[0].name, "svc_ports");
     }
 }

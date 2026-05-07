@@ -1,7 +1,8 @@
 use crate::config::{LoadedConfig, load_config};
 use crate::core::{Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
-    ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, dedupe_diagnostics, render,
+    ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
+    limit_report_diagnostics, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files;
 use anyhow::Result;
@@ -45,6 +46,12 @@ struct CheckArgs {
     /// Diagnostic level that fails the process.
     #[arg(long, value_enum, default_value_t = FailOn::Error)]
     fail_on: FailOn,
+    /// Only include diagnostics whose `rule_id` matches this pattern (same rules as profiles: exact id, `prefix/*`, or `*`).
+    #[arg(long, value_name = "PATTERN")]
+    only_rule: Option<String>,
+    /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
+    #[arg(long, value_name = "N")]
+    max_diagnostics: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -86,8 +93,9 @@ fn run(rules: Vec<Arc<dyn Rule>>) -> Result<u8> {
 }
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
-    let (mut diagnostics, db) = analyze_and_run(&root, args, rules)?;
-    diagnostics = dedupe_diagnostics(diagnostics);
+    let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, rules)?;
+    diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+    let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let source_map = match args.format {
         FormatArg::Human => db.sources_by_relative_path(),
         _ => BTreeMap::new(),
@@ -102,6 +110,11 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8>
         FormatArg::Human => Some(&source_map),
         _ => None,
     };
+    let sarif_map = if loaded.config.sarif.rule_help_uri.is_empty() {
+        None
+    } else {
+        Some(&loaded.config.sarif.rule_help_uri)
+    };
     let opts = RenderOpts {
         json: JsonReportMeta {
             tool_name: "polint-local-rules",
@@ -114,7 +127,10 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8>
         },
         sources,
     };
-    print!("{}", render(format, &diagnostics, opts));
+    print!(
+        "{}",
+        render_with_sarif_help(format, &rendered_diagnostics, opts, sarif_map)
+    );
 
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
@@ -123,22 +139,26 @@ fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
     rules: &[Arc<dyn Rule>],
-) -> Result<(Vec<crate::diagnostics::Diagnostic>, crate::core::AnalysisDb)> {
-    let config = load_config_for_check(root, &args.paths)?;
+) -> Result<(
+    Vec<crate::diagnostics::Diagnostic>,
+    crate::core::AnalysisDb,
+    LoadedConfig,
+)> {
+    let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
-    let config_digest = crate::cache::keys::config_hash(&config);
-    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let mut options = BTreeMap::<String, RuleOptions>::new();
     for rule in rules {
         let meta = rule.meta();
         options.insert(
             meta.id.clone(),
-            rule_options_from_config(config.rule_config(&meta.id)),
+            rule_options_from_config(loaded.rule_config(&meta.id)),
         );
     }
     let rule_digest = crate::cache::keys::rule_hash(rules, enabled.as_ref(), &options);
 
-    let mut db = load_analysis_files(&config)?;
+    let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = Vec::new();
     diagnostics.extend(crate::go::analyze_with_options(
         &mut db,
@@ -155,7 +175,7 @@ fn analyze_and_run(
         true,
     ));
     diagnostics.extend(run_rules(&db, rules, &options, enabled.as_ref(), true));
-    Ok((diagnostics, db))
+    Ok((diagnostics, db, loaded))
 }
 
 fn selected_rule_patterns(

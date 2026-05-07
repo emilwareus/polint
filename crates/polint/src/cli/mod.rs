@@ -2,7 +2,8 @@ use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
     ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
-    dedupe_diagnostics, diagnostics_from_json_report, render,
+    apply_report_filters, diagnostics_from_json_report, limit_report_diagnostics,
+    render_with_sarif_help,
 };
 use crate::fs::load_analysis_files;
 use crate::graph::{FunctionGraph, ImportGraph};
@@ -16,7 +17,7 @@ use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 use std::time::Instant;
 
-mod msrv_hint;
+mod rules_host_error;
 mod skill;
 
 fn json_report_meta() -> JsonReportMeta<'static> {
@@ -38,6 +39,14 @@ fn render_opts<'a>(
             ColorArg::Never => ColorChoice::Never,
         },
         sources,
+    }
+}
+
+fn sarif_help_map(config: &LoadedConfig) -> Option<&BTreeMap<String, String>> {
+    if config.config.sarif.rule_help_uri.is_empty() {
+        None
+    } else {
+        Some(&config.config.sarif.rule_help_uri)
     }
 }
 
@@ -84,8 +93,8 @@ enum Command {
     NewRule(NewRuleArgs),
     /// Run enabled rules.
     Check(CheckArgs),
-    /// Explain a rule by id.
-    Explain { rule_id: String },
+    /// Explain rules or harvested facts.
+    Explain(ExplainArgs),
     /// Run the fixture-based custom-rule harness.
     TestRules(CheckArgs),
     /// Print per-rule timing.
@@ -103,6 +112,31 @@ struct NewRuleArgs {
     language: String,
     /// Rule directory/name.
     rule_name: String,
+}
+
+#[derive(Debug, Args)]
+struct ExplainArgs {
+    #[command(subcommand)]
+    command: ExplainCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExplainCommand {
+    /// Describe a rule id (polint ships no bundled rules; mostly a stub for tooling).
+    Rule { rule_id: String },
+    /// Print one harvested Go [`crate::core::TestFact`] as JSON (`docs/facts/go-tests.md`).
+    #[command(name = "go-test")]
+    GoTest(ExplainGoTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExplainGoTestArgs {
+    /// Repository-relative path (must be analyzed under current workspace includes).
+    #[arg(long)]
+    file: String,
+    /// Test function name (for example `TestFoo`).
+    #[arg(long)]
+    test: String,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -125,6 +159,12 @@ struct CheckArgs {
     /// Diagnostic level that fails the process.
     #[arg(long, value_enum, default_value_t = FailOn::Error)]
     fail_on: FailOn,
+    /// Only include diagnostics whose `rule_id` matches this pattern (same rules as profiles: exact id, `prefix/*`, or `*`).
+    #[arg(long, value_name = "PATTERN")]
+    only_rule: Option<String>,
+    /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
+    #[arg(long, value_name = "N")]
+    max_diagnostics: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -190,10 +230,7 @@ pub(crate) fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Check(args) => check(std::env::current_dir()?, &args),
-        Command::Explain { rule_id } => {
-            explain(&rule_id);
-            Ok(0)
-        }
+        Command::Explain(args) => explain_command(&args),
         Command::TestRules(args) => {
             if matches!(args.format, FormatArg::Human) {
                 println!("Running rule tests against the current repository fixtures.");
@@ -255,7 +292,7 @@ fn ensure_repo_rust_toolchain_shim(root: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    let msrv = msrv_hint::polint_msrv();
+    let msrv = env!("CARGO_PKG_RUST_VERSION");
     fs::write(
         &path,
         format!(
@@ -518,7 +555,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         return check_local_rule_hosts(&root, args, &local_rule_hosts);
     }
 
-    let (mut diagnostics, db) = analyze_and_run(&root, args, true)?;
+    let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, true)?;
     let source_map = match args.format {
         FormatArg::Human => db.sources_by_relative_path(),
         _ => BTreeMap::new(),
@@ -528,17 +565,23 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };
-    diagnostics = dedupe_diagnostics(diagnostics);
+    diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+    let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let sources = match args.format {
         FormatArg::Human => Some(&source_map),
         _ => None,
     };
     print!(
         "{}",
-        render(format, &diagnostics, render_opts(args, sources))
+        render_with_sarif_help(
+            format,
+            &rendered_diagnostics,
+            render_opts(args, sources),
+            sarif_help_map(&loaded),
+        )
     );
 
-    if load_config(&root)?.missing && matches!(args.format, FormatArg::Human) {
+    if loaded.missing && matches!(args.format, FormatArg::Human) {
         println!("Config not found. Run `polint init` to create .polint.toml.");
     }
 
@@ -549,16 +592,20 @@ fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
     parallel: bool,
-) -> Result<(Vec<crate::diagnostics::Diagnostic>, crate::core::AnalysisDb)> {
-    let config = load_config_for_check(root, &args.paths)?;
+) -> Result<(
+    Vec<crate::diagnostics::Diagnostic>,
+    crate::core::AnalysisDb,
+    LoadedConfig,
+)> {
+    let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
-    let config_digest = crate::cache::keys::config_hash(&config);
+    let config_digest = crate::cache::keys::config_hash(&loaded);
     let rules: Vec<Arc<dyn Rule>> = Vec::new();
-    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
+    let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
 
-    let mut db = load_analysis_files(&config)?;
+    let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = Vec::new();
     diagnostics.extend(crate::go::analyze_with_options(
         &mut db,
@@ -576,7 +623,7 @@ fn analyze_and_run(
     ));
 
     diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
-    Ok((diagnostics, db))
+    Ok((diagnostics, db, loaded))
 }
 
 fn selected_rule_patterns(
@@ -588,10 +635,81 @@ fn selected_rule_patterns(
         .map(|rules| rules.into_iter().collect()))
 }
 
-fn explain(rule_id: &str) {
-    println!(
-        "No bundled rule found for `{rule_id}`. polint ships no built-in policy rules; repo-local rules own their metadata."
-    );
+fn explain_command(args: &ExplainArgs) -> Result<u8> {
+    match &args.command {
+        ExplainCommand::Rule { rule_id } => {
+            println!(
+                "No bundled rule found for `{rule_id}`. polint ships no built-in policy rules; repo-local rules own their metadata."
+            );
+            Ok(0)
+        }
+        ExplainCommand::GoTest(go) => explain_go_test_fact(std::env::current_dir()?, go),
+    }
+}
+
+fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
+    let loaded = load_config_for_check(&root, &[])?;
+    let cache = crate::cache::Cache::default_for_repo(&root, false);
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let enabled = selected_rule_patterns(&loaded, None)?;
+    let options = BTreeMap::<String, RuleOptions>::new();
+    let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+
+    let mut db = load_analysis_files(&loaded)?;
+    let _ = crate::go::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, true);
+
+    let file_id = db
+        .files()
+        .iter()
+        .find(|f| f.relative_path == args.file)
+        .map(|f| f.id)
+        .with_context(|| {
+            format!(
+                "file `{}` not found in analysis (check include globs)",
+                args.file
+            )
+        })?;
+
+    let fact = db
+        .tests()
+        .iter()
+        .find(|t| t.file == file_id && t.name == args.test)
+        .with_context(|| {
+            format!(
+                "no TestFact for function `{}` in `{}` (only `_test.go` top-level tests are harvested)",
+                args.test, args.file
+            )
+        })?;
+
+    let path = db.path_for(fact.file);
+    let function_name = fact.function.and_then(|id| {
+        db.functions()
+            .iter()
+            .find(|f| f.id == id)
+            .map(|f| f.name.clone())
+    });
+
+    let out = serde_json::json!({
+        "file": path,
+        "function": function_name,
+        "name": fact.name,
+        "span": {
+            "start_line": fact.span.start_line,
+            "start_col": fact.span.start_col,
+            "end_line": fact.span.end_line,
+            "end_col": fact.span.end_col,
+            "start_byte": fact.span.start_byte,
+            "end_byte": fact.span.end_byte,
+        },
+        "evidence_terms": fact.evidence_terms,
+        "assertion_count": fact.assertion_count,
+        "subtest_count": fact.subtest_count,
+        "subtest_names": fact.subtest_names,
+        "table_rows": fact.table_rows,
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(0)
 }
 
 fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
@@ -652,6 +770,7 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         println!("No rules registered. polint ships no built-in policy rules.");
     }
 
+    let all_diagnostics = apply_report_filters(all_diagnostics, args.only_rule.as_deref());
     Ok(exit_code_for(&all_diagnostics, args.fail_on))
 }
 
@@ -663,8 +782,10 @@ fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
         color: ColorArg::Auto,
         no_cache: true,
         fail_on: FailOn::None,
+        only_rule: None,
+        max_diagnostics: None,
     };
-    let (_diagnostics, db) = analyze_and_run(&root, &args, false)?;
+    let (_diagnostics, db, _) = analyze_and_run(&root, &args, false)?;
     match command {
         GraphCommand::Imports {
             format: GraphFormat::Dot,
@@ -734,9 +855,10 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         diagnostics.extend(run_local_rule_host(root, manifest, args)?);
     }
 
-    diagnostics = dedupe_diagnostics(diagnostics);
+    diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+    let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let source_map = if matches!(args.format, FormatArg::Human) {
-        read_sources_for_diagnostics(root, &diagnostics)
+        read_sources_for_diagnostics(root, &rendered_diagnostics)
     } else {
         BTreeMap::new()
     };
@@ -751,7 +873,12 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     };
     print!(
         "{}",
-        render(format, &diagnostics, render_opts(args, sources))
+        render_with_sarif_help(
+            format,
+            &rendered_diagnostics,
+            render_opts(args, sources),
+            sarif_help_map(&config),
+        )
     );
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
@@ -781,6 +908,14 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
     if args.no_cache {
         command.arg("--no-cache");
     }
+    if let Some(pattern) = &args.only_rule {
+        command.args(["--only-rule", pattern]);
+    }
+    if let Ok(toolchain) = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
+        && !toolchain.is_empty()
+    {
+        command.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
     command.args(args.paths.iter().map(|path| path.as_os_str()));
 
     let output = command.output().with_context(|| {
@@ -792,18 +927,12 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut detail = format!(
-            "local rule host failed: {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            manifest.display(),
+        anyhow::bail!(rules_host_error::rules_host_error_message(
+            &manifest.display().to_string(),
             output.status,
-            stdout.trim(),
-            stderr.trim()
-        );
-        if msrv_hint::is_polint_rules_cargo_msrv_error(&stderr, &stdout) {
-            detail.push_str("\n\n");
-            detail.push_str(&msrv_hint::rules_host_msrv_followup_note());
-        }
-        anyhow::bail!("{detail}");
+            stdout.as_ref(),
+            stderr.as_ref(),
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout).with_context(|| {

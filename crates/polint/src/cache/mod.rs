@@ -205,7 +205,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), true);
         let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
-        let value = json!({ "diagnostics": [], "schema": "go-facts-v1" });
+        let value = json!({ "diagnostics": [], "schema": "go-facts-v2" });
 
         cache.write_json(&key, &value).unwrap();
         let restored: serde_json::Value = cache.read_json(&key).unwrap().unwrap();

@@ -4,6 +4,10 @@ use std::fmt;
 use std::io::{self, IsTerminal};
 use std::sync::Arc;
 
+/// Public URL of [`crate::diagnostics::PolintReport`] JSON Schema (v1); embedded in `--format json` when present.
+pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -298,6 +302,7 @@ pub struct PolintReport {
 #[derive(Serialize)]
 struct PolintReportWire<'a> {
     version: u32,
+    schema: &'static str,
     tool: PolintToolWire<'a>,
     diagnostics: &'a [Diagnostic],
 }
@@ -345,21 +350,57 @@ pub(crate) fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic
         .collect()
 }
 
+/// Dedupe, optionally filter by `rule_id` pattern (see [`crate::core::rule_id_matches`]),
+/// then sort for deterministic ordering.
+pub(crate) fn apply_report_filters(
+    diagnostics: Vec<Diagnostic>,
+    only_rule: Option<&str>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = dedupe_diagnostics(diagnostics);
+    if let Some(pattern) = only_rule {
+        diagnostics.retain(|d| crate::core::rule_id_matches(pattern, &d.rule_id));
+    }
+    sort_diagnostics(&mut diagnostics);
+    diagnostics
+}
+
+/// Truncate diagnostics for rendering only. Exit status must be computed before this cap.
+pub(crate) fn limit_report_diagnostics(
+    mut diagnostics: Vec<Diagnostic>,
+    max_diagnostics: Option<usize>,
+) -> Vec<Diagnostic> {
+    if let Some(max) = max_diagnostics {
+        diagnostics.truncate(max);
+    }
+    diagnostics
+}
+
+#[cfg(test)]
 pub(crate) fn render(
     format: OutputFormat,
     diagnostics: &[Diagnostic],
     opts: RenderOpts<'_>,
 ) -> String {
+    render_with_sarif_help(format, diagnostics, opts, None)
+}
+
+pub(crate) fn render_with_sarif_help(
+    format: OutputFormat,
+    diagnostics: &[Diagnostic],
+    opts: RenderOpts<'_>,
+    sarif_rule_help_uri: Option<&BTreeMap<String, String>>,
+) -> String {
     match format {
         OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
         OutputFormat::Json => render_json(diagnostics, opts.json),
-        OutputFormat::Sarif => render_sarif(diagnostics),
+        OutputFormat::Sarif => render_sarif(diagnostics, sarif_rule_help_uri),
     }
 }
 
 fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> String {
     let wire = PolintReportWire {
         version: 1,
+        schema: POLINT_REPORT_JSON_SCHEMA_V1_URL,
         tool: PolintToolWire {
             name: json_meta.tool_name,
             version: json_meta.tool_version,
@@ -548,6 +589,69 @@ fn push_code_snippet(out: &mut String, p: &HumanPalette, source: &str, range: Te
     }
 }
 
+/// Header line for human output: counts per `rule_id`, grouped by severity (errors, then warnings, then infos). Rule ids sorted lexicographically within each group.
+fn format_human_summary_line(diagnostics: &[Diagnostic], p: &HumanPalette) -> String {
+    let mut errors: BTreeMap<String, u32> = BTreeMap::new();
+    let mut warns: BTreeMap<String, u32> = BTreeMap::new();
+    let mut infos: BTreeMap<String, u32> = BTreeMap::new();
+    for d in diagnostics {
+        match d.severity {
+            Severity::Error => *errors.entry(d.rule_id.clone()).or_insert(0) += 1,
+            Severity::Warn => *warns.entry(d.rule_id.clone()).or_insert(0) += 1,
+            Severity::Info => *infos.entry(d.rule_id.clone()).or_insert(0) += 1,
+        }
+    }
+
+    fn push_group(
+        parts: &mut Vec<String>,
+        p: &HumanPalette,
+        sev: Severity,
+        count: u32,
+        rules: &BTreeMap<String, u32>,
+    ) {
+        if rules.is_empty() {
+            return;
+        }
+        let label = if count == 1 {
+            match sev {
+                Severity::Error => "error",
+                Severity::Warn => "warning",
+                Severity::Info => "info",
+            }
+        } else {
+            match sev {
+                Severity::Error => "errors",
+                Severity::Warn => "warnings",
+                Severity::Info => "infos",
+            }
+        };
+        let breakdown: Vec<String> = rules.iter().map(|(id, n)| format!("{id} ({n})")).collect();
+        parts.push(format!(
+            "{}{} {} — {}{}",
+            p.severity_paint(sev),
+            count,
+            label,
+            breakdown.join(", "),
+            p.reset
+        ));
+    }
+
+    let err_n: u32 = errors.values().sum();
+    let warn_n: u32 = warns.values().sum();
+    let info_n: u32 = infos.values().sum();
+
+    let mut parts = Vec::new();
+    push_group(&mut parts, p, Severity::Error, err_n, &errors);
+    push_group(&mut parts, p, Severity::Warn, warn_n, &warns);
+    push_group(&mut parts, p, Severity::Info, info_n, &infos);
+
+    let mut out = String::new();
+    out.push_str(&format!("{}Summary:{} ", p.bold, p.reset));
+    out.push_str(&parts.join("; "));
+    out.push('\n');
+    out
+}
+
 pub(crate) fn render_human(
     diagnostics: &[Diagnostic],
     color: ColorChoice,
@@ -559,6 +663,8 @@ pub(crate) fn render_human(
     }
 
     let mut out = String::new();
+    out.push_str(&format_human_summary_line(diagnostics, &p));
+    out.push('\n');
     for diagnostic in diagnostics {
         let sev_word = match diagnostic.severity {
             Severity::Error => "error",
@@ -640,7 +746,10 @@ fn format_range(range: TextRange) -> String {
     )
 }
 
-pub(crate) fn render_sarif(diagnostics: &[Diagnostic]) -> String {
+pub(crate) fn render_sarif(
+    diagnostics: &[Diagnostic],
+    rule_help_uri: Option<&BTreeMap<String, String>>,
+) -> String {
     #[derive(Serialize)]
     struct SarifLog {
         version: &'static str,
@@ -674,6 +783,16 @@ pub(crate) fn render_sarif(diagnostics: &[Diagnostic]) -> String {
         id: String,
         #[serde(rename = "shortDescription")]
         short_description: SarifMessage,
+        #[serde(rename = "fullDescription", skip_serializing_if = "Option::is_none")]
+        full_description: Option<SarifMessage>,
+        #[serde(rename = "helpUri", skip_serializing_if = "Option::is_none")]
+        help_uri: Option<String>,
+        properties: SarifProperties,
+    }
+
+    #[derive(Serialize)]
+    struct SarifProperties {
+        tags: Vec<String>,
     }
 
     #[derive(Serialize)]
@@ -791,9 +910,17 @@ pub(crate) fn render_sarif(diagnostics: &[Diagnostic]) -> String {
     }
     let rules: Vec<SarifReportingRule> = rule_descriptions
         .into_iter()
-        .map(|(id, text)| SarifReportingRule {
-            id,
-            short_description: SarifMessage { text },
+        .map(|(id, text)| {
+            let help_uri = rule_help_uri.and_then(|m| m.get(&id).cloned());
+            SarifReportingRule {
+                id,
+                short_description: SarifMessage { text: text.clone() },
+                full_description: Some(SarifMessage { text }),
+                help_uri,
+                properties: SarifProperties {
+                    tags: vec!["polint".to_string()],
+                },
+            }
         })
         .collect();
 
@@ -962,6 +1089,28 @@ mod tests {
     }
 
     #[test]
+    fn render_human_summary_line_groups_counts_by_severity_and_rule_id() {
+        let d1 = Diagnostic::error("local/a", "a.go", TextRange::point(1, 1), "m");
+        let d2 = Diagnostic::error("local/a", "b.go", TextRange::point(1, 1), "m");
+        let d3 = Diagnostic::error("parser/go", "c.go", TextRange::point(1, 1), "m");
+        let d4 = Diagnostic::warning("local/b", "d.go", TextRange::point(1, 1), "m");
+        let d5 = Diagnostic::info("local/c", "e.go", TextRange::point(1, 1), "m");
+        let d6 = Diagnostic::info("local/c", "f.go", TextRange::point(1, 1), "m");
+        let rendered = render_human(&[d1, d2, d3, d4, d5, d6], ColorChoice::Never, None);
+        assert!(
+            rendered.starts_with("Summary:"),
+            "unexpected prefix: {rendered:?}"
+        );
+        assert!(rendered.contains("3 errors"));
+        assert!(rendered.contains("local/a (2)"));
+        assert!(rendered.contains("parser/go (1)"));
+        assert!(rendered.contains("1 warning"));
+        assert!(rendered.contains("local/b (1)"));
+        assert!(rendered.contains("2 infos"));
+        assert!(rendered.contains("local/c (2)"));
+    }
+
+    #[test]
     fn render_human_always_color_includes_escape_sequences() {
         let diagnostic = Diagnostic::error("r", "f.go", TextRange::point(1, 1), "oops");
         let rendered = render_human(&[diagnostic], ColorChoice::Always, None);
@@ -980,6 +1129,8 @@ mod tests {
                 test_opts(),
             ),
             @r###"
+        Summary: 1 error — project/rule (1)
+
         error[project/rule]: policy failed
           --> src/lib.rs:10:4-10:12
           label 11:2-11:8: related expression
@@ -1017,6 +1168,8 @@ mod tests {
         insta::assert_snapshot!(
             render(OutputFormat::Human, &[contract_diagnostic()], opts),
             @r###"
+        Summary: 1 error — project/rule (1)
+
         error[project/rule]: policy failed
           --> src/lib.rs:10:4-10:12
              |
@@ -1039,6 +1192,10 @@ mod tests {
         let rendered = render(OutputFormat::Json, &[contract_diagnostic()], test_opts());
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["version"], 1);
+        assert_eq!(
+            parsed["schema"].as_str().unwrap(),
+            POLINT_REPORT_JSON_SCHEMA_V1_URL
+        );
         assert_eq!(parsed["tool"]["name"], "polint");
         assert_eq!(parsed["tool"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 1);
@@ -1047,6 +1204,7 @@ mod tests {
         insta::assert_snapshot!(normalized, @r###"
         {
           "version": 1,
+          "schema": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json",
           "tool": {
             "name": "polint",
             "version": "<PKG_VERSION>"
@@ -1103,6 +1261,54 @@ mod tests {
         let json = render(OutputFormat::Json, &input, test_opts());
         let output = diagnostics_from_json_report(&json).unwrap();
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn polint_report_json_schema_file_tracks_repo() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/schemas/polint-report-v1.json");
+        let raw = std::fs::read_to_string(&path).expect("polint-report schema should exist");
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            value["$id"].as_str().unwrap(),
+            POLINT_REPORT_JSON_SCHEMA_V1_URL
+        );
+    }
+
+    #[test]
+    fn render_sarif_includes_rule_help_uri_from_map() {
+        let mut help = BTreeMap::new();
+        help.insert(
+            "project/rule".to_string(),
+            "https://example.invalid/rules/project-rule".to_string(),
+        );
+        let rendered = render_with_sarif_help(
+            OutputFormat::Sarif,
+            &[contract_diagnostic()],
+            RenderOpts {
+                json: JsonReportMeta {
+                    tool_name: "polint",
+                    tool_version: env!("CARGO_PKG_VERSION"),
+                },
+                color: ColorChoice::Never,
+                sources: None,
+            },
+            Some(&help),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(
+            parsed
+                .pointer("/runs/0/tool/driver/rules/0/helpUri")
+                .unwrap(),
+            "https://example.invalid/rules/project-rule"
+        );
+        assert_eq!(
+            parsed
+                .pointer("/runs/0/tool/driver/rules/0/properties/tags/0")
+                .unwrap(),
+            "polint"
+        );
+        assert!(parsed.pointer("/runs/0/tool/driver/rules/0/tags").is_none());
     }
 
     #[test]
@@ -1165,6 +1371,14 @@ mod tests {
                       "id": "project/rule",
                       "shortDescription": {
                         "text": "policy failed"
+                      },
+                      "fullDescription": {
+                        "text": "policy failed"
+                      },
+                      "properties": {
+                        "tags": [
+                          "polint"
+                        ]
                       }
                     }
                   ]
