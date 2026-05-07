@@ -26,6 +26,19 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+  msrv:
+    name: MSRV (1.95) — cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95
+
+      - name: cargo check (workspace MSRV)
+        run: cargo check --workspace --all-targets --all-features --locked
+
   clippy-test-install:
     name: ${{ matrix.os }} — clippy, test, cargo install smoke
     runs-on: ${{ matrix.os }}

@@ -84,7 +84,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create .polint.toml and .polint/rules.
+    /// Create `.polint.toml`, `.polint/rules/src`, `.polint/cache`, `.polint/.gitignore`, and root
+    /// `rust-toolchain.toml` when missing (matches polint's MSRV for building rule packs).
     Init,
     /// Install a repo-local AI-agent skill for using polint.
     AddSkill(skill::AddSkillArgs),
@@ -247,9 +248,70 @@ fn init_project(root: PathBuf) -> Result<()> {
         fs::write(&config_path, default_config_toml())
             .with_context(|| format!("failed to write {}", config_path.display()))?;
     }
-    fs::create_dir_all(root.join(".polint/rules"))?;
+
+    let polint_dir = root.join(".polint");
+    fs::create_dir_all(polint_dir.join("rules/src"))
+        .with_context(|| format!("failed to create {}", polint_dir.display()))?;
+    fs::create_dir_all(polint_dir.join("cache"))
+        .with_context(|| format!("failed to create {}", polint_dir.join("cache").display()))?;
+    ensure_polint_nested_gitignore(&polint_dir)?;
+    ensure_repo_rust_toolchain_shim(&root)?;
+
     println!("Initialized polint config at {}", config_path.display());
     Ok(())
+}
+
+/// Ensures `.polint/.gitignore` lists `cache/` so analysis cache stays local to each machine.
+fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
+    let path = polint_dir.join(".gitignore");
+    const ENTRY: &str = "cache/";
+
+    if path.is_file() {
+        let existing = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+        if existing.lines().any(gitignore_line_covers_polint_cache) {
+            return Ok(());
+        }
+        let mut out = existing;
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(ENTRY);
+        out.push('\n');
+        fs::write(&path, out).with_context(|| format!("failed to update {}", path.display()))?;
+    } else {
+        let content = format!("# polint: local cache (not shared between checkouts)\n{ENTRY}\n");
+        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Writes `rust-toolchain.toml` at the repo root when absent so `cargo` (invoked from `polint
+/// check` with `--manifest-path .polint/rules/Cargo.toml`) picks a toolchain that can build `polint`.
+fn ensure_repo_rust_toolchain_shim(root: &Path) -> Result<()> {
+    let path = root.join("rust-toolchain.toml");
+    if path.exists() {
+        return Ok(());
+    }
+    let msrv = env!("CARGO_PKG_RUST_VERSION");
+    fs::write(
+        &path,
+        format!(
+            "# Polint rule packs compile the `polint` crate (MSRV Rust {msrv}).\n\
+             # https://github.com/emilwareus/polint#minimum-rust-version\n\
+             [toolchain]\n\
+             channel = \"{msrv}\"\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn gitignore_line_covers_polint_cache(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return false;
+    }
+    t.trim_end_matches('/') == "cache"
 }
 
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {

@@ -58,7 +58,7 @@ polint new-rule ts no-raw-colors
 polint check
 ```
 
-`polint init` creates `.polint.toml` and `.polint/rules/`.
+`polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/.gitignore` (ignoring `cache/`), and root `rust-toolchain.toml` when missing (see [Minimum Rust version](#minimum-rust-version)).
 `polint new-rule <go|ts|js|generic> <name>` adds a Rust rule module to your
 local rule pack. `polint check` discovers and runs that rule pack.
 
@@ -89,6 +89,20 @@ also set a top-level `schema` URL when using current polint. Diagnostics are
 deduplicated and sorted deterministically; `--only-rule` and `--max-diagnostics`
 apply after that pipeline for emitted reports. `--max-diagnostics` does not hide
 failures from `--fail-on` (see [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md)).
+
+## Minimum Rust version
+
+Rule packs under `.polint/rules` are normal Rust crates that depend on the **`polint` library**. The published crate declares **`rust-version = "1.95"`** (MSRV). Cargo refuses to build the rule pack if the **active `rustc`** is older, even when the stub uses `edition = "2024"`.
+
+- **`polint init`** writes **`rust-toolchain.toml` at the repository root** only when that file does **not** already exist, aligning the default toolchain with polint’s MSRV so `polint check` (which runs `cargo` with `--manifest-path .polint/rules/Cargo.toml`) succeeds.
+- If your repo already pins an older toolchain, **raise `channel`** in `rust-toolchain.toml` to **1.95** or newer, or run with an override, for example:
+  `RUSTUP_TOOLCHAIN=1.95 polint check`
+
+When the rules crate fails for this reason, the CLI adds a short note on top of Cargo’s stderr.
+
+**Semver:** generated `Cargo.toml` uses `polint = "0.1.x"` (caret). Patch updates within **0.1** are accepted automatically; a **0.2** release requires updating that dependency line.
+
+This repository pins Rust **1.95** in [`rust-toolchain.toml`](rust-toolchain.toml) for developing polint itself.
 
 ## Versions
 
@@ -124,8 +138,6 @@ jobs:
 - [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)
 - [Release process](docs/RELEASING.md)
-
-Rust **1.95** is pinned in [`rust-toolchain.toml`](rust-toolchain.toml).
 
 ## License
 
