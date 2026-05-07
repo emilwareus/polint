@@ -542,6 +542,9 @@ impl Rule for {struct_name} {{
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {{
 {query_example}
+        // To report a diagnostic, call ctx.warn(&some_fact.span, "message")
+        // or ctx.report(Diagnostic::...). Custom TOML fields are in
+        // ctx.options().settings.
         Ok(())
     }}
 }}

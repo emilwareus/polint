@@ -85,6 +85,31 @@ Use these entry points:
 Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
 <!-- GSD:workflow-end -->
 
+## Rule Authoring Platform Contract
+
+Repo-local rules must be treated as external consumers of polint, even when they
+live in `examples/` inside this repository.
+
+- Rule code should import `polint::sdk::prelude::*` and register through
+  `polint::runner::run_cli`; do not make examples depend on `polint::core`,
+  `go`, `ts`, `config`, parser adapters, test helpers, or other internal modules.
+- Examples should demonstrate composition of public facts from `RuleCtx`, not
+  call one-off helpers that solve only the example.
+- When adding a rule-authoring feature, add at least one temp-repo style test
+  that behaves like an outside user: generated `.polint/rules`, public SDK
+  imports only, real facts consumed, and a diagnostic asserted through
+  `polint check --format json`.
+- Keep capability names honest. Do not expose or advertise a capability as a
+  provided fact family until a rule can read the underlying facts through the
+  public SDK.
+- If a rule needs custom config, preserve it through `RuleOptions::settings`
+  rather than overloading unrelated fields like `allow`, `deny`, or `max`.
+- Config and resolved rule options that can affect rule behavior must
+  participate in deterministic cache digests, with regression tests for new
+  fields.
+- Document new public facts under `docs/facts/`, including limits and heuristic
+  behavior.
+
 
 
 <!-- GSD:profile-start -->

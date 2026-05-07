@@ -9,6 +9,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Arbitrary per-rule configuration value from `.polint.toml`.
+///
+/// Rules read these through [`RuleOptions::settings`] when the built-in shortcut
+/// fields (`max`, `deny`, `forbidden_imports`, etc.) are not expressive enough.
+pub type RuleConfigValue = toml::Value;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FileId(pub u32);
 
@@ -589,20 +595,35 @@ pub struct RuleMeta {
 /// Fact families a rule wants the host to provide.
 ///
 /// Capabilities are declarative: they describe which analysis facts a rule
-/// consumes without changing the `Rule` trait.
+/// consumes without changing the `Rule` trait. The current host may harvest a
+/// superset of facts for a language; capability names are still the public
+/// contract a rule should declare and docs should not imply unavailable facts
+/// are produced.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Capabilities {
+    /// Needs source files and syntax-derived facts. Currently descriptive; adapters still run their standard fact harvesters.
     pub syntax: bool,
+    /// Needs syntactic import facts.
     pub imports: bool,
+    /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
+    /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
     pub call_graph: bool,
+    /// Needs Go test facts harvested from `_test.go` files.
     pub go_tests: bool,
+    /// Needs syntax-level branch obligation facts.
     pub branch_obligations: bool,
+    /// Reserved for future external coverage imports.
     pub coverage_facts: bool,
+    /// Needs aggregate-like Go test metrics currently stored on [`TestFact`].
     pub test_suite_metrics: bool,
+    /// Needs TypeScript/JavaScript component-like function facts.
     pub ts_components: bool,
+    /// Needs TypeScript/JavaScript class facts.
     pub ts_classes: bool,
+    /// Needs string and regex literal facts.
     pub string_literals: bool,
+    /// Needs JSX attribute facts.
     pub jsx_attributes: bool,
 }
 
@@ -689,13 +710,22 @@ pub trait Rule: Send + Sync {
 /// denied values, or import-boundary settings.
 #[derive(Debug, Clone, Default)]
 pub struct RuleOptions {
+    /// Severity override from config, if any.
     pub severity: Option<Severity>,
+    /// File include globs for this rule.
     pub files: Vec<String>,
+    /// File globs to skip for this rule.
     pub allow_files: Vec<String>,
+    /// Rule-defined allow list. Helpers treat this as exact file paths only when documented.
     pub allow: Vec<String>,
+    /// Common numeric threshold used by example complexity/test-size rules.
     pub max: Option<u32>,
+    /// Common deny list used by literal/pattern rules.
     pub deny: Vec<String>,
+    /// Common import-boundary map: source glob -> forbidden import patterns.
     pub forbidden_imports: BTreeMap<String, Vec<String>>,
+    /// Arbitrary extra fields from this rule's `[[rules.config]]` table.
+    pub settings: BTreeMap<String, RuleConfigValue>,
 }
 
 /// Borrowed execution context passed to a single rule run.
