@@ -20,6 +20,24 @@ Archived milestone records:
 - `.planning/milestones/v1.0-REQUIREMENTS.md`
 - `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
 
+## Current Milestone: v1.1 Capability Fulfillment
+
+**Goal:** Fulfill polint's capability promise by making declared rule
+capabilities drive planning, setup validation, fact harvesting, cache behavior,
+and public SDK access.
+
+**Target features:**
+
+- Capability-driven `AnalysisPlan` for enabled rules.
+- Real CFG facts for Go and TypeScript/JavaScript.
+- Coverage fact import for Go and TypeScript/JavaScript.
+- Resolved imports and module graph facts.
+- Direct call graph facts with resolution confidence.
+- Symbols and references through the public SDK.
+- Reusable test-suite metrics.
+- Python adapter with an explicit initial capability subset.
+- Java adapter with setup-aware initial capability subset.
+
 ## Requirements
 
 ### Validated
@@ -47,7 +65,42 @@ Archived milestone records:
 
 ### Active
 
-No active v1 requirements remain after Phase 9 verification. Future work is tracked under v2 requirements and out-of-scope notes.
+- [ ] **PLAN-01**: Rule authors can declare capabilities and see an explicit analysis plan derived from enabled rules.
+- [ ] **PLAN-02**: The runner passes the resolved analysis plan to Go and TS/JS adapters before fact harvesting.
+- [ ] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
+- [ ] **PLAN-04**: Missing or unsupported setup for requested capabilities becomes a clear diagnostic or structured warning.
+- [ ] **CFG-01**: Rule authors can read real per-function CFG facts through `RuleCtx`.
+- [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
+- [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared graph model.
+- [ ] **CFG-04**: `polint graph cfg` renders non-placeholder CFG output for debugging.
+- [ ] **COV-01**: Rule authors can read coverage facts for files, functions, and branches through `RuleCtx`.
+- [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
+- [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
+- [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
+- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through `RuleCtx`.
+- [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
+- [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
+- [ ] **MOD-04**: A module graph exposes file, package, module, and dependency relationships for architecture rules.
+- [ ] **CALL-01**: Rule authors can read direct call edge facts through `RuleCtx`.
+- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
+- [ ] **CALL-03**: Call graph facts consume resolved imports and symbols when available.
+- [ ] **CALL-04**: `polint graph calls` renders useful call graph output for debugging.
+- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through `RuleCtx`.
+- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
+- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
+- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
+- [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through `RuleCtx`.
+- [ ] **TEST-02**: Go metrics aggregate existing test facts into assertions, subtests, table rows, evidence terms, and related test evidence.
+- [ ] **TEST-03**: TS/JS metrics detect common Jest/Vitest/Mocha-style test structures and assertion evidence.
+- [ ] **TEST-04**: Test metrics state heuristic limits and avoid claiming exact behavioral coverage.
+- [ ] **PY-01**: Python files participate in discovery, parsing, diagnostics, and the shared fact model.
+- [ ] **PY-02**: Python adapter exposes the declared initial capability tier: syntax, functions/classes, imports, literals, branches, tests, and coverage import.
+- [ ] **PY-03**: Python import/call uncertainty and optional interpreter or virtualenv setup are represented explicitly.
+- [ ] **PY-04**: Python rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
+- [ ] **JAVA-01**: Java files participate in discovery, parsing, diagnostics, and the shared fact model.
+- [ ] **JAVA-02**: Java adapter exposes the declared initial capability tier: packages/imports, classes/methods, literals, branches, tests, and coverage import.
+- [ ] **JAVA-03**: Java classpath/build setup requirements are represented explicitly when deeper facts are requested.
+- [ ] **JAVA-04**: Java rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
 
 ### Out of Scope
 
@@ -56,6 +109,11 @@ No active v1 requirements remain after Phase 9 verification. Future work is trac
 - Full Go type checking in the first pass - leave a trait boundary for a future `go/packages` or `go/analysis` sidecar.
 - Full dynamic branch coverage in the first pass - design the model so exact coverage can be added later.
 - Fully automatic compilation/loading of repo-local Rust rules in the first pass - scaffolding, SDK, and native registration are sufficient for v1.
+- Perfect semantic precision in the first implementation of every capability - v1.1 should expose precision tiers and useful facts incrementally instead of pretending all dynamic or setup-sensitive behavior is exact.
+- Running user test suites inside polint by default - coverage should be imported from reports that users or CI already produce.
+- Exposing raw language-tool output as the public SDK - rule authors should consume normalized polint facts, not raw `go/packages`, Oxc, Python, javac, Maven, Gradle, or coverage report structures.
+- Python and Java parity before Go and TS/JS capability coverage - Go and TS/JS should prove the complete model first; Python and Java start with declared subsets and expand later.
+
 ## Context
 
 - The implementation target is Rust 2024 on stable Rust. Current local toolchain check: `rustc 1.94.0` and `cargo 1.94.0`.
@@ -109,10 +167,14 @@ No active v1 requirements remain after Phase 9 verification. Future work is trac
 | Treat timing output as local profiling metadata, not benchmarks | Phase 7 `profile-rules` reports parseable elapsed timing rows but tests only assert shape/order/nonnegative values and no fixed speedup claims. | Accepted in Phase 7 |
 | Keep CI output SARIF-like, not certified SARIF | Phase 8 emits useful SARIF-shaped JSON for CI while avoiding conformance claims beyond the implemented fields. | Accepted in Phase 8 |
 | Make README and examples the v1 user-facing documentation surface | Phase 9 completed concise command-oriented docs and examples instead of creating a separate docs site or publishing automation. | Accepted in Phase 9 |
+| Fulfill capability promises instead of removing them | The v1.1 milestone should make declared capabilities operational through public facts, setup validation, cache semantics, docs, and external-consumer tests. | Pending in v1.1 |
+| Keep Go and TS/JS as full-coverage targets before Python and Java parity | The current adapters are the proving ground for the complete capability model; Python and Java should enter through explicit subsets and expand after the model is proven. | Pending in v1.1 |
+| Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Pending in v1.1 |
 
 ## Next Milestone Goals
 
-No v1 carryover requirements remain. Next milestone planning should start from fresh requirements with `/gsd-new-milestone`.
+v1.1 Capability Fulfillment is active. See `.planning/REQUIREMENTS.md` and
+`.planning/ROADMAP.md` for scoped requirements and phase mapping.
 
 ## Evolution
 
@@ -132,4 +194,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-02 after quick task 260502-qsd*
+*Last updated: 2026-05-08 after starting milestone v1.1 Capability Fulfillment*

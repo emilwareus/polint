@@ -1,28 +1,28 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: MVP
-status: archived
-stopped_at: quick task 260507-rap complete
-last_updated: "2026-05-07T08:55:00Z"
-last_activity: 2026-05-07
+milestone: v1.1
+milestone_name: Capability Fulfillment
+status: active
+stopped_at: milestone v1.1 initialized
+last_updated: "2026-05-08T00:00:00Z"
+last_activity: 2026-05-08
 progress:
   total_phases: 9
-  completed_phases: 9
-  total_plans: 32
-  completed_plans: 32
-  percent: 100
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-02)
+See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** post-v1 rule-authoring platform hardening
+**Current focus:** v1.1 Capability Fulfillment
 
 ## Current Status
 
@@ -31,7 +31,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 - Active branch policy: work directly on `main`; do not use GSD worktrees for this project.
 - Planning initialized from `docs/INITIAL_PROMPT.md`.
 - v1.0 requirements and full roadmap archived under `.planning/milestones/`.
-- Live `.planning/REQUIREMENTS.md` is intentionally absent until the next milestone is started.
+- Live `.planning/REQUIREMENTS.md` defines v1.1 Capability Fulfillment requirements.
 - Source implementation committed on `main` as `7828215` (`Implement initial polint workspace`).
 - Verification passed: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 - Phase 1 has been closed through GSD plan execution and verification.
@@ -53,15 +53,19 @@ See: `.planning/PROJECT.md` (updated 2026-05-02)
 - Phase 7 completed cache key invalidation, source-free cached parser facts, deterministic Rayon-backed execution, repeated-run output proof, profiling rows, code review, verification, and security with `threats_open: 0`; see `.planning/phases/07-cache-and-performance/07-VERIFICATION.md` and `.planning/phases/07-cache-and-performance/07-SECURITY.md`.
 - Phase 8 completed CI output, command contracts, deterministic DOT graph command coverage, code review, verification, and security with `threats_open: 0`; see `.planning/phases/08-ci-output-and-graph-commands/08-VERIFICATION.md` and `.planning/phases/08-ci-output-and-graph-commands/08-SECURITY.md`.
 - Phase 9 completed README, examples, final CLI smoke tests, release verification, code review, and security with `threats_open: 0`; see `.planning/phases/10-docs-examples-and-release-hardening/10-VERIFICATION.md` and `.planning/phases/10-docs-examples-and-release-hardening/10-SECURITY.md`.
-- Next action: review/commit the rule-authoring platform hardening changes, then
-  start the next milestone with `/gsd-new-milestone` when ready.
+- Capability Fulfillment research lives in `docs/CAPABILITY-FULFILLMENT-RESEARCH.md`.
+- Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
+- v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
+- v1.1 roadmap is defined in `.planning/ROADMAP.md`.
+- Next action: start Phase 11 with `/gsd-discuss-phase 11` or `/gsd-plan-phase 11`.
 
 ## Current Position
 
-Milestone: v1.0 MVP - ARCHIVED
-Status: Archived
-Plan: Next milestone not started
-Last activity: 2026-05-07 - Completed quick task 260507-rap: Rule authoring platform hardening
+Milestone: v1.1 Capability Fulfillment
+Status: Active
+Phase: 11 - Capability-Driven Analysis Plan
+Plan: Not started
+Last activity: 2026-05-08 - Started milestone v1.1 Capability Fulfillment
 
 ## Quick Tasks Completed
 
@@ -89,15 +93,15 @@ Last activity: 2026-05-07 - Completed quick task 260507-rap: Rule authoring plat
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1 | Complete | Rust workspace foundation committed and verified |
-| 2 | Complete | CLI, config, discovery, and JSON output first loop verified |
-| 3 | Complete | Core facts, diagnostics, deterministic discovery, and review fixes verified |
-| 4 | Complete | 4/4 plans complete; parser-backed Go facts verified through unit and CLI integration coverage |
-| 5 | Complete | 4/4 plans complete; Oxc-backed TS/JS facts, review fixes, and phase verification passed |
-| 6 | Complete | 6/6 plans complete; SDK helpers, example rules, snapshots, review fixes, verification, and security passed |
-| 7 | Complete | 4/4 plans complete; cache, deterministic parallelism, profiling, review, verification, and security passed |
-| 8 | Complete | 4/4 plans complete; CI output, command contracts, DOT graph commands, verification, and security passed |
-| 9 | Complete | 4/4 plans complete; README, examples, release verification, code review, and security passed |
+| 11 | Pending | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
+| 12 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
+| 13 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
+| 14 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
+| 15 | Pending | Direct call graph facts; requirements CALL-01 through CALL-04 |
+| 16 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
+| 17 | Pending | Test suite metrics; requirements TEST-01 through TEST-04 |
+| 18 | Pending | Python adapter with explicit initial capability tier; requirements PY-01 through PY-04 |
+| 19 | Pending | Java adapter with setup-aware initial capability tier; requirements JAVA-01 through JAVA-04 |
 
 ## Decisions Made
 
