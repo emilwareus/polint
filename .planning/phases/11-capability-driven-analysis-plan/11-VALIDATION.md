@@ -34,8 +34,8 @@ Per-phase validation contract for feedback sampling during execution.
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 11-01-01 | 01 | 1 | PLAN-01, PLAN-04 | T-11-01-01, T-11-01-03 | Rule capability support is exposed through a narrow, read-only SDK view. | unit | `cargo test -p polint --lib capability_support --locked` | W0 | pending |
 | 11-01-02 | 01 | 1 | PLAN-01, PLAN-04 | T-11-01-01, T-11-01-02, T-11-01-03 | Unsupported reserved capabilities become deterministic plan diagnostics. | unit | `cargo test -p polint --lib analysis_plan --locked` | W0 | pending |
-| 11-02-01 | 02 | 2 | PLAN-02, PLAN-04 | T-11-02-02 | The child rule host builds the real plan before source loading and contains plan-time rule panics. | unit | `cargo test -p polint --lib analysis_plan --locked` | W0 | pending |
-| 11-02-02 | 02 | 2 | PLAN-02, PLAN-03 | T-11-02-01, T-11-02-03 | Go and TS/JS cache keys change when the plan digest changes. | unit | `cargo test -p polint --lib cache_key_changes_with_plan_hash --locked` | W0 | pending |
+| 11-02-01 | 02 | 2 | PLAN-02, PLAN-04 | T-11-02-02 | The child rule host uses one panic-contained metadata/capability collection path before options, rule digest, plan construction, source loading, and check output. | unit + CLI integration | `cargo test -p polint --lib analysis_plan --locked && cargo test -p polint --test cli check_contains_plan_time_rule_metadata_panic --locked` | W0 | pending |
+| 11-02-02 | 02 | 2 | PLAN-02, PLAN-03 | T-11-02-01, T-11-02-03 | Go and TS/JS cache keys change when the plan digest changes while `_bench` / `polint-bench` keep the old adapter wrapper signature. | unit + compile check | `cargo test -p polint --lib cache_key_changes_with_plan_hash --locked && cargo check -p polint-bench --locked` | W0 | pending |
 | 11-03-01 | 03 | 3 | PLAN-01, PLAN-04 | T-11-03-02, T-11-03-03 | Child explain-plan output is deterministic JSON or human text and does not parse source files. | unit | `cargo test -p polint --lib analysis_plan_explain_report --locked` | W0 | pending |
 | 11-03-02 | 03 | 3 | PLAN-01, PLAN-04 | T-11-03-01, T-11-03-02, T-11-03-03 | Parent explain-plan delegates through explicit process args and emits an empty valid plan without local rules. | CLI integration | `cargo test -p polint --test cli explain_plan_no_rules_outputs_empty_json_without_parsing_sources --locked` | W0 | pending |
 | 11-03-03 | 03 | 3 | PLAN-01, PLAN-03, PLAN-04 | T-11-03-04, T-11-03-05 | External local-rule tests prove unsupported diagnostics and capability-sensitive cache entries. | CLI integration | `cargo test -p polint --test cli explain_plan --locked` | W0 | pending |
@@ -44,8 +44,9 @@ Per-phase validation contract for feedback sampling during execution.
 
 - [ ] `crates/polint/src/analysis_plan.rs` or equivalent unit tests for deterministic plan merge, capability support statuses, unsupported diagnostics, and digest stability.
 - [ ] `crates/polint/src/cache/mod.rs` or `crates/polint/src/cache/keys.rs` tests proving plan digest changes cache stable IDs.
-- [ ] `crates/polint/tests/cli.rs` tests for explain-plan JSON, parent-to-child delegation, no source parsing by default, unsupported capability diagnostics, and capability-sensitive cache invalidation.
+- [ ] `crates/polint/tests/cli.rs` tests for plan-time metadata panic containment in the actual check path, explain-plan JSON, parent-to-child delegation, no source parsing by default, unsupported capability diagnostics, and capability-sensitive cache invalidation.
 - [ ] Adapter tests or integration assertions proving Go and TS/JS adapters receive plan-aware cache inputs.
+- [ ] `cargo check -p polint-bench --locked` proves `_bench` retains a usable adapter wrapper that does not expose crate-private `AnalysisPlan`.
 
 ## Manual-Only Verifications
 
