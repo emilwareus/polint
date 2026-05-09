@@ -374,12 +374,12 @@ Keep command construction argument-based and avoid shell strings because current
 |---|-------|---------|---------------|
 | A1 | A distinct `plan_hash` field is the preferred cache-key shape rather than folding the digest into `rule_hash`. [ASSUMED] | Standard Stack / Architecture Patterns | If the implementer chooses fold-in instead, tests must still prove cache invalidation and explain output must still expose the plan digest. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should `test_suite_metrics` be treated as unsupported or as an alias for current Go `TestFact` aggregate fields?** [VERIFIED: crates/polint/src/core/mod.rs:618, .planning/ROADMAP.md]
+1. **RESOLVED: `test_suite_metrics` is unsupported/reserved in Phase 11, not an alias for current Go `TestFact` aggregate fields.** [VERIFIED: crates/polint/src/core/mod.rs:618, .planning/ROADMAP.md]
    - What we know: Rich test-suite metrics are Phase 17, while current Go `TestFact` already stores assertion/subtest/table-row evidence. [VERIFIED: crates/polint/src/core/mod.rs:168, .planning/ROADMAP.md]
-   - What's unclear: The existing `Capabilities::test_suite_metrics()` comment says aggregate-like Go metrics are currently stored on `TestFact`, but the v1.1 roadmap treats normalized metrics as future work. [VERIFIED: crates/polint/src/core/mod.rs:618, .planning/ROADMAP.md]
-   - Recommendation: In Phase 11, mark `test_suite_metrics` as unsupported/reserved for normalized metrics and point users to `go_tests` for current Go test evidence. [VERIFIED: .planning/phases/11-capability-driven-analysis-plan/11-CONTEXT.md]
+   - Resolution: The existing `Capabilities::test_suite_metrics()` comment is treated as stale until Phase 17 defines normalized metrics. Phase 11 must report `test_suite_metrics` as unsupported/reserved if requested. [VERIFIED: crates/polint/src/core/mod.rs:618, .planning/ROADMAP.md]
+   - Implementation guidance: Use `go_tests` for current Go test evidence; reserve `test_suite_metrics` for normalized cross-language metrics. [VERIFIED: .planning/phases/11-capability-driven-analysis-plan/11-CONTEXT.md]
 
 ## Environment Availability
 
