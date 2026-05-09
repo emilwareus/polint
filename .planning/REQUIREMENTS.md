@@ -11,8 +11,8 @@ one roadmap phase.
 ### Capability Planning
 
 - [x] **PLAN-01**: Rule authors can declare capabilities and see an explicit analysis plan derived from enabled rules.
-- [ ] **PLAN-02**: The runner passes the resolved analysis plan to Go and TS/JS adapters before fact harvesting.
-- [ ] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
+- [x] **PLAN-02**: The runner passes the resolved analysis plan to Go and TS/JS adapters before fact harvesting.
+- [x] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
 - [x] **PLAN-04**: Missing or unsupported setup for requested capabilities becomes a clear diagnostic or structured warning.
 
 ### Control Flow Graphs
@@ -94,8 +94,8 @@ Deferred until after Go and TS/JS prove the full capability model:
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PLAN-01 | Phase 11 | Complete |
-| PLAN-02 | Phase 11 | Pending |
-| PLAN-03 | Phase 11 | Pending |
+| PLAN-02 | Phase 11 | Complete |
+| PLAN-03 | Phase 11 | Complete |
 | PLAN-04 | Phase 11 | Complete |
 | CFG-01 | Phase 12 | Pending |
 | CFG-02 | Phase 12 | Pending |

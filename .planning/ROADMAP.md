@@ -22,7 +22,7 @@ through the public SDK.
 
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
-| 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (In Progress: 1/3 plans executed.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
+| 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (In Progress: 2/3 plans executed.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
 | 12 | CFG Facts for Go and TS/JS | Expose real per-function control-flow graphs through `RuleCtx`. | CFG-01, CFG-02, CFG-03, CFG-04 |
 | 13 | Coverage Facts Import | Import Go and TS/JS coverage reports into public coverage facts. | COV-01, COV-02, COV-03, COV-04 |
 | 14 | Resolved Imports and Module Graph | Resolve imports into file/package/module relationships. | MOD-01, MOD-02, MOD-03, MOD-04 |
@@ -43,11 +43,11 @@ for before analysis starts.
 
 **Requirements:** PLAN-01, PLAN-02, PLAN-03, PLAN-04
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 11-01-PLAN.md — Internal AnalysisPlan contract and RuleCtx support view
-- [ ] 11-02-PLAN.md — Runner, adapter, and cache integration
+- [x] 11-02-PLAN.md — Runner, adapter, and cache integration
 - [ ] 11-03-PLAN.md — Explain plan CLI, external proof, and docs
 
 **Success criteria:**

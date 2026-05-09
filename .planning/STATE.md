@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-05-09T07:49:07.705Z"
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-05-09T08:09:48.254Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 33
+  completed_plans: 2
+  percent: 67
 ---
 
 # State: polint
@@ -64,7 +64,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to execute
 Phase: 11 (Capability-Driven Analysis Plan) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Last activity: 2026-05-09
 
 ## Quick Tasks Completed
@@ -159,6 +159,10 @@ Last activity: 2026-05-09
 - [Phase 11-capability-driven-analysis-plan]: Keep AnalysisPlan crate-private and expose only CapabilitySupport, CapabilitySupportStatus, and CapabilitySupportView through the SDK prelude.
 - [Phase 11-capability-driven-analysis-plan]: Treat cfg, call_graph, coverage_facts, and test_suite_metrics as unsupported reserved capabilities in Phase 11.
 - [Phase 11-capability-driven-analysis-plan]: Use deterministic length-prefixed strings plus stable_hash for the plan digest instead of serde JSON output.
+- [Phase 11-capability-driven-analysis-plan]: Use RulePlanInputs as the single panic-contained rule metadata/capability snapshot for options, rule digest, and plan construction.
+- [Phase 11-capability-driven-analysis-plan]: Keep AnalysisPlan crate-private; bench-facing analyze_with_options wrappers construct AnalysisPlan::empty() internally.
+- [Phase 11-capability-driven-analysis-plan]: Include plan_hash in CacheKey::stable_id between rule_hash and cache version.
+- [Phase 11-capability-driven-analysis-plan]: Use an empty AnalysisPlan in parent CLI paths where no local rule host is loaded.
 
 ## Performance Metrics
 
@@ -191,11 +195,12 @@ Last activity: 2026-05-09
 | Phase 09 P03 | 4 min | 3 tasks | 1 files |
 | Phase 09 P04 | 2 min | 3 tasks | 1 files |
 | Phase 11-capability-driven-analysis-plan P01 | 8 min | 2 tasks | 4 files |
+| Phase 11-capability-driven-analysis-plan P02 | 16m 12s | 2 tasks | 9 files |
 
 ## Session
 
-**Last Date:** 2026-05-09T07:49:07.702Z
-**Stopped At:** Completed 11-01-PLAN.md
+**Last Date:** 2026-05-09T08:09:48.251Z
+**Stopped At:** Completed 11-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
