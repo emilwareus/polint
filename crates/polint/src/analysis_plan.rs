@@ -573,7 +573,8 @@ fn requested_capabilities(capabilities: Capabilities) -> Vec<String> {
         ("jsx_attributes", capabilities.jsx_attributes),
     ]
     .into_iter()
-    .filter_map(|(name, requested)| requested.then(|| name.to_string()))
+    .filter(|&(_name, requested)| requested)
+    .map(|(name, _requested)| name.to_string())
     .collect()
 }
 
