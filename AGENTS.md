@@ -123,6 +123,10 @@ live in `examples/` inside this repository.
   should produce capability diagnostics and not execute with placeholder facts.
 - If a rule needs custom config, preserve it through `RuleOptions::settings`
   rather than overloading unrelated fields like `allow`, `deny`, or `max`.
+- Comment ignores are an engine/reporting concern. Rules should always report
+  the real diagnostics they find; do not add per-rule ignore-comment parsing or
+  suppression logic. Keep `polint ignores`, `docs/IGNORE-COMMENTS.md`, and the
+  generated skill text aligned when ignore behavior changes.
 - Config and resolved rule options that can affect rule behavior must
   participate in deterministic cache digests, with regression tests for new
   fields.

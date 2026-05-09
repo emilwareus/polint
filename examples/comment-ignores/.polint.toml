@@ -1,0 +1,18 @@
+[workspace]
+include = ["app.ts"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+
+[ignores]
+require_reason = true
+
+[profiles.default]
+rules = ["local/no-denied-literals"]
+
+[[rules.config]]
+id = "local/no-denied-literals"
+severity = "warn"
+files = ["*.ts"]
+deny = ["legacy-testid"]

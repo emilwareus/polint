@@ -1147,6 +1147,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-comment-ignores-rule"
+version = "0.1.7"
+dependencies = [
+ "polint",
+]
+
+[[package]]
 name = "polint-example-config-denied-literal-rule"
 version = "0.1.7"
 dependencies = [

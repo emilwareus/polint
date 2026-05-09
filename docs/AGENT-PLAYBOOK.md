@@ -28,6 +28,27 @@ Example:
 polint check --format json --fail-on error --only-rule 'local/*' path/to/dir
 ```
 
+## Ignore cleanup
+
+polint supports comment ignores such as
+`// polint-ignore-next-line local/no-raw-colors -- legacy fixture`. Ignores
+suppress policy diagnostics only; parser, internal, capability, and `polint/*`
+diagnostics stay visible.
+
+Use `polint ignores` to find suppressions that an agent should fix:
+
+```bash
+polint ignores --shortstat
+polint ignores --stat --filter 'local/no-raw-colors,local/*'
+polint ignores --format json --filter local/no-raw-colors
+```
+
+The JSON shape is documented in
+[`docs/schemas/polint-ignores-v1.json`](schemas/polint-ignores-v1.json). See
+[`docs/IGNORE-COMMENTS.md`](IGNORE-COMMENTS.md) for syntax and health
+diagnostics (`polint/unused-ignore`, `polint/malformed-ignore`,
+`polint/ignore-missing-reason`).
+
 ## Explaining harvester facts
 
 ```bash
@@ -53,7 +74,9 @@ SARIF for GitHub Code Scanning: `polint check --format sarif` then
 > Use the polint JSON report (`polint check --format json`). The schema is in
 > `docs/schemas/polint-report-v1.json`. Parse `diagnostics[]`; each item has
 > `rule_id`, `severity`, `file`, `range`, `message`, optional `fix`. Apply fixes
-> and re-run until the report is empty or only allowed severities remain.
+> and re-run until the report is empty or only allowed severities remain. To
+> remove suppressed debt, run `polint ignores --stat --filter RULE_ID`, fix the
+> underlying code, remove the ignore comment, and rerun `polint check`.
 
 ## Troubleshooting
 

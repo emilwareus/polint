@@ -29,6 +29,8 @@ pub(crate) struct PolintConfig {
     pub(crate) sarif: SarifConfig,
     #[serde(default)]
     pub(crate) path_contexts: PathContextsConfig,
+    #[serde(default)]
+    pub(crate) ignores: IgnoreConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +108,14 @@ pub(crate) struct SarifConfig {
     /// Map `rule_id` → help URI (`reportingDescriptor.helpUri`).
     #[serde(default)]
     pub(crate) rule_help_uri: BTreeMap<String, String>,
+}
+
+/// Comment-ignore behavior.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct IgnoreConfig {
+    /// Require `-- reason` on suppressing ignore directives.
+    #[serde(default)]
+    pub(crate) require_reason: bool,
 }
 
 /// Optional path pairing: same context segment between `left_*` and `right_*` path shapes.
@@ -194,6 +204,9 @@ exclude = ["**/vendor/**", "**/node_modules/**", "**/.git/**", "**/target/**", "
 
 [rules]
 paths = [".polint/rules"]
+
+[ignores]
+require_reason = false
 "#
 }
 
@@ -246,6 +259,7 @@ mod tests {
         let config: PolintConfig = toml::from_str(default_config_toml()).unwrap();
         assert_eq!(config.rules.paths, vec![".polint/rules"]);
         assert!(config.profiles.is_empty());
+        assert!(!config.ignores.require_reason);
     }
 
     #[test]
@@ -376,5 +390,18 @@ right_after_ctx = "/ports/"
         );
         assert_eq!(config.path_contexts.pairs.len(), 1);
         assert_eq!(config.path_contexts.pairs[0].name, "svc_ports");
+    }
+
+    #[test]
+    fn ignore_config_parses_reason_policy() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[ignores]
+require_reason = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.ignores.require_reason);
     }
 }

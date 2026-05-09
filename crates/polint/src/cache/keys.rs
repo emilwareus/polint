@@ -3,8 +3,8 @@
 //! Encoding is deterministic and infallible so cache hashing never relies on panicking serializers.
 
 use crate::config::{
-    LoadedConfig, PathContextPair, PathContextsConfig, PolintConfig, ProfileConfig, RuleConfig,
-    RuleSection, WorkspaceConfig,
+    IgnoreConfig, LoadedConfig, PathContextPair, PathContextsConfig, PolintConfig, ProfileConfig,
+    RuleConfig, RuleSection, WorkspaceConfig,
 };
 use crate::core::{Rule, RuleOptions};
 use std::collections::BTreeSet;
@@ -99,6 +99,7 @@ fn deterministic_polint_config(config: &PolintConfig) -> String {
             "path_contexts={}",
             deterministic_path_contexts(&config.path_contexts)
         ),
+        format!("ignores={}", deterministic_ignores(&config.ignores)),
     ]
     .join("\x1e")
 }
@@ -183,6 +184,10 @@ fn deterministic_path_context_pair(pair: &PathContextPair) -> String {
         deterministic_string(&pair.right_before_ctx),
         deterministic_string(&pair.right_after_ctx)
     )
+}
+
+fn deterministic_ignores(ignores: &IgnoreConfig) -> String {
+    format!("require_reason={}", ignores.require_reason)
 }
 
 fn deterministic_string_map(map: &std::collections::BTreeMap<String, String>) -> String {
@@ -332,6 +337,15 @@ mod tests {
             right_before_ctx: "clients/".to_string(),
             right_after_ctx: "/client".to_string(),
         });
+
+        assert_ne!(config_hash(&baseline), config_hash(&modified));
+    }
+
+    #[test]
+    fn config_hash_differs_when_ignore_reason_policy_changes() {
+        let baseline = sample_loaded(false);
+        let mut modified = baseline.clone();
+        modified.config.ignores.require_reason = true;
 
         assert_ne!(config_hash(&baseline), config_hash(&modified));
     }

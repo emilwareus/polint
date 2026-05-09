@@ -124,6 +124,31 @@ Profiles are explicit:
 - Unknown profiles are errors.
 - Profile names are arbitrary. There is no default profile.
 
+## Comment Ignores
+
+Use comment ignores for intentional, local suppressions:
+
+```ts
+// polint-ignore-next-line local/no-raw-colors -- legacy fixture
+const color = "#ff00aa";
+```
+
+`polint-ignore-line`, `polint-ignore-next-line`, `polint-ignore-start` /
+`polint-ignore-end`, and top-of-file `polint-ignore-file` are supported.
+Selectors are required and use exact IDs, `prefix/*`, or `*`. Ignores suppress
+policy diagnostics only; parser, internal, capability, and `polint/*`
+diagnostics still report.
+
+To inspect ignored debt:
+
+```bash
+polint ignores --stat --filter local/no-raw-colors
+```
+
+See [docs/IGNORE-COMMENTS.md](docs/IGNORE-COMMENTS.md).
+The checked-in [comment-ignores example](examples/comment-ignores/README.md)
+shows one suppressed finding and one visible finding from the same rule.
+
 ## Machine contract (JSON)
 
 Stable JSON reports (`polint check --format json`) match the schema at
@@ -178,6 +203,7 @@ jobs:
 - [Examples](examples/)
 - [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
 - [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
+- [Comment ignores](docs/IGNORE-COMMENTS.md)
 - [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)
 - [Release process](docs/RELEASING.md)
