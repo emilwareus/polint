@@ -3,6 +3,7 @@ mod common;
 use assert_cmd::Command;
 use common::*;
 use predicates::prelude::*;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -26,6 +27,191 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
+}
+
+fn write_plan_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+use std::sync::Arc;
+
+use polint::sdk::prelude::*;
+
+struct NeedsImports;
+struct NeedsCfg;
+
+impl Rule for NeedsImports {
+    fn meta(&self) -> RuleMeta {
+        RuleMeta {
+            id: "local/needs-imports".to_string(),
+            description: "Needs import facts.".to_string(),
+            severity: Severity::Warn,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new().imports()
+    }
+
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let _import_count = ctx.imports().len();
+        Ok(())
+    }
+}
+
+impl Rule for NeedsCfg {
+    fn meta(&self) -> RuleMeta {
+        RuleMeta {
+            id: "local/needs-cfg".to_string(),
+            description: "Needs CFG facts.".to_string(),
+            severity: Severity::Warn,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new().cfg()
+    }
+
+    fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+        Ok(())
+    }
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![Arc::new(NeedsImports), Arc::new(NeedsCfg)])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"import { token } from "./token";
+
+export const value = token;
+"#,
+    );
+    write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
+}
+
+fn write_cache_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+use std::sync::Arc;
+
+use polint::sdk::prelude::*;
+
+struct CacheCapability;
+
+impl Rule for CacheCapability {
+    fn meta(&self) -> RuleMeta {
+        RuleMeta {
+            id: "local/cache-capability".to_string(),
+            description: "Reads capability-gated facts.".to_string(),
+            severity: Severity::Warn,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new().string_literals()
+    }
+
+    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let _literal_count = ctx.string_literals().len();
+        let _attribute_count = ctx.jsx_attributes().len();
+        Ok(())
+    }
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![Arc::new(CacheCapability)])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.tsx"),
+        r##"export function Component() {
+  return <div data-color="#fff">ok</div>;
+}
+"##,
+    );
+}
+
+fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
+    fs::read_dir(root.join(".polint/cache"))
+        .unwrap_or_else(|error| panic!("read cache dir: {error}"))
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            (path.extension().is_some_and(|ext| ext == "json")).then(|| {
+                path.file_name()
+                    .unwrap_or_else(|| panic!("cache path has no file name: {}", path.display()))
+                    .to_string_lossy()
+                    .to_string()
+            })
+        })
+        .collect()
 }
 
 #[test]
@@ -1487,6 +1673,146 @@ exclude = []
     assert_eq!(value["rules"], serde_json::json!([]));
     assert_eq!(value["capabilities"], serde_json::json!([]));
     assert_eq!(value["setup_checks"], serde_json::json!([]));
+}
+
+mod explain_plan {
+    use super::*;
+
+    #[test]
+    fn explain_plan_delegates_to_local_rule_host_json() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+
+        let value = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["explain", "plan", "--format", "json"])
+                .assert()
+                .success(),
+        );
+
+        let rules = value["rules"]
+            .as_array()
+            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
+        assert!(rules.iter().any(|rule| {
+            rule["id"] == "local/needs-imports"
+                && rule["capabilities"] == serde_json::json!(["imports"])
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule["id"] == "local/needs-cfg" && rule["capabilities"] == serde_json::json!(["cfg"])
+        }));
+
+        let capabilities = value["capabilities"]
+            .as_array()
+            .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
+        assert!(capabilities.iter().any(|capability| {
+            capability["name"] == "imports" && capability["status"] == "supported"
+        }));
+        assert!(capabilities.iter().any(|capability| {
+            capability["name"] == "cfg" && capability["status"] == "unsupported"
+        }));
+        assert!(
+            value["digest"]
+                .as_str()
+                .is_some_and(|digest| !digest.is_empty()),
+            "digest should be present: {value:#?}"
+        );
+    }
+
+    #[test]
+    fn check_reports_unsupported_reserved_capability() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported capability `cfg`")),
+            "{diagnostic:#?}"
+        );
+        assert!(
+            diagnostic["help"]
+                .as_str()
+                .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
+            "{diagnostic:#?}"
+        );
+    }
+
+    #[test]
+    fn explain_plan_json_is_deterministic() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+        let run = || {
+            stdout_string(
+                Command::cargo_bin("polint")
+                    .unwrap()
+                    .current_dir(temp.path())
+                    .args(["explain", "plan", "--format", "json"])
+                    .assert()
+                    .success(),
+            )
+        };
+
+        let first = run();
+        let second = run();
+        let third = run();
+
+        assert_eq!(second, first);
+        assert_eq!(third, first);
+    }
+
+    #[test]
+    fn capability_change_changes_cache_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        write_cache_capability_rule_repo(temp.path());
+
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success();
+        let first = cache_json_file_names(temp.path());
+        assert!(!first.is_empty(), "first check should write cache files");
+
+        let rule_path = temp.path().join(".polint/rules/src/main.rs");
+        let rule_source = fs::read_to_string(&rule_path).unwrap();
+        fs::write(
+            &rule_path,
+            rule_source.replace(
+                "Capabilities::new().string_literals()",
+                "Capabilities::new().jsx_attributes()",
+            ),
+        )
+        .unwrap();
+
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success();
+        let second = cache_json_file_names(temp.path());
+
+        assert!(
+            second.difference(&first).next().is_some(),
+            "changing only requested capabilities should create new cache entries\nfirst={first:#?}\nsecond={second:#?}"
+        );
+    }
 }
 
 #[test]
