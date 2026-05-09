@@ -1,4 +1,4 @@
-use crate::analysis_plan::AnalysisPlan;
+use crate::analysis_plan::{ANALYSIS_PLAN_SCHEMA, AnalysisPlan, ExplainPlanReport};
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
@@ -20,6 +20,8 @@ use std::time::Instant;
 
 mod rules_host_error;
 mod skill;
+
+const CHILD_EXPLAIN_PLAN_JSON_ARGS: [&str; 4] = ["explain", "plan", "--format", "json"];
 
 fn json_report_meta() -> JsonReportMeta<'static> {
     JsonReportMeta {
@@ -125,9 +127,27 @@ struct ExplainArgs {
 enum ExplainCommand {
     /// Describe a rule id (polint ships no bundled rules; mostly a stub for tooling).
     Rule { rule_id: String },
+    /// Print the resolved analysis plan without parsing source files.
+    Plan(ExplainPlanArgs),
     /// Print one harvested Go [`crate::core::TestFact`] as JSON (`docs/facts/go-tests.md`).
     #[command(name = "go-test")]
     GoTest(ExplainGoTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExplainPlanArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ExplainPlanFormat::Human)]
+    format: ExplainPlanFormat,
+    /// Named profile from .polint.toml. When omitted, all discovered rules are planned.
+    #[arg(long)]
+    profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExplainPlanFormat {
+    Human,
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -231,7 +251,7 @@ pub(crate) fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Check(args) => check(std::env::current_dir()?, &args),
-        Command::Explain(args) => explain_command(&args),
+        Command::Explain(args) => explain_command(std::env::current_dir()?, &args),
         Command::TestRules(args) => {
             if matches!(args.format, FormatArg::Human) {
                 println!("Running rule tests against the current repository fixtures.");
@@ -647,7 +667,7 @@ fn selected_rule_patterns(
         .map(|rules| rules.into_iter().collect()))
 }
 
-fn explain_command(args: &ExplainArgs) -> Result<u8> {
+fn explain_command(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
     match &args.command {
         ExplainCommand::Rule { rule_id } => {
             println!(
@@ -655,8 +675,31 @@ fn explain_command(args: &ExplainArgs) -> Result<u8> {
             );
             Ok(0)
         }
-        ExplainCommand::GoTest(go) => explain_go_test_fact(std::env::current_dir()?, go),
+        ExplainCommand::Plan(plan) => explain_plan(root, plan),
+        ExplainCommand::GoTest(go) => explain_go_test_fact(root, go),
     }
+}
+
+fn explain_plan(root: PathBuf, args: &ExplainPlanArgs) -> Result<u8> {
+    let manifests = discover_local_rule_hosts(&root)?;
+    let report = if manifests.is_empty() {
+        let loaded = load_config_for_check(&root, &[])?;
+        selected_rule_patterns(&loaded, args.profile.as_deref())?;
+        AnalysisPlan::empty().explain_report()
+    } else {
+        let mut reports = Vec::new();
+        for manifest in &manifests {
+            reports.push(run_local_rule_host_explain_plan(&root, manifest, args)?);
+        }
+        combine_explain_plan_reports(reports)
+    };
+
+    match args.format {
+        ExplainPlanFormat::Human => print!("{}", report.to_human()),
+        ExplainPlanFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+
+    Ok(0)
 }
 
 fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
@@ -957,6 +1000,85 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
             manifest.display()
         )
     })
+}
+
+fn run_local_rule_host_explain_plan(
+    root: &Path,
+    manifest: &Path,
+    args: &ExplainPlanArgs,
+) -> Result<ExplainPlanReport> {
+    let cargo = std::env::var("POLINT_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
+    let manifest_str = manifest
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))?;
+    let mut command = ProcessCommand::new(&cargo);
+    command
+        .current_dir(root)
+        .args(["run", "--quiet", "--manifest-path", manifest_str, "--"])
+        .args(CHILD_EXPLAIN_PLAN_JSON_ARGS);
+    if let Some(profile) = &args.profile {
+        command.args(["--profile", profile]);
+    }
+    if let Ok(toolchain) = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
+        && !toolchain.is_empty()
+    {
+        command.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
+
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run local rule host explain plan {} with `{cargo}`",
+            manifest.display()
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        anyhow::bail!(
+            "local rule host explain plan failed for {} with status {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            output.status,
+            stdout,
+            stderr
+        );
+    }
+
+    serde_json::from_str(stdout.as_ref()).with_context(|| {
+        format!(
+            "local rule host explain plan emitted invalid JSON: {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            stdout,
+            stderr
+        )
+    })
+}
+
+fn combine_explain_plan_reports(mut reports: Vec<ExplainPlanReport>) -> ExplainPlanReport {
+    if reports.len() == 1 {
+        return reports.remove(0);
+    }
+
+    let mut digest_parts = Vec::new();
+    let mut rules = Vec::new();
+    let mut capabilities = Vec::new();
+    let mut setup_checks = Vec::new();
+    for report in reports {
+        digest_parts.push(report.digest);
+        rules.extend(report.rules);
+        capabilities.extend(report.capabilities);
+        setup_checks.extend(report.setup_checks);
+    }
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+
+    ExplainPlanReport {
+        schema: ANALYSIS_PLAN_SCHEMA.to_string(),
+        digest: crate::cache::stable_hash(&digest_refs),
+        rules,
+        capabilities,
+        setup_checks,
+    }
 }
 
 fn exit_code_for(diagnostics: &[crate::diagnostics::Diagnostic], fail_on: FailOn) -> u8 {
