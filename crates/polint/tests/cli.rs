@@ -1721,6 +1721,41 @@ mod explain_plan {
     }
 
     #[test]
+    fn explain_plan_json_uses_resolved_severity_override() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+        let config_path = temp.path().join(".polint.toml");
+        let config = fs::read_to_string(&config_path).unwrap();
+        write_file(
+            &config_path,
+            &format!(
+                r#"{config}
+[[rules.config]]
+id = "local/needs-imports"
+severity = "error"
+"#
+            ),
+        );
+
+        let value = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["explain", "plan", "--format", "json"])
+                .assert()
+                .success(),
+        );
+
+        let rule = value["rules"]
+            .as_array()
+            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"))
+            .iter()
+            .find(|rule| rule["id"] == "local/needs-imports")
+            .unwrap_or_else(|| panic!("expected needs-imports rule: {value:#?}"));
+        assert_eq!(rule["severity"], "error");
+    }
+
+    #[test]
     fn check_reports_unsupported_reserved_capability() {
         let temp = tempfile::tempdir().unwrap();
         write_plan_capability_rule_repo(temp.path());

@@ -124,15 +124,14 @@ impl AnalysisPlan {
             .iter()
             .map(|input| {
                 let capabilities = requested_capabilities(input.capabilities);
-                let options_digest = options
-                    .get(&input.meta.id)
-                    .map(deterministic_rule_options)
-                    .unwrap_or_else(|| deterministic_rule_options(&RuleOptions::default()));
+                let default_options = RuleOptions::default();
+                let rule_options = options.get(&input.meta.id).unwrap_or(&default_options);
+                let options_digest = deterministic_rule_options(rule_options);
 
                 PlannedRule {
                     id: input.meta.id.clone(),
                     description: input.meta.description.clone(),
-                    severity: input.meta.severity,
+                    severity: rule_options.severity.unwrap_or(input.meta.severity),
                     requested_capabilities: capabilities,
                     options_digest,
                 }
