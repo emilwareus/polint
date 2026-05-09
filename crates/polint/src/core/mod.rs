@@ -693,6 +693,69 @@ impl Capabilities {
     }
 }
 
+/// Support state for a requested capability in the resolved analysis plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CapabilitySupportStatus {
+    /// The host can provide this capability for the current plan.
+    Supported,
+    /// The capability is known but not implemented or not requestable yet.
+    Unsupported,
+    /// The capability is implemented but required local setup is missing.
+    SetupMissing,
+}
+
+/// Read-only support information for one capability row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilitySupport {
+    /// Stable capability name, such as `imports` or `cfg`.
+    pub capability: String,
+    /// Language this support row applies to, if language-specific.
+    pub language: Option<Language>,
+    /// Current support status for the capability row.
+    pub status: CapabilitySupportStatus,
+    /// Rule IDs that requested the capability.
+    pub rules: Vec<String>,
+    /// Deterministic explanation for unsupported or setup-missing rows.
+    pub reason: Option<String>,
+    /// Actionable remediation hint, when available.
+    pub hint: Option<String>,
+    /// Repository docs path for more context, when available.
+    pub docs_path: Option<String>,
+}
+
+/// Read-only capability support rows exposed to rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilitySupportView {
+    entries: Vec<CapabilitySupport>,
+}
+
+impl CapabilitySupportView {
+    /// Returns an empty support view for compatibility paths that do not build a plan.
+    pub fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Creates a support view from deterministic support rows.
+    pub fn new(entries: Vec<CapabilitySupport>) -> Self {
+        Self { entries }
+    }
+
+    /// Returns support rows in deterministic plan order.
+    pub fn entries(&self) -> &[CapabilitySupport] {
+        &self.entries
+    }
+
+    /// Returns the first status for a capability name, if present.
+    pub fn status_for(&self, capability: &str) -> Option<CapabilitySupportStatus> {
+        self.entries
+            .iter()
+            .find(|entry| entry.capability == capability)
+            .map(|entry| entry.status.clone())
+    }
+}
+
 /// A static-analysis rule that runs against an [`AnalysisDb`] through [`RuleCtx`].
 ///
 /// Implementations should declare their metadata and capabilities, then report
@@ -737,16 +800,27 @@ pub struct RuleCtx<'a> {
     diagnostics: Vec<Diagnostic>,
     rule: RuleMeta,
     options: RuleOptions,
+    capability_support: CapabilitySupportView,
 }
 
 impl<'a> RuleCtx<'a> {
     /// Creates a rule context for one rule execution.
     pub fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
+        Self::with_capability_support(db, rule, options, CapabilitySupportView::empty())
+    }
+
+    pub(crate) fn with_capability_support(
+        db: &'a AnalysisDb,
+        rule: RuleMeta,
+        options: RuleOptions,
+        capability_support: CapabilitySupportView,
+    ) -> Self {
         Self {
             db,
             diagnostics: Vec::new(),
             rule,
             options,
+            capability_support,
         }
     }
 
@@ -758,6 +832,11 @@ impl<'a> RuleCtx<'a> {
     /// Returns resolved options for the current rule.
     pub fn options(&self) -> &RuleOptions {
         &self.options
+    }
+
+    /// Returns read-only capability support information for the resolved plan.
+    pub fn capability_support(&self) -> &CapabilitySupportView {
+        &self.capability_support
     }
 
     /// Returns all analyzed source files in deterministic database order.
@@ -1046,6 +1125,18 @@ pub fn run_rules(
     enabled: Option<&BTreeSet<String>>,
     parallel: bool,
 ) -> Vec<Diagnostic> {
+    let capability_support = CapabilitySupportView::empty();
+    run_rules_with_capability_support(db, rules, options, enabled, parallel, &capability_support)
+}
+
+pub(crate) fn run_rules_with_capability_support(
+    db: &AnalysisDb,
+    rules: &[Arc<dyn Rule>],
+    options: &BTreeMap<String, RuleOptions>,
+    enabled: Option<&BTreeSet<String>>,
+    parallel: bool,
+    capability_support: &CapabilitySupportView,
+) -> Vec<Diagnostic> {
     let run_one = |rule: &Arc<dyn Rule>| {
         let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
             Ok(meta) => meta,
@@ -1065,7 +1156,12 @@ pub fn run_rules(
             return Vec::new();
         }
         let rule_options = options.get(&meta.id).cloned().unwrap_or_default();
-        let mut ctx = RuleCtx::new(db, meta.clone(), rule_options);
+        let mut ctx = RuleCtx::with_capability_support(
+            db,
+            meta.clone(),
+            rule_options,
+            capability_support.clone(),
+        );
         let result = catch_unwind(AssertUnwindSafe(|| rule.run(&mut ctx)));
         match result {
             Ok(Ok(())) => ctx.into_diagnostics(),

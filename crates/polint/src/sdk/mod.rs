@@ -25,7 +25,8 @@ pub fn collect_go_tests<'a>(ctx: &'a RuleCtx<'_>, file: FileId) -> Vec<&'a TestF
 /// the path-scoping helpers, and [`RuleResult`](crate::sdk::prelude::RuleResult) in one star-import.
 pub mod prelude {
     pub use crate::core::{
-        AnalysisDb, BranchId, BranchObligation, Capabilities, CoverageFact, FileId, FunctionFact,
+        AnalysisDb, BranchId, BranchObligation, Capabilities, CapabilitySupport,
+        CapabilitySupportStatus, CapabilitySupportView, CoverageFact, FileId, FunctionFact,
         FunctionId, ImportFact, ImportId, JsxAttributeFact, Language, NodeId, PackageFact,
         PackageId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span,
         StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
