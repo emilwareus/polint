@@ -2,14 +2,19 @@
 //!
 //! Rule authors primarily use [`sdk`] and [`runner`]. Other modules are internal to this crate.
 
+extern crate self as polint;
+
 pub mod runner;
 pub mod sdk;
+
+pub use polint_macros::rule;
 
 /// CLI entry used by the `polint` binary (`src/main.rs`).
 pub fn run_main() -> anyhow::Result<u8> {
     cli::run()
 }
 
+pub(crate) mod analysis_plan;
 pub(crate) mod cache;
 pub(crate) mod cli;
 pub(crate) mod config;
@@ -55,7 +60,6 @@ pub mod _bench {
         use crate::core::{Rule, RuleOptions};
         use std::collections::BTreeMap;
         use std::collections::BTreeSet;
-        use std::sync::Arc;
 
         #[inline]
         pub fn config_hash(config: &LoadedConfig) -> String {
@@ -64,7 +68,7 @@ pub mod _bench {
 
         #[inline]
         pub fn rule_hash(
-            rules: &[Arc<dyn Rule>],
+            rules: &[Rule],
             enabled: Option<&BTreeSet<String>>,
             options: &BTreeMap<String, RuleOptions>,
         ) -> String {

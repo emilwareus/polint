@@ -12,6 +12,7 @@ pub(crate) struct CacheKey {
     pub(crate) file_hash: String,
     pub(crate) config_hash: String,
     pub(crate) rule_hash: String,
+    pub(crate) plan_hash: String,
     pub(crate) version: String,
     pub(crate) schema: String,
 }
@@ -28,6 +29,7 @@ impl CacheKey {
             file_hash: file_hash.into(),
             config_hash: config_hash.into(),
             rule_hash: rule_hash.into(),
+            plan_hash: String::new(),
             version: CACHE_VERSION.to_string(),
             schema: "analysis-facts-v1".to_string(),
         }
@@ -38,12 +40,14 @@ impl CacheKey {
         content_hash: &str,
         config_hash: &str,
         rule_hash: &str,
+        plan_hash: &str,
         schema: &str,
     ) -> Self {
         Self {
             file_hash: stable_hash(&[relative_path, content_hash]),
             config_hash: config_hash.to_string(),
             rule_hash: rule_hash.to_string(),
+            plan_hash: plan_hash.to_string(),
             version: CACHE_VERSION.to_string(),
             schema: schema.to_string(),
         }
@@ -54,6 +58,7 @@ impl CacheKey {
             &self.file_hash,
             &self.config_hash,
             &self.rule_hash,
+            &self.plan_hash,
             &self.version,
             &self.schema,
         ])
@@ -165,24 +170,88 @@ mod tests {
 
     #[test]
     fn cache_key_changes_with_rule_hash() {
-        let a = CacheKey::for_file("src/main.go", "content", "config", "rule-a", "go-facts-v1");
-        let b = CacheKey::for_file("src/main.go", "content", "config", "rule-b", "go-facts-v1");
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule-a",
+            "plan",
+            "go-facts-v1",
+        );
+        let b = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule-b",
+            "plan",
+            "go-facts-v1",
+        );
+
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
+    fn cache_key_changes_with_plan_hash() {
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan-a",
+            "go-facts-v1",
+        );
+        let b = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan-b",
+            "go-facts-v1",
+        );
 
         assert_ne!(a.stable_id(), b.stable_id());
     }
 
     #[test]
     fn cache_key_changes_with_schema() {
-        let a = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
-        let b = CacheKey::for_file("src/main.go", "content", "config", "rule", "ts-facts-v1");
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
+        let b = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "ts-facts-v1",
+        );
 
         assert_ne!(a.stable_id(), b.stable_id());
     }
 
     #[test]
     fn cache_key_changes_with_relative_path() {
-        let a = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
-        let b = CacheKey::for_file("src/other.go", "content", "config", "rule", "go-facts-v1");
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
+        let b = CacheKey::for_file(
+            "src/other.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
 
         assert_ne!(a.stable_id(), b.stable_id());
     }
@@ -191,7 +260,14 @@ mod tests {
     fn disabled_cache_does_not_create_cache_directory() {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), false);
-        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let key = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
 
         cache.write_json(&key, &json!({ "ok": true })).unwrap();
 
@@ -204,7 +280,14 @@ mod tests {
     fn cache_json_round_trip() {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), true);
-        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let key = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
         let value = json!({ "diagnostics": [], "schema": "go-facts-v2" });
 
         cache.write_json(&key, &value).unwrap();
@@ -218,7 +301,14 @@ mod tests {
     fn invalid_json_can_be_treated_as_miss() {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), true);
-        let key = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
+        let key = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
         fs::create_dir_all(cache.root()).unwrap();
         fs::write(cache.path_for(&key), "{not-json").unwrap();
 
@@ -234,8 +324,8 @@ mod tests {
             right in "[a-z]{1,8}/[a-z]{1,8}\\.go",
         ) {
             prop_assume!(left != right);
-            let left_key = CacheKey::for_file(&left, "same-content", "config", "rule", "go-facts-v1");
-            let right_key = CacheKey::for_file(&right, "same-content", "config", "rule", "go-facts-v1");
+            let left_key = CacheKey::for_file(&left, "same-content", "config", "rule", "plan", "go-facts-v1");
+            let right_key = CacheKey::for_file(&right, "same-content", "config", "rule", "plan", "go-facts-v1");
 
             prop_assert_ne!(left_key.stable_id(), right_key.stable_id());
         }

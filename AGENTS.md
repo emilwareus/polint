@@ -93,15 +93,34 @@ live in `examples/` inside this repository.
 - Rule code should import `polint::sdk::prelude::*` and register through
   `polint::runner::run_cli`; do not make examples depend on `polint::core`,
   `go`, `ts`, `config`, parser adapters, test helpers, or other internal modules.
-- Examples should demonstrate composition of public facts from `RuleCtx`, not
-  call one-off helpers that solve only the example.
+- Examples should demonstrate composition of public typed fact views requested
+  from `#[polint::rule]` signatures. `RuleCtx` is for diagnostics, options,
+  source paths, and capability/setup metadata; do not reintroduce broad fact
+  access on `RuleCtx` as the normal rule-authoring path.
+- Future analysis families such as CFG, call graph, dataflow, coverage, module
+  graph, symbols, references, and test metrics should be added as typed SDK
+  views with query methods on those views, not as `RuleCtx` fact accessors.
+- Capabilities for normal rules must be derived from typed fact-view parameters,
+  not handwritten `Capabilities::new()` declarations. Do not add manual `impl
+  Rule` examples, compatibility shims, or public rule constructors as a beta
+  escape hatch; if the old API shape fights the product model, break it and move
+  examples/tests to the typed macro path.
+- `#[polint::rule]` functions should stay plain and analyzable: no generics,
+  no async/const/unsafe/extern forms, `&mut RuleCtx<'_>` first, `RuleResult`
+  or `RuleResult<()>` return.
+- Macro-derived fact parameters must resolve to SDK fact views exported by the
+  prelude or written as canonical `polint::sdk::facts::*` paths, with the
+  placeholder lifetime form such as `Imports<'_>`. Do not make locally defined
+  lookalike types, aliases, or user-provided `FactView` implementations count
+  as capability sources.
 - When adding a rule-authoring feature, add at least one temp-repo style test
   that behaves like an outside user: generated `.polint/rules`, public SDK
   imports only, real facts consumed, and a diagnostic asserted through
   `polint check --format json`.
 - Keep capability names honest. Do not expose or advertise a capability as a
   provided fact family until a rule can read the underlying facts through the
-  public SDK.
+  public SDK. Rules that request unsupported or setup-missing hard capabilities
+  should produce capability diagnostics and not execute with placeholder facts.
 - If a rule needs custom config, preserve it through `RuleOptions::settings`
   rather than overloading unrelated fields like `allow`, `deny`, or `max`.
 - Config and resolved rule options that can affect rule behavior must

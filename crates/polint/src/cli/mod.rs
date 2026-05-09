@@ -1,3 +1,4 @@
+use crate::analysis_plan::{ANALYSIS_PLAN_SCHEMA, AnalysisPlan, ExplainPlanReport};
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
@@ -19,6 +20,8 @@ use std::time::Instant;
 
 mod rules_host_error;
 mod skill;
+
+const CHILD_EXPLAIN_PLAN_JSON_ARGS: [&str; 4] = ["explain", "plan", "--format", "json"];
 
 fn json_report_meta() -> JsonReportMeta<'static> {
     JsonReportMeta {
@@ -124,9 +127,27 @@ struct ExplainArgs {
 enum ExplainCommand {
     /// Describe a rule id (polint ships no bundled rules; mostly a stub for tooling).
     Rule { rule_id: String },
+    /// Print the resolved analysis plan without parsing source files.
+    Plan(ExplainPlanArgs),
     /// Print one harvested Go [`crate::core::TestFact`] as JSON (`docs/facts/go-tests.md`).
     #[command(name = "go-test")]
     GoTest(ExplainGoTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExplainPlanArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ExplainPlanFormat::Human)]
+    format: ExplainPlanFormat,
+    /// Named profile from .polint.toml. When omitted, all discovered rules are planned.
+    #[arg(long)]
+    profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExplainPlanFormat {
+    Human,
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -230,7 +251,7 @@ pub(crate) fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Check(args) => check(std::env::current_dir()?, &args),
-        Command::Explain(args) => explain_command(&args),
+        Command::Explain(args) => explain_command(std::env::current_dir()?, &args),
         Command::TestRules(args) => {
             if matches!(args.format, FormatArg::Human) {
                 println!("Running rule tests against the current repository fixtures.");
@@ -318,7 +339,6 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let rules_dir = root.join(".polint/rules");
     let module = rust_module_name(&rule_name);
-    let struct_name = to_pascal_case(&rule_name);
     let module_path = rules_dir.join("src").join(format!("{module}.rs"));
 
     match fs::symlink_metadata(&module_path) {
@@ -336,17 +356,17 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let pack_toml = rules_dir.join("Cargo.toml");
     if !pack_toml.is_file() {
         write_pack_cargo_toml(&rules_dir)?;
-        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+        write_initial_pack_main(&rules_dir, &module)?;
     } else if !rules_dir.join("src/main.rs").is_file() {
-        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+        write_initial_pack_main(&rules_dir, &module)?;
     } else {
-        prepend_pack_mod_use(&rules_dir, &module, &struct_name)?;
-        append_rule_to_run_cli_vec(&rules_dir, &struct_name)?;
+        prepend_pack_mod_use(&rules_dir, &module)?;
+        append_rule_to_run_cli_vec(&rules_dir, &module)?;
     }
 
     fs::write(
         &module_path,
-        rule_module_template(&args.language, &rule_name, &struct_name),
+        rule_module_template(&args.language, &rule_name),
     )?;
     println!("Created rule module {}", module_path.display());
     Ok(())
@@ -398,17 +418,15 @@ publish = false
     Ok(())
 }
 
-fn write_initial_pack_main(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+fn write_initial_pack_main(rules_dir: &Path, module: &str) -> Result<()> {
     let initial = format!(
         r#"mod {module};
-use {module}::{struct_name};
 
 use std::process::ExitCode;
-use std::sync::Arc;
 
 fn main() -> ExitCode {{
     polint::runner::run_cli(vec![
-        Arc::new({struct_name}),
+        {module}::{module}(),
     ])
 }}
 "#
@@ -422,20 +440,19 @@ fn main() -> ExitCode {{
     Ok(())
 }
 
-fn prepend_pack_mod_use(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+fn prepend_pack_mod_use(rules_dir: &Path, module: &str) -> Result<()> {
     let main_path = rules_dir.join("src/main.rs");
     let mut src = fs::read_to_string(&main_path)
         .with_context(|| format!("failed to read {}", main_path.display()))?;
     let mod_decl = format!("mod {module};");
-    let use_decl = format!("use {module}::{struct_name};");
     if !src.contains(&mod_decl) {
-        src.insert_str(0, &format!("{mod_decl}\n{use_decl}\n\n"));
+        src.insert_str(0, &format!("{mod_decl}\n"));
         fs::write(&main_path, src)?;
     }
     Ok(())
 }
 
-fn append_rule_to_run_cli_vec(rules_dir: &Path, struct_name: &str) -> Result<()> {
+fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
     let main_path = rules_dir.join("src/main.rs");
     let src = fs::read_to_string(&main_path)
         .with_context(|| format!("failed to read {}", main_path.display()))?;
@@ -466,9 +483,9 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, struct_name: &str) -> Result<()>
     let inner = &src[inner_start..end];
     let trimmed = inner.trim_end();
     let new_inner = if trimmed.is_empty() {
-        format!("\n        Arc::new({struct_name}),\n    ")
+        format!("\n        {module}::{module}(),\n    ")
     } else {
-        format!("{trimmed}\n        Arc::new({struct_name}),\n    ")
+        format!("{trimmed}\n        {module}::{module}(),\n    ")
     };
     let mut new_src = String::new();
     new_src.push_str(&src[..inner_start]);
@@ -494,59 +511,44 @@ fn validate_rule_name(name: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn rule_module_template(language: &str, rule_name: &str, struct_name: &str) -> String {
-    let capability = match language {
-        "go" => ".go_tests().branch_obligations()",
-        "ts" | "tsx" | "js" | "jsx" => ".string_literals().jsx_attributes()",
-        _ => ".syntax()",
+fn rule_module_template(language: &str, rule_name: &str) -> String {
+    let module = rust_module_name(rule_name);
+    let fact_params = match language {
+        "go" => "tests: GoTests<'_>, branches: BranchObligations<'_>",
+        "ts" | "tsx" | "js" | "jsx" => "literals: StringLiterals<'_>, jsx: JsxAttributes<'_>",
+        _ => "functions: Functions<'_>",
     };
     let query_example = match language {
         "go" => {
-            r#"        for file in ctx.files() {
-            let test_count = ctx.go_tests_for_file(file.id).count();
-            let branch_count = ctx.branch_obligations_for_file(file.id).count();
-            let _ = (test_count, branch_count);
-        }"#
+            r#"    for branch in branches.iter() {
+        let related_test_count = tests.related_for_file(branch.file).len();
+        let _ = related_test_count;
+    }"#
         }
         "ts" | "tsx" | "js" | "jsx" => {
-            r#"        for file in ctx.files() {
-            let literal_count = ctx.string_literals_for_file(file.id).count();
-            let attribute_count = ctx.jsx_attributes_for_file(file.id).count();
-            let _ = (literal_count, attribute_count);
-        }"#
+            r#"    let literal_count = literals.iter().count();
+    let attribute_count = jsx.iter().count();
+    let _ = (literal_count, attribute_count);"#
         }
         _ => {
-            r#"        for file in ctx.files() {
-            let function_count = ctx.functions_for_file(file.id).count();
-            let _ = function_count;
-        }"#
+            r#"    let function_count = functions.iter().count();
+    let _ = function_count;"#
         }
     };
     format!(
         r#"use polint::sdk::prelude::*;
 
-pub struct {struct_name};
-
-impl Rule for {struct_name} {{
-    fn meta(&self) -> RuleMeta {{
-        RuleMeta {{
-            id: "custom/{rule_name}".to_string(),
-            description: "Project-specific policy: {rule_name}.".to_string(),
-            severity: Severity::Warn,
-        }}
-    }}
-
-    fn capabilities(&self) -> Capabilities {{
-        Capabilities::new(){capability}
-    }}
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {{
+#[polint::rule(
+    id = "custom/{rule_name}",
+    description = "Project-specific policy: {rule_name}.",
+    severity = "warn"
+)]
+pub(crate) fn {module}(_ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
-        // To report a diagnostic, call ctx.warn(&some_fact.span, "message")
-        // or ctx.report(Diagnostic::...). Custom TOML fields are in
-        // ctx.options().settings.
-        Ok(())
-    }}
+    // To report a diagnostic, call _ctx.warn(&some_fact.span, "message")
+    // or _ctx.report(Diagnostic::...). Custom TOML fields are in
+    // _ctx.options().settings.
+    Ok(())
 }}
 "#
     )
@@ -603,27 +605,35 @@ fn analyze_and_run(
     let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+    let plan = AnalysisPlan::empty();
 
     let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = Vec::new();
-    diagnostics.extend(crate::go::analyze_with_options(
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics = analyze_with_plan_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        &plan,
         parallel,
-    ));
-    diagnostics.extend(crate::ts::analyze_with_options(
+    );
+    diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics = analyze_with_plan_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        &plan,
         parallel,
-    ));
+    );
+    diagnostics.extend(ts_diagnostics);
 
     diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
     Ok((diagnostics, db, loaded))
@@ -638,7 +648,7 @@ fn selected_rule_patterns(
         .map(|rules| rules.into_iter().collect()))
 }
 
-fn explain_command(args: &ExplainArgs) -> Result<u8> {
+fn explain_command(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
     match &args.command {
         ExplainCommand::Rule { rule_id } => {
             println!(
@@ -646,21 +656,46 @@ fn explain_command(args: &ExplainArgs) -> Result<u8> {
             );
             Ok(0)
         }
-        ExplainCommand::GoTest(go) => explain_go_test_fact(std::env::current_dir()?, go),
+        ExplainCommand::Plan(plan) => explain_plan(root, plan),
+        ExplainCommand::GoTest(go) => explain_go_test_fact(root, go),
     }
+}
+
+fn explain_plan(root: PathBuf, args: &ExplainPlanArgs) -> Result<u8> {
+    let manifests = discover_local_rule_hosts(&root)?;
+    let report = if manifests.is_empty() {
+        let loaded = load_config_for_check(&root, &[])?;
+        selected_rule_patterns(&loaded, args.profile.as_deref())?;
+        AnalysisPlan::empty().explain_report()
+    } else {
+        let mut reports = Vec::new();
+        for manifest in &manifests {
+            reports.push(run_local_rule_host_explain_plan(&root, manifest, args)?);
+        }
+        combine_explain_plan_reports(reports)
+    };
+
+    match args.format {
+        ExplainPlanFormat::Human => print!("{}", report.to_human()),
+        ExplainPlanFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+
+    Ok(0)
 }
 
 fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
     let loaded = load_config_for_check(&root, &[])?;
     let cache = crate::cache::Cache::default_for_repo(&root, false);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, None)?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+    let plan = AnalysisPlan::empty();
 
     let mut db = load_analysis_files(&loaded)?;
-    let _ = crate::go::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, true);
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let _ = analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
 
     let file_id = db
         .files()
@@ -719,26 +754,22 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config_for_check(&root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(&root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&config);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let mut parser_diagnostics = Vec::new();
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &all_options);
+    let plan = AnalysisPlan::empty();
     let mut db = load_analysis_files(&config)?;
-    parser_diagnostics.extend(crate::go::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
-    parser_diagnostics.extend(crate::ts::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    parser_diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    parser_diagnostics.extend(ts_diagnostics);
     let mut all_diagnostics = parser_diagnostics;
 
     for rule in &rules {
@@ -952,6 +983,85 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
     })
 }
 
+fn run_local_rule_host_explain_plan(
+    root: &Path,
+    manifest: &Path,
+    args: &ExplainPlanArgs,
+) -> Result<ExplainPlanReport> {
+    let cargo = std::env::var("POLINT_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
+    let manifest_str = manifest
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))?;
+    let mut command = ProcessCommand::new(&cargo);
+    command
+        .current_dir(root)
+        .args(["run", "--quiet", "--manifest-path", manifest_str, "--"])
+        .args(CHILD_EXPLAIN_PLAN_JSON_ARGS);
+    if let Some(profile) = &args.profile {
+        command.args(["--profile", profile]);
+    }
+    if let Ok(toolchain) = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
+        && !toolchain.is_empty()
+    {
+        command.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
+
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run local rule host explain plan {} with `{cargo}`",
+            manifest.display()
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        anyhow::bail!(
+            "local rule host explain plan failed for {} with status {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            output.status,
+            stdout,
+            stderr
+        );
+    }
+
+    serde_json::from_str(stdout.as_ref()).with_context(|| {
+        format!(
+            "local rule host explain plan emitted invalid JSON: {}\nstdout:\n{}\nstderr:\n{}",
+            manifest.display(),
+            stdout,
+            stderr
+        )
+    })
+}
+
+fn combine_explain_plan_reports(mut reports: Vec<ExplainPlanReport>) -> ExplainPlanReport {
+    if reports.len() == 1 {
+        return reports.remove(0);
+    }
+
+    let mut digest_parts = Vec::new();
+    let mut rules = Vec::new();
+    let mut capabilities = Vec::new();
+    let mut setup_checks = Vec::new();
+    for report in reports {
+        digest_parts.push(report.digest);
+        rules.extend(report.rules);
+        capabilities.extend(report.capabilities);
+        setup_checks.extend(report.setup_checks);
+    }
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+
+    ExplainPlanReport {
+        schema: ANALYSIS_PLAN_SCHEMA.to_string(),
+        digest: crate::cache::stable_hash(&digest_refs),
+        rules,
+        capabilities,
+        setup_checks,
+    }
+}
+
 fn exit_code_for(diagnostics: &[crate::diagnostics::Diagnostic], fail_on: FailOn) -> u8 {
     let threshold = match fail_on {
         FailOn::Warn => Some(Severity::Warn),
@@ -978,23 +1088,4 @@ fn sanitize_name(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn to_pascal_case(name: &str) -> String {
-    let mut out = String::new();
-    for part in name.split(|ch: char| !ch.is_ascii_alphanumeric()) {
-        if part.is_empty() {
-            continue;
-        }
-        let mut chars = part.chars();
-        if let Some(first) = chars.next() {
-            out.extend(first.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-    if out.is_empty() {
-        "CustomRule".to_string()
-    } else {
-        out
-    }
 }

@@ -11,6 +11,6 @@ internal entry points.
 - [Imports](imports.md)
 - [Branches](branches.md)
 - [Go tests](go-tests.md)
+- [Capability plans](capability-plans.md)
 - [TypeScript / JavaScript](ts-js.md)
 - [Literals and JSX attributes](literals.md)
-

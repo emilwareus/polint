@@ -8,19 +8,23 @@ The product direction is simple:
 - Python, Java, and later languages join through the same adapter contract.
 - polint owns the rule SDK, fact model, diagnostics, cache, graph APIs, and
   capability planning.
+- Future analysis facts are requested as typed `#[polint::rule]` parameters,
+  not as broad `RuleCtx` fact helpers.
 - Language adapters may use in-house analysis, parser crates, language-native
   tools, or sidecars when that gives better facts.
 
 ## Roadmap
 
-- [ ] **1. Make capabilities drive analysis**
+- [x] **1. Make capabilities drive analysis**
   ([technical plan](01_ENTRY_1_ANALYSIS_PLAN.md))
 
-  Build an `AnalysisPlan` from enabled rules before parsing. This makes
-  `Capabilities` a real contract instead of metadata. After this, a rule that
-  asks for imports, CFG, coverage, symbols, or tests should cause polint to
-  plan that work explicitly, validate required setup, and include the request in
-  cache keys. This is the foundation for every later item.
+  Completed in Phase 11. polint now builds a deterministic `AnalysisPlan` from
+  enabled rules before parsing, exposes it through `polint explain plan`, passes
+  it to the Go and TS/JS adapters, reports unsupported reserved capabilities,
+  and includes the resolved plan digest in adapter cache keys. This makes
+  `Capabilities` an enforceable planning contract. Later entries still own the
+  real CFG, coverage, symbol, call-graph, dataflow, module-resolution, and
+  test-metric facts.
 
 - [ ] **2. Add real CFG facts for Go and TS/JS**
   ([technical plan](02_ENTRY_2_CFG_FACTS.md))
@@ -95,7 +99,7 @@ The product direction is simple:
 Every roadmap item should ship with:
 
 - [ ] public fact types or graph types
-- [ ] public `RuleCtx` accessors
+- [ ] typed SDK views and query methods on those views
 - [ ] adapter implementation for the targeted language tier
 - [ ] cache-key participation when harvested facts change
 - [ ] docs under `docs/facts/` when new facts are public

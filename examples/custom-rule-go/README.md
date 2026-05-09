@@ -38,15 +38,29 @@ Start a Go rule in a real project with:
 polint new-rule go require-payment-error-tests
 ```
 
-The useful SDK calls for this kind of policy are `ctx.branches()` and
-`ctx.go_tests_for_related_file(...)`:
+The useful SDK views for this kind of policy are `BranchObligations<'_>` and
+`GoTests<'_>`. Requesting those parameters is also how polint derives the rule's
+capabilities:
 
 ```rust
-for branch in ctx.branches() {
-    if branch.is_error_path && ctx.go_tests_for_related_file(branch.file).is_empty() {
+#[polint::rule(
+    id = "local/require-payment-error-tests",
+    description = "Require test evidence for Go error branches.",
+    severity = "warn"
+)]
+fn require_payment_error_tests(
+    ctx: &mut RuleCtx<'_>,
+    branches: BranchObligations<'_>,
+    tests: GoTests<'_>,
+) -> RuleResult {
+    for branch in branches.iter() {
+        if !branch.is_error_path || !tests.related_for_file(branch.file).is_empty() {
+            continue;
+        }
+
         ctx.report(
             Diagnostic::warning(
-                "local/require-payment-error-tests",
+                ctx.rule_id(),
                 ctx.file_path(branch.file),
                 branch.decision_span.diagnostic_range(),
                 "Add a test for this error branch.",
@@ -54,6 +68,7 @@ for branch in ctx.branches() {
             .with_evidence("condition", branch.condition_text.clone()),
         );
     }
+    Ok(())
 }
 ```
 

@@ -1,3 +1,4 @@
+use crate::analysis_plan::AnalysisPlan;
 use crate::core::{
     AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
     Language, SourceFile, Span, StringLiteralFact, TsClassFact, TsComponentFact,
@@ -42,12 +43,24 @@ pub(crate) fn analyze_with_cache(
 }
 
 // `pub` for `polint::_bench::ts` / `polint-bench`, not for direct downstream use.
-#[allow(unreachable_pub)]
+#[allow(dead_code, unreachable_pub)]
 pub fn analyze_with_options(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
     config_hash: &str,
     rule_hash: &str,
+    parallel: bool,
+) -> Vec<Diagnostic> {
+    let plan = AnalysisPlan::empty();
+    analyze_with_plan_options(db, cache, config_hash, rule_hash, &plan, parallel)
+}
+
+pub(crate) fn analyze_with_plan_options(
+    db: &mut AnalysisDb,
+    cache: &crate::cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+    plan: &AnalysisPlan,
     parallel: bool,
 ) -> Vec<Diagnostic> {
     let files: Vec<&SourceFile> = db
@@ -59,12 +72,12 @@ pub fn analyze_with_options(
     let mut results = if parallel {
         files
             .par_iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash))
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
             .collect::<Vec<_>>()
     } else {
         files
             .iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash))
+            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
             .collect::<Vec<_>>()
     };
     results.sort_by_key(|result| result.file_id);
@@ -90,12 +103,14 @@ fn analyze_ts_source_file(
     cache: &crate::cache::Cache,
     config_hash: &str,
     rule_hash: &str,
+    plan_hash: &str,
 ) -> TsFileAnalysis {
     let key = crate::cache::CacheKey::for_file(
         file.relative_path.as_str(),
         file.content_hash.as_str(),
         config_hash,
         rule_hash,
+        plan_hash,
         TS_CACHE_SCHEMA,
     );
     if let Some(cached) = cache.read_json_or_miss::<CachedFileAnalysis>(&key)

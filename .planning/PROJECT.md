@@ -14,6 +14,8 @@ Make it easy to express a repo-specific engineering policy as a small rule and r
 
 v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/discovery loop, deterministic core facts and diagnostics, Go and TypeScript/JavaScript adapters, SDK and self-contained example-local rules, cache/performance support, CI output and graph commands, README/examples, and final release verification.
 
+Phase 11 of v1.1 completed on 2026-05-09. Declared rule capabilities now produce an internal deterministic `AnalysisPlan`, the child rule host passes that plan to Go and TS/JS adapters before harvesting, adapter cache keys include the plan digest, unsupported reserved capabilities produce structured `polint/capability` diagnostics, and `polint explain plan` exposes deterministic human/JSON output.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -62,13 +64,13 @@ and public SDK access.
 - [x] Harden SARIF-like diagnostics, fail thresholds, exit code semantics, and CI-facing command behavior. Validated in Phase 8: CI Output and Graph Commands.
 - [x] Provide meaningful unit, integration, snapshot, and property tests for the core behavior. Validated across Phases 1–9, with final traceability closed in Phase 9: Docs, Examples, and Release Hardening.
 - [x] Write a README that explains the goal, non-goals, quickstart, custom rule authoring, CI usage, and roadmap. Validated in Phase 9: Docs, Examples, and Release Hardening.
+- [x] Let rule authors declare capabilities and inspect an explicit analysis plan derived from enabled rules. Validated in Phase 11: Capability-Driven Analysis Plan.
+- [x] Pass the resolved analysis plan to Go and TS/JS adapters before fact harvesting. Validated in Phase 11: Capability-Driven Analysis Plan.
+- [x] Include requested capabilities and setup-sensitive analysis inputs in cache identity through the plan digest. Validated in Phase 11: Capability-Driven Analysis Plan.
+- [x] Report missing or unsupported requested capabilities as clear diagnostics or structured warnings. Validated in Phase 11: Capability-Driven Analysis Plan.
 
 ### Active
 
-- [ ] **PLAN-01**: Rule authors can declare capabilities and see an explicit analysis plan derived from enabled rules.
-- [ ] **PLAN-02**: The runner passes the resolved analysis plan to Go and TS/JS adapters before fact harvesting.
-- [ ] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
-- [ ] **PLAN-04**: Missing or unsupported setup for requested capabilities becomes a clear diagnostic or structured warning.
 - [ ] **CFG-01**: Rule authors can read real per-function CFG facts through `RuleCtx`.
 - [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
 - [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared graph model.
@@ -167,7 +169,7 @@ and public SDK access.
 | Treat timing output as local profiling metadata, not benchmarks | Phase 7 `profile-rules` reports parseable elapsed timing rows but tests only assert shape/order/nonnegative values and no fixed speedup claims. | Accepted in Phase 7 |
 | Keep CI output SARIF-like, not certified SARIF | Phase 8 emits useful SARIF-shaped JSON for CI while avoiding conformance claims beyond the implemented fields. | Accepted in Phase 8 |
 | Make README and examples the v1 user-facing documentation surface | Phase 9 completed concise command-oriented docs and examples instead of creating a separate docs site or publishing automation. | Accepted in Phase 9 |
-| Fulfill capability promises instead of removing them | The v1.1 milestone should make declared capabilities operational through public facts, setup validation, cache semantics, docs, and external-consumer tests. | Pending in v1.1 |
+| Fulfill capability promises instead of removing them | The v1.1 milestone should make declared capabilities operational through public facts, setup validation, cache semantics, docs, and external-consumer tests. | Accepted in Phase 11 for planning/cache/diagnostic semantics; remaining fact families continue in later v1.1 phases |
 | Keep Go and TS/JS as full-coverage targets before Python and Java parity | The current adapters are the proving ground for the complete capability model; Python and Java should enter through explicit subsets and expand after the model is proven. | Pending in v1.1 |
 | Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Pending in v1.1 |
 
@@ -194,4 +196,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-08 after starting milestone v1.1 Capability Fulfillment*
+*Last updated: 2026-05-09 after completing Phase 11 Capability-Driven Analysis Plan*

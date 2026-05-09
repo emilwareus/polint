@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
-status: active
-stopped_at: milestone v1.1 initialized
-last_updated: "2026-05-08T00:00:00Z"
-last_activity: 2026-05-08
+status: planning
+stopped_at: Phase 11 complete
+last_updated: "2026-05-09T12:00:31.000Z"
+last_activity: 2026-05-09
 progress:
   total_phases: 9
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
+  percent: 11
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.1 Capability Fulfillment
+**Current focus:** Phase 12 — CFG Facts for Go and TS/JS
 
 ## Current Status
 
@@ -57,15 +57,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
-- Next action: start Phase 11 with `/gsd-discuss-phase 11` or `/gsd-plan-phase 11`.
+- Next action: discuss and plan Phase 12.
 
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Active
-Phase: 11 - Capability-Driven Analysis Plan
+Status: Ready to plan
+Phase: 12 - CFG Facts for Go and TS/JS
 Plan: Not started
-Last activity: 2026-05-08 - Started milestone v1.1 Capability Fulfillment
+Last activity: 2026-05-09 - Completed quick task 260509-ibk: Implement static capability derivation rule authoring API
 
 ## Quick Tasks Completed
 
@@ -88,12 +88,14 @@ Last activity: 2026-05-08 - Started milestone v1.1 Capability Fulfillment
 | 260505-ffu | Make polint check run repo-local rule hosts directly | 2026-05-05 | uncommitted | [260505-ffu-make-polint-check-run-repo-local-rule-ho](./quick/260505-ffu-make-polint-check-run-repo-local-rule-ho/) |
 | 260506-iuu | Fix staged review findings for agent-quality changes | 2026-05-06 | uncommitted | [260506-iuu-fix-staged-review-findings-for-agent-qua](./quick/260506-iuu-fix-staged-review-findings-for-agent-qua/) |
 | 260507-rap | Rule authoring platform hardening | 2026-05-07 | uncommitted | [260507-rap-rule-authoring-platform-hardening](./quick/260507-rap-rule-authoring-platform-hardening/) |
+| 260509-h5x | Fix capability roadmap docs and add realistic CLI coverage for explain plan | 2026-05-09 | uncommitted | [260509-h5x-fix-capability-roadmap-docs-and-add-real](./quick/260509-h5x-fix-capability-roadmap-docs-and-add-real/) |
+| 260509-ibk | Implement static capability derivation rule authoring API | 2026-05-09 | uncommitted | [260509-ibk-implement-static-capability-derivation-r](./quick/260509-ibk-implement-static-capability-derivation-r/) |
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 11 | Pending | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
+| 11 | Complete | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
 | 12 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
 | 13 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
 | 14 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
@@ -156,6 +158,19 @@ Last activity: 2026-05-08 - Started milestone v1.1 Capability Fulfillment
 - [Phase 09]: Existing property tests remain the TEST-04 traceability source. — Span, diagnostic sorting, discovery, and cache-key invariants are already covered in the owning crates.
 - [Phase 09]: Phase 9 release readiness is command-verified v1 behavior. — The release matrix covers docs inventory, targeted CLI smoke tests, fmt, clippy, and workspace tests without implying publication or future runtime features.
 - [Phase 09]: Post-v1 release and runtime capabilities remain future work. — crates.io publishing, release tags, exact Go semantics, and dynamic branch coverage were intentionally not claimed as implemented.
+- [Phase 11-capability-driven-analysis-plan]: Keep AnalysisPlan crate-private and expose only CapabilitySupport, CapabilitySupportStatus, and CapabilitySupportView through the SDK prelude.
+- [Phase 11-capability-driven-analysis-plan]: Treat cfg, call_graph, coverage_facts, and test_suite_metrics as unsupported reserved capabilities in Phase 11.
+- [Phase 11-capability-driven-analysis-plan]: Use deterministic length-prefixed strings plus stable_hash for the plan digest instead of serde JSON output.
+- [Phase 11-capability-driven-analysis-plan]: Use RulePlanInputs as the single panic-contained rule metadata/capability snapshot for options, rule digest, and plan construction.
+- [Phase 11-capability-driven-analysis-plan]: Keep AnalysisPlan crate-private; bench-facing analyze_with_options wrappers construct AnalysisPlan::empty() internally.
+- [Phase 11-capability-driven-analysis-plan]: Include plan_hash in CacheKey::stable_id between rule_hash and cache version.
+- [Phase 11-capability-driven-analysis-plan]: Use an empty AnalysisPlan in parent CLI paths where no local rule host is loaded.
+- [Phase 11-capability-driven-analysis-plan]: Use ExplainPlanReport as a crate-private typed serde boundary shared by child and parent explain-plan commands.
+- [Phase 11-capability-driven-analysis-plan]: Keep polint explain plan --format json stdout as the child report itself for a single local rule host; no human prelude is emitted.
+- [Phase 11-capability-driven-analysis-plan]: Keep current Go test evidence on the supported go_tests capability; test_suite_metrics remains reserved for normalized future metrics.
+- [Static capability derivation]: Normal rule authors use `#[polint::rule]` functions with typed fact-view parameters; capabilities are generated from those parameter types instead of handwritten declarations.
+- [Static capability derivation]: `RuleCtx` is the diagnostics/options/path/support surface. Broad fact access belongs in typed SDK fact views, not the normal context API.
+- [Static capability derivation]: `Rule` is an opaque value, not a public trait. Do not preserve manual `impl Rule` compatibility paths during beta; update examples, scaffolds, and tests to the typed macro path instead.
 
 ## Performance Metrics
 
@@ -187,11 +202,14 @@ Last activity: 2026-05-08 - Started milestone v1.1 Capability Fulfillment
 | Phase 09 P02 | 3 min | 3 tasks | 7 files |
 | Phase 09 P03 | 4 min | 3 tasks | 1 files |
 | Phase 09 P04 | 2 min | 3 tasks | 1 files |
+| Phase 11-capability-driven-analysis-plan P01 | 8 min | 2 tasks | 4 files |
+| Phase 11-capability-driven-analysis-plan P02 | 16m 12s | 2 tasks | 9 files |
+| Phase 11-capability-driven-analysis-plan P03 | 22m 23s | 3 tasks | 7 files |
 
 ## Session
 
-**Last Date:** 2026-05-01T16:17:24.935Z
-**Stopped At:** Completed 10-04-PLAN.md
+**Last Date:** 2026-05-09T08:36:15.422Z
+**Stopped At:** Completed 11-03-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution

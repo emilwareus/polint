@@ -1,5 +1,6 @@
+use crate::analysis_plan::{AnalysisPlan, RulePlanInputs};
 use crate::config::{LoadedConfig, load_config};
-use crate::core::{Rule, RuleOptions, run_rules};
+use crate::core::{Rule, run_rules_with_capability_support};
 use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
     limit_report_diagnostics, render_with_sarif_help,
@@ -10,7 +11,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 #[command(name = "polint-local-rules")]
@@ -24,6 +24,36 @@ struct Cli {
 enum Command {
     /// Run the registered local rules against the current directory.
     Check(CheckArgs),
+    /// Explain registered local-rule analysis behavior.
+    Explain(ExplainArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExplainArgs {
+    #[command(subcommand)]
+    command: ExplainCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExplainCommand {
+    /// Print the resolved analysis plan without parsing source files.
+    Plan(ExplainPlanArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExplainPlanArgs {
+    /// Named profile from .polint.toml. When omitted, all registered rules are planned.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ExplainPlanFormat::Human)]
+    format: ExplainPlanFormat,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExplainPlanFormat {
+    Human,
+    Json,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -75,7 +105,7 @@ enum FailOn {
     None,
 }
 
-pub fn run_cli(rules: Vec<Arc<dyn Rule>>) -> ExitCode {
+pub fn run_cli(rules: Vec<Rule>) -> ExitCode {
     match run(rules) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
@@ -85,14 +115,48 @@ pub fn run_cli(rules: Vec<Arc<dyn Rule>>) -> ExitCode {
     }
 }
 
-fn run(rules: Vec<Arc<dyn Rule>>) -> Result<u8> {
+fn run(rules: Vec<Rule>) -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check(std::env::current_dir()?, &args, &rules),
+        Command::Explain(args) => explain_command(std::env::current_dir()?, &args, &rules),
     }
 }
 
-fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
+fn explain_command(root: PathBuf, args: &ExplainArgs, rules: &[Rule]) -> Result<u8> {
+    match &args.command {
+        ExplainCommand::Plan(plan_args) => explain_plan(root, plan_args, rules),
+    }
+}
+
+fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Rule]) -> Result<u8> {
+    let loaded = load_config_for_check(&root, &[])?;
+    let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
+    let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    let plan_diagnostics = plan_inputs.diagnostics();
+    if !plan_diagnostics.is_empty() {
+        anyhow::bail!(
+            "failed to collect rule plan inputs: {}",
+            plan_diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    let options = plan_inputs.rule_options_from_config(&loaded);
+    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
+    let report = plan.explain_report();
+
+    match args.format {
+        ExplainPlanFormat::Human => print!("{}", report.to_human()),
+        ExplainPlanFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+
+    Ok(0)
+}
+
+fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
     let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, rules)?;
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
@@ -138,7 +202,7 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8>
 fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
 ) -> Result<(
     Vec<crate::diagnostics::Diagnostic>,
     crate::core::AnalysisDb,
@@ -148,33 +212,31 @@ fn analyze_and_run(
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
-    let mut options = BTreeMap::<String, RuleOptions>::new();
-    for rule in rules {
-        let meta = rule.meta();
-        options.insert(
-            meta.id.clone(),
-            rule_options_from_config(loaded.rule_config(&meta.id)),
-        );
-    }
-    let rule_digest = crate::cache::keys::rule_hash(rules, enabled.as_ref(), &options);
+    let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    let options = plan_inputs.rule_options_from_config(&loaded);
+    let rule_digest = plan_inputs.rule_digest(&options);
+    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
 
     let mut db = load_analysis_files(&loaded)?;
-    let mut diagnostics = Vec::new();
-    diagnostics.extend(crate::go::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
+    let mut diagnostics = plan_inputs.diagnostics();
+    diagnostics.extend(plan.diagnostics());
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    diagnostics.extend(ts_diagnostics);
+    diagnostics.extend(run_rules_with_capability_support(
+        &db,
+        rules,
+        &options,
+        enabled.as_ref(),
         true,
+        plan.support_view(),
     ));
-    diagnostics.extend(crate::ts::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
-    diagnostics.extend(run_rules(&db, rules, &options, enabled.as_ref(), true));
     Ok((diagnostics, db, loaded))
 }
 
@@ -216,31 +278,6 @@ fn check_path_pattern(root: &Path, path: &Path) -> String {
         format!("{}/**", normalized.trim_end_matches('/'))
     } else {
         normalized
-    }
-}
-
-pub(crate) fn rule_options_from_config(config: Option<&crate::config::RuleConfig>) -> RuleOptions {
-    let Some(config) = config else {
-        return RuleOptions::default();
-    };
-    RuleOptions {
-        severity: config.severity.as_deref().and_then(parse_severity),
-        files: config.files.clone(),
-        allow_files: config.allow_files.clone(),
-        allow: config.allow.clone(),
-        max: config.max,
-        deny: config.deny.clone(),
-        forbidden_imports: config.forbidden_imports.clone(),
-        settings: config.settings.clone(),
-    }
-}
-
-fn parse_severity(value: &str) -> Option<Severity> {
-    match value {
-        "info" => Some(Severity::Info),
-        "warn" | "warning" => Some(Severity::Warn),
-        "error" => Some(Severity::Error),
-        _ => None,
     }
 }
 

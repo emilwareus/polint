@@ -1,9 +1,7 @@
 mod ts_complexity;
-use ts_complexity::TsComplexity;
 
 use std::process::ExitCode;
-use std::sync::Arc;
 
 fn main() -> ExitCode {
-    polint::runner::run_cli(vec![Arc::new(TsComplexity)])
+    polint::runner::run_cli(vec![ts_complexity::ts_complexity()])
 }

@@ -1,5 +1,7 @@
 # Roadmap: polint v1.1 Capability Fulfillment
 
+## Current Milestone: v1.1 Capability Fulfillment
+
 ## Milestones
 
 - [x] **v1.0 MVP** - repo-local static analysis framework for Go and TypeScript/JavaScript, shipped 2026-05-02. See [v1.0 roadmap archive](milestones/v1.0-ROADMAP.md), [requirements archive](milestones/v1.0-REQUIREMENTS.md), and [milestone audit](milestones/v1.0-MILESTONE-AUDIT.md).
@@ -20,7 +22,7 @@ through the public SDK.
 
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
-| 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
+| 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (Complete: 3/3 plans executed on 2026-05-09.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
 | 12 | CFG Facts for Go and TS/JS | Expose real per-function control-flow graphs through `RuleCtx`. | CFG-01, CFG-02, CFG-03, CFG-04 |
 | 13 | Coverage Facts Import | Import Go and TS/JS coverage reports into public coverage facts. | COV-01, COV-02, COV-03, COV-04 |
 | 14 | Resolved Imports and Module Graph | Resolve imports into file/package/module relationships. | MOD-01, MOD-02, MOD-03, MOD-04 |
@@ -40,6 +42,13 @@ through the public SDK.
 for before analysis starts.
 
 **Requirements:** PLAN-01, PLAN-02, PLAN-03, PLAN-04
+
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 11-01-PLAN.md — Internal AnalysisPlan contract and RuleCtx support view
+- [x] 11-02-PLAN.md — Runner, adapter, and cache integration
+- [x] 11-03-PLAN.md — Explain plan CLI, external proof, and docs
 
 **Success criteria:**
 

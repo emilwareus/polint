@@ -1,13 +1,13 @@
-//! Typed errors for [`crate::core::Rule`] implementations.
+//! Typed errors for rule implementations.
 //!
 //! This module is crate-private; use [`crate::sdk::prelude::RuleError`] and
 //! [`crate::sdk::prelude::RuleResult`] from rule packs.
 //!
-//! Rules return [`RuleResult`] from [`crate::core::Rule::run`]. Use `?` with
+//! Rules return [`RuleResult`] from `#[polint::rule]` functions. Use `?` with
 //! operations that produce [`anyhow::Error`] (including [`anyhow::bail!`]) —
 //! they convert through [`From`].
 
-/// Error returned when a rule's [`crate::core::Rule::run`] fails.
+/// Error returned when a rule function fails.
 ///
 /// Wraps [`anyhow::Error`] so rule authors keep context chains while the
 /// public surface stays a single `thiserror`-derived type.

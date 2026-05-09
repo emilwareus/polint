@@ -75,11 +75,47 @@ Rule packs live in your repo:
 ```
 
 Rules should use the public SDK (`polint::sdk::prelude::*`) and runner
-(`polint::runner::run_cli`) only. The fact reference in
-[docs/facts/](docs/facts/) describes the raw building blocks available to rule
-authors: functions, imports, branches, Go tests, TS/JS facts, literals, and JSX
-attributes. Rule-specific TOML fields that are not one of the common shortcuts
-are available through `ctx.options().settings`.
+(`polint::runner::run_cli`) only. Rule modules use `#[polint::rule]` functions:
+the typed fact-view parameters (`StringLiterals<'_>`, `Imports<'_>`,
+`GoTests<'_>`, and similar) are the facts the rule can read, and polint derives
+the analysis capabilities from that function signature. Rule functions are plain
+sync Rust functions with `&mut RuleCtx<'_>` first and a `RuleResult` return.
+`RuleCtx` is for
+reporting diagnostics, source paths, rule options, and capability/setup
+metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw
+building blocks available to rule authors: functions, imports, branches, Go
+tests, TS/JS facts, literals, and JSX attributes. Rule-specific TOML fields that
+are not one of the common shortcuts are available through
+`ctx.options().settings`.
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-raw-colors",
+    description = "Require design tokens instead of raw color literals.",
+    severity = "error"
+)]
+pub(crate) fn no_raw_colors(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
+    for literal in literals.iter() {
+        if literal.value.starts_with('#') {
+            ctx.report(
+                Diagnostic::error(
+                    ctx.rule_id(),
+                    ctx.file_path(literal.file),
+                    literal.span.diagnostic_range(),
+                    "Use a design token instead of a raw color literal.",
+                )
+                .with_evidence("literal", literal.value.clone()),
+            );
+        }
+    }
+    Ok(())
+}
+```
 
 Profiles are explicit:
 
