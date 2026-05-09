@@ -728,6 +728,62 @@ mod tests {
     }
 
     #[test]
+    fn analysis_plan_explain_report_json_fields() {
+        let rules = vec![
+            rule(
+                "local/needs-cfg",
+                "Needs CFG",
+                Severity::Warn,
+                Capabilities::new().cfg(),
+            ),
+            rule(
+                "local/needs-imports",
+                "Needs imports",
+                Severity::Error,
+                Capabilities::new().imports(),
+            ),
+        ];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+
+        let value = serde_json::to_value(plan.explain_report()).unwrap();
+
+        assert_eq!(value["schema"], "analysis-plan-v1");
+        assert_eq!(value["digest"], plan.digest());
+        assert_eq!(value["rules"][0]["id"], "local/needs-cfg");
+        assert_eq!(value["rules"][0]["description"], "Needs CFG");
+        assert_eq!(value["rules"][0]["severity"], "warn");
+        assert_eq!(value["rules"][0]["capabilities"], serde_json::json!(["cfg"]));
+        assert_eq!(value["capabilities"][0]["name"], "cfg");
+        assert_eq!(value["capabilities"][0]["status"], "unsupported");
+        assert_eq!(
+            value["capabilities"][0]["rules"],
+            serde_json::json!(["local/needs-cfg"])
+        );
+        assert_eq!(value["setup_checks"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn analysis_plan_explain_report_human_sections() {
+        let rules = vec![rule(
+            "local/needs-imports",
+            "Needs imports",
+            Severity::Warn,
+            Capabilities::new().imports(),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+
+        let human = plan.explain_report().to_human();
+
+        assert!(human.contains("Analysis plan"));
+        assert!(human.contains("Digest: "));
+        assert!(human.contains("Rules"));
+        assert!(human.contains("local/needs-imports"));
+        assert!(human.contains("Capabilities"));
+        assert!(human.contains("imports"));
+        assert!(human.contains("Setup checks"));
+    }
+
+    #[test]
     fn analysis_plan_contains_rule_metadata_and_capability_panics() {
         let rules = vec![
             rule_with_behavior(
