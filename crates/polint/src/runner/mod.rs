@@ -1,5 +1,6 @@
+use crate::analysis_plan::{AnalysisPlan, RulePlanInputs};
 use crate::config::{LoadedConfig, load_config};
-use crate::core::{Rule, RuleOptions, run_rules};
+use crate::core::{Rule, run_rules_with_capability_support};
 use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
     limit_report_diagnostics, render_with_sarif_help,
@@ -148,18 +149,14 @@ fn analyze_and_run(
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
-    let mut options = BTreeMap::<String, RuleOptions>::new();
-    for rule in rules {
-        let meta = rule.meta();
-        options.insert(
-            meta.id.clone(),
-            rule_options_from_config(loaded.rule_config(&meta.id)),
-        );
-    }
-    let rule_digest = crate::cache::keys::rule_hash(rules, enabled.as_ref(), &options);
+    let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    let options = plan_inputs.rule_options_from_config(&loaded);
+    let rule_digest = plan_inputs.rule_digest(&options);
+    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
 
     let mut db = load_analysis_files(&loaded)?;
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = plan_inputs.diagnostics();
+    diagnostics.extend(plan.diagnostics());
     diagnostics.extend(crate::go::analyze_with_options(
         &mut db,
         &cache,
@@ -174,7 +171,14 @@ fn analyze_and_run(
         &rule_digest,
         true,
     ));
-    diagnostics.extend(run_rules(&db, rules, &options, enabled.as_ref(), true));
+    diagnostics.extend(run_rules_with_capability_support(
+        &db,
+        rules,
+        &options,
+        enabled.as_ref(),
+        true,
+        plan.support_view(),
+    ));
     Ok((diagnostics, db, loaded))
 }
 
@@ -216,31 +220,6 @@ fn check_path_pattern(root: &Path, path: &Path) -> String {
         format!("{}/**", normalized.trim_end_matches('/'))
     } else {
         normalized
-    }
-}
-
-pub(crate) fn rule_options_from_config(config: Option<&crate::config::RuleConfig>) -> RuleOptions {
-    let Some(config) = config else {
-        return RuleOptions::default();
-    };
-    RuleOptions {
-        severity: config.severity.as_deref().and_then(parse_severity),
-        files: config.files.clone(),
-        allow_files: config.allow_files.clone(),
-        allow: config.allow.clone(),
-        max: config.max,
-        deny: config.deny.clone(),
-        forbidden_imports: config.forbidden_imports.clone(),
-        settings: config.settings.clone(),
-    }
-}
-
-fn parse_severity(value: &str) -> Option<Severity> {
-    match value {
-        "info" => Some(Severity::Info),
-        "warn" | "warning" => Some(Severity::Warn),
-        "error" => Some(Severity::Error),
-        _ => None,
     }
 }
 

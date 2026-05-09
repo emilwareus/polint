@@ -1,11 +1,13 @@
 use crate::cache::keys::deterministic_rule_options;
 use crate::cache::stable_hash;
+use crate::config::{LoadedConfig, RuleConfig};
 use crate::core::{
     Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, Language,
-    Rule, RuleOptions, rule_id_matches,
+    Rule, RuleMeta, RuleOptions, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
 use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 pub(crate) const ANALYSIS_PLAN_SCHEMA: &str = "analysis-plan-v1";
@@ -17,6 +19,18 @@ pub(crate) struct AnalysisPlan {
     capabilities: Vec<PlannedCapability>,
     setup_checks: Vec<SetupCheck>,
     support_view: CapabilitySupportView,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RulePlanInputs {
+    rules: Vec<RulePlanInput>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone)]
+struct RulePlanInput {
+    meta: RuleMeta,
+    capabilities: Capabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,31 +74,31 @@ impl AnalysisPlan {
         enabled: Option<&BTreeSet<String>>,
         options: &BTreeMap<String, RuleOptions>,
     ) -> Self {
-        let mut planned_rules = rules
-            .iter()
-            .filter_map(|rule| {
-                let meta = rule.meta();
-                if let Some(enabled) = enabled
-                    && !enabled
-                        .iter()
-                        .any(|pattern| rule_id_matches(pattern, &meta.id))
-                {
-                    return None;
-                }
+        let inputs = RulePlanInputs::collect(rules, enabled);
+        Self::from_inputs(&inputs, options)
+    }
 
-                let capabilities = requested_capabilities(rule.capabilities());
+    pub(crate) fn from_inputs(
+        inputs: &RulePlanInputs,
+        options: &BTreeMap<String, RuleOptions>,
+    ) -> Self {
+        let mut planned_rules = inputs
+            .rules
+            .iter()
+            .map(|input| {
+                let capabilities = requested_capabilities(input.capabilities);
                 let options_digest = options
-                    .get(&meta.id)
+                    .get(&input.meta.id)
                     .map(deterministic_rule_options)
                     .unwrap_or_else(|| deterministic_rule_options(&RuleOptions::default()));
 
-                Some(PlannedRule {
-                    id: meta.id,
-                    description: meta.description,
-                    severity: meta.severity,
+                PlannedRule {
+                    id: input.meta.id.clone(),
+                    description: input.meta.description.clone(),
+                    severity: input.meta.severity,
                     requested_capabilities: capabilities,
                     options_digest,
-                })
+                }
             })
             .collect::<Vec<_>>();
         planned_rules.sort_by(|left, right| {
@@ -178,6 +192,141 @@ impl AnalysisPlan {
             setup_checks,
             support_view,
         }
+    }
+}
+
+impl RulePlanInputs {
+    pub(crate) fn collect(rules: &[Arc<dyn Rule>], enabled: Option<&BTreeSet<String>>) -> Self {
+        let mut inputs = Vec::new();
+        let mut diagnostics = Vec::new();
+
+        for rule in rules {
+            let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
+                Ok(meta) => meta,
+                Err(_) => {
+                    diagnostics.push(internal_plan_error("unknown", "rule metadata panicked"));
+                    continue;
+                }
+            };
+
+            if let Some(enabled) = enabled
+                && !enabled
+                    .iter()
+                    .any(|pattern| rule_id_matches(pattern, &meta.id))
+            {
+                continue;
+            }
+
+            let capabilities = match catch_unwind(AssertUnwindSafe(|| rule.capabilities())) {
+                Ok(capabilities) => capabilities,
+                Err(_) => {
+                    diagnostics.push(capability_collection_error(&meta));
+                    Capabilities::new()
+                }
+            };
+
+            inputs.push(RulePlanInput { meta, capabilities });
+        }
+
+        Self {
+            rules: inputs,
+            diagnostics,
+        }
+    }
+
+    pub(crate) fn rule_options_from_config(
+        &self,
+        loaded: &LoadedConfig,
+    ) -> BTreeMap<String, RuleOptions> {
+        self.rules
+            .iter()
+            .map(|input| {
+                (
+                    input.meta.id.clone(),
+                    rule_options_from_config(loaded.rule_config(&input.meta.id)),
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn rule_digest(&self, options: &BTreeMap<String, RuleOptions>) -> String {
+        let mut parts = Vec::new();
+        let mut rules = self.rules.iter().collect::<Vec<_>>();
+        rules.sort_by(|left, right| {
+            (
+                left.meta.id.as_str(),
+                left.meta.description.as_str(),
+                left.meta.severity.to_string(),
+            )
+                .cmp(&(
+                    right.meta.id.as_str(),
+                    right.meta.description.as_str(),
+                    right.meta.severity.to_string(),
+                ))
+        });
+
+        for input in rules {
+            parts.push(format!("rule:{}", input.meta.id));
+            parts.push(format!("description:{}", input.meta.description));
+            parts.push(format!("severity:{}", input.meta.severity));
+            let options_digest = options
+                .get(&input.meta.id)
+                .map(deterministic_rule_options)
+                .unwrap_or_else(|| deterministic_rule_options(&RuleOptions::default()));
+            parts.push(format!("options:{options_digest}"));
+        }
+
+        let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        stable_hash(&part_refs)
+    }
+
+    pub(crate) fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.diagnostics.clone()
+    }
+}
+
+fn internal_plan_error(rule_id: &str, message: &str) -> Diagnostic {
+    Diagnostic::error(
+        format!("internal/{rule_id}"),
+        "<workspace>",
+        TextRange::point(1, 1),
+        format!("Rule `{rule_id}` failed: {message}"),
+    )
+}
+
+fn capability_collection_error(meta: &RuleMeta) -> Diagnostic {
+    Diagnostic::error(
+        "polint/capability",
+        "<workspace>",
+        TextRange::point(1, 1),
+        format!("Rule `{}` capability collection panicked.", meta.id),
+    )
+    .with_evidence("rule", meta.id.clone())
+    .with_help("Capability declarations must not panic; polint ignored requested capabilities for this rule.")
+}
+
+fn rule_options_from_config(config: Option<&RuleConfig>) -> RuleOptions {
+    let Some(config) = config else {
+        return RuleOptions::default();
+    };
+    RuleOptions {
+        severity: config.severity.as_deref().and_then(parse_severity),
+        files: config.files.clone(),
+        allow_files: config.allow_files.clone(),
+        allow: config.allow.clone(),
+        max: config.max,
+        deny: config.deny.clone(),
+        forbidden_imports: config.forbidden_imports.clone(),
+        settings: config.settings.clone(),
+    }
+}
+
+fn parse_severity(value: &str) -> Option<Severity> {
+    match value {
+        "info" => Some(Severity::Info),
+        "warn" | "warning" => Some(Severity::Warn),
+        "error" => Some(Severity::Error),
+        _ => None,
     }
 }
 
