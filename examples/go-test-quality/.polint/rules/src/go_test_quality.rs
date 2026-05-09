@@ -16,7 +16,7 @@ impl Rule for GoTestQuality {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities::new().go_tests().test_suite_metrics()
+        Capabilities::new().go_tests()
     }
 
     fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
