@@ -16,3 +16,4 @@ Tighten the static capability derivation macro so its compile-time checks match 
 - [x] Restrict qualified fact-view paths to canonical polint SDK paths, while keeping prelude/unqualified usage ergonomic.
 - [x] Add tests for rejected bad ctx/return/fact paths and rerun focused/full verification.
 - [x] Fix public rustdoc links after making the rule internals private.
+- [x] Fix release dry-run handling for the new `polint-macros` crate.

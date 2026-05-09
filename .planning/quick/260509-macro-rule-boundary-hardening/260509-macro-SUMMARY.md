@@ -9,6 +9,7 @@
 - Updated generated rule scaffolds to use `_ctx` so fresh rules do not warn on an unused context.
 - Updated static capability docs and `AGENTS.md` with the stricter rule-authoring boundary.
 - Fixed a rustdoc link that still referenced now-private rule internals.
+- Updated the publish script so dry-run and real release flows account for the new `polint-macros` crate before `polint`.
 
 ## Verification
 
@@ -21,5 +22,7 @@
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked`
 - `git diff --check`
 - `cargo install --path crates/polint --locked --force`
+- `bash -n scripts/publish-crates.sh`
+- `DRY_RUN=1 ./scripts/publish-crates.sh`
 - Installed `polint check --format json --fail-on none` against every checked-in example.
 - Installed `polint init`, `polint new-rule ts no-inline-colors`, `polint explain plan --format json`, and `polint check --format json --fail-on none` in a generated temp repo.
