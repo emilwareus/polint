@@ -13,14 +13,16 @@ The product direction is simple:
 
 ## Roadmap
 
-- [ ] **1. Make capabilities drive analysis**
+- [x] **1. Make capabilities drive analysis**
   ([technical plan](01_ENTRY_1_ANALYSIS_PLAN.md))
 
-  Build an `AnalysisPlan` from enabled rules before parsing. This makes
-  `Capabilities` a real contract instead of metadata. After this, a rule that
-  asks for imports, CFG, coverage, symbols, or tests should cause polint to
-  plan that work explicitly, validate required setup, and include the request in
-  cache keys. This is the foundation for every later item.
+  Completed in Phase 11. polint now builds a deterministic `AnalysisPlan` from
+  enabled rules before parsing, exposes it through `polint explain plan`, passes
+  it to the Go and TS/JS adapters, reports unsupported reserved capabilities,
+  and includes the resolved plan digest in adapter cache keys. This makes
+  `Capabilities` an enforceable planning contract. Later entries still own the
+  real CFG, coverage, symbol, call-graph, module-resolution, and test-metric
+  facts.
 
 - [ ] **2. Add real CFG facts for Go and TS/JS**
   ([technical plan](02_ENTRY_2_CFG_FACTS.md))

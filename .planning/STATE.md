@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
 stopped_at: Phase 11 complete
-last_updated: "2026-05-09T09:57:46.432Z"
+last_updated: "2026-05-09T10:35:00.000Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 9
@@ -65,7 +65,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 12 - CFG Facts for Go and TS/JS
 Plan: Not started
-Last activity: 2026-05-09
+Last activity: 2026-05-09 - Completed quick task 260509-h5x: Fix capability roadmap docs and add realistic CLI coverage for explain plan
 
 ## Quick Tasks Completed
 
@@ -88,6 +88,7 @@ Last activity: 2026-05-09
 | 260505-ffu | Make polint check run repo-local rule hosts directly | 2026-05-05 | uncommitted | [260505-ffu-make-polint-check-run-repo-local-rule-ho](./quick/260505-ffu-make-polint-check-run-repo-local-rule-ho/) |
 | 260506-iuu | Fix staged review findings for agent-quality changes | 2026-05-06 | uncommitted | [260506-iuu-fix-staged-review-findings-for-agent-qua](./quick/260506-iuu-fix-staged-review-findings-for-agent-qua/) |
 | 260507-rap | Rule authoring platform hardening | 2026-05-07 | uncommitted | [260507-rap-rule-authoring-platform-hardening](./quick/260507-rap-rule-authoring-platform-hardening/) |
+| 260509-h5x | Fix capability roadmap docs and add realistic CLI coverage for explain plan | 2026-05-09 | uncommitted | [260509-h5x-fix-capability-roadmap-docs-and-add-real](./quick/260509-h5x-fix-capability-roadmap-docs-and-add-real/) |
 
 ## Phase Progress
 

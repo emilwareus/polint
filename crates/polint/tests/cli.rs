@@ -1459,6 +1459,98 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
 }
 
 #[test]
+fn checked_in_multiple_rules_example_explain_plan_reports_real_capabilities() {
+    let example_dir = repo_root().join("examples/multiple-rules");
+
+    let value = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["explain", "plan", "--format", "json"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(value["schema"], "analysis-plan-v1");
+    assert!(
+        value["digest"]
+            .as_str()
+            .is_some_and(|digest| !digest.is_empty()),
+        "digest should be present: {value:#?}"
+    );
+    assert_eq!(value["setup_checks"], serde_json::json!([]));
+
+    let rules = value["rules"]
+        .as_array()
+        .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
+    let rule_ids = rules
+        .iter()
+        .map(|rule| {
+            rule["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("rule id must be a string: {rule:#?}"))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        rule_ids,
+        BTreeSet::from(["local/go-import-boundaries", "local/no-raw-colors"])
+    );
+
+    let import_rule = rules
+        .iter()
+        .find(|rule| rule["id"] == "local/go-import-boundaries")
+        .unwrap_or_else(|| panic!("expected Go import-boundary rule: {value:#?}"));
+    assert_eq!(import_rule["severity"], "error");
+    assert_eq!(import_rule["capabilities"], serde_json::json!(["imports"]));
+
+    let color_rule = rules
+        .iter()
+        .find(|rule| rule["id"] == "local/no-raw-colors")
+        .unwrap_or_else(|| panic!("expected TS raw-color rule: {value:#?}"));
+    assert_eq!(color_rule["severity"], "error");
+    assert_eq!(
+        color_rule["capabilities"],
+        serde_json::json!(["string_literals", "jsx_attributes"])
+    );
+
+    let capabilities = value["capabilities"]
+        .as_array()
+        .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
+    let capability_statuses = capabilities
+        .iter()
+        .map(|capability| {
+            let name = capability["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("capability name must be a string: {capability:#?}"));
+            let status = capability["status"]
+                .as_str()
+                .unwrap_or_else(|| panic!("capability status must be a string: {capability:#?}"));
+            (name, status)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        capability_statuses,
+        BTreeSet::from([
+            ("imports", "supported"),
+            ("jsx_attributes", "supported"),
+            ("string_literals", "supported")
+        ])
+    );
+
+    for (name, owner) in [
+        ("imports", "local/go-import-boundaries"),
+        ("jsx_attributes", "local/no-raw-colors"),
+        ("string_literals", "local/no-raw-colors"),
+    ] {
+        let capability = capabilities
+            .iter()
+            .find(|capability| capability["name"] == name)
+            .unwrap_or_else(|| panic!("expected capability `{name}`: {value:#?}"));
+        assert_eq!(capability["rules"], serde_json::json!([owner]));
+    }
+}
+
+#[test]
 fn check_with_unknown_profile_is_an_error() {
     let example_dir = repo_root().join("examples/config-denied-literal");
 
