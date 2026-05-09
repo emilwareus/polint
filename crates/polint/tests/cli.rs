@@ -687,6 +687,128 @@ fn main() -> ExitCode {
 }
 
 #[test]
+fn rule_macro_rejects_non_canonical_qualified_fact_view_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-qualified-facts-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::{RuleCtx, RuleResult};
+
+mod local {
+    pub struct Imports<'a>(&'a ());
+}
+
+#[polint::rule(
+    id = "local/qualified-imports",
+    description = "Qualified imports.",
+    severity = "warn"
+)]
+fn qualified_imports(ctx: &mut RuleCtx<'_>, _imports: local::Imports<'_>) -> RuleResult {
+    let _ = ctx;
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![qualified_imports()])
+}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "fact-view parameters must use canonical polint SDK fact views",
+        ));
+}
+
+#[test]
+fn rule_macro_rejects_non_analyzable_rule_signatures() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-signature-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use polint::sdk::prelude::*;
+use std::process::ExitCode;
+
+#[polint::rule(
+    id = "local/async-rule",
+    description = "Async rule.",
+    severity = "warn"
+)]
+async fn async_rule(ctx: &mut RuleCtx<'_>) -> RuleResult {
+    let _ = ctx;
+    Ok(())
+}
+
+#[polint::rule(
+    id = "local/value-return",
+    description = "Value return.",
+    severity = "warn"
+)]
+fn value_return(ctx: &mut RuleCtx<'_>) -> RuleResult<usize> {
+    let _ = ctx;
+    Ok(1)
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![async_rule(), value_return()])
+}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("plain non-generic sync functions")
+                .and(predicate::str::contains("RuleResult<()>")),
+        );
+}
+
+#[test]
 fn external_rule_cannot_manually_implement_rule_trait() {
     let temp = tempfile::tempdir().unwrap();
     let polint_path = repo_root()

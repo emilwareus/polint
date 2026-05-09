@@ -167,11 +167,16 @@ For this to stay analyzable, the macro path intentionally restricts what counts
 as a fact dependency:
 
 - The first parameter must be a simple mutable `RuleCtx<'_>` binding.
-- Fact parameters must use concrete polint fact-view types.
-- The macro constructs canonical `polint::sdk::facts::*` views; a local type
-  with a matching name is rejected by Rust type checking instead of becoming a
-  user-defined fact source.
-- Type aliases are not accepted as fact parameters in v1.
+- Rule functions must be plain non-generic sync functions and return
+  `RuleResult` or `RuleResult<()>`.
+- Fact parameters must use concrete polint fact-view types exported by the SDK
+  prelude or written as canonical `polint::sdk::facts::*` paths, with the
+  placeholder lifetime form such as `Imports<'_>`.
+- The macro constructs canonical `polint::sdk::facts::*` views; arbitrary
+  qualified lookalike paths are rejected, and local unqualified lookalike types
+  fail Rust type checking instead of becoming user-defined fact sources.
+- Type aliases with different names are not accepted as fact parameters in v1;
+  rule authors should write the canonical view name directly.
 - Generic fact-view parameters are not accepted in v1.
 - Conditional use still declares the superset of possible facts.
 - Macros inside the rule body are allowed only because they cannot grant new

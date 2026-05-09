@@ -44,7 +44,9 @@ rules in one pack.
 
 Start with `use polint::sdk::prelude::*;`, give the rule a stable local ID, and
 request the facts it needs as typed parameters. The `#[polint::rule]` macro
-derives capabilities from those fact-view parameters.
+derives capabilities from those fact-view parameters. Keep the function shape
+plain: first parameter `&mut RuleCtx<'_>`, typed fact views like
+`Imports<'_>`, and a `RuleResult` or `RuleResult<()>` return.
 
 ```rust
 use polint::sdk::prelude::*;
@@ -107,5 +109,7 @@ allow_files = ["src/theme/**"]
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Do not implement `Rule` manually or write handwritten capability declarations.
+- Do not use async, generics, local lookalike fact types, or type aliases as
+  fact-view parameters in `#[polint::rule]` functions.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.

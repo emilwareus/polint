@@ -102,9 +102,14 @@ live in `examples/` inside this repository.
   Rule` examples, compatibility shims, or public rule constructors as a beta
   escape hatch; if the old API shape fights the product model, break it and move
   examples/tests to the typed macro path.
-- Macro-derived fact parameters must resolve to canonical `polint::sdk::facts::*`
-  views. Do not make locally defined lookalike types, aliases, or user-provided
-  `FactView` implementations count as capability sources.
+- `#[polint::rule]` functions should stay plain and analyzable: no generics,
+  no async/const/unsafe/extern forms, `&mut RuleCtx<'_>` first, `RuleResult`
+  or `RuleResult<()>` return.
+- Macro-derived fact parameters must resolve to SDK fact views exported by the
+  prelude or written as canonical `polint::sdk::facts::*` paths, with the
+  placeholder lifetime form such as `Imports<'_>`. Do not make locally defined
+  lookalike types, aliases, or user-provided `FactView` implementations count
+  as capability sources.
 - When adding a rule-authoring feature, add at least one temp-repo style test
   that behaves like an outside user: generated `.polint/rules`, public SDK
   imports only, real facts consumed, and a diagnostic asserted through

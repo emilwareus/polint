@@ -543,11 +543,11 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
     description = "Project-specific policy: {rule_name}.",
     severity = "warn"
 )]
-pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
+pub(crate) fn {module}(_ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
-    // To report a diagnostic, call ctx.warn(&some_fact.span, "message")
-    // or ctx.report(Diagnostic::...). Custom TOML fields are in
-    // ctx.options().settings.
+    // To report a diagnostic, call _ctx.warn(&some_fact.span, "message")
+    // or _ctx.report(Diagnostic::...). Custom TOML fields are in
+    // _ctx.options().settings.
     Ok(())
 }}
 "#

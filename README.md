@@ -78,7 +78,9 @@ Rules should use the public SDK (`polint::sdk::prelude::*`) and runner
 (`polint::runner::run_cli`) only. Rule modules use `#[polint::rule]` functions:
 the typed fact-view parameters (`StringLiterals<'_>`, `Imports<'_>`,
 `GoTests<'_>`, and similar) are the facts the rule can read, and polint derives
-the analysis capabilities from that function signature. `RuleCtx` is for
+the analysis capabilities from that function signature. Rule functions are plain
+sync Rust functions with `&mut RuleCtx<'_>` first and a `RuleResult` return.
+`RuleCtx` is for
 reporting diagnostics, source paths, rule options, and capability/setup
 metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw
 building blocks available to rule authors: functions, imports, branches, Go
