@@ -1785,6 +1785,48 @@ severity = "error"
                 .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
             "{diagnostic:#?}"
         );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "rule",
+            "local/needs-cfg"
+        ));
+    }
+
+    #[test]
+    fn check_only_rule_keeps_selected_capability_diagnostic() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args([
+                    "check",
+                    "--format",
+                    "json",
+                    "--only-rule",
+                    "local/needs-cfg",
+                ])
+                .assert()
+                .failure(),
+        );
+
+        let diagnostics = diagnostics(&json);
+        assert_eq!(diagnostics.len(), 1, "{json:#?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["rule_id"], "polint/capability");
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported capability `cfg`")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "rule",
+            "local/needs-cfg"
+        ));
     }
 
     #[test]

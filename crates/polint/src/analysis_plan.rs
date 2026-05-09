@@ -193,6 +193,7 @@ impl AnalysisPlan {
                             capability.capability
                         ),
                     )
+                    .with_evidence("rule", rule_id.clone())
                     .with_evidence("capability", capability.capability.clone())
                     .with_help(format!(
                         "Capability `{}` is not supported in this phase; see docs/roadmap/00_ROADMAP.md.",
@@ -875,6 +876,9 @@ mod tests {
                     .help
                     .as_deref()
                     .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md"))
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "rule" && evidence.value == "local/needs-metrics"
+                })
                 && diagnostic
                     .evidence
                     .iter()

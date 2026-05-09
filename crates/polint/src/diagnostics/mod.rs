@@ -358,10 +358,18 @@ pub(crate) fn apply_report_filters(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = dedupe_diagnostics(diagnostics);
     if let Some(pattern) = only_rule {
-        diagnostics.retain(|d| crate::core::rule_id_matches(pattern, &d.rule_id));
+        diagnostics.retain(|diagnostic| diagnostic_matches_rule_pattern(pattern, diagnostic));
     }
     sort_diagnostics(&mut diagnostics);
     diagnostics
+}
+
+fn diagnostic_matches_rule_pattern(pattern: &str, diagnostic: &Diagnostic) -> bool {
+    crate::core::rule_id_matches(pattern, &diagnostic.rule_id)
+        || (diagnostic.rule_id == "polint/capability"
+            && diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "rule" && crate::core::rule_id_matches(pattern, &evidence.value)
+            }))
 }
 
 /// Truncate diagnostics for rendering only. Exit status must be computed before this cap.
