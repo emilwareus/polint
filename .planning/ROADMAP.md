@@ -1,5 +1,7 @@
 # Roadmap: polint v1.1 Capability Fulfillment
 
+## Current Milestone: v1.1 Capability Fulfillment
+
 ## Milestones
 
 - [x] **v1.0 MVP** - repo-local static analysis framework for Go and TypeScript/JavaScript, shipped 2026-05-02. See [v1.0 roadmap archive](milestones/v1.0-ROADMAP.md), [requirements archive](milestones/v1.0-REQUIREMENTS.md), and [milestone audit](milestones/v1.0-MILESTONE-AUDIT.md).
