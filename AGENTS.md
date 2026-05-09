@@ -97,6 +97,9 @@ live in `examples/` inside this repository.
   from `#[polint::rule]` signatures. `RuleCtx` is for diagnostics, options,
   source paths, and capability/setup metadata; do not reintroduce broad fact
   access on `RuleCtx` as the normal rule-authoring path.
+- Future analysis families such as CFG, call graph, dataflow, coverage, module
+  graph, symbols, references, and test metrics should be added as typed SDK
+  views with query methods on those views, not as `RuleCtx` fact accessors.
 - Capabilities for normal rules must be derived from typed fact-view parameters,
   not handwritten `Capabilities::new()` declarations. Do not add manual `impl
   Rule` examples, compatibility shims, or public rule constructors as a beta
@@ -116,7 +119,8 @@ live in `examples/` inside this repository.
   `polint check --format json`.
 - Keep capability names honest. Do not expose or advertise a capability as a
   provided fact family until a rule can read the underlying facts through the
-  public SDK.
+  public SDK. Rules that request unsupported or setup-missing hard capabilities
+  should produce capability diagnostics and not execute with placeholder facts.
 - If a rule needs custom config, preserve it through `RuleOptions::settings`
   rather than overloading unrelated fields like `allow`, `deny`, or `max`.
 - Config and resolved rule options that can affect rule behavior must

@@ -44,10 +44,12 @@ These names are reserved but unsupported in Phase 11:
 
 - `cfg`
 - `call_graph`
+- `dataflow`
 - `coverage_facts`
 - `test_suite_metrics`
 
 Unsupported reserved capabilities appear in `polint explain plan` and produce a
-`polint/capability` diagnostic during `polint check`.
+`polint/capability` diagnostic during `polint check`. Rules that request one of
+these unavailable capabilities are not executed with placeholder facts.
 
 Use go_tests for current Go test evidence; test_suite_metrics is reserved for normalized metrics.

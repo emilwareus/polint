@@ -20,8 +20,8 @@ just the text of the import.
 - `ModuleGraph`
 - `ResolutionStatus`
 - `UnresolvedReason`
-- `RuleCtx::resolved_imports`
-- `RuleCtx::module_graph`
+- `ResolvedImports<'_>`
+- `ModuleGraphFacts<'_>`
 - `polint explain import`
 
 ## Build Method
@@ -29,7 +29,8 @@ just the text of the import.
 1. Keep current `ImportFact` as the syntactic source of truth.
 2. Add `ResolvedImportFact` with `from_file`, `import`, `target_file`,
    `target_package`, `resolution_status`, and `unresolved_reason`.
-3. Add `ModuleGraph` nodes for files, packages, and modules.
+3. Add `ModuleGraph` nodes for files, packages, and modules, exposed through
+   typed SDK views.
 4. For TS/JS, use `oxc_resolver::ResolveOptions` with `tsconfig`, extensions,
    condition names, main fields, and package exports/imports settings.
 5. For Go, use `go/packages.Load` and map package IDs and `GoFiles` to polint

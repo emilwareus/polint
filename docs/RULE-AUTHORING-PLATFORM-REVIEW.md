@@ -232,8 +232,8 @@ The TS adapter does the same for TS/JS facts:
 
 The API says "declare what facts your rule needs," but the implementation mostly
 treats that declaration as metadata. A user may believe that setting
-`.coverage_facts()` or `.call_graph()` gives them those underlying models, when
-that is not true in the same way as `.string_literals()` or `.imports()`.
+`CoverageFacts<'_>` or `CallGraph<'_>` gives them those underlying models, when
+that is not true in the same way as `StringLiterals<'_>` or `Imports<'_>`.
 
 ### Fix Direction
 
@@ -242,8 +242,9 @@ Either:
 - make capabilities real and use them to drive analysis, or
 - rename/document them as descriptive metadata only.
 
-Also split unavailable or placeholder capability names out of the public SDK
-until they have real facts behind them.
+Reserved future capability names can remain visible only if the plan marks them
+unsupported/setup-missing and the runner refuses to execute those rules with
+placeholder facts.
 
 ## Finding 4: The SDK Has Real Primitives, But The Fact Semantics Need Better Docs
 

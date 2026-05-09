@@ -609,6 +609,8 @@ pub struct Capabilities {
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
     pub call_graph: bool,
+    /// Reserved for future dataflow facts built on CFG, symbols, and call graph support.
+    pub dataflow: bool,
     /// Needs Go test facts harvested from `_test.go` files.
     pub go_tests: bool,
     /// Needs syntax-level branch obligation facts.
@@ -652,6 +654,11 @@ impl Capabilities {
         self
     }
 
+    pub fn dataflow(mut self) -> Self {
+        self.dataflow = true;
+        self
+    }
+
     pub fn go_tests(mut self) -> Self {
         self.go_tests = true;
         self
@@ -690,6 +697,26 @@ impl Capabilities {
     pub fn jsx_attributes(mut self) -> Self {
         self.jsx_attributes = true;
         self
+    }
+
+    pub(crate) fn requested_names(self) -> impl Iterator<Item = &'static str> {
+        [
+            ("syntax", self.syntax),
+            ("imports", self.imports),
+            ("cfg", self.cfg),
+            ("call_graph", self.call_graph),
+            ("dataflow", self.dataflow),
+            ("go_tests", self.go_tests),
+            ("branch_obligations", self.branch_obligations),
+            ("coverage_facts", self.coverage_facts),
+            ("test_suite_metrics", self.test_suite_metrics),
+            ("ts_components", self.ts_components),
+            ("ts_classes", self.ts_classes),
+            ("string_literals", self.string_literals),
+            ("jsx_attributes", self.jsx_attributes),
+        ]
+        .into_iter()
+        .filter_map(|(name, requested)| requested.then_some(name))
     }
 }
 
@@ -987,6 +1014,9 @@ pub(crate) fn run_rules_with_capability_support(
         {
             return Vec::new();
         }
+        if has_blocking_capability(&meta.id, capability_support) {
+            return Vec::new();
+        }
         let rule_options = options.get(&meta.id).cloned().unwrap_or_default();
         let mut ctx = RuleCtx::with_capability_support(
             db,
@@ -1015,6 +1045,13 @@ pub(crate) fn run_rules_with_capability_support(
     };
 
     dedupe_diagnostics(diagnostics)
+}
+
+fn has_blocking_capability(rule_id: &str, support: &CapabilitySupportView) -> bool {
+    support.entries.iter().any(|entry| {
+        entry.rules.iter().any(|entry_rule| entry_rule == rule_id)
+            && entry.status != CapabilitySupportStatus::Supported
+    })
 }
 
 fn internal_rule_error(db: &AnalysisDb, meta: &RuleMeta, message: String) -> Diagnostic {
@@ -1324,6 +1361,63 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].message, "imports are supported");
+    }
+
+    #[test]
+    fn run_rules_skips_rules_with_blocking_capabilities() {
+        let db = AnalysisDb::new();
+        let rules = vec![
+            TestRule::report("examples/needs-cfg", Severity::Warn, "cfg")
+                .with_capabilities(Capabilities::new().cfg())
+                .into_rule(),
+            TestRule::panic("examples/needs-dataflow")
+                .with_capabilities(Capabilities::new().dataflow())
+                .into_rule(),
+            TestRule::report("examples/imports", Severity::Warn, "imports")
+                .with_capabilities(Capabilities::new().imports())
+                .into_rule(),
+        ];
+        let support_view = CapabilitySupportView::new(vec![
+            CapabilitySupport {
+                capability: "cfg".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::Unsupported,
+                rules: vec!["examples/needs-cfg".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+            CapabilitySupport {
+                capability: "dataflow".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::SetupMissing,
+                rules: vec!["examples/needs-dataflow".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+            CapabilitySupport {
+                capability: "imports".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::Supported,
+                rules: vec!["examples/imports".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+        ]);
+
+        let diagnostics = run_rules_with_capability_support(
+            &db,
+            &rules,
+            &BTreeMap::new(),
+            None,
+            false,
+            &support_view,
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "examples/imports");
     }
 
     #[test]
@@ -1838,6 +1932,7 @@ mod tests {
         let capabilities = registry.rules()[0].capabilities();
         assert!(capabilities.imports);
         assert!(capabilities.coverage_facts);
+        assert!(!capabilities.dataflow);
         assert!(!capabilities.jsx_attributes);
     }
 

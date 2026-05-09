@@ -83,6 +83,10 @@ fn needs_imports(_ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
     severity = "warn"
 )]
 fn needs_cfg(_ctx: &mut RuleCtx<'_>, _cfg: Cfg<'_>) -> RuleResult {
+    _ctx.warn(
+        &Span::point(FileId(0), 1, 1),
+        "this should not run while cfg is unsupported",
+    );
     Ok(())
 }
 

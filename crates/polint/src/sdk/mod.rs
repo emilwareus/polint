@@ -40,7 +40,7 @@ pub mod prelude {
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
-        BranchObligations, CallGraph, Cfg, CoverageFacts, Functions, GoTests, Imports,
+        BranchObligations, CallGraph, Cfg, CoverageFacts, DataFlow, Functions, GoTests, Imports,
         JsxAttributes, Packages, SourceFiles, StringLiterals, TestSuiteMetrics, TsClasses,
         TsComponents,
     };

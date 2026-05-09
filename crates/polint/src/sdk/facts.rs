@@ -337,6 +337,12 @@ pub struct CallGraph<'a> {
     _db: &'a AnalysisDb,
 }
 
+/// Reserved dataflow fact view. Requesting this view currently maps to unsupported `dataflow`.
+#[derive(Clone, Copy)]
+pub struct DataFlow<'a> {
+    _db: &'a AnalysisDb,
+}
+
 /// Reserved coverage fact view. Requesting this view currently maps to unsupported `coverage_facts`.
 #[derive(Clone, Copy)]
 pub struct CoverageFacts<'a> {
@@ -398,4 +404,5 @@ impl_fact_view!(JsxAttributes);
 impl_fact_view!(CoverageFacts);
 impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
+impl_fact_view!(DataFlow, _db);
 impl_fact_view!(TestSuiteMetrics, _db);

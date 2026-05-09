@@ -156,6 +156,8 @@ The public rule-authoring surface is intentionally split:
 | `TsComponents<'a>` | TS component facts only |
 | `TsClasses<'a>` | TS class facts only |
 | future `Cfg<'a>` | CFG facts only |
+| future `CallGraph<'a>` | call graph facts only |
+| future `DataFlow<'a>` | dataflow facts only |
 | future `CoverageFacts<'a>` | coverage facts only |
 
 `RuleCtx` is not the normal fact surface. Fact families live behind typed views
@@ -179,6 +181,9 @@ as a fact dependency:
   rule authors should write the canonical view name directly.
 - Generic fact-view parameters are not accepted in v1.
 - Conditional use still declares the superset of possible facts.
+- If the resolved plan marks a requested hard capability as unsupported or
+  setup-missing, polint reports the capability problem and does not execute the
+  rule with placeholder facts.
 - Macros inside the rule body are allowed only because they cannot grant new
   facts; they can only use the fact views already passed in.
 - Manual `impl Rule` is not a supported authoring path. The `Rule` type is
