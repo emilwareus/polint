@@ -1457,6 +1457,39 @@ fn explain_unknown_rule_is_nonfatal_and_clear() {
 }
 
 #[test]
+fn explain_plan_no_rules_outputs_empty_json_without_parsing_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/broken.go"),
+        "package broken\nfunc Broken( {\n",
+    );
+
+    let stdout = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["explain", "plan", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("stdout was not parseable JSON: {error}\n{stdout}"));
+
+    assert_eq!(value["schema"], "analysis-plan-v1");
+    assert_eq!(value["rules"], serde_json::json!([]));
+    assert_eq!(value["capabilities"], serde_json::json!([]));
+    assert_eq!(value["setup_checks"], serde_json::json!([]));
+}
+
+#[test]
 fn check_max_diagnostics_truncates_sorted_json_in_example_repo() {
     let root = repo_root().join("examples/ts-design-tokens");
     let json = stdout_json(
