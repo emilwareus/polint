@@ -43,6 +43,13 @@ for before analysis starts.
 
 **Requirements:** PLAN-01, PLAN-02, PLAN-03, PLAN-04
 
+**Plans:** 3 plans
+
+Plans:
+- [ ] 11-01-PLAN.md — Internal AnalysisPlan contract and RuleCtx support view
+- [ ] 11-02-PLAN.md — Runner, adapter, and cache integration
+- [ ] 11-03-PLAN.md — Explain plan CLI, external proof, and docs
+
 **Success criteria:**
 
 1. Enabled rules are merged into a deterministic `AnalysisPlan`.
