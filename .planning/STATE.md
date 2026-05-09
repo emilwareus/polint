@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
 stopped_at: Phase 11 complete
-last_updated: "2026-05-09T10:35:00.000Z"
+last_updated: "2026-05-09T12:00:31.000Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 9
@@ -65,7 +65,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 12 - CFG Facts for Go and TS/JS
 Plan: Not started
-Last activity: 2026-05-09 - Completed quick task 260509-h5x: Fix capability roadmap docs and add realistic CLI coverage for explain plan
+Last activity: 2026-05-09 - Completed quick task 260509-ibk: Implement static capability derivation rule authoring API
 
 ## Quick Tasks Completed
 
@@ -89,6 +89,7 @@ Last activity: 2026-05-09 - Completed quick task 260509-h5x: Fix capability road
 | 260506-iuu | Fix staged review findings for agent-quality changes | 2026-05-06 | uncommitted | [260506-iuu-fix-staged-review-findings-for-agent-qua](./quick/260506-iuu-fix-staged-review-findings-for-agent-qua/) |
 | 260507-rap | Rule authoring platform hardening | 2026-05-07 | uncommitted | [260507-rap-rule-authoring-platform-hardening](./quick/260507-rap-rule-authoring-platform-hardening/) |
 | 260509-h5x | Fix capability roadmap docs and add realistic CLI coverage for explain plan | 2026-05-09 | uncommitted | [260509-h5x-fix-capability-roadmap-docs-and-add-real](./quick/260509-h5x-fix-capability-roadmap-docs-and-add-real/) |
+| 260509-ibk | Implement static capability derivation rule authoring API | 2026-05-09 | uncommitted | [260509-ibk-implement-static-capability-derivation-r](./quick/260509-ibk-implement-static-capability-derivation-r/) |
 
 ## Phase Progress
 
@@ -167,6 +168,9 @@ Last activity: 2026-05-09 - Completed quick task 260509-h5x: Fix capability road
 - [Phase 11-capability-driven-analysis-plan]: Use ExplainPlanReport as a crate-private typed serde boundary shared by child and parent explain-plan commands.
 - [Phase 11-capability-driven-analysis-plan]: Keep polint explain plan --format json stdout as the child report itself for a single local rule host; no human prelude is emitted.
 - [Phase 11-capability-driven-analysis-plan]: Keep current Go test evidence on the supported go_tests capability; test_suite_metrics remains reserved for normalized future metrics.
+- [Static capability derivation]: Normal rule authors use `#[polint::rule]` functions with typed fact-view parameters; capabilities are generated from those parameter types instead of handwritten declarations.
+- [Static capability derivation]: `RuleCtx` is the diagnostics/options/path/support surface. Broad fact access belongs in typed SDK fact views, not the normal context API.
+- [Static capability derivation]: `Rule` is an opaque value, not a public trait. Do not preserve manual `impl Rule` compatibility paths during beta; update examples, scaffolds, and tests to the typed macro path instead.
 
 ## Performance Metrics
 

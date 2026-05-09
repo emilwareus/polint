@@ -609,6 +609,8 @@ pub struct Capabilities {
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
     pub call_graph: bool,
+    /// Reserved for future dataflow facts built on CFG, symbols, and call graph support.
+    pub dataflow: bool,
     /// Needs Go test facts harvested from `_test.go` files.
     pub go_tests: bool,
     /// Needs syntax-level branch obligation facts.
@@ -652,6 +654,11 @@ impl Capabilities {
         self
     }
 
+    pub fn dataflow(mut self) -> Self {
+        self.dataflow = true;
+        self
+    }
+
     pub fn go_tests(mut self) -> Self {
         self.go_tests = true;
         self
@@ -690,6 +697,26 @@ impl Capabilities {
     pub fn jsx_attributes(mut self) -> Self {
         self.jsx_attributes = true;
         self
+    }
+
+    pub(crate) fn requested_names(self) -> impl Iterator<Item = &'static str> {
+        [
+            ("syntax", self.syntax),
+            ("imports", self.imports),
+            ("cfg", self.cfg),
+            ("call_graph", self.call_graph),
+            ("dataflow", self.dataflow),
+            ("go_tests", self.go_tests),
+            ("branch_obligations", self.branch_obligations),
+            ("coverage_facts", self.coverage_facts),
+            ("test_suite_metrics", self.test_suite_metrics),
+            ("ts_components", self.ts_components),
+            ("ts_classes", self.ts_classes),
+            ("string_literals", self.string_literals),
+            ("jsx_attributes", self.jsx_attributes),
+        ]
+        .into_iter()
+        .filter_map(|(name, requested)| requested.then_some(name))
     }
 }
 
@@ -756,14 +783,47 @@ impl CapabilitySupportView {
     }
 }
 
-/// A static-analysis rule that runs against an [`AnalysisDb`] through [`RuleCtx`].
+type RuleMetaFn = dyn Fn() -> RuleMeta + Send + Sync;
+type RuleCapabilitiesFn = dyn Fn() -> Capabilities + Send + Sync;
+type RuleRunFn = dyn Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync;
+
+/// Opaque static-analysis rule registered with the runner.
 ///
-/// Implementations should declare their metadata and capabilities, then report
-/// diagnostics through the context instead of panicking or writing output.
-pub trait Rule: Send + Sync {
-    fn meta(&self) -> RuleMeta;
-    fn capabilities(&self) -> Capabilities;
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult;
+/// Rule authors create this through `#[polint::rule]`. The value is intentionally
+/// not a trait: repo-local rules must be written in the analyzable macro shape so
+/// capabilities come from typed fact-view parameters.
+#[derive(Clone)]
+pub struct Rule {
+    meta: Arc<RuleMetaFn>,
+    capabilities: Arc<RuleCapabilitiesFn>,
+    run: Arc<RuleRunFn>,
+}
+
+impl Rule {
+    pub(crate) fn from_parts<M, C, R>(meta: M, capabilities: C, run: R) -> Self
+    where
+        M: Fn() -> RuleMeta + Send + Sync + 'static,
+        C: Fn() -> Capabilities + Send + Sync + 'static,
+        R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
+    {
+        Self {
+            meta: Arc::new(meta),
+            capabilities: Arc::new(capabilities),
+            run: Arc::new(run),
+        }
+    }
+
+    pub(crate) fn meta(&self) -> RuleMeta {
+        (self.meta)()
+    }
+
+    pub(crate) fn capabilities(&self) -> Capabilities {
+        (self.capabilities)()
+    }
+
+    pub(crate) fn run(&self, db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        (self.run)(db, ctx)
+    }
 }
 
 /// Resolved per-rule options from configuration.
@@ -793,8 +853,9 @@ pub struct RuleOptions {
 
 /// Borrowed execution context passed to a single rule run.
 ///
-/// The context exposes stable, deterministic views of facts in [`AnalysisDb`]
-/// and buffers diagnostics until the rule finishes.
+/// The context owns reporting, options, path lookup, and support metadata.
+/// Analysis facts are exposed through typed SDK fact views requested in a
+/// `#[polint::rule]` function signature.
 pub struct RuleCtx<'a> {
     db: &'a AnalysisDb,
     diagnostics: Vec<Diagnostic>,
@@ -805,7 +866,8 @@ pub struct RuleCtx<'a> {
 
 impl<'a> RuleCtx<'a> {
     /// Creates a rule context for one rule execution.
-    pub fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
         Self::with_capability_support(db, rule, options, CapabilitySupportView::empty())
     }
 
@@ -824,14 +886,14 @@ impl<'a> RuleCtx<'a> {
         }
     }
 
-    /// Returns the underlying analysis database for advanced read-only queries.
-    pub fn db(&self) -> &AnalysisDb {
-        self.db
-    }
-
     /// Returns resolved options for the current rule.
     pub fn options(&self) -> &RuleOptions {
         &self.options
+    }
+
+    /// Returns the stable ID of the current rule.
+    pub fn rule_id(&self) -> &str {
+        &self.rule.id
     }
 
     /// Returns read-only capability support information for the resolved plan.
@@ -839,213 +901,13 @@ impl<'a> RuleCtx<'a> {
         &self.capability_support
     }
 
-    /// Returns all analyzed source files in deterministic database order.
-    pub fn files(&self) -> &[SourceFile] {
-        self.db.files()
-    }
-
-    /// Returns all package facts in deterministic database order.
-    pub fn packages(&self) -> &[PackageFact] {
-        self.db.packages()
-    }
-
-    /// Returns all function facts in deterministic database order.
-    pub fn functions(&self) -> &[FunctionFact] {
-        self.db.functions()
-    }
-
-    /// Returns all import facts in deterministic database order.
-    pub fn imports(&self) -> &[ImportFact] {
-        self.db.imports()
-    }
-
-    /// Returns all branch obligations in deterministic database order.
-    pub fn branches(&self) -> &[BranchObligation] {
-        self.db.branches()
-    }
-
-    /// Returns the source file for a stable file ID.
-    pub fn source_file(&self, file: FileId) -> Option<&SourceFile> {
-        self.db.file(file)
-    }
-
-    /// Returns function facts for a file without cloning facts.
-    pub fn functions_for_file(&self, file: FileId) -> impl Iterator<Item = &FunctionFact> + '_ {
-        self.db
-            .functions()
-            .iter()
-            .filter(move |function| function.file == file)
-    }
-
-    /// Returns import facts for a file without cloning facts.
-    pub fn imports_for_file(&self, file: FileId) -> impl Iterator<Item = &ImportFact> + '_ {
-        self.db
-            .imports()
-            .iter()
-            .filter(move |import| import.file == file)
-    }
-
-    /// Returns branch obligations for a function.
-    ///
-    /// This compatibility helper combines borrowed branch references for the
-    /// requested function ID.
-    pub fn branch_obligations(&self, function: FunctionId) -> Vec<&BranchObligation> {
-        self.db
-            .branches()
-            .iter()
-            .filter(|branch| branch.function == Some(function))
-            .collect()
-    }
-
-    /// Returns branch obligations for a file without cloning facts.
-    pub fn branch_obligations_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &BranchObligation> + '_ {
-        self.db
-            .branches()
-            .iter()
-            .filter(move |branch| branch.file == file)
-    }
-
-    /// Returns all Go test facts in deterministic database order.
-    pub fn go_tests(&self) -> &[TestFact] {
-        self.db.tests()
-    }
-
-    /// Returns Go test facts for a file without cloning facts.
-    pub fn go_tests_for_file(&self, file: FileId) -> impl Iterator<Item = &TestFact> + '_ {
-        self.db.tests().iter().filter(move |test| test.file == file)
-    }
-
     /// Paths paired with `file`'s relative path under the named `[path_contexts]` rule.
     pub fn path_context_related(&self, pair_name: &str, file: FileId) -> Vec<String> {
-        let Some(source) = self.source_file(file) else {
+        let Some(source) = self.db.file(file) else {
             return Vec::new();
         };
         self.db
             .path_context_related(pair_name, &source.relative_path)
-    }
-
-    /// Returns Go tests related to a source file.
-    ///
-    /// For a production `.go` file, this includes tests in the same file and
-    /// tests from same-directory `_test.go` files. For a `_test.go` file, this
-    /// includes only tests from that same test file.
-    pub fn go_tests_for_related_file(&self, file: FileId) -> Vec<&TestFact> {
-        let Some(source_file) = self.source_file(file) else {
-            return Vec::new();
-        };
-        if source_file.language != Language::Go {
-            return Vec::new();
-        }
-
-        let source_path = Path::new(&source_file.relative_path);
-        let source_name = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-
-        if source_name.ends_with("_test.go") {
-            return self.go_tests_for_file(file).collect();
-        }
-
-        let source_dir = source_path.parent();
-        self.db
-            .tests()
-            .iter()
-            .filter(|test| {
-                if test.file == file {
-                    return true;
-                }
-
-                let Some(test_file) = self.source_file(test.file) else {
-                    return false;
-                };
-                if test_file.language != Language::Go {
-                    return false;
-                }
-
-                let test_path = Path::new(&test_file.relative_path);
-                let test_name = test_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default();
-
-                test_name.ends_with("_test.go") && test_path.parent() == source_dir
-            })
-            .collect()
-    }
-
-    /// Returns TypeScript/JavaScript component facts in database order.
-    pub fn ts_components(&self) -> &[TsComponentFact] {
-        self.db.ts_components()
-    }
-
-    /// Returns TypeScript/JavaScript component facts for a file without cloning facts.
-    pub fn ts_components_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &TsComponentFact> + '_ {
-        self.db
-            .ts_components()
-            .iter()
-            .filter(move |component| component.file == file)
-    }
-
-    /// Returns TypeScript/JavaScript class facts in database order.
-    pub fn ts_classes(&self) -> &[TsClassFact] {
-        self.db.ts_classes()
-    }
-
-    /// Returns TypeScript/JavaScript class facts for a file without cloning facts.
-    pub fn ts_classes_for_file(&self, file: FileId) -> impl Iterator<Item = &TsClassFact> + '_ {
-        self.db
-            .ts_classes()
-            .iter()
-            .filter(move |class| class.file == file)
-    }
-
-    /// Returns string literal facts in deterministic database order.
-    pub fn string_literals(&self) -> &[StringLiteralFact] {
-        self.db.string_literals()
-    }
-
-    /// Returns string literal facts for a file without cloning facts.
-    pub fn string_literals_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &StringLiteralFact> + '_ {
-        self.db
-            .string_literals()
-            .iter()
-            .filter(move |literal| literal.file == file)
-    }
-
-    /// Returns JSX attribute facts in deterministic database order.
-    pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
-        self.db.jsx_attributes()
-    }
-
-    /// Returns JSX attribute facts for a file without cloning facts.
-    pub fn jsx_attributes_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &JsxAttributeFact> + '_ {
-        self.db
-            .jsx_attributes()
-            .iter()
-            .filter(move |attribute| attribute.file == file)
-    }
-
-    /// Returns syntactic import graph edges as `(source file, import)` pairs.
-    ///
-    /// Edges follow import fact insertion order from [`AnalysisDb`].
-    pub fn import_edges(&self) -> impl Iterator<Item = (&SourceFile, &ImportFact)> + '_ {
-        self.db
-            .imports()
-            .iter()
-            .filter_map(move |import| self.source_file(import.file).map(|file| (file, import)))
     }
 
     /// Returns a display path for a file ID, or `<unknown>` if missing.
@@ -1089,12 +951,12 @@ impl<'a> RuleCtx<'a> {
     }
 }
 
-/// Test-only registry that exposes the [`Capabilities`]/`Rule` shape independent of `run_rules`.
-/// Production runs use [`run_rules`] directly with `&[Arc<dyn Rule>]`.
+/// Test-only registry that exposes the [`Capabilities`]/[`Rule`] shape independent of `run_rules`.
+/// Production runs use [`run_rules`] directly with `&[Rule]`.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct RuleRegistry {
-    rules: Vec<Arc<dyn Rule>>,
+    rules: Vec<Rule>,
 }
 
 #[cfg(test)]
@@ -1103,14 +965,11 @@ impl RuleRegistry {
         Self::default()
     }
 
-    pub(crate) fn register<R>(&mut self, rule: R)
-    where
-        R: Rule + 'static,
-    {
-        self.rules.push(Arc::new(rule));
+    pub(crate) fn register(&mut self, rule: Rule) {
+        self.rules.push(rule);
     }
 
-    pub(crate) fn rules(&self) -> &[Arc<dyn Rule>] {
+    pub(crate) fn rules(&self) -> &[Rule] {
         &self.rules
     }
 }
@@ -1120,7 +979,7 @@ impl RuleRegistry {
 #[allow(unreachable_pub)]
 pub fn run_rules(
     db: &AnalysisDb,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
     options: &BTreeMap<String, RuleOptions>,
     enabled: Option<&BTreeSet<String>>,
     parallel: bool,
@@ -1131,13 +990,13 @@ pub fn run_rules(
 
 pub(crate) fn run_rules_with_capability_support(
     db: &AnalysisDb,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
     options: &BTreeMap<String, RuleOptions>,
     enabled: Option<&BTreeSet<String>>,
     parallel: bool,
     capability_support: &CapabilitySupportView,
 ) -> Vec<Diagnostic> {
-    let run_one = |rule: &Arc<dyn Rule>| {
+    let run_one = |rule: &Rule| {
         let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
             Ok(meta) => meta,
             Err(_) => {
@@ -1155,6 +1014,9 @@ pub(crate) fn run_rules_with_capability_support(
         {
             return Vec::new();
         }
+        if has_blocking_capability(&meta.id, capability_support) {
+            return Vec::new();
+        }
         let rule_options = options.get(&meta.id).cloned().unwrap_or_default();
         let mut ctx = RuleCtx::with_capability_support(
             db,
@@ -1162,7 +1024,7 @@ pub(crate) fn run_rules_with_capability_support(
             rule_options,
             capability_support.clone(),
         );
-        let result = catch_unwind(AssertUnwindSafe(|| rule.run(&mut ctx)));
+        let result = catch_unwind(AssertUnwindSafe(|| rule.run(db, &mut ctx)));
         match result {
             Ok(Ok(())) => ctx.into_diagnostics(),
             Ok(Err(error)) => vec![internal_rule_error(db, &meta, error.to_string())],
@@ -1183,6 +1045,13 @@ pub(crate) fn run_rules_with_capability_support(
     };
 
     dedupe_diagnostics(diagnostics)
+}
+
+fn has_blocking_capability(rule_id: &str, support: &CapabilitySupportView) -> bool {
+    support.entries.iter().any(|entry| {
+        entry.rules.iter().any(|entry_rule| entry_rule == rule_id)
+            && entry.status != CapabilitySupportStatus::Supported
+    })
 }
 
 fn internal_rule_error(db: &AnalysisDb, meta: &RuleMeta, message: String) -> Diagnostic {
@@ -1256,9 +1125,12 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sdk::facts::{
+        BranchObligations, FactView, Functions, GoTests, Imports, JsxAttributes, Packages,
+        SourceFiles, StringLiterals, TsClasses, TsComponents,
+    };
     use anyhow::anyhow;
     use proptest::prelude::*;
-    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
@@ -1270,6 +1142,7 @@ mod tests {
         MetaPanic,
     }
 
+    #[derive(Clone, Copy)]
     struct TestRule {
         id: &'static str,
         capabilities: Capabilities,
@@ -1343,10 +1216,19 @@ mod tests {
                 behavior: TestRuleBehavior::MetaPanic,
             }
         }
-    }
 
-    impl Rule for TestRule {
-        fn meta(&self) -> RuleMeta {
+        fn into_rule(self) -> Rule {
+            let meta_rule = self;
+            let capabilities_rule = self;
+            let run_rule = self;
+            Rule::from_parts(
+                move || meta_rule.meta(),
+                move || capabilities_rule.capabilities,
+                move |_db, ctx| run_rule.run(ctx),
+            )
+        }
+
+        fn meta(self) -> RuleMeta {
             if matches!(self.behavior, TestRuleBehavior::MetaPanic) {
                 panic!("intentional metadata panic");
             }
@@ -1358,11 +1240,7 @@ mod tests {
             }
         }
 
-        fn capabilities(&self) -> Capabilities {
-            self.capabilities
-        }
-
-        fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        fn run(self, ctx: &mut RuleCtx<'_>) -> RuleResult {
             if !self.delay.is_zero() {
                 thread::sleep(self.delay);
             }
@@ -1438,38 +1316,30 @@ mod tests {
 
     #[test]
     fn capability_support_runner_supplies_view_to_rules() {
-        struct SupportProbeRule;
-
-        impl Rule for SupportProbeRule {
-            fn meta(&self) -> RuleMeta {
-                RuleMeta {
-                    id: "examples/support-probe".to_string(),
-                    description: "Support probe".to_string(),
-                    severity: Severity::Warn,
-                }
-            }
-
-            fn capabilities(&self) -> Capabilities {
-                Capabilities::new().imports()
-            }
-
-            fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let rule = Rule::from_parts(
+            || RuleMeta {
+                id: "examples/support-probe".to_string(),
+                description: "Support probe".to_string(),
+                severity: Severity::Warn,
+            },
+            || Capabilities::new().imports(),
+            |_db, ctx| {
                 if ctx.capability_support().status_for("imports")
                     == Some(CapabilitySupportStatus::Supported)
                 {
                     ctx.report(Diagnostic::warning(
-                        self.meta().id,
+                        ctx.rule_id(),
                         "<workspace>",
                         DiagnosticRange::point(1, 1),
                         "imports are supported",
                     ));
                 }
                 Ok(())
-            }
-        }
+            },
+        );
 
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(SupportProbeRule)];
+        let rules = vec![rule];
         let support_view = CapabilitySupportView::new(vec![CapabilitySupport {
             capability: "imports".to_string(),
             language: Some(Language::Go),
@@ -1491,6 +1361,63 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].message, "imports are supported");
+    }
+
+    #[test]
+    fn run_rules_skips_rules_with_blocking_capabilities() {
+        let db = AnalysisDb::new();
+        let rules = vec![
+            TestRule::report("examples/needs-cfg", Severity::Warn, "cfg")
+                .with_capabilities(Capabilities::new().cfg())
+                .into_rule(),
+            TestRule::panic("examples/needs-dataflow")
+                .with_capabilities(Capabilities::new().dataflow())
+                .into_rule(),
+            TestRule::report("examples/imports", Severity::Warn, "imports")
+                .with_capabilities(Capabilities::new().imports())
+                .into_rule(),
+        ];
+        let support_view = CapabilitySupportView::new(vec![
+            CapabilitySupport {
+                capability: "cfg".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::Unsupported,
+                rules: vec!["examples/needs-cfg".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+            CapabilitySupport {
+                capability: "dataflow".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::SetupMissing,
+                rules: vec!["examples/needs-dataflow".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+            CapabilitySupport {
+                capability: "imports".to_string(),
+                language: Some(Language::Go),
+                status: CapabilitySupportStatus::Supported,
+                rules: vec!["examples/imports".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+        ]);
+
+        let diagnostics = run_rules_with_capability_support(
+            &db,
+            &rules,
+            &BTreeMap::new(),
+            None,
+            false,
+            &support_view,
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "examples/imports");
     }
 
     #[test]
@@ -1663,7 +1590,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_ctx_exposes_ts_classes() {
+    fn fact_view_exposes_ts_classes() {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
             PathBuf::from("src/dialog.tsx"),
@@ -1679,19 +1606,11 @@ mod tests {
             is_component_like: true,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/ts-classes".to_string(),
-                description: "TS classes test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let classes = TsClasses::build(&db);
 
-        assert_eq!(ctx.ts_classes().len(), 1);
-        assert_eq!(ctx.ts_classes()[0].name, db.ts_classes()[0].name);
-        assert_eq!(ctx.ts_classes()[0].span, db.ts_classes()[0].span);
+        assert_eq!(classes.all().len(), 1);
+        assert_eq!(classes.all()[0].name, db.ts_classes()[0].name);
+        assert_eq!(classes.all()[0].span, db.ts_classes()[0].span);
     }
 
     #[test]
@@ -1795,61 +1714,65 @@ mod tests {
             span: ts_span,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/sdk-query".to_string(),
-                description: "SDK query helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let packages = Packages::build(&db);
+        let files = SourceFiles::build(&db);
+        let functions = Functions::build(&db);
+        let imports = Imports::build(&db);
+        let branches = BranchObligations::build(&db);
+        let tests = GoTests::build(&db);
+        let components = TsComponents::build(&db);
+        let classes = TsClasses::build(&db);
+        let literals = StringLiterals::build(&db);
+        let jsx = JsxAttributes::build(&db);
 
-        assert_eq!(ctx.packages()[0].name, "payment");
-        assert_eq!(ctx.branches()[0].condition_text, "err != nil");
+        assert_eq!(packages.all()[0].name, "payment");
+        assert_eq!(branches.all()[0].condition_text, "err != nil");
+        assert_eq!(files.get(go_file).unwrap().relative_path, "src/payment.go");
         assert_eq!(
-            ctx.source_file(go_file).unwrap().relative_path,
-            "src/payment.go"
-        );
-        assert_eq!(
-            ctx.functions_for_file(go_file)
+            functions
+                .for_file(go_file)
                 .map(|function| function.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Charge"]
         );
         assert_eq!(
-            ctx.imports_for_file(go_file)
+            imports
+                .for_file(go_file)
                 .map(|import| import.path.as_str())
                 .collect::<Vec<_>>(),
             vec!["context"]
         );
-        assert_eq!(ctx.branch_obligations_for_file(go_file).count(), 1);
+        assert_eq!(branches.for_file(go_file).count(), 1);
         assert_eq!(
-            ctx.go_tests_for_file(go_file)
+            tests
+                .for_file(go_file)
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["TestCharge"]
         );
         assert_eq!(
-            ctx.ts_components_for_file(ts_file)
+            components
+                .for_file(ts_file)
                 .map(|component| component.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Button"]
         );
         assert_eq!(
-            ctx.ts_classes_for_file(ts_file)
+            classes
+                .for_file(ts_file)
                 .map(|class| class.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Dialog"]
         );
         assert_eq!(
-            ctx.string_literals_for_file(ts_file)
+            literals
+                .for_file(ts_file)
                 .map(|literal| literal.value.as_str())
                 .collect::<Vec<_>>(),
             vec!["Pay"]
         );
         assert_eq!(
-            ctx.jsx_attributes_for_file(ts_file)
+            jsx.for_file(ts_file)
                 .map(|attribute| attribute.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["aria-label"]
@@ -1887,18 +1810,11 @@ mod tests {
             language: Language::Go,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/import-edges".to_string(),
-                description: "Import edge helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let imports = Imports::build(&db);
 
         assert_eq!(
-            ctx.import_edges()
+            imports
+                .edges()
                 .map(|(file, import)| (file.relative_path.as_str(), import.path.as_str()))
                 .collect::<Vec<_>>(),
             vec![("src/second.go", "fmt"), ("src/first.go", "strings")]
@@ -1958,25 +1874,19 @@ mod tests {
             table_rows: 0,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/go-related-tests".to_string(),
-                description: "Related Go test helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let tests = GoTests::build(&db);
 
         assert_eq!(
-            ctx.go_tests_for_related_file(production_file)
+            tests
+                .related_for_file(production_file)
                 .iter()
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["TestInline", "TestPayment"]
         );
         assert_eq!(
-            ctx.go_tests_for_related_file(companion_file)
+            tests
+                .related_for_file(companion_file)
                 .iter()
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),
@@ -2015,29 +1925,23 @@ mod tests {
         let mut registry = RuleRegistry::new();
         registry.register(
             TestRule::report("examples/capabilities", Severity::Warn, "capabilities")
-                .with_capabilities(Capabilities::new().imports().coverage_facts()),
+                .with_capabilities(Capabilities::new().imports().coverage_facts())
+                .into_rule(),
         );
 
         let capabilities = registry.rules()[0].capabilities();
         assert!(capabilities.imports);
         assert!(capabilities.coverage_facts);
+        assert!(!capabilities.dataflow);
         assert!(!capabilities.jsx_attributes);
     }
 
     #[test]
     fn run_rules_filters_enabled_patterns_and_applies_severity_override() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report(
-                "examples/allowed",
-                Severity::Warn,
-                "allowed",
-            )),
-            Arc::new(TestRule::report(
-                "custom/blocked",
-                Severity::Error,
-                "blocked",
-            )),
+        let rules = vec![
+            TestRule::report("examples/allowed", Severity::Warn, "allowed").into_rule(),
+            TestRule::report("custom/blocked", Severity::Error, "blocked").into_rule(),
         ];
         let mut options = BTreeMap::new();
         options.insert(
@@ -2059,9 +1963,9 @@ mod tests {
     #[test]
     fn run_rules_none_selection_runs_all_and_empty_selection_runs_none() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report("examples/one", Severity::Warn, "one")),
-            Arc::new(TestRule::report("examples/two", Severity::Warn, "two")),
+        let rules = vec![
+            TestRule::report("examples/one", Severity::Warn, "one").into_rule(),
+            TestRule::report("examples/two", Severity::Warn, "two").into_rule(),
         ];
 
         let all = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -2075,9 +1979,9 @@ mod tests {
     #[test]
     fn run_rules_contains_rule_errors_and_panics() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::error("examples/error")),
-            Arc::new(TestRule::panic("examples/panic")),
+        let rules = vec![
+            TestRule::error("examples/error").into_rule(),
+            TestRule::panic("examples/panic").into_rule(),
         ];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -2109,7 +2013,7 @@ mod tests {
     #[test]
     fn run_rules_contains_meta_panics() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(TestRule::meta_panic())];
+        let rules = vec![TestRule::meta_panic().into_rule()];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
 
@@ -2122,16 +2026,14 @@ mod tests {
     #[test]
     fn run_rules_parallel_matches_sequential() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(
-                TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
-                    .with_message("same diagnostic")
-                    .with_delay(Duration::from_millis(50)),
-            ),
-            Arc::new(
-                TestRule::report("examples/duplicate", Severity::Error, "duplicate")
-                    .with_message("same diagnostic"),
-            ),
+        let rules = vec![
+            TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
+                .with_message("same diagnostic")
+                .with_delay(Duration::from_millis(50))
+                .into_rule(),
+            TestRule::report("examples/duplicate", Severity::Error, "duplicate")
+                .with_message("same diagnostic")
+                .into_rule(),
         ];
 
         let sequential = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -2143,17 +2045,11 @@ mod tests {
     #[test]
     fn run_rules_dedupes_duplicate_fingerprints() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report(
-                "examples/duplicate-a",
-                Severity::Warn,
-                "same-fingerprint",
-            )),
-            Arc::new(TestRule::report(
-                "examples/duplicate-b",
-                Severity::Error,
-                "same-fingerprint",
-            )),
+        let rules = vec![
+            TestRule::report("examples/duplicate-a", Severity::Warn, "same-fingerprint")
+                .into_rule(),
+            TestRule::report("examples/duplicate-b", Severity::Error, "same-fingerprint")
+                .into_rule(),
         ];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);

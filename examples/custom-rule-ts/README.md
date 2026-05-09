@@ -33,15 +33,28 @@ Start a TypeScript/JavaScript rule in a real project with:
 polint new-rule ts no-product-hex-colors
 ```
 
-The useful SDK calls for this kind of policy are `ctx.string_literals()` and
-`ctx.jsx_attributes()`:
+The useful SDK views for this kind of policy are `StringLiterals<'_>` and
+`JsxAttributes<'_>`. Requesting those parameters is also how polint derives the
+rule's capabilities:
 
 ```rust
-for literal in ctx.string_literals() {
-    if literal.value.starts_with('#') {
+#[polint::rule(
+    id = "local/no-product-hex-colors",
+    description = "Reject raw product colors.",
+    severity = "warn"
+)]
+fn no_product_hex_colors(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
+    for literal in literals.iter() {
+        if !literal.value.starts_with('#') {
+            continue;
+        }
+
         ctx.report(
             Diagnostic::warning(
-                "local/no-product-hex-colors",
+                ctx.rule_id(),
                 ctx.file_path(literal.file),
                 literal.span.diagnostic_range(),
                 "Use a design token instead of a raw color.",
@@ -49,6 +62,7 @@ for literal in ctx.string_literals() {
             .with_evidence("literal", literal.value.clone()),
         );
     }
+    Ok(())
 }
 ```
 

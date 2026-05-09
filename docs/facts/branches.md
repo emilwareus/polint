@@ -1,9 +1,10 @@
 # Branch Facts
 
 `BranchObligation` describes a syntax-level branch that may need policy review,
-for example an error path in Go. Rules read these through `RuleCtx::branches()`,
-`RuleCtx::branch_obligations_for_file(file_id)`, or
-`RuleCtx::branch_obligations(function_id)`.
+for example an error path in Go. Rules request `BranchObligations<'_>` and, when
+needed, `GoTests<'_>` as typed fact-view parameters on a `#[polint::rule]`
+function. Those parameters are also how polint derives the required
+capabilities.
 
 ## Fields
 
@@ -30,17 +31,26 @@ for example an error path in Go. Rules read these through `RuleCtx::branches()`,
 ```rust
 use polint::sdk::prelude::*;
 
-fn require_test_evidence(ctx: &mut RuleCtx<'_>) {
+#[polint::rule(
+    id = "local/error-branch-tests",
+    description = "Require nearby test evidence for Go error branches.",
+    severity = "warn"
+)]
+fn require_test_evidence(
+    ctx: &mut RuleCtx<'_>,
+    branches: BranchObligations<'_>,
+    tests: GoTests<'_>,
+) -> RuleResult {
     let mut diagnostics = Vec::new();
-    for branch in ctx.branches() {
+    for branch in branches.iter() {
         let file = ctx.file_path(branch.file);
         if branch.is_error_path
             && file_in_scope(ctx.options(), &file)
-            && ctx.go_tests_for_related_file(branch.file).is_empty()
+            && tests.related_for_file(branch.file).is_empty()
         {
             diagnostics.push(
                 Diagnostic::warning(
-                    "local/error-branch-tests",
+                    ctx.rule_id(),
                     file,
                     branch.decision_span.diagnostic_range(),
                     "No nearby test evidence found for this error branch.",
@@ -53,5 +63,6 @@ fn require_test_evidence(ctx: &mut RuleCtx<'_>) {
     for diagnostic in diagnostics {
         ctx.report(diagnostic);
     }
+    Ok(())
 }
 ```

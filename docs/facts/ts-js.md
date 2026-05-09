@@ -2,6 +2,9 @@
 
 TS/JS facts are produced by the Oxc adapter. Rules usually combine function,
 import, literal, JSX attribute, component, and class facts.
+Rule functions request these facts through typed views such as
+`TsComponents<'_>`, `TsClasses<'_>`, `StringLiterals<'_>`, and
+`JsxAttributes<'_>`.
 
 ## Component Facts
 
@@ -39,13 +42,21 @@ extract a name.
 ```rust
 use polint::sdk::prelude::*;
 
-fn require_exported_component_name(ctx: &mut RuleCtx<'_>) {
+#[polint::rule(
+    id = "local/export-components",
+    description = "Require component-like classes to be exported.",
+    severity = "warn"
+)]
+fn require_exported_component_name(
+    ctx: &mut RuleCtx<'_>,
+    classes: TsClasses<'_>,
+) -> RuleResult {
     let mut diagnostics = Vec::new();
-    for class in ctx.ts_classes() {
+    for class in classes.iter() {
         let file = ctx.file_path(class.file);
         if class.is_component_like && !class.is_exported && file_in_scope(ctx.options(), &file) {
             diagnostics.push(Diagnostic::warning(
-                "local/export-components",
+                ctx.rule_id(),
                 file,
                 class.span.diagnostic_range(),
                 format!("Component-like class `{}` is not exported.", class.name),
@@ -55,5 +66,6 @@ fn require_exported_component_name(ctx: &mut RuleCtx<'_>) {
     for diagnostic in diagnostics {
         ctx.report(diagnostic);
     }
+    Ok(())
 }
 ```

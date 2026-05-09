@@ -13,8 +13,16 @@
 //! ```no_run
 //! use polint::sdk::prelude::*;
 //!
-//! fn run_for_each_literal(ctx: &mut RuleCtx<'_>) -> RuleResult {
-//!     for literal in ctx.string_literals() {
+//! #[polint::rule(
+//!     id = "local/literal-scope",
+//!     description = "Example scoped literal rule.",
+//!     severity = "warn"
+//! )]
+//! fn run_for_each_literal(
+//!     ctx: &mut RuleCtx<'_>,
+//!     literals: StringLiterals<'_>,
+//! ) -> RuleResult {
+//!     for literal in literals.iter() {
 //!         let file = ctx.file_path(literal.file);
 //!         if !file_in_scope(ctx.options(), &file) {
 //!             continue;

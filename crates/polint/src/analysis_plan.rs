@@ -9,7 +9,6 @@ use crate::diagnostics::{Diagnostic, Severity, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 pub(crate) const ANALYSIS_PLAN_SCHEMA: &str = "analysis-plan-v1";
 
@@ -107,7 +106,7 @@ impl AnalysisPlan {
 
     #[allow(dead_code)]
     pub(crate) fn from_rules(
-        rules: &[Arc<dyn Rule>],
+        rules: &[Rule],
         enabled: Option<&BTreeSet<String>>,
         options: &BTreeMap<String, RuleOptions>,
     ) -> Self {
@@ -181,25 +180,12 @@ impl AnalysisPlan {
     pub(crate) fn diagnostics(&self) -> Vec<Diagnostic> {
         self.capabilities
             .iter()
-            .filter(|capability| capability.status == CapabilitySupportStatus::Unsupported)
+            .filter(|capability| capability.status != CapabilitySupportStatus::Supported)
             .flat_map(|capability| {
-                capability.rules.iter().map(|rule_id| {
-                    Diagnostic::error(
-                        "polint/capability",
-                        "<workspace>",
-                        TextRange::point(1, 1),
-                        format!(
-                            "Rule `{rule_id}` requested unsupported capability `{}`.",
-                            capability.capability
-                        ),
-                    )
-                    .with_evidence("rule", rule_id.clone())
-                    .with_evidence("capability", capability.capability.clone())
-                    .with_help(format!(
-                        "Capability `{}` is not supported in this phase; see docs/roadmap/00_ROADMAP.md.",
-                        capability.capability
-                    ))
-                })
+                capability
+                    .rules
+                    .iter()
+                    .map(|rule_id| capability_diagnostic(capability, rule_id))
             })
             .collect()
     }
@@ -345,7 +331,7 @@ impl ExplainPlanReport {
 }
 
 impl RulePlanInputs {
-    pub(crate) fn collect(rules: &[Arc<dyn Rule>], enabled: Option<&BTreeSet<String>>) -> Self {
+    pub(crate) fn collect(rules: &[Rule], enabled: Option<&BTreeSet<String>>) -> Self {
         let mut inputs = Vec::new();
         let mut diagnostics = Vec::new();
 
@@ -454,6 +440,49 @@ fn capability_collection_error(meta: &RuleMeta) -> Diagnostic {
     .with_help("Capability declarations must not panic; polint ignored requested capabilities for this rule.")
 }
 
+fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagnostic {
+    let message = match capability.status {
+        CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
+        CapabilitySupportStatus::Unsupported => format!(
+            "Rule `{rule_id}` requested unsupported capability `{}`.",
+            capability.capability
+        ),
+        CapabilitySupportStatus::SetupMissing => format!(
+            "Rule `{rule_id}` requested capability `{}`, but required setup is missing.",
+            capability.capability
+        ),
+    };
+    let docs_path = capability
+        .docs_path
+        .as_deref()
+        .unwrap_or("docs/roadmap/00_ROADMAP.md");
+    let help = match capability.status {
+        CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
+        CapabilitySupportStatus::Unsupported => format!(
+            "Capability `{}` is not supported in this phase; see {docs_path}.",
+            capability.capability
+        ),
+        CapabilitySupportStatus::SetupMissing => format!(
+            "Capability `{}` needs additional local setup before this rule can run; see {docs_path}.",
+            capability.capability
+        ),
+    };
+
+    Diagnostic::error(
+        "polint/capability",
+        "<workspace>",
+        TextRange::point(1, 1),
+        message,
+    )
+    .with_evidence("rule", rule_id.to_string())
+    .with_evidence("capability", capability.capability.clone())
+    .with_evidence(
+        "status",
+        capability_status_json(&capability.status).to_string(),
+    )
+    .with_help(help)
+}
+
 fn setup_check_message(check: &SetupCheck) -> String {
     match (&check.reason, &check.hint) {
         (Some(reason), Some(hint)) => format!("{reason} {hint}"),
@@ -534,7 +563,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             Some("Use go_tests for current Go test evidence.".to_string()),
             Some("docs/roadmap/00_ROADMAP.md".to_string()),
         ),
-        "cfg" | "call_graph" | "coverage_facts" => (
+        "cfg" | "call_graph" | "dataflow" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is reserved for a later phase.".to_string()),
             None,
@@ -558,24 +587,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
 }
 
 fn requested_capabilities(capabilities: Capabilities) -> Vec<String> {
-    [
-        ("syntax", capabilities.syntax),
-        ("imports", capabilities.imports),
-        ("cfg", capabilities.cfg),
-        ("call_graph", capabilities.call_graph),
-        ("go_tests", capabilities.go_tests),
-        ("branch_obligations", capabilities.branch_obligations),
-        ("coverage_facts", capabilities.coverage_facts),
-        ("test_suite_metrics", capabilities.test_suite_metrics),
-        ("ts_components", capabilities.ts_components),
-        ("ts_classes", capabilities.ts_classes),
-        ("string_literals", capabilities.string_literals),
-        ("jsx_attributes", capabilities.jsx_attributes),
-    ]
-    .into_iter()
-    .filter(|&(_name, requested)| requested)
-    .map(|(name, _requested)| name.to_string())
-    .collect()
+    capabilities.requested_names().map(str::to_string).collect()
 }
 
 fn plan_digest(
@@ -686,13 +698,12 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::{
-        Capabilities, Rule, RuleCtx, RuleMeta, RuleOptions, run_rules_with_capability_support,
+        Capabilities, Rule, RuleMeta, RuleOptions, run_rules_with_capability_support,
     };
     use crate::diagnostics::{Severity, TextRange as DiagnosticRange};
-    use crate::rule_error::RuleResult;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Arc;
 
+    #[derive(Clone, Copy)]
     struct PlanRule {
         id: &'static str,
         description: &'static str,
@@ -708,8 +719,18 @@ mod tests {
         CapabilitiesPanic,
     }
 
-    impl Rule for PlanRule {
-        fn meta(&self) -> RuleMeta {
+    impl PlanRule {
+        fn into_rule(self) -> Rule {
+            let meta_rule = self;
+            let capabilities_rule = self;
+            Rule::from_parts(
+                move || meta_rule.meta(),
+                move || capabilities_rule.capabilities(),
+                |_db, _ctx| Ok(()),
+            )
+        }
+
+        fn meta(self) -> RuleMeta {
             if matches!(self.behavior, PlanRuleBehavior::MetaPanic) {
                 panic!("intentional plan-time metadata panic");
             }
@@ -721,16 +742,12 @@ mod tests {
             }
         }
 
-        fn capabilities(&self) -> Capabilities {
+        fn capabilities(self) -> Capabilities {
             if matches!(self.behavior, PlanRuleBehavior::CapabilitiesPanic) {
                 panic!("intentional plan-time capability panic");
             }
 
             self.capabilities
-        }
-
-        fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-            Ok(())
         }
     }
 
@@ -739,14 +756,15 @@ mod tests {
         description: &'static str,
         severity: Severity,
         capabilities: Capabilities,
-    ) -> Arc<dyn Rule> {
-        Arc::new(PlanRule {
+    ) -> Rule {
+        PlanRule {
             id,
             description,
             severity,
             capabilities,
             behavior: PlanRuleBehavior::Normal,
-        })
+        }
+        .into_rule()
     }
 
     fn rule_with_behavior(
@@ -755,14 +773,15 @@ mod tests {
         severity: Severity,
         capabilities: Capabilities,
         behavior: PlanRuleBehavior,
-    ) -> Arc<dyn Rule> {
-        Arc::new(PlanRule {
+    ) -> Rule {
+        PlanRule {
             id,
             description,
             severity,
             capabilities,
             behavior,
-        })
+        }
+        .into_rule()
     }
 
     #[test]
@@ -791,7 +810,7 @@ mod tests {
                 Capabilities::new().syntax().imports(),
             ),
         ];
-        let second_rules = vec![Arc::clone(&first_rules[1]), Arc::clone(&first_rules[0])];
+        let second_rules = vec![first_rules[1].clone(), first_rules[0].clone()];
         let enabled = BTreeSet::from(["local/*".to_string()]);
         let mut options = BTreeMap::new();
         options.insert(
@@ -855,7 +874,7 @@ mod tests {
             "local/needs-metrics",
             "Needs metrics",
             Severity::Warn,
-            Capabilities::new().test_suite_metrics().cfg(),
+            Capabilities::new().test_suite_metrics().cfg().dataflow(),
         )];
 
         let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
@@ -891,6 +910,51 @@ mod tests {
                     .as_deref()
                     .is_some_and(|hint| hint.contains("Use go_tests for current Go test evidence"))
         }));
+        assert_eq!(
+            plan.support_view().status_for("dataflow"),
+            Some(crate::core::CapabilitySupportStatus::Unsupported)
+        );
+    }
+
+    #[test]
+    fn analysis_plan_reports_setup_missing_capabilities_as_diagnostics() {
+        let plan = AnalysisPlan::finish(
+            vec![PlannedRule {
+                id: "local/needs-coverage".to_string(),
+                description: "Needs coverage".to_string(),
+                severity: Severity::Warn,
+                requested_capabilities: vec!["coverage_facts".to_string()],
+                options_digest: "options".to_string(),
+            }],
+            vec![PlannedCapability {
+                capability: "coverage_facts".to_string(),
+                language: None,
+                status: crate::core::CapabilitySupportStatus::SetupMissing,
+                rules: vec!["local/needs-coverage".to_string()],
+                reason: Some("Coverage report was not configured.".to_string()),
+                hint: Some("Set coverage report paths in .polint.toml.".to_string()),
+                docs_path: Some("docs/facts/capability-plans.md".to_string()),
+            }],
+            Vec::new(),
+        );
+
+        let diagnostics = plan.diagnostics();
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "polint/capability");
+        assert!(diagnostics[0].message.contains("required setup is missing"));
+        assert!(
+            diagnostics[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "status" && evidence.value == "setup_missing")
+        );
+        assert!(
+            diagnostics[0]
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("docs/facts/capability-plans.md"))
+        );
     }
 
     #[test]

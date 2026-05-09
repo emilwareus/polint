@@ -1116,6 +1116,7 @@ dependencies = [
  "oxc_semantic",
  "oxc_span",
  "petgraph",
+ "polint-macros",
  "predicates",
  "proptest",
  "rayon",
@@ -1213,6 +1214,15 @@ name = "polint-example-ts-design-tokens-rule"
 version = "0.1.7"
 dependencies = [
  "polint",
+]
+
+[[package]]
+name = "polint-macros"
+version = "0.1.7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

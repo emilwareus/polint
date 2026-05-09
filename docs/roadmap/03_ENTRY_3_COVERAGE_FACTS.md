@@ -2,8 +2,8 @@
 
 ## Goal
 
-Fulfill `.coverage_facts()` by importing external coverage reports and mapping
-them to polint source facts.
+Fulfill the `CoverageFacts<'_>` typed view by importing external coverage
+reports and mapping them to polint source facts.
 
 ## Why
 
@@ -23,9 +23,9 @@ cross-language branch mapping.
 - `FunctionCoverageFact`
 - `CoverageSource`
 - `CoveragePrecision`
-- `RuleCtx::coverage_for_file`
-- `RuleCtx::coverage_for_function`
-- `RuleCtx::coverage_for_branch`
+- `CoverageFacts<'_>::for_file(file_id)`
+- `CoverageFacts<'_>::for_function(function_id)`
+- `CoverageFacts<'_>::for_branch(branch_id)`
 
 ## Build Method
 

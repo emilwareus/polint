@@ -20,8 +20,8 @@ interprocedural analysis.
 - `CallEdgeFact`
 - `CallResolutionStatus`
 - `CallConfidence`
-- `RuleCtx::call_edges`
-- `RuleCtx::calls_from(function_id)`
+- `CallGraph<'_>::edges()`
+- `CallGraph<'_>::calls_from(function_id)`
 - `polint graph calls`
 
 ## Build Method

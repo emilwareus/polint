@@ -8,7 +8,6 @@ use crate::config::{
 };
 use crate::core::{Rule, RuleOptions};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use super::stable_hash;
 
@@ -23,7 +22,7 @@ pub(crate) fn config_hash(config: &LoadedConfig) -> String {
 }
 
 pub(crate) fn rule_hash(
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
     enabled: Option<&BTreeSet<String>>,
     options: &std::collections::BTreeMap<String, RuleOptions>,
 ) -> String {

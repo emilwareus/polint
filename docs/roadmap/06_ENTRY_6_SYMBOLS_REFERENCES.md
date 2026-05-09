@@ -24,10 +24,10 @@ precision**.
 - `ReferenceKind`
 - `SymbolKind`
 - `SymbolPrecision`
-- `RuleCtx::symbols`
-- `RuleCtx::references`
-- `RuleCtx::references_to(symbol_id)`
-- `RuleCtx::definition(symbol_id)`
+- `Symbols<'_>`
+- `References<'_>`
+- `References<'_>::to(symbol_id)`
+- `Symbols<'_>::definition(symbol_id)`
 
 ## Build Method
 

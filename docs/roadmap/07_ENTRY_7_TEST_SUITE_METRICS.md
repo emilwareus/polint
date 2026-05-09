@@ -19,8 +19,8 @@ later**.
 - `TestMetricFact`
 - `RelatedTestEvidence`
 - `TestFramework`
-- `RuleCtx::test_metrics_for_file`
-- `RuleCtx::test_metrics_for_function`
+- `TestSuiteMetrics<'_>::for_file(file_id)`
+- `TestSuiteMetrics<'_>::for_function(function_id)`
 
 ## Build Method
 

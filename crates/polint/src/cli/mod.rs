@@ -339,7 +339,6 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let rules_dir = root.join(".polint/rules");
     let module = rust_module_name(&rule_name);
-    let struct_name = to_pascal_case(&rule_name);
     let module_path = rules_dir.join("src").join(format!("{module}.rs"));
 
     match fs::symlink_metadata(&module_path) {
@@ -357,17 +356,17 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let pack_toml = rules_dir.join("Cargo.toml");
     if !pack_toml.is_file() {
         write_pack_cargo_toml(&rules_dir)?;
-        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+        write_initial_pack_main(&rules_dir, &module)?;
     } else if !rules_dir.join("src/main.rs").is_file() {
-        write_initial_pack_main(&rules_dir, &module, &struct_name)?;
+        write_initial_pack_main(&rules_dir, &module)?;
     } else {
-        prepend_pack_mod_use(&rules_dir, &module, &struct_name)?;
-        append_rule_to_run_cli_vec(&rules_dir, &struct_name)?;
+        prepend_pack_mod_use(&rules_dir, &module)?;
+        append_rule_to_run_cli_vec(&rules_dir, &module)?;
     }
 
     fs::write(
         &module_path,
-        rule_module_template(&args.language, &rule_name, &struct_name),
+        rule_module_template(&args.language, &rule_name),
     )?;
     println!("Created rule module {}", module_path.display());
     Ok(())
@@ -419,17 +418,15 @@ publish = false
     Ok(())
 }
 
-fn write_initial_pack_main(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+fn write_initial_pack_main(rules_dir: &Path, module: &str) -> Result<()> {
     let initial = format!(
         r#"mod {module};
-use {module}::{struct_name};
 
 use std::process::ExitCode;
-use std::sync::Arc;
 
 fn main() -> ExitCode {{
     polint::runner::run_cli(vec![
-        Arc::new({struct_name}),
+        {module}::{module}(),
     ])
 }}
 "#
@@ -443,20 +440,19 @@ fn main() -> ExitCode {{
     Ok(())
 }
 
-fn prepend_pack_mod_use(rules_dir: &Path, module: &str, struct_name: &str) -> Result<()> {
+fn prepend_pack_mod_use(rules_dir: &Path, module: &str) -> Result<()> {
     let main_path = rules_dir.join("src/main.rs");
     let mut src = fs::read_to_string(&main_path)
         .with_context(|| format!("failed to read {}", main_path.display()))?;
     let mod_decl = format!("mod {module};");
-    let use_decl = format!("use {module}::{struct_name};");
     if !src.contains(&mod_decl) {
-        src.insert_str(0, &format!("{mod_decl}\n{use_decl}\n\n"));
+        src.insert_str(0, &format!("{mod_decl}\n"));
         fs::write(&main_path, src)?;
     }
     Ok(())
 }
 
-fn append_rule_to_run_cli_vec(rules_dir: &Path, struct_name: &str) -> Result<()> {
+fn append_rule_to_run_cli_vec(rules_dir: &Path, module: &str) -> Result<()> {
     let main_path = rules_dir.join("src/main.rs");
     let src = fs::read_to_string(&main_path)
         .with_context(|| format!("failed to read {}", main_path.display()))?;
@@ -487,9 +483,9 @@ fn append_rule_to_run_cli_vec(rules_dir: &Path, struct_name: &str) -> Result<()>
     let inner = &src[inner_start..end];
     let trimmed = inner.trim_end();
     let new_inner = if trimmed.is_empty() {
-        format!("\n        Arc::new({struct_name}),\n    ")
+        format!("\n        {module}::{module}(),\n    ")
     } else {
-        format!("{trimmed}\n        Arc::new({struct_name}),\n    ")
+        format!("{trimmed}\n        {module}::{module}(),\n    ")
     };
     let mut new_src = String::new();
     new_src.push_str(&src[..inner_start]);
@@ -515,59 +511,44 @@ fn validate_rule_name(name: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn rule_module_template(language: &str, rule_name: &str, struct_name: &str) -> String {
-    let capability = match language {
-        "go" => ".go_tests().branch_obligations()",
-        "ts" | "tsx" | "js" | "jsx" => ".string_literals().jsx_attributes()",
-        _ => ".syntax()",
+fn rule_module_template(language: &str, rule_name: &str) -> String {
+    let module = rust_module_name(rule_name);
+    let fact_params = match language {
+        "go" => "tests: GoTests<'_>, branches: BranchObligations<'_>",
+        "ts" | "tsx" | "js" | "jsx" => "literals: StringLiterals<'_>, jsx: JsxAttributes<'_>",
+        _ => "functions: Functions<'_>",
     };
     let query_example = match language {
         "go" => {
-            r#"        for file in ctx.files() {
-            let test_count = ctx.go_tests_for_file(file.id).count();
-            let branch_count = ctx.branch_obligations_for_file(file.id).count();
-            let _ = (test_count, branch_count);
-        }"#
+            r#"    for branch in branches.iter() {
+        let related_test_count = tests.related_for_file(branch.file).len();
+        let _ = related_test_count;
+    }"#
         }
         "ts" | "tsx" | "js" | "jsx" => {
-            r#"        for file in ctx.files() {
-            let literal_count = ctx.string_literals_for_file(file.id).count();
-            let attribute_count = ctx.jsx_attributes_for_file(file.id).count();
-            let _ = (literal_count, attribute_count);
-        }"#
+            r#"    let literal_count = literals.iter().count();
+    let attribute_count = jsx.iter().count();
+    let _ = (literal_count, attribute_count);"#
         }
         _ => {
-            r#"        for file in ctx.files() {
-            let function_count = ctx.functions_for_file(file.id).count();
-            let _ = function_count;
-        }"#
+            r#"    let function_count = functions.iter().count();
+    let _ = function_count;"#
         }
     };
     format!(
         r#"use polint::sdk::prelude::*;
 
-pub struct {struct_name};
-
-impl Rule for {struct_name} {{
-    fn meta(&self) -> RuleMeta {{
-        RuleMeta {{
-            id: "custom/{rule_name}".to_string(),
-            description: "Project-specific policy: {rule_name}.".to_string(),
-            severity: Severity::Warn,
-        }}
-    }}
-
-    fn capabilities(&self) -> Capabilities {{
-        Capabilities::new(){capability}
-    }}
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {{
+#[polint::rule(
+    id = "custom/{rule_name}",
+    description = "Project-specific policy: {rule_name}.",
+    severity = "warn"
+)]
+pub(crate) fn {module}(_ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
-        // To report a diagnostic, call ctx.warn(&some_fact.span, "message")
-        // or ctx.report(Diagnostic::...). Custom TOML fields are in
-        // ctx.options().settings.
-        Ok(())
-    }}
+    // To report a diagnostic, call _ctx.warn(&some_fact.span, "message")
+    // or _ctx.report(Diagnostic::...). Custom TOML fields are in
+    // _ctx.options().settings.
+    Ok(())
 }}
 "#
     )
@@ -624,7 +605,7 @@ fn analyze_and_run(
     let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
@@ -706,7 +687,7 @@ fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
     let loaded = load_config_for_check(&root, &[])?;
     let cache = crate::cache::Cache::default_for_repo(&root, false);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, None)?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
@@ -773,7 +754,7 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config_for_check(&root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(&root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&config);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let mut parser_diagnostics = Vec::new();
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();
@@ -1107,23 +1088,4 @@ fn sanitize_name(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn to_pascal_case(name: &str) -> String {
-    let mut out = String::new();
-    for part in name.split(|ch: char| !ch.is_ascii_alphanumeric()) {
-        if part.is_empty() {
-            continue;
-        }
-        let mut chars = part.chars();
-        if let Some(first) = chars.next() {
-            out.extend(first.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-    if out.is_empty() {
-        "CustomRule".to_string()
-    } else {
-        out
-    }
 }

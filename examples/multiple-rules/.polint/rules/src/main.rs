@@ -4,11 +4,11 @@
 mod go_import_boundaries;
 mod no_raw_colors;
 
-use go_import_boundaries::GoImportBoundaries;
-use no_raw_colors::NoRawColors;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 fn main() -> ExitCode {
-    polint::runner::run_cli(vec![Arc::new(NoRawColors), Arc::new(GoImportBoundaries)])
+    polint::runner::run_cli(vec![
+        no_raw_colors::no_raw_colors(),
+        go_import_boundaries::go_import_boundaries(),
+    ])
 }

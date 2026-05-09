@@ -1,8 +1,8 @@
 # Import Facts
 
-`ImportFact` describes a syntactic Go or TS/JS import. Rules read these through
-`RuleCtx::imports()`, `RuleCtx::imports_for_file(file_id)`, or
-`RuleCtx::import_edges()`.
+`ImportFact` describes a syntactic Go or TS/JS import. Rules request the
+`Imports<'_>` typed fact view on a `#[polint::rule]` function. The same
+parameter is how polint derives the `imports` capability.
 
 ## Fields
 
@@ -27,14 +27,25 @@
 ```rust
 use polint::sdk::prelude::*;
 
-fn check_forbidden_import(ctx: &mut RuleCtx<'_>, forbidden: &str) {
+#[polint::rule(
+    id = "local/forbidden-import",
+    description = "Reject forbidden imports.",
+    severity = "error"
+)]
+fn check_forbidden_import(ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
+    let forbidden = ctx
+        .options()
+        .settings
+        .get("forbidden")
+        .and_then(|value| value.as_str())
+        .unwrap_or("internal/legacy");
     let mut diagnostics = Vec::new();
-    for import in ctx.imports() {
+    for import in imports.iter() {
         let file = ctx.file_path(import.file);
         if file_in_scope(ctx.options(), &file) && import.path.contains(forbidden) {
             diagnostics.push(
                 Diagnostic::error(
-                    "local/forbidden-import",
+                    ctx.rule_id(),
                     file,
                     import.span.diagnostic_range(),
                     "Import violates a local boundary.",
@@ -46,5 +57,6 @@ fn check_forbidden_import(ctx: &mut RuleCtx<'_>, forbidden: &str) {
     for diagnostic in diagnostics {
         ctx.report(diagnostic);
     }
+    Ok(())
 }
 ```
