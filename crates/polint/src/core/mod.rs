@@ -756,15 +756,47 @@ impl CapabilitySupportView {
     }
 }
 
-/// A static-analysis rule that runs against an [`AnalysisDb`] through [`RuleCtx`].
+type RuleMetaFn = dyn Fn() -> RuleMeta + Send + Sync;
+type RuleCapabilitiesFn = dyn Fn() -> Capabilities + Send + Sync;
+type RuleRunFn = dyn Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync;
+
+/// Opaque static-analysis rule registered with the runner.
 ///
-/// Normal rule authors should use `#[polint::rule]`, which derives capabilities
-/// from typed fact-view parameters. Manual implementations are an advanced
-/// escape hatch and must keep `capabilities` in sync themselves.
-pub trait Rule: Send + Sync {
-    fn meta(&self) -> RuleMeta;
-    fn capabilities(&self) -> Capabilities;
-    fn run(&self, db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult;
+/// Rule authors create this through `#[polint::rule]`. The value is intentionally
+/// not a trait: repo-local rules must be written in the analyzable macro shape so
+/// capabilities come from typed fact-view parameters.
+#[derive(Clone)]
+pub struct Rule {
+    meta: Arc<RuleMetaFn>,
+    capabilities: Arc<RuleCapabilitiesFn>,
+    run: Arc<RuleRunFn>,
+}
+
+impl Rule {
+    pub(crate) fn from_parts<M, C, R>(meta: M, capabilities: C, run: R) -> Self
+    where
+        M: Fn() -> RuleMeta + Send + Sync + 'static,
+        C: Fn() -> Capabilities + Send + Sync + 'static,
+        R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
+    {
+        Self {
+            meta: Arc::new(meta),
+            capabilities: Arc::new(capabilities),
+            run: Arc::new(run),
+        }
+    }
+
+    pub(crate) fn meta(&self) -> RuleMeta {
+        (self.meta)()
+    }
+
+    pub(crate) fn capabilities(&self) -> Capabilities {
+        (self.capabilities)()
+    }
+
+    pub(crate) fn run(&self, db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        (self.run)(db, ctx)
+    }
 }
 
 /// Resolved per-rule options from configuration.
@@ -807,7 +839,8 @@ pub struct RuleCtx<'a> {
 
 impl<'a> RuleCtx<'a> {
     /// Creates a rule context for one rule execution.
-    pub fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(db: &'a AnalysisDb, rule: RuleMeta, options: RuleOptions) -> Self {
         Self::with_capability_support(db, rule, options, CapabilitySupportView::empty())
     }
 
@@ -891,12 +924,12 @@ impl<'a> RuleCtx<'a> {
     }
 }
 
-/// Test-only registry that exposes the [`Capabilities`]/`Rule` shape independent of `run_rules`.
-/// Production runs use [`run_rules`] directly with `&[Arc<dyn Rule>]`.
+/// Test-only registry that exposes the [`Capabilities`]/[`Rule`] shape independent of `run_rules`.
+/// Production runs use [`run_rules`] directly with `&[Rule]`.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct RuleRegistry {
-    rules: Vec<Arc<dyn Rule>>,
+    rules: Vec<Rule>,
 }
 
 #[cfg(test)]
@@ -905,14 +938,11 @@ impl RuleRegistry {
         Self::default()
     }
 
-    pub(crate) fn register<R>(&mut self, rule: R)
-    where
-        R: Rule + 'static,
-    {
-        self.rules.push(Arc::new(rule));
+    pub(crate) fn register(&mut self, rule: Rule) {
+        self.rules.push(rule);
     }
 
-    pub(crate) fn rules(&self) -> &[Arc<dyn Rule>] {
+    pub(crate) fn rules(&self) -> &[Rule] {
         &self.rules
     }
 }
@@ -922,7 +952,7 @@ impl RuleRegistry {
 #[allow(unreachable_pub)]
 pub fn run_rules(
     db: &AnalysisDb,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
     options: &BTreeMap<String, RuleOptions>,
     enabled: Option<&BTreeSet<String>>,
     parallel: bool,
@@ -933,13 +963,13 @@ pub fn run_rules(
 
 pub(crate) fn run_rules_with_capability_support(
     db: &AnalysisDb,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
     options: &BTreeMap<String, RuleOptions>,
     enabled: Option<&BTreeSet<String>>,
     parallel: bool,
     capability_support: &CapabilitySupportView,
 ) -> Vec<Diagnostic> {
-    let run_one = |rule: &Arc<dyn Rule>| {
+    let run_one = |rule: &Rule| {
         let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
             Ok(meta) => meta,
             Err(_) => {
@@ -1064,7 +1094,6 @@ mod tests {
     };
     use anyhow::anyhow;
     use proptest::prelude::*;
-    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
@@ -1076,6 +1105,7 @@ mod tests {
         MetaPanic,
     }
 
+    #[derive(Clone, Copy)]
     struct TestRule {
         id: &'static str,
         capabilities: Capabilities,
@@ -1149,10 +1179,19 @@ mod tests {
                 behavior: TestRuleBehavior::MetaPanic,
             }
         }
-    }
 
-    impl Rule for TestRule {
-        fn meta(&self) -> RuleMeta {
+        fn into_rule(self) -> Rule {
+            let meta_rule = self;
+            let capabilities_rule = self;
+            let run_rule = self;
+            Rule::from_parts(
+                move || meta_rule.meta(),
+                move || capabilities_rule.capabilities,
+                move |_db, ctx| run_rule.run(ctx),
+            )
+        }
+
+        fn meta(self) -> RuleMeta {
             if matches!(self.behavior, TestRuleBehavior::MetaPanic) {
                 panic!("intentional metadata panic");
             }
@@ -1164,11 +1203,7 @@ mod tests {
             }
         }
 
-        fn capabilities(&self) -> Capabilities {
-            self.capabilities
-        }
-
-        fn run(&self, _db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        fn run(self, ctx: &mut RuleCtx<'_>) -> RuleResult {
             if !self.delay.is_zero() {
                 thread::sleep(self.delay);
             }
@@ -1244,38 +1279,30 @@ mod tests {
 
     #[test]
     fn capability_support_runner_supplies_view_to_rules() {
-        struct SupportProbeRule;
-
-        impl Rule for SupportProbeRule {
-            fn meta(&self) -> RuleMeta {
-                RuleMeta {
-                    id: "examples/support-probe".to_string(),
-                    description: "Support probe".to_string(),
-                    severity: Severity::Warn,
-                }
-            }
-
-            fn capabilities(&self) -> Capabilities {
-                Capabilities::new().imports()
-            }
-
-            fn run(&self, _db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let rule = Rule::from_parts(
+            || RuleMeta {
+                id: "examples/support-probe".to_string(),
+                description: "Support probe".to_string(),
+                severity: Severity::Warn,
+            },
+            || Capabilities::new().imports(),
+            |_db, ctx| {
                 if ctx.capability_support().status_for("imports")
                     == Some(CapabilitySupportStatus::Supported)
                 {
                     ctx.report(Diagnostic::warning(
-                        self.meta().id,
+                        ctx.rule_id(),
                         "<workspace>",
                         DiagnosticRange::point(1, 1),
                         "imports are supported",
                     ));
                 }
                 Ok(())
-            }
-        }
+            },
+        );
 
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(SupportProbeRule)];
+        let rules = vec![rule];
         let support_view = CapabilitySupportView::new(vec![CapabilitySupport {
             capability: "imports".to_string(),
             language: Some(Language::Go),
@@ -1804,7 +1831,8 @@ mod tests {
         let mut registry = RuleRegistry::new();
         registry.register(
             TestRule::report("examples/capabilities", Severity::Warn, "capabilities")
-                .with_capabilities(Capabilities::new().imports().coverage_facts()),
+                .with_capabilities(Capabilities::new().imports().coverage_facts())
+                .into_rule(),
         );
 
         let capabilities = registry.rules()[0].capabilities();
@@ -1816,17 +1844,9 @@ mod tests {
     #[test]
     fn run_rules_filters_enabled_patterns_and_applies_severity_override() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report(
-                "examples/allowed",
-                Severity::Warn,
-                "allowed",
-            )),
-            Arc::new(TestRule::report(
-                "custom/blocked",
-                Severity::Error,
-                "blocked",
-            )),
+        let rules = vec![
+            TestRule::report("examples/allowed", Severity::Warn, "allowed").into_rule(),
+            TestRule::report("custom/blocked", Severity::Error, "blocked").into_rule(),
         ];
         let mut options = BTreeMap::new();
         options.insert(
@@ -1848,9 +1868,9 @@ mod tests {
     #[test]
     fn run_rules_none_selection_runs_all_and_empty_selection_runs_none() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report("examples/one", Severity::Warn, "one")),
-            Arc::new(TestRule::report("examples/two", Severity::Warn, "two")),
+        let rules = vec![
+            TestRule::report("examples/one", Severity::Warn, "one").into_rule(),
+            TestRule::report("examples/two", Severity::Warn, "two").into_rule(),
         ];
 
         let all = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -1864,9 +1884,9 @@ mod tests {
     #[test]
     fn run_rules_contains_rule_errors_and_panics() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::error("examples/error")),
-            Arc::new(TestRule::panic("examples/panic")),
+        let rules = vec![
+            TestRule::error("examples/error").into_rule(),
+            TestRule::panic("examples/panic").into_rule(),
         ];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -1898,7 +1918,7 @@ mod tests {
     #[test]
     fn run_rules_contains_meta_panics() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(TestRule::meta_panic())];
+        let rules = vec![TestRule::meta_panic().into_rule()];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);
 
@@ -1911,16 +1931,14 @@ mod tests {
     #[test]
     fn run_rules_parallel_matches_sequential() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(
-                TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
-                    .with_message("same diagnostic")
-                    .with_delay(Duration::from_millis(50)),
-            ),
-            Arc::new(
-                TestRule::report("examples/duplicate", Severity::Error, "duplicate")
-                    .with_message("same diagnostic"),
-            ),
+        let rules = vec![
+            TestRule::report("examples/duplicate", Severity::Warn, "duplicate")
+                .with_message("same diagnostic")
+                .with_delay(Duration::from_millis(50))
+                .into_rule(),
+            TestRule::report("examples/duplicate", Severity::Error, "duplicate")
+                .with_message("same diagnostic")
+                .into_rule(),
         ];
 
         let sequential = run_rules(&db, &rules, &BTreeMap::new(), None, false);
@@ -1932,17 +1950,11 @@ mod tests {
     #[test]
     fn run_rules_dedupes_duplicate_fingerprints() {
         let db = AnalysisDb::new();
-        let rules: Vec<Arc<dyn Rule>> = vec![
-            Arc::new(TestRule::report(
-                "examples/duplicate-a",
-                Severity::Warn,
-                "same-fingerprint",
-            )),
-            Arc::new(TestRule::report(
-                "examples/duplicate-b",
-                Severity::Error,
-                "same-fingerprint",
-            )),
+        let rules = vec![
+            TestRule::report("examples/duplicate-a", Severity::Warn, "same-fingerprint")
+                .into_rule(),
+            TestRule::report("examples/duplicate-b", Severity::Error, "same-fingerprint")
+                .into_rule(),
         ];
 
         let diagnostics = run_rules(&db, &rules, &BTreeMap::new(), None, false);

@@ -9,7 +9,6 @@ use crate::diagnostics::{Diagnostic, Severity, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 pub(crate) const ANALYSIS_PLAN_SCHEMA: &str = "analysis-plan-v1";
 
@@ -107,7 +106,7 @@ impl AnalysisPlan {
 
     #[allow(dead_code)]
     pub(crate) fn from_rules(
-        rules: &[Arc<dyn Rule>],
+        rules: &[Rule],
         enabled: Option<&BTreeSet<String>>,
         options: &BTreeMap<String, RuleOptions>,
     ) -> Self {
@@ -345,7 +344,7 @@ impl ExplainPlanReport {
 }
 
 impl RulePlanInputs {
-    pub(crate) fn collect(rules: &[Arc<dyn Rule>], enabled: Option<&BTreeSet<String>>) -> Self {
+    pub(crate) fn collect(rules: &[Rule], enabled: Option<&BTreeSet<String>>) -> Self {
         let mut inputs = Vec::new();
         let mut diagnostics = Vec::new();
 
@@ -686,13 +685,12 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::{
-        Capabilities, Rule, RuleCtx, RuleMeta, RuleOptions, run_rules_with_capability_support,
+        Capabilities, Rule, RuleMeta, RuleOptions, run_rules_with_capability_support,
     };
     use crate::diagnostics::{Severity, TextRange as DiagnosticRange};
-    use crate::rule_error::RuleResult;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Arc;
 
+    #[derive(Clone, Copy)]
     struct PlanRule {
         id: &'static str,
         description: &'static str,
@@ -708,8 +706,18 @@ mod tests {
         CapabilitiesPanic,
     }
 
-    impl Rule for PlanRule {
-        fn meta(&self) -> RuleMeta {
+    impl PlanRule {
+        fn into_rule(self) -> Rule {
+            let meta_rule = self;
+            let capabilities_rule = self;
+            Rule::from_parts(
+                move || meta_rule.meta(),
+                move || capabilities_rule.capabilities(),
+                |_db, _ctx| Ok(()),
+            )
+        }
+
+        fn meta(self) -> RuleMeta {
             if matches!(self.behavior, PlanRuleBehavior::MetaPanic) {
                 panic!("intentional plan-time metadata panic");
             }
@@ -721,16 +729,12 @@ mod tests {
             }
         }
 
-        fn capabilities(&self) -> Capabilities {
+        fn capabilities(self) -> Capabilities {
             if matches!(self.behavior, PlanRuleBehavior::CapabilitiesPanic) {
                 panic!("intentional plan-time capability panic");
             }
 
             self.capabilities
-        }
-
-        fn run(&self, _db: &crate::core::AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-            Ok(())
         }
     }
 
@@ -739,14 +743,15 @@ mod tests {
         description: &'static str,
         severity: Severity,
         capabilities: Capabilities,
-    ) -> Arc<dyn Rule> {
-        Arc::new(PlanRule {
+    ) -> Rule {
+        PlanRule {
             id,
             description,
             severity,
             capabilities,
             behavior: PlanRuleBehavior::Normal,
-        })
+        }
+        .into_rule()
     }
 
     fn rule_with_behavior(
@@ -755,14 +760,15 @@ mod tests {
         severity: Severity,
         capabilities: Capabilities,
         behavior: PlanRuleBehavior,
-    ) -> Arc<dyn Rule> {
-        Arc::new(PlanRule {
+    ) -> Rule {
+        PlanRule {
             id,
             description,
             severity,
             capabilities,
             behavior,
-        })
+        }
+        .into_rule()
     }
 
     #[test]
@@ -791,7 +797,7 @@ mod tests {
                 Capabilities::new().syntax().imports(),
             ),
         ];
-        let second_rules = vec![Arc::clone(&first_rules[1]), Arc::clone(&first_rules[0])];
+        let second_rules = vec![first_rules[1].clone(), first_rules[0].clone()];
         let enabled = BTreeSet::from(["local/*".to_string()]);
         let mut options = BTreeMap::new();
         options.insert(

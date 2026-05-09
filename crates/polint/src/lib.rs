@@ -60,7 +60,6 @@ pub mod _bench {
         use crate::core::{Rule, RuleOptions};
         use std::collections::BTreeMap;
         use std::collections::BTreeSet;
-        use std::sync::Arc;
 
         #[inline]
         pub fn config_hash(config: &LoadedConfig) -> String {
@@ -69,7 +68,7 @@ pub mod _bench {
 
         #[inline]
         pub fn rule_hash(
-            rules: &[Arc<dyn Rule>],
+            rules: &[Rule],
             enabled: Option<&BTreeSet<String>>,
             options: &BTreeMap<String, RuleOptions>,
         ) -> String {

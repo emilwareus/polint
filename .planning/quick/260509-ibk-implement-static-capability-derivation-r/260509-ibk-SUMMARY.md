@@ -33,6 +33,7 @@
 
 ## Notes
 
-Manual `impl Rule` remains available as an advanced/internal escape hatch for
-panic-containment and reserved-capability tests, but user-facing examples and
-scaffolds now use `#[polint::rule]`.
+Superseded by quick task `260509-rul`: `Rule` is now an opaque value, not a
+public trait. Manual `impl Rule` is no longer retained as a compatibility path;
+tests that need precise capability behavior use internal constructors, and
+user-facing rules use `#[polint::rule]`.

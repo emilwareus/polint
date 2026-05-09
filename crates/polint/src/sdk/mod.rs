@@ -1,11 +1,10 @@
 //! Public rule-authoring API for polint.
 //!
 //! Repo-local and example rule authors should start with
-//! `use polint::sdk::prelude::*;`. The prelude re-exports the stable core rule
-//! contract, fact types, diagnostics, severity types, scope helpers
+//! `use polint::sdk::prelude::*;`. The prelude re-exports the stable rule
+//! authoring types, fact views, diagnostics, severity types, scope helpers
 //! ([`scope::file_in_scope`], [`scope::glob_matches`]), and [`RuleResult`](prelude::RuleResult)
-//! ([`RuleError`](prelude::RuleError)) for [`crate::core::Rule::run`] without depending on
-//! `polint::core` directly.
+//! ([`RuleError`](prelude::RuleError)) without depending on `polint::core` directly.
 
 #![deny(missing_docs)]
 
@@ -27,11 +26,11 @@ pub fn collect_go_tests<'a>(tests: GoTests<'a>, file: FileId) -> Vec<&'a TestFac
 /// the path-scoping helpers, and [`RuleResult`](crate::sdk::prelude::RuleResult) in one star-import.
 pub mod prelude {
     pub use crate::core::{
-        AnalysisDb, BranchId, BranchObligation, Capabilities, CapabilitySupport,
-        CapabilitySupportStatus, CapabilitySupportView, CoverageFact, FileId, FunctionFact,
-        FunctionId, ImportFact, ImportId, JsxAttributeFact, Language, NodeId, PackageFact,
-        PackageId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleMeta, RuleOptions, SourceFile, Span,
-        StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
+        BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
+        CapabilitySupportView, CoverageFact, FileId, FunctionFact, FunctionId, ImportFact,
+        ImportId, JsxAttributeFact, Language, NodeId, PackageFact, PackageId, Rule,
+        RuleConfigValue, RuleCtx, RuleId, RuleOptions, SourceFile, Span, StringLiteralFact,
+        TestFact, TextRange, TsClassFact, TsComponentFact,
     };
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
@@ -51,12 +50,27 @@ pub mod prelude {
 /// Hidden implementation details used by generated rule code.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::core::AnalysisDb;
+    pub use crate::core::{AnalysisDb, Capabilities, RuleMeta};
     pub use crate::sdk::facts::FactView;
+
+    use crate::core::{Rule, RuleCtx};
+    use crate::rule_error::RuleResult;
+
+    /// Constructs an opaque rule for generated `#[polint::rule]` code.
+    #[doc(hidden)]
+    pub fn make_rule<M, C, R>(meta: M, capabilities: C, run: R) -> Rule
+    where
+        M: Fn() -> RuleMeta + Send + Sync + 'static,
+        C: Fn() -> Capabilities + Send + Sync + 'static,
+        R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
+    {
+        Rule::from_parts(meta, capabilities, run)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::core::AnalysisDb;
     use crate::sdk::facts::FactView;
     use crate::sdk::prelude::*;
 

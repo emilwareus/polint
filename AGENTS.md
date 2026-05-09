@@ -98,9 +98,13 @@ live in `examples/` inside this repository.
   source paths, and capability/setup metadata; do not reintroduce broad fact
   access on `RuleCtx` as the normal rule-authoring path.
 - Capabilities for normal rules must be derived from typed fact-view parameters,
-  not handwritten `Capabilities::new()` declarations. Manual `impl Rule` is an
-  advanced/internal escape hatch and should not be used in user-facing examples
-  or scaffolds.
+  not handwritten `Capabilities::new()` declarations. Do not add manual `impl
+  Rule` examples, compatibility shims, or public rule constructors as a beta
+  escape hatch; if the old API shape fights the product model, break it and move
+  examples/tests to the typed macro path.
+- Macro-derived fact parameters must resolve to canonical `polint::sdk::facts::*`
+  views. Do not make locally defined lookalike types, aliases, or user-provided
+  `FactView` implementations count as capability sources.
 - When adding a rule-authoring feature, add at least one temp-repo style test
   that behaves like an outside user: generated `.polint/rules`, public SDK
   imports only, real facts consumed, and a diagnostic asserted through

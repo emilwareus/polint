@@ -64,52 +64,30 @@ polint = {{ path = "{polint_path}" }}
     write_file(
         &root.join(".polint/rules/src/main.rs"),
         r#"use std::process::ExitCode;
-use std::sync::Arc;
 
 use polint::sdk::prelude::*;
 
-struct NeedsImports;
-struct NeedsCfg;
-
-impl Rule for NeedsImports {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "local/needs-imports".to_string(),
-            description: "Needs import facts.".to_string(),
-            severity: Severity::Warn,
-        }
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().imports()
-    }
-
-    fn run(&self, db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let _import_count = db.imports().len();
-        Ok(())
-    }
+#[polint::rule(
+    id = "local/needs-imports",
+    description = "Needs import facts.",
+    severity = "warn"
+)]
+fn needs_imports(_ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
+    let _import_count = imports.iter().count();
+    Ok(())
 }
 
-impl Rule for NeedsCfg {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "local/needs-cfg".to_string(),
-            description: "Needs CFG facts.".to_string(),
-            severity: Severity::Warn,
-        }
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().cfg()
-    }
-
-    fn run(&self, _db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-        Ok(())
-    }
+#[polint::rule(
+    id = "local/needs-cfg",
+    description = "Needs CFG facts.",
+    severity = "warn"
+)]
+fn needs_cfg(_ctx: &mut RuleCtx<'_>, _cfg: Cfg<'_>) -> RuleResult {
+    Ok(())
 }
 
 fn main() -> ExitCode {
-    polint::runner::run_cli(vec![Arc::new(NeedsImports), Arc::new(NeedsCfg)])
+    polint::runner::run_cli(vec![needs_imports(), needs_cfg()])
 }
 "#,
     );
@@ -158,34 +136,21 @@ polint = {{ path = "{polint_path}" }}
     write_file(
         &root.join(".polint/rules/src/main.rs"),
         r#"use std::process::ExitCode;
-use std::sync::Arc;
 
 use polint::sdk::prelude::*;
 
-struct CacheCapability;
-
-impl Rule for CacheCapability {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "local/cache-capability".to_string(),
-            description: "Reads capability-gated facts.".to_string(),
-            severity: Severity::Warn,
-        }
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().string_literals()
-    }
-
-    fn run(&self, db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let _literal_count = db.string_literals().len();
-        let _attribute_count = db.jsx_attributes().len();
-        Ok(())
-    }
+#[polint::rule(
+    id = "local/cache-capability",
+    description = "Reads capability-gated facts.",
+    severity = "warn"
+)]
+fn cache_capability(_ctx: &mut RuleCtx<'_>, literals: StringLiterals<'_>) -> RuleResult {
+    let _literal_count = literals.iter().count();
+    Ok(())
 }
 
 fn main() -> ExitCode {
-    polint::runner::run_cli(vec![Arc::new(CacheCapability)])
+    polint::runner::run_cli(vec![cache_capability()])
 }
 "#,
     );
@@ -405,6 +370,7 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("polint explain go-test --file"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
+    assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
 #[test]
@@ -667,6 +633,146 @@ fn main() -> ExitCode {
 }
 
 #[test]
+fn rule_macro_rejects_shadowed_fact_view_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-shadowed-facts-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::{RuleCtx, RuleResult};
+
+struct Imports<'a>(&'a ());
+
+#[polint::rule(
+    id = "local/shadowed-imports",
+    description = "Shadowed imports.",
+    severity = "warn"
+)]
+fn shadowed_imports(ctx: &mut RuleCtx<'_>, _imports: Imports<'_>) -> RuleResult {
+    let _ = ctx;
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![shadowed_imports()])
+}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("mismatched types"));
+}
+
+#[test]
+fn external_rule_cannot_manually_implement_rule_trait() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-manual-rule-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use polint::sdk::prelude::*;
+
+struct ManualRule;
+
+impl Rule for ManualRule {}
+
+fn main() {}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "expected trait, found struct `Rule`",
+        ));
+}
+
+#[test]
+fn external_prelude_does_not_export_manual_capability_types() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-capabilities-prelude-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use polint::sdk::prelude::*;
+
+fn main() {
+    let _ = Capabilities::new();
+}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "use of undeclared type `Capabilities`",
+        ));
+}
+
+#[test]
 fn external_generated_rule_uses_sdk_facts_settings_and_reports_diagnostic() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
@@ -782,76 +888,6 @@ pub(crate) fn no_todo_literals(
         "Configured forbidden literal found."
     );
     assert!(diagnostic_has_evidence(diagnostics[0], "token", "TODO"));
-}
-
-#[test]
-fn check_contains_plan_time_rule_metadata_panic() {
-    let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["new-rule", "generic", "metadata-panic"])
-        .assert()
-        .success();
-
-    point_generated_rule_pack_at_local_polint(temp.path());
-    write_file(
-        &temp.path().join(".polint/rules/src/metadata_panic.rs"),
-        r#"use polint::sdk::prelude::*;
-use std::sync::Arc;
-
-pub fn metadata_panic() -> Arc<dyn Rule> {
-    Arc::new(MetadataPanic)
-}
-
-pub struct MetadataPanic;
-
-impl Rule for MetadataPanic {
-    fn meta(&self) -> RuleMeta {
-        panic!("plan-time metadata panic");
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().syntax()
-    }
-
-    fn run(&self, _db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
-        Ok(())
-    }
-}
-"#,
-    );
-    write_file(
-        &temp.path().join("src/main.ts"),
-        "export const value = \"ok\";\n",
-    );
-
-    let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["check", "--format", "json", "--fail-on", "none"])
-            .assert()
-            .success(),
-    );
-
-    let diagnostic = diagnostics(&json)
-        .iter()
-        .find(|diagnostic| diagnostic["rule_id"] == "internal/unknown")
-        .unwrap_or_else(|| panic!("expected controlled metadata panic diagnostic: {json:#?}"));
-    assert_eq!(diagnostic["file"], "<workspace>");
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("rule metadata panicked")),
-        "{diagnostic:#?}"
-    );
 }
 
 #[test]
@@ -1994,31 +2030,6 @@ severity = "error"
     }
 
     #[test]
-    fn explain_plan_fails_when_capabilities_panic() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-        let rule_path = temp.path().join(".polint/rules/src/main.rs");
-        let source = fs::read_to_string(&rule_path).unwrap();
-        let rewritten = source.replace(
-            "Capabilities::new().cfg()",
-            r#"panic!("plan-time capability panic")"#,
-        );
-        assert_ne!(rewritten, source);
-        write_file(&rule_path, &rewritten);
-
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["explain", "plan", "--format", "json"])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(
-                "failed to collect rule plan inputs",
-            ))
-            .stderr(predicate::str::contains("capability collection panicked"));
-    }
-
-    #[test]
     fn explain_plan_json_is_deterministic() {
         let temp = tempfile::tempdir().unwrap();
         write_plan_capability_rule_repo(temp.path());
@@ -2059,10 +2070,9 @@ severity = "error"
         let rule_source = fs::read_to_string(&rule_path).unwrap();
         fs::write(
             &rule_path,
-            rule_source.replace(
-                "Capabilities::new().string_literals()",
-                "Capabilities::new().jsx_attributes()",
-            ),
+            rule_source
+                .replace("literals: StringLiterals<'_>", "jsx: JsxAttributes<'_>")
+                .replace("literals.iter().count()", "jsx.iter().count()"),
         )
         .unwrap();
 

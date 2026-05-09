@@ -25,6 +25,7 @@ struct RuleArgs {
 struct ViewParam {
     ident: Ident,
     ty: Type,
+    view_type: Ident,
     capability_method: Ident,
 }
 
@@ -33,7 +34,6 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
     let vis = input.vis.clone();
     let fn_name = input.sig.ident.clone();
     let run_name = format_ident!("__polint_run_{fn_name}");
-    let struct_name = format_ident!("__PolintRule_{fn_name}");
     let block = input.block;
     let attrs = input.attrs;
     let output = input.sig.output.clone();
@@ -58,8 +58,9 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
     let view_bindings = view_params.iter().map(|param| {
         let ident = &param.ident;
         let ty = &param.ty;
+        let view_type = &param.view_type;
         quote! {
-            let #ident: #ty = <#ty as ::polint::sdk::__private::FactView<'_>>::build(db);
+            let #ident: #ty = <::polint::sdk::facts::#view_type<'_> as ::polint::sdk::__private::FactView<'_>>::build(db);
         }
     });
     let view_idents = view_params
@@ -74,34 +75,25 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
     let severity = rule_args.severity;
 
     Ok(quote! {
-        #[allow(non_camel_case_types)]
-        struct #struct_name;
-
-        #vis fn #fn_name() -> ::std::sync::Arc<dyn ::polint::sdk::prelude::Rule> {
-            ::std::sync::Arc::new(#struct_name)
-        }
-
-        impl ::polint::sdk::prelude::Rule for #struct_name {
-            fn meta(&self) -> ::polint::sdk::prelude::RuleMeta {
-                ::polint::sdk::prelude::RuleMeta {
-                    id: #id.to_string(),
-                    description: #description.to_string(),
-                    severity: ::polint::sdk::prelude::Severity::#severity,
-                }
-            }
-
-            fn capabilities(&self) -> ::polint::sdk::prelude::Capabilities {
-                ::polint::sdk::prelude::Capabilities::new()#(.#capability_methods())*
-            }
-
-            fn run(
-                &self,
-                db: &::polint::sdk::__private::AnalysisDb,
-                ctx: &mut ::polint::sdk::prelude::RuleCtx<'_>,
-            ) -> ::polint::sdk::prelude::RuleResult {
-                #(#view_bindings)*
-                #run_name(#ctx_ident, #(#view_idents),*)
-            }
+        #vis fn #fn_name() -> ::polint::sdk::prelude::Rule {
+            ::polint::sdk::__private::make_rule(
+                || {
+                    ::polint::sdk::__private::RuleMeta {
+                        id: #id.to_string(),
+                        description: #description.to_string(),
+                        severity: ::polint::sdk::prelude::Severity::#severity,
+                    }
+                },
+                || {
+                    ::polint::sdk::__private::Capabilities::new()#(.#capability_methods())*
+                },
+                |db: &::polint::sdk::__private::AnalysisDb,
+                 #ctx_ident: &mut ::polint::sdk::prelude::RuleCtx<'_>|
+                 -> ::polint::sdk::prelude::RuleResult {
+                    #(#view_bindings)*
+                    #run_name(#ctx_ident, #(#view_idents),*)
+                },
+            )
         }
 
         #(#attrs)*
@@ -191,12 +183,6 @@ fn parse_ctx_param(arg: &FnArg) -> syn::Result<Ident> {
             "the RuleCtx parameter must be a simple identifier",
         ));
     };
-    if ident != "ctx" {
-        return Err(syn::Error::new(
-            ident.span(),
-            "the RuleCtx parameter must be named `ctx`",
-        ));
-    }
     Ok(ident.clone())
 }
 
@@ -219,15 +205,16 @@ fn parse_view_param(arg: &FnArg) -> syn::Result<ViewParam> {
             "fact-view parameters cannot be `mut`",
         ));
     }
-    let capability_method = capability_for_type(pat_type.ty.as_ref())?;
+    let (view_type, capability_method) = capability_for_type(pat_type.ty.as_ref())?;
     Ok(ViewParam {
         ident: ident.clone(),
         ty: (*pat_type.ty).clone(),
+        view_type,
         capability_method,
     })
 }
 
-fn capability_for_type(ty: &Type) -> syn::Result<Ident> {
+fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident)> {
     let Type::Path(path) = ty else {
         return Err(syn::Error::new(
             ty.span(),
@@ -260,7 +247,7 @@ fn capability_for_type(ty: &Type) -> syn::Result<Ident> {
             ));
         }
     };
-    Ok(format_ident!("{method}"))
+    Ok((segment.ident.clone(), format_ident!("{method}")))
 }
 
 #[cfg(test)]
@@ -269,7 +256,7 @@ mod tests {
 
     fn capability(type_source: &str) -> String {
         let ty = syn::parse_str::<Type>(type_source).unwrap();
-        capability_for_type(&ty).unwrap().to_string()
+        capability_for_type(&ty).unwrap().1.to_string()
     }
 
     #[test]

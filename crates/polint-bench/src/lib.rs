@@ -12,7 +12,6 @@ use polint::_bench::fs::{LoadSourcesTimings, load_analysis_files_with_timings};
 use polint::_bench::{go, ts};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Wall-time breakdown of a single cold `polint check`-like pass (no polint cache).
@@ -100,7 +99,7 @@ pub fn cold_analyze_breakdown(
     let t0 = Instant::now();
     let config = load_config(root)?;
     let config_digest = config_hash(&config);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = cache::stable_hash(&[] as &[&str]);
     let cache = cache::Cache::default_for_repo(root, false);

@@ -11,7 +11,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 #[command(name = "polint-local-rules")]
@@ -106,7 +105,7 @@ enum FailOn {
     None,
 }
 
-pub fn run_cli(rules: Vec<Arc<dyn Rule>>) -> ExitCode {
+pub fn run_cli(rules: Vec<Rule>) -> ExitCode {
     match run(rules) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
@@ -116,7 +115,7 @@ pub fn run_cli(rules: Vec<Arc<dyn Rule>>) -> ExitCode {
     }
 }
 
-fn run(rules: Vec<Arc<dyn Rule>>) -> Result<u8> {
+fn run(rules: Vec<Rule>) -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check(std::env::current_dir()?, &args, &rules),
@@ -124,13 +123,13 @@ fn run(rules: Vec<Arc<dyn Rule>>) -> Result<u8> {
     }
 }
 
-fn explain_command(root: PathBuf, args: &ExplainArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
+fn explain_command(root: PathBuf, args: &ExplainArgs, rules: &[Rule]) -> Result<u8> {
     match &args.command {
         ExplainCommand::Plan(plan_args) => explain_plan(root, plan_args, rules),
     }
 }
 
-fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
+fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Rule]) -> Result<u8> {
     let loaded = load_config_for_check(&root, &[])?;
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
@@ -157,7 +156,7 @@ fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Arc<dyn Rule>]) 
     Ok(0)
 }
 
-fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8> {
+fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
     let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, rules)?;
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
@@ -203,7 +202,7 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Arc<dyn Rule>]) -> Result<u8>
 fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
-    rules: &[Arc<dyn Rule>],
+    rules: &[Rule],
 ) -> Result<(
     Vec<crate::diagnostics::Diagnostic>,
     crate::core::AnalysisDb,

@@ -605,7 +605,7 @@ fn analyze_and_run(
     let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
@@ -687,7 +687,7 @@ fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
     let loaded = load_config_for_check(&root, &[])?;
     let cache = crate::cache::Cache::default_for_repo(&root, false);
     let config_digest = crate::cache::keys::config_hash(&loaded);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let enabled = selected_rule_patterns(&loaded, None)?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
@@ -754,7 +754,7 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let config = load_config_for_check(&root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(&root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&config);
-    let rules: Vec<Arc<dyn Rule>> = Vec::new();
+    let rules: Vec<Rule> = Vec::new();
     let mut parser_diagnostics = Vec::new();
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();

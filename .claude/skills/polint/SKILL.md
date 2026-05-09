@@ -33,7 +33,7 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 .polint.toml
 .polint/rules/Cargo.toml
 .polint/rules/src/main.rs          # calls polint::runner::run_cli(vec![...])
-.polint/rules/src/my_rule.rs       # one module per rule (pub struct + impl Rule)
+.polint/rules/src/my_rule.rs       # one module per #[polint::rule] function
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs` and wires it
@@ -42,43 +42,39 @@ rules in one pack.
 
 ## Writing A Rule
 
-Start with `use polint::sdk::prelude::*;`, give the rule a stable local ID, declare
-only the facts it needs in `capabilities`, then report diagnostics from `run`.
+Start with `use polint::sdk::prelude::*;`, give the rule a stable local ID, and
+request the facts it needs as typed parameters. The `#[polint::rule]` macro
+derives capabilities from those fact-view parameters.
 
 ```rust
 use polint::sdk::prelude::*;
 
-struct NoRawColors;
-
-impl Rule for NoRawColors {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "local/no-raw-colors".to_string(),
-            description: "Require design tokens instead of raw color literals.".to_string(),
-            severity: Severity::Error,
+#[polint::rule(
+    id = "local/no-raw-colors",
+    description = "Require design tokens instead of raw color literals.",
+    severity = "error"
+)]
+fn no_raw_colors(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+    jsx: JsxAttributes<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for literal in literals.iter() {
+        if literal.value.starts_with('#') {
+            ctx.report(
+                Diagnostic::error(
+                    rule_id.clone(),
+                    ctx.file_path(literal.file),
+                    literal.span.diagnostic_range(),
+                    "Use a design token instead of a raw color literal.",
+                )
+                .with_evidence("literal", literal.value.clone()),
+            );
         }
     }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().string_literals().jsx_attributes()
-    }
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-        for literal in ctx.string_literals() {
-            if literal.value.starts_with('#') {
-                ctx.report(
-                    Diagnostic::error(
-                        self.meta().id,
-                        ctx.file_path(literal.file),
-                        literal.span.diagnostic_range(),
-                        "Use a design token instead of a raw color literal.",
-                    )
-                    .with_evidence("literal", literal.value.clone()),
-                );
-            }
-        }
-        Ok(())
-    }
+    let _ = jsx.iter().count();
+    Ok(())
 }
 ```
 
@@ -110,5 +106,6 @@ allow_files = ["src/theme/**"]
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
+- Do not implement `Rule` manually or write handwritten capability declarations.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.

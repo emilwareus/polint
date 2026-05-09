@@ -170,7 +170,7 @@ Last activity: 2026-05-09 - Completed quick task 260509-ibk: Implement static ca
 - [Phase 11-capability-driven-analysis-plan]: Keep current Go test evidence on the supported go_tests capability; test_suite_metrics remains reserved for normalized future metrics.
 - [Static capability derivation]: Normal rule authors use `#[polint::rule]` functions with typed fact-view parameters; capabilities are generated from those parameter types instead of handwritten declarations.
 - [Static capability derivation]: `RuleCtx` is the diagnostics/options/path/support surface. Broad fact access belongs in typed SDK fact views, not the normal context API.
-- [Static capability derivation]: Manual `impl Rule` remains only as an advanced/internal escape hatch for tests and reserved capability behavior, not as the documented scaffold/example path.
+- [Static capability derivation]: `Rule` is an opaque value, not a public trait. Do not preserve manual `impl Rule` compatibility paths during beta; update examples, scaffolds, and tests to the typed macro path instead.
 
 ## Performance Metrics
 

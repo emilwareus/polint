@@ -286,6 +286,7 @@ allow_files = ["src/theme/**"]
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
+- Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.
