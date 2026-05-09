@@ -134,6 +134,17 @@ fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Arc<dyn Rule>]) 
     let loaded = load_config_for_check(&root, &[])?;
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    let plan_diagnostics = plan_inputs.diagnostics();
+    if !plan_diagnostics.is_empty() {
+        anyhow::bail!(
+            "failed to collect rule plan inputs: {}",
+            plan_diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
     let options = plan_inputs.rule_options_from_config(&loaded);
     let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
     let report = plan.explain_report();

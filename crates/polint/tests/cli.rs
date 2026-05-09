@@ -1830,6 +1830,31 @@ severity = "error"
     }
 
     #[test]
+    fn explain_plan_fails_when_capabilities_panic() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+        let rule_path = temp.path().join(".polint/rules/src/main.rs");
+        let source = fs::read_to_string(&rule_path).unwrap();
+        let rewritten = source.replace(
+            "Capabilities::new().cfg()",
+            r#"panic!("plan-time capability panic")"#,
+        );
+        assert_ne!(rewritten, source);
+        write_file(&rule_path, &rewritten);
+
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["explain", "plan", "--format", "json"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "failed to collect rule plan inputs",
+            ))
+            .stderr(predicate::str::contains("capability collection panicked"));
+    }
+
+    #[test]
     fn explain_plan_json_is_deterministic() {
         let temp = tempfile::tempdir().unwrap();
         write_plan_capability_rule_repo(temp.path());
