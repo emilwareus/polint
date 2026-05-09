@@ -91,4 +91,15 @@ mod tests {
         assert_eq!(diagnostics[0].severity, Severity::Warn);
         assert_eq!(diagnostics[0].file, "<unknown>");
     }
+
+    #[test]
+    fn sdk_prelude_exports_capability_support_view() {
+        fn assert_exported<T>() {}
+        assert_exported::<CapabilitySupport>();
+        assert_exported::<CapabilitySupportStatus>();
+        assert_exported::<CapabilitySupportView>();
+
+        let view = CapabilitySupportView::empty();
+        assert!(view.entries().is_empty());
+    }
 }

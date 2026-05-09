@@ -1305,6 +1305,99 @@ mod tests {
     }
 
     #[test]
+    fn capability_support_view_reports_status_for_capability() {
+        let view = CapabilitySupportView::new(vec![CapabilitySupport {
+            capability: "imports".to_string(),
+            language: Some(Language::Go),
+            status: CapabilitySupportStatus::Supported,
+            rules: vec!["examples/imports".to_string()],
+            reason: None,
+            hint: None,
+            docs_path: None,
+        }]);
+
+        assert_eq!(
+            view.status_for("imports"),
+            Some(CapabilitySupportStatus::Supported)
+        );
+        assert!(view.status_for("cfg").is_none());
+        assert_eq!(view.entries().len(), 1);
+    }
+
+    #[test]
+    fn capability_support_defaults_empty_for_rule_ctx_constructor() {
+        let db = AnalysisDb::new();
+        let ctx = RuleCtx::new(
+            &db,
+            RuleMeta {
+                id: "examples/support".to_string(),
+                description: "Support view constructor test".to_string(),
+                severity: Severity::Warn,
+            },
+            RuleOptions::default(),
+        );
+
+        assert!(ctx.capability_support().entries().is_empty());
+    }
+
+    #[test]
+    fn capability_support_runner_supplies_view_to_rules() {
+        struct SupportProbeRule;
+
+        impl Rule for SupportProbeRule {
+            fn meta(&self) -> RuleMeta {
+                RuleMeta {
+                    id: "examples/support-probe".to_string(),
+                    description: "Support probe".to_string(),
+                    severity: Severity::Warn,
+                }
+            }
+
+            fn capabilities(&self) -> Capabilities {
+                Capabilities::new().imports()
+            }
+
+            fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+                if ctx.capability_support().status_for("imports")
+                    == Some(CapabilitySupportStatus::Supported)
+                {
+                    ctx.report(Diagnostic::warning(
+                        self.meta().id,
+                        "<workspace>",
+                        DiagnosticRange::point(1, 1),
+                        "imports are supported",
+                    ));
+                }
+                Ok(())
+            }
+        }
+
+        let db = AnalysisDb::new();
+        let rules: Vec<Arc<dyn Rule>> = vec![Arc::new(SupportProbeRule)];
+        let support_view = CapabilitySupportView::new(vec![CapabilitySupport {
+            capability: "imports".to_string(),
+            language: Some(Language::Go),
+            status: CapabilitySupportStatus::Supported,
+            rules: vec!["examples/support-probe".to_string()],
+            reason: None,
+            hint: None,
+            docs_path: None,
+        }]);
+
+        let diagnostics = run_rules_with_capability_support(
+            &db,
+            &rules,
+            &BTreeMap::new(),
+            None,
+            false,
+            &support_view,
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "imports are supported");
+    }
+
+    #[test]
     fn cached_file_facts_round_trip_remaps_ids() {
         let mut source_db = AnalysisDb::new();
         let source_file = source_db.add_file(
