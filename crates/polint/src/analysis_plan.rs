@@ -6,6 +6,7 @@ use crate::core::{
     Rule, RuleMeta, RuleOptions, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -61,6 +62,41 @@ pub(crate) struct SetupCheck {
     pub(crate) status: String,
     pub(crate) reason: Option<String>,
     pub(crate) hint: Option<String>,
+    pub(crate) docs_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExplainPlanReport {
+    pub(crate) schema: String,
+    pub(crate) digest: String,
+    pub(crate) rules: Vec<ExplainPlanRule>,
+    pub(crate) capabilities: Vec<ExplainPlanCapability>,
+    pub(crate) setup_checks: Vec<ExplainPlanSetupCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExplainPlanRule {
+    pub(crate) id: String,
+    pub(crate) description: String,
+    pub(crate) severity: Severity,
+    pub(crate) capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExplainPlanCapability {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) rules: Vec<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) hint: Option<String>,
+    pub(crate) docs_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExplainPlanSetupCheck {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) message: String,
     pub(crate) docs_path: Option<String>,
 }
 
@@ -168,6 +204,45 @@ impl AnalysisPlan {
             .collect()
     }
 
+    pub(crate) fn explain_report(&self) -> ExplainPlanReport {
+        ExplainPlanReport {
+            schema: ANALYSIS_PLAN_SCHEMA.to_string(),
+            digest: self.digest.clone(),
+            rules: self
+                .rules
+                .iter()
+                .map(|rule| ExplainPlanRule {
+                    id: rule.id.clone(),
+                    description: rule.description.clone(),
+                    severity: rule.severity,
+                    capabilities: rule.requested_capabilities.clone(),
+                })
+                .collect(),
+            capabilities: self
+                .capabilities
+                .iter()
+                .map(|capability| ExplainPlanCapability {
+                    name: capability.capability.clone(),
+                    status: capability_status_json(&capability.status).to_string(),
+                    rules: capability.rules.clone(),
+                    reason: capability.reason.clone(),
+                    hint: capability.hint.clone(),
+                    docs_path: capability.docs_path.clone(),
+                })
+                .collect(),
+            setup_checks: self
+                .setup_checks
+                .iter()
+                .map(|check| ExplainPlanSetupCheck {
+                    id: check.id.clone(),
+                    status: check.status.clone(),
+                    message: setup_check_message(check),
+                    docs_path: check.docs_path.clone(),
+                })
+                .collect(),
+        }
+    }
+
     fn finish(
         rules: Vec<PlannedRule>,
         capabilities: Vec<PlannedCapability>,
@@ -196,6 +271,76 @@ impl AnalysisPlan {
             setup_checks,
             support_view,
         }
+    }
+}
+
+impl ExplainPlanReport {
+    pub(crate) fn to_human(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Analysis plan\n");
+        out.push_str(&format!("Digest: {}\n\n", self.digest));
+
+        out.push_str("Rules\n");
+        if self.rules.is_empty() {
+            out.push_str("- none\n");
+        } else {
+            for rule in &self.rules {
+                let capabilities = if rule.capabilities.is_empty() {
+                    "none".to_string()
+                } else {
+                    rule.capabilities.join(", ")
+                };
+                out.push_str(&format!(
+                    "- {} [{}]: {} (capabilities: {})\n",
+                    rule.id, rule.severity, rule.description, capabilities
+                ));
+            }
+        }
+
+        out.push_str("\nCapabilities\n");
+        if self.capabilities.is_empty() {
+            out.push_str("- none\n");
+        } else {
+            for capability in &self.capabilities {
+                let rules = if capability.rules.is_empty() {
+                    "none".to_string()
+                } else {
+                    capability.rules.join(", ")
+                };
+                out.push_str(&format!(
+                    "- {}: {} (rules: {})",
+                    capability.name, capability.status, rules
+                ));
+                if let Some(reason) = &capability.reason {
+                    out.push_str(&format!(" - {reason}"));
+                }
+                if let Some(hint) = &capability.hint {
+                    out.push_str(&format!(" Hint: {hint}"));
+                }
+                if let Some(docs_path) = &capability.docs_path {
+                    out.push_str(&format!(" See: {docs_path}"));
+                }
+                out.push('\n');
+            }
+        }
+
+        out.push_str("\nSetup checks\n");
+        if self.setup_checks.is_empty() {
+            out.push_str("- none\n");
+        } else {
+            for check in &self.setup_checks {
+                out.push_str(&format!(
+                    "- {}: {} - {}",
+                    check.id, check.status, check.message
+                ));
+                if let Some(docs_path) = &check.docs_path {
+                    out.push_str(&format!(" See: {docs_path}"));
+                }
+                out.push('\n');
+            }
+        }
+
+        out
     }
 }
 
@@ -307,6 +452,15 @@ fn capability_collection_error(meta: &RuleMeta) -> Diagnostic {
     )
     .with_evidence("rule", meta.id.clone())
     .with_help("Capability declarations must not panic; polint ignored requested capabilities for this rule.")
+}
+
+fn setup_check_message(check: &SetupCheck) -> String {
+    match (&check.reason, &check.hint) {
+        (Some(reason), Some(hint)) => format!("{reason} {hint}"),
+        (Some(reason), None) => reason.clone(),
+        (None, Some(hint)) => hint.clone(),
+        (None, None) => String::new(),
+    }
 }
 
 fn rule_options_from_config(config: Option<&RuleConfig>) -> RuleOptions {
@@ -516,6 +670,14 @@ fn capability_status_name(status: &CapabilitySupportStatus) -> &'static str {
         CapabilitySupportStatus::Supported => "Supported",
         CapabilitySupportStatus::Unsupported => "Unsupported",
         CapabilitySupportStatus::SetupMissing => "SetupMissing",
+    }
+}
+
+fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
+    match status {
+        CapabilitySupportStatus::Supported => "supported",
+        CapabilitySupportStatus::Unsupported => "unsupported",
+        CapabilitySupportStatus::SetupMissing => "setup_missing",
     }
 }
 
@@ -752,7 +914,10 @@ mod tests {
         assert_eq!(value["rules"][0]["id"], "local/needs-cfg");
         assert_eq!(value["rules"][0]["description"], "Needs CFG");
         assert_eq!(value["rules"][0]["severity"], "warn");
-        assert_eq!(value["rules"][0]["capabilities"], serde_json::json!(["cfg"]));
+        assert_eq!(
+            value["rules"][0]["capabilities"],
+            serde_json::json!(["cfg"])
+        );
         assert_eq!(value["capabilities"][0]["name"], "cfg");
         assert_eq!(value["capabilities"][0]["status"], "unsupported");
         assert_eq!(
