@@ -1,3 +1,4 @@
+use crate::analysis_plan::AnalysisPlan;
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
@@ -607,23 +608,31 @@ fn analyze_and_run(
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+    let plan = AnalysisPlan::empty();
 
     let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = Vec::new();
-    diagnostics.extend(crate::go::analyze_with_options(
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics = analyze_with_plan_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        &plan,
         parallel,
-    ));
-    diagnostics.extend(crate::ts::analyze_with_options(
+    );
+    diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics = analyze_with_plan_options(
         &mut db,
         &cache,
         &config_digest,
         &rule_digest,
+        &plan,
         parallel,
-    ));
+    );
+    diagnostics.extend(ts_diagnostics);
 
     diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
     Ok((diagnostics, db, loaded))
@@ -658,9 +667,11 @@ fn explain_go_test_fact(root: PathBuf, args: &ExplainGoTestArgs) -> Result<u8> {
     let enabled = selected_rule_patterns(&loaded, None)?;
     let options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+    let plan = AnalysisPlan::empty();
 
     let mut db = load_analysis_files(&loaded)?;
-    let _ = crate::go::analyze_with_options(&mut db, &cache, &config_digest, &rule_digest, true);
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let _ = analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
 
     let file_id = db
         .files()
@@ -724,21 +735,17 @@ fn profile_rules(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let all_options = BTreeMap::<String, RuleOptions>::new();
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &all_options);
+    let plan = AnalysisPlan::empty();
     let mut db = load_analysis_files(&config)?;
-    parser_diagnostics.extend(crate::go::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
-    parser_diagnostics.extend(crate::ts::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    parser_diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    parser_diagnostics.extend(ts_diagnostics);
     let mut all_diagnostics = parser_diagnostics;
 
     for rule in &rules {

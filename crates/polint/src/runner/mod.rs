@@ -157,20 +157,15 @@ fn analyze_and_run(
     let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = plan_inputs.diagnostics();
     diagnostics.extend(plan.diagnostics());
-    diagnostics.extend(crate::go::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
-    diagnostics.extend(crate::ts::analyze_with_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        true,
-    ));
+    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
+    let go_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    diagnostics.extend(go_diagnostics);
+
+    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
+    let ts_diagnostics =
+        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
+    diagnostics.extend(ts_diagnostics);
     diagnostics.extend(run_rules_with_capability_support(
         &db,
         rules,

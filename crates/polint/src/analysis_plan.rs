@@ -69,6 +69,7 @@ impl AnalysisPlan {
         Self::finish(Vec::new(), Vec::new(), Vec::new())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_rules(
         rules: &[Arc<dyn Rule>],
         enabled: Option<&BTreeSet<String>>,
@@ -123,14 +124,17 @@ impl AnalysisPlan {
         &self.digest
     }
 
+    #[allow(dead_code)]
     pub(crate) fn rules(&self) -> &[PlannedRule] {
         &self.rules
     }
 
+    #[allow(dead_code)]
     pub(crate) fn capabilities(&self) -> &[PlannedCapability] {
         &self.capabilities
     }
 
+    #[allow(dead_code)]
     pub(crate) fn setup_checks(&self) -> &[SetupCheck] {
         &self.setup_checks
     }
