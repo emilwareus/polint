@@ -172,6 +172,28 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_changes_with_plan_hash() {
+        let a = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan-a",
+            "go-facts-v1",
+        );
+        let b = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan-b",
+            "go-facts-v1",
+        );
+
+        assert_ne!(a.stable_id(), b.stable_id());
+    }
+
+    #[test]
     fn cache_key_changes_with_schema() {
         let a = CacheKey::for_file("src/main.go", "content", "config", "rule", "go-facts-v1");
         let b = CacheKey::for_file("src/main.go", "content", "config", "rule", "ts-facts-v1");
