@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
-status: verifying
-stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-05-09T08:36:15.426Z"
+status: planning
+stopped_at: Phase 11 complete
+last_updated: "2026-05-09T09:57:46.432Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 3
   completed_plans: 3
-  percent: 100
+  percent: 11
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 11 — Capability-Driven Analysis Plan
+**Current focus:** Phase 12 — CFG Facts for Go and TS/JS
 
 ## Current Status
 
@@ -57,14 +57,14 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
-- Next action: verify Phase 11 completion, then continue to Phase 12 planning.
+- Next action: discuss and plan Phase 12.
 
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Phase complete — ready for verification
-Phase: 11 (Capability-Driven Analysis Plan) — COMPLETE
-Plan: 3 of 3
+Status: Ready to plan
+Phase: 12 - CFG Facts for Go and TS/JS
+Plan: Not started
 Last activity: 2026-05-09
 
 ## Quick Tasks Completed
