@@ -1,3 +1,371 @@
+use crate::cache::keys::deterministic_rule_options;
+use crate::cache::stable_hash;
+use crate::core::{
+    Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, Language,
+    Rule, RuleOptions, rule_id_matches,
+};
+use crate::diagnostics::{Diagnostic, Severity, TextRange};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+pub(crate) const ANALYSIS_PLAN_SCHEMA: &str = "analysis-plan-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AnalysisPlan {
+    digest: String,
+    rules: Vec<PlannedRule>,
+    capabilities: Vec<PlannedCapability>,
+    setup_checks: Vec<SetupCheck>,
+    support_view: CapabilitySupportView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedRule {
+    pub(crate) id: String,
+    pub(crate) description: String,
+    pub(crate) severity: Severity,
+    pub(crate) requested_capabilities: Vec<String>,
+    pub(crate) options_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedCapability {
+    pub(crate) capability: String,
+    pub(crate) language: Option<Language>,
+    pub(crate) status: CapabilitySupportStatus,
+    pub(crate) rules: Vec<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) hint: Option<String>,
+    pub(crate) docs_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SetupCheck {
+    pub(crate) id: String,
+    pub(crate) capability: String,
+    pub(crate) language: Option<Language>,
+    pub(crate) status: String,
+    pub(crate) reason: Option<String>,
+    pub(crate) hint: Option<String>,
+    pub(crate) docs_path: Option<String>,
+}
+
+impl AnalysisPlan {
+    pub(crate) fn empty() -> Self {
+        Self::finish(Vec::new(), Vec::new(), Vec::new())
+    }
+
+    pub(crate) fn from_rules(
+        rules: &[Arc<dyn Rule>],
+        enabled: Option<&BTreeSet<String>>,
+        options: &BTreeMap<String, RuleOptions>,
+    ) -> Self {
+        let mut planned_rules = rules
+            .iter()
+            .filter_map(|rule| {
+                let meta = rule.meta();
+                if let Some(enabled) = enabled
+                    && !enabled
+                        .iter()
+                        .any(|pattern| rule_id_matches(pattern, &meta.id))
+                {
+                    return None;
+                }
+
+                let capabilities = requested_capabilities(rule.capabilities());
+                let options_digest = options
+                    .get(&meta.id)
+                    .map(deterministic_rule_options)
+                    .unwrap_or_else(|| deterministic_rule_options(&RuleOptions::default()));
+
+                Some(PlannedRule {
+                    id: meta.id,
+                    description: meta.description,
+                    severity: meta.severity,
+                    requested_capabilities: capabilities,
+                    options_digest,
+                })
+            })
+            .collect::<Vec<_>>();
+        planned_rules.sort_by(|left, right| {
+            (
+                left.id.as_str(),
+                left.description.as_str(),
+                left.severity.to_string(),
+            )
+                .cmp(&(
+                    right.id.as_str(),
+                    right.description.as_str(),
+                    right.severity.to_string(),
+                ))
+        });
+
+        let capabilities = plan_capabilities(&planned_rules);
+
+        Self::finish(planned_rules, capabilities, Vec::new())
+    }
+
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub(crate) fn rules(&self) -> &[PlannedRule] {
+        &self.rules
+    }
+
+    pub(crate) fn capabilities(&self) -> &[PlannedCapability] {
+        &self.capabilities
+    }
+
+    pub(crate) fn setup_checks(&self) -> &[SetupCheck] {
+        &self.setup_checks
+    }
+
+    pub(crate) fn support_view(&self) -> &CapabilitySupportView {
+        &self.support_view
+    }
+
+    pub(crate) fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.capabilities
+            .iter()
+            .filter(|capability| capability.status == CapabilitySupportStatus::Unsupported)
+            .flat_map(|capability| {
+                capability.rules.iter().map(|rule_id| {
+                    Diagnostic::error(
+                        "polint/capability",
+                        "<workspace>",
+                        TextRange::point(1, 1),
+                        format!(
+                            "Rule `{rule_id}` requested unsupported capability `{}`.",
+                            capability.capability
+                        ),
+                    )
+                    .with_evidence("capability", capability.capability.clone())
+                    .with_help(format!(
+                        "Capability `{}` is not supported in this phase; see docs/roadmap/00_ROADMAP.md.",
+                        capability.capability
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn finish(
+        rules: Vec<PlannedRule>,
+        capabilities: Vec<PlannedCapability>,
+        setup_checks: Vec<SetupCheck>,
+    ) -> Self {
+        let support_view = CapabilitySupportView::new(
+            capabilities
+                .iter()
+                .map(|capability| CapabilitySupport {
+                    capability: capability.capability.clone(),
+                    language: capability.language,
+                    status: capability.status.clone(),
+                    rules: capability.rules.clone(),
+                    reason: capability.reason.clone(),
+                    hint: capability.hint.clone(),
+                    docs_path: capability.docs_path.clone(),
+                })
+                .collect(),
+        );
+        let digest = plan_digest(&rules, &capabilities, &setup_checks);
+
+        Self {
+            digest,
+            rules,
+            capabilities,
+            setup_checks,
+            support_view,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityAccumulator {
+    status: CapabilitySupportStatus,
+    rules: BTreeSet<String>,
+    reason: Option<String>,
+    hint: Option<String>,
+    docs_path: Option<String>,
+}
+
+fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
+    let mut capabilities = BTreeMap::<String, CapabilityAccumulator>::new();
+    for rule in rules {
+        for requested in &rule.requested_capabilities {
+            let entry = capabilities
+                .entry(requested.clone())
+                .or_insert_with(|| support_for(requested));
+            entry.rules.insert(rule.id.clone());
+        }
+    }
+
+    capabilities
+        .into_iter()
+        .map(|(capability, accumulator)| PlannedCapability {
+            capability,
+            language: None,
+            status: accumulator.status,
+            rules: accumulator.rules.into_iter().collect(),
+            reason: accumulator.reason,
+            hint: accumulator.hint,
+            docs_path: accumulator.docs_path,
+        })
+        .collect()
+}
+
+fn support_for(capability: &str) -> CapabilityAccumulator {
+    let (status, reason, hint, docs_path) = match capability {
+        "syntax" | "imports" | "go_tests" | "branch_obligations" | "ts_components"
+        | "ts_classes" | "string_literals" | "jsx_attributes" => {
+            (CapabilitySupportStatus::Supported, None, None, None)
+        }
+        "test_suite_metrics" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
+            Some("Use go_tests for current Go test evidence.".to_string()),
+            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+        ),
+        "cfg" | "call_graph" | "coverage_facts" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Capability is reserved for a later phase.".to_string()),
+            None,
+            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+        ),
+        _ => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Capability is not recognized by this analysis plan schema.".to_string()),
+            None,
+            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+        ),
+    };
+
+    CapabilityAccumulator {
+        status,
+        rules: BTreeSet::new(),
+        reason,
+        hint,
+        docs_path,
+    }
+}
+
+fn requested_capabilities(capabilities: Capabilities) -> Vec<String> {
+    [
+        ("syntax", capabilities.syntax),
+        ("imports", capabilities.imports),
+        ("cfg", capabilities.cfg),
+        ("call_graph", capabilities.call_graph),
+        ("go_tests", capabilities.go_tests),
+        ("branch_obligations", capabilities.branch_obligations),
+        ("coverage_facts", capabilities.coverage_facts),
+        ("test_suite_metrics", capabilities.test_suite_metrics),
+        ("ts_components", capabilities.ts_components),
+        ("ts_classes", capabilities.ts_classes),
+        ("string_literals", capabilities.string_literals),
+        ("jsx_attributes", capabilities.jsx_attributes),
+    ]
+    .into_iter()
+    .filter_map(|(name, requested)| requested.then(|| name.to_string()))
+    .collect()
+}
+
+fn plan_digest(
+    rules: &[PlannedRule],
+    capabilities: &[PlannedCapability],
+    setup_checks: &[SetupCheck],
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("schema={}", encode_str(ANALYSIS_PLAN_SCHEMA)));
+
+    for rule in rules {
+        parts.push(format!("rule.id={}", encode_str(&rule.id)));
+        parts.push(format!(
+            "rule.description={}",
+            encode_str(&rule.description)
+        ));
+        parts.push(format!(
+            "rule.severity={}",
+            encode_str(&rule.severity.to_string())
+        ));
+        parts.push(format!("rule.options={}", encode_str(&rule.options_digest)));
+        parts.push(format!(
+            "rule.capabilities={}",
+            encode_str_list(&rule.requested_capabilities)
+        ));
+    }
+
+    for capability in capabilities {
+        parts.push(format!(
+            "capability.name={}",
+            encode_str(&capability.capability)
+        ));
+        parts.push(format!(
+            "capability.language={}",
+            encode_optional_language(capability.language)
+        ));
+        parts.push(format!(
+            "capability.status={}",
+            encode_str(capability_status_name(&capability.status))
+        ));
+        parts.push(format!(
+            "capability.rules={}",
+            encode_str_list(&capability.rules)
+        ));
+    }
+
+    for check in setup_checks {
+        parts.push(format!("setup.id={}", encode_str(&check.id)));
+        parts.push(format!("setup.status={}", encode_str(&check.status)));
+        parts.push(format!(
+            "setup.capability={}",
+            encode_str(&check.capability)
+        ));
+        parts.push(format!(
+            "setup.language={}",
+            encode_optional_language(check.language)
+        ));
+    }
+
+    let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    stable_hash(&part_refs)
+}
+
+fn encode_str(value: &str) -> String {
+    format!("{}:{value}", value.len())
+}
+
+fn encode_str_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| encode_str(value))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn encode_optional_language(language: Option<Language>) -> String {
+    language.map(language_name).unwrap_or("none").to_string()
+}
+
+fn language_name(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn capability_status_name(status: &CapabilitySupportStatus) -> &'static str {
+    match status {
+        CapabilitySupportStatus::Supported => "Supported",
+        CapabilitySupportStatus::Unsupported => "Unsupported",
+        CapabilitySupportStatus::SetupMissing => "SetupMissing",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,6 +419,11 @@ mod tests {
     #[test]
     fn analysis_plan_schema_is_versioned() {
         assert_eq!(ANALYSIS_PLAN_SCHEMA, "analysis-plan-v1");
+
+        let plan = AnalysisPlan::empty();
+        assert!(plan.rules().is_empty());
+        assert!(plan.capabilities().is_empty());
+        assert!(plan.setup_checks().is_empty());
     }
 
     #[test]
