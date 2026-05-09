@@ -382,10 +382,22 @@ mod tests {
         description: &'static str,
         severity: Severity,
         capabilities: Capabilities,
+        behavior: PlanRuleBehavior,
+    }
+
+    #[derive(Clone, Copy)]
+    enum PlanRuleBehavior {
+        Normal,
+        MetaPanic,
+        CapabilitiesPanic,
     }
 
     impl Rule for PlanRule {
         fn meta(&self) -> RuleMeta {
+            if matches!(self.behavior, PlanRuleBehavior::MetaPanic) {
+                panic!("intentional plan-time metadata panic");
+            }
+
             RuleMeta {
                 id: self.id.to_string(),
                 description: self.description.to_string(),
@@ -394,6 +406,10 @@ mod tests {
         }
 
         fn capabilities(&self) -> Capabilities {
+            if matches!(self.behavior, PlanRuleBehavior::CapabilitiesPanic) {
+                panic!("intentional plan-time capability panic");
+            }
+
             self.capabilities
         }
 
@@ -413,6 +429,23 @@ mod tests {
             description,
             severity,
             capabilities,
+            behavior: PlanRuleBehavior::Normal,
+        })
+    }
+
+    fn rule_with_behavior(
+        id: &'static str,
+        description: &'static str,
+        severity: Severity,
+        capabilities: Capabilities,
+        behavior: PlanRuleBehavior,
+    ) -> Arc<dyn Rule> {
+        Arc::new(PlanRule {
+            id,
+            description,
+            severity,
+            capabilities,
+            behavior,
         })
     }
 
@@ -539,6 +572,50 @@ mod tests {
                     .as_deref()
                     .is_some_and(|hint| hint.contains("Use go_tests for current Go test evidence"))
         }));
+    }
+
+    #[test]
+    fn analysis_plan_contains_rule_metadata_and_capability_panics() {
+        let rules = vec![
+            rule_with_behavior(
+                "local/meta-panic",
+                "Metadata panic",
+                Severity::Warn,
+                Capabilities::new().syntax(),
+                PlanRuleBehavior::MetaPanic,
+            ),
+            rule_with_behavior(
+                "local/capability-panic",
+                "Capability panic",
+                Severity::Error,
+                Capabilities::new().imports(),
+                PlanRuleBehavior::CapabilitiesPanic,
+            ),
+        ];
+
+        let inputs = RulePlanInputs::collect(&rules, None);
+        let plan = AnalysisPlan::from_inputs(&inputs, &BTreeMap::new());
+        let mut diagnostics = inputs.diagnostics();
+        diagnostics.extend(plan.diagnostics());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "internal/unknown"
+                    && diagnostic.file == "<workspace>"
+                    && diagnostic.message.contains("rule metadata panicked")
+            }),
+            "{diagnostics:#?}"
+        );
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic.file == "<workspace>"
+                    && diagnostic
+                        .message
+                        .contains("Rule `local/capability-panic` capability collection panicked")
+            }),
+            "{diagnostics:#?}"
+        );
     }
 
     #[test]

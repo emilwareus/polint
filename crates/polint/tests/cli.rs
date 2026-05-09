@@ -532,6 +532,71 @@ impl Rule for NoTodoLiterals {
 }
 
 #[test]
+fn check_contains_plan_time_rule_metadata_panic() {
+    let temp = tempfile::tempdir().unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["new-rule", "generic", "metadata-panic"])
+        .assert()
+        .success();
+
+    point_generated_rule_pack_at_local_polint(temp.path());
+    write_file(
+        &temp.path().join(".polint/rules/src/metadata_panic.rs"),
+        r#"use polint::sdk::prelude::*;
+
+pub struct MetadataPanic;
+
+impl Rule for MetadataPanic {
+    fn meta(&self) -> RuleMeta {
+        panic!("plan-time metadata panic");
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new().syntax()
+    }
+
+    fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+        Ok(())
+    }
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.ts"),
+        "export const value = \"ok\";\n",
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostic = diagnostics(&json)
+        .iter()
+        .find(|diagnostic| diagnostic["rule_id"] == "internal/unknown")
+        .unwrap_or_else(|| panic!("expected controlled metadata panic diagnostic: {json:#?}"));
+    assert_eq!(diagnostic["file"], "<workspace>");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("rule metadata panicked")),
+        "{diagnostic:#?}"
+    );
+}
+
+#[test]
 fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
