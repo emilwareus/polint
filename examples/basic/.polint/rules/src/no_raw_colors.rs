@@ -4,66 +4,52 @@
 // rule would enforce a team convention like "all UI colors come from tokens".
 use polint::sdk::prelude::*;
 
-pub(crate) struct NoRawColors;
-
-impl Rule for NoRawColors {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "local/no-raw-colors".to_string(),
-            description: "Require design tokens instead of raw TSX color literals.".to_string(),
-            severity: Severity::Error,
+#[polint::rule(
+    id = "local/no-raw-colors",
+    description = "Require design tokens instead of raw TSX color literals.",
+    severity = "error"
+)]
+pub(crate) fn no_raw_colors(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+    jsx: JsxAttributes<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    let mut diagnostics = Vec::new();
+    for literal in literals
+        .iter()
+        .filter(|literal| literal.language.is_ts_family())
+    {
+        let file = ctx.file_path(literal.file);
+        if file_in_scope(ctx.options(), &file) && is_raw_color(&literal.value) {
+            diagnostics.push(raw_color_diagnostic(
+                &rule_id,
+                file,
+                &literal.span,
+                &literal.value,
+                "string-literal",
+            ));
         }
     }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().string_literals().jsx_attributes()
+    for attribute in jsx.iter() {
+        let Some(value) = &attribute.value else {
+            continue;
+        };
+        let file = ctx.file_path(attribute.file);
+        if file_in_scope(ctx.options(), &file) && is_raw_color(value) {
+            diagnostics.push(raw_color_diagnostic(
+                &rule_id,
+                file,
+                &attribute.span,
+                value,
+                "jsx-attribute",
+            ));
+        }
     }
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let rule_id = self.meta().id;
-        let mut diagnostics = Vec::new();
-        for literal in ctx
-            .string_literals()
-            .iter()
-            .filter(|literal| literal.language.is_ts_family())
-        {
-            let file = ctx.file_path(literal.file);
-            if file_in_scope(ctx.options(), &file) && is_raw_color(&literal.value) {
-                diagnostics.push(raw_color_diagnostic(
-                    &rule_id,
-                    file,
-                    &literal.span,
-                    &literal.value,
-                    "string-literal",
-                ));
-            }
-        }
-        for attribute in ctx.jsx_attributes() {
-            let Some(value) = &attribute.value else {
-                continue;
-            };
-            let Some(source) = ctx.source_file(attribute.file) else {
-                continue;
-            };
-            let file = ctx.file_path(attribute.file);
-            if source.language.is_ts_family()
-                && file_in_scope(ctx.options(), &file)
-                && is_raw_color(value)
-            {
-                diagnostics.push(raw_color_diagnostic(
-                    &rule_id,
-                    file,
-                    &attribute.span,
-                    value,
-                    "jsx-attribute",
-                ));
-            }
-        }
-        for diagnostic in diagnostics {
-            ctx.report(diagnostic);
-        }
-        Ok(())
+    for diagnostic in diagnostics {
+        ctx.report(diagnostic);
     }
+    Ok(())
 }
 
 fn raw_color_diagnostic(

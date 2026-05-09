@@ -1,8 +1,9 @@
 # Go test facts (`TestFact`)
 
 polint harvests one **`TestFact`** per **top-level** Go test entry (`Test…`, `Benchmark…`,
-`Fuzz…`) in `*_test.go` files. Rules read them via **`RuleCtx::go_tests`**, per-file iterators,
-and **`RuleCtx::go_tests_for_related_file`**.
+`Fuzz…`) in `*_test.go` files. Rules request the **`GoTests<'_>`** typed fact view,
+then use `iter()`, `for_file(file_id)`, or `related_for_file(file_id)`. Requesting
+that view is also how polint derives the `go_tests` capability.
 
 ## Fields
 
@@ -40,4 +41,5 @@ polint explain go-test --file path/to/file_test.go --test TestName
 
 to print one harvested fact as JSON (including `subtest_names`).
 
-In rules, `polint::sdk::prelude::collect_go_tests` wraps the per-file iterator.
+In rules, `polint::sdk::prelude::collect_go_tests(tests, file_id)` wraps the
+per-file iterator when a `Vec<&TestFact>` is more convenient.

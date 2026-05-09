@@ -199,7 +199,7 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 .polint.toml
 .polint/rules/Cargo.toml
 .polint/rules/src/main.rs          # calls polint::runner::run_cli(vec![...])
-.polint/rules/src/my_rule.rs       # one module per rule (pub struct + impl Rule)
+.polint/rules/src/my_rule.rs       # one #[polint::rule] function per rule
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs` and wires it
@@ -209,51 +209,52 @@ rules in one pack.
 ## Writing A Rule
 
 Start with `use polint::sdk::prelude::*;`, register the rule with
-`polint::runner::run_cli`, give the rule a stable local ID, declare only the facts
-it needs in `capabilities`, then report diagnostics from `run`.
+`polint::runner::run_cli`, give the rule a stable local ID in `#[polint::rule]`,
+and request facts as typed fact-view parameters. polint derives the rule's
+capabilities from those parameter types.
 Use `ctx.options().settings` for rule-specific TOML fields that are not covered
 by the common shortcuts (`max`, `deny`, `forbidden_imports`, etc.).
 
+`src/main.rs`:
+
 ```rust
-use polint::sdk::prelude::*;
 use std::process::ExitCode;
-use std::sync::Arc;
+
+mod no_raw_colors;
 
 fn main() -> ExitCode {{
-    polint::runner::run_cli(vec![Arc::new(NoRawColors)])
+    polint::runner::run_cli(vec![no_raw_colors::no_raw_colors()])
 }}
+```
 
-struct NoRawColors;
+`src/no_raw_colors.rs`:
 
-impl Rule for NoRawColors {{
-    fn meta(&self) -> RuleMeta {{
-        RuleMeta {{
-            id: "local/no-raw-colors".to_string(),
-            description: "Require design tokens instead of raw color literals.".to_string(),
-            severity: Severity::Error,
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-raw-colors",
+    description = "Require design tokens instead of raw color literals.",
+    severity = "error"
+)]
+pub(crate) fn no_raw_colors(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {{
+    for literal in literals.iter() {{
+        if literal.value.starts_with('#') {{
+            ctx.report(
+                Diagnostic::error(
+                    ctx.rule_id(),
+                    ctx.file_path(literal.file),
+                    literal.span.diagnostic_range(),
+                    "Use a design token instead of a raw color literal.",
+                )
+                .with_evidence("literal", literal.value.clone()),
+            );
         }}
     }}
-
-    fn capabilities(&self) -> Capabilities {{
-        Capabilities::new().string_literals().jsx_attributes()
-    }}
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {{
-        for literal in ctx.string_literals() {{
-            if literal.value.starts_with('#') {{
-                ctx.report(
-                    Diagnostic::error(
-                        self.meta().id,
-                        ctx.file_path(literal.file),
-                        literal.span.diagnostic_range(),
-                        "Use a design token instead of a raw color literal.",
-                    )
-                    .with_evidence("literal", literal.value.clone()),
-                );
-            }}
-        }}
-        Ok(())
-    }}
+    Ok(())
 }}
 ```
 
@@ -284,7 +285,7 @@ allow_files = ["src/theme/**"]
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
-- Use raw `RuleCtx` facts for project-specific logic; examples are consumers of the SDK, not special internal entry points.
+- Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.

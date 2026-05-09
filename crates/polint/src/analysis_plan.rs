@@ -729,7 +729,7 @@ mod tests {
             self.capabilities
         }
 
-        fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+        fn run(&self, _db: &crate::core::AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
             Ok(())
         }
     }

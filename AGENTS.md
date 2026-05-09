@@ -93,8 +93,14 @@ live in `examples/` inside this repository.
 - Rule code should import `polint::sdk::prelude::*` and register through
   `polint::runner::run_cli`; do not make examples depend on `polint::core`,
   `go`, `ts`, `config`, parser adapters, test helpers, or other internal modules.
-- Examples should demonstrate composition of public facts from `RuleCtx`, not
-  call one-off helpers that solve only the example.
+- Examples should demonstrate composition of public typed fact views requested
+  from `#[polint::rule]` signatures. `RuleCtx` is for diagnostics, options,
+  source paths, and capability/setup metadata; do not reintroduce broad fact
+  access on `RuleCtx` as the normal rule-authoring path.
+- Capabilities for normal rules must be derived from typed fact-view parameters,
+  not handwritten `Capabilities::new()` declarations. Manual `impl Rule` is an
+  advanced/internal escape hatch and should not be used in user-facing examples
+  or scaffolds.
 - When adding a rule-authoring feature, add at least one temp-repo style test
   that behaves like an outside user: generated `.polint/rules`, public SDK
   imports only, real facts consumed, and a diagnostic asserted through

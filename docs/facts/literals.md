@@ -1,9 +1,9 @@
 # Literal And JSX Attribute Facts
 
 Literal facts let rules inspect string-like syntax without parsing source text
-by hand. Rules read these through `RuleCtx::string_literals()`,
-`RuleCtx::string_literals_for_file(file_id)`, `RuleCtx::jsx_attributes()`, and
-`RuleCtx::jsx_attributes_for_file(file_id)`.
+by hand. Rules request `StringLiterals<'_>` and `JsxAttributes<'_>` as typed
+fact-view parameters on a `#[polint::rule]` function. Those parameters are also
+how polint derives the rule's required capabilities.
 
 ## String Literal Fields
 
@@ -35,7 +35,15 @@ by hand. Rules read these through `RuleCtx::string_literals()`,
 ```rust
 use polint::sdk::prelude::*;
 
-fn reject_configured_literal(ctx: &mut RuleCtx<'_>) {
+#[polint::rule(
+    id = "local/no-configured-literal",
+    description = "Reject a configured literal value.",
+    severity = "warn"
+)]
+fn reject_configured_literal(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
     let denied = ctx
         .options()
         .settings
@@ -45,12 +53,12 @@ fn reject_configured_literal(ctx: &mut RuleCtx<'_>) {
         .to_string();
 
     let mut diagnostics = Vec::new();
-    for literal in ctx.string_literals() {
+    for literal in literals.iter() {
         let file = ctx.file_path(literal.file);
         if file_in_scope(ctx.options(), &file) && literal.value == denied {
             diagnostics.push(
                 Diagnostic::warning(
-                    "local/no-configured-literal",
+                    ctx.rule_id(),
                     file,
                     literal.span.diagnostic_range(),
                     "Configured literal is not allowed here.",
@@ -62,5 +70,6 @@ fn reject_configured_literal(ctx: &mut RuleCtx<'_>) {
     for diagnostic in diagnostics {
         ctx.report(diagnostic);
     }
+    Ok(())
 }
 ```

@@ -758,12 +758,13 @@ impl CapabilitySupportView {
 
 /// A static-analysis rule that runs against an [`AnalysisDb`] through [`RuleCtx`].
 ///
-/// Implementations should declare their metadata and capabilities, then report
-/// diagnostics through the context instead of panicking or writing output.
+/// Normal rule authors should use `#[polint::rule]`, which derives capabilities
+/// from typed fact-view parameters. Manual implementations are an advanced
+/// escape hatch and must keep `capabilities` in sync themselves.
 pub trait Rule: Send + Sync {
     fn meta(&self) -> RuleMeta;
     fn capabilities(&self) -> Capabilities;
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult;
+    fn run(&self, db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult;
 }
 
 /// Resolved per-rule options from configuration.
@@ -793,8 +794,9 @@ pub struct RuleOptions {
 
 /// Borrowed execution context passed to a single rule run.
 ///
-/// The context exposes stable, deterministic views of facts in [`AnalysisDb`]
-/// and buffers diagnostics until the rule finishes.
+/// The context owns reporting, options, path lookup, and support metadata.
+/// Analysis facts are exposed through typed SDK fact views requested in a
+/// `#[polint::rule]` function signature.
 pub struct RuleCtx<'a> {
     db: &'a AnalysisDb,
     diagnostics: Vec<Diagnostic>,
@@ -824,14 +826,14 @@ impl<'a> RuleCtx<'a> {
         }
     }
 
-    /// Returns the underlying analysis database for advanced read-only queries.
-    pub fn db(&self) -> &AnalysisDb {
-        self.db
-    }
-
     /// Returns resolved options for the current rule.
     pub fn options(&self) -> &RuleOptions {
         &self.options
+    }
+
+    /// Returns the stable ID of the current rule.
+    pub fn rule_id(&self) -> &str {
+        &self.rule.id
     }
 
     /// Returns read-only capability support information for the resolved plan.
@@ -839,213 +841,13 @@ impl<'a> RuleCtx<'a> {
         &self.capability_support
     }
 
-    /// Returns all analyzed source files in deterministic database order.
-    pub fn files(&self) -> &[SourceFile] {
-        self.db.files()
-    }
-
-    /// Returns all package facts in deterministic database order.
-    pub fn packages(&self) -> &[PackageFact] {
-        self.db.packages()
-    }
-
-    /// Returns all function facts in deterministic database order.
-    pub fn functions(&self) -> &[FunctionFact] {
-        self.db.functions()
-    }
-
-    /// Returns all import facts in deterministic database order.
-    pub fn imports(&self) -> &[ImportFact] {
-        self.db.imports()
-    }
-
-    /// Returns all branch obligations in deterministic database order.
-    pub fn branches(&self) -> &[BranchObligation] {
-        self.db.branches()
-    }
-
-    /// Returns the source file for a stable file ID.
-    pub fn source_file(&self, file: FileId) -> Option<&SourceFile> {
-        self.db.file(file)
-    }
-
-    /// Returns function facts for a file without cloning facts.
-    pub fn functions_for_file(&self, file: FileId) -> impl Iterator<Item = &FunctionFact> + '_ {
-        self.db
-            .functions()
-            .iter()
-            .filter(move |function| function.file == file)
-    }
-
-    /// Returns import facts for a file without cloning facts.
-    pub fn imports_for_file(&self, file: FileId) -> impl Iterator<Item = &ImportFact> + '_ {
-        self.db
-            .imports()
-            .iter()
-            .filter(move |import| import.file == file)
-    }
-
-    /// Returns branch obligations for a function.
-    ///
-    /// This compatibility helper combines borrowed branch references for the
-    /// requested function ID.
-    pub fn branch_obligations(&self, function: FunctionId) -> Vec<&BranchObligation> {
-        self.db
-            .branches()
-            .iter()
-            .filter(|branch| branch.function == Some(function))
-            .collect()
-    }
-
-    /// Returns branch obligations for a file without cloning facts.
-    pub fn branch_obligations_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &BranchObligation> + '_ {
-        self.db
-            .branches()
-            .iter()
-            .filter(move |branch| branch.file == file)
-    }
-
-    /// Returns all Go test facts in deterministic database order.
-    pub fn go_tests(&self) -> &[TestFact] {
-        self.db.tests()
-    }
-
-    /// Returns Go test facts for a file without cloning facts.
-    pub fn go_tests_for_file(&self, file: FileId) -> impl Iterator<Item = &TestFact> + '_ {
-        self.db.tests().iter().filter(move |test| test.file == file)
-    }
-
     /// Paths paired with `file`'s relative path under the named `[path_contexts]` rule.
     pub fn path_context_related(&self, pair_name: &str, file: FileId) -> Vec<String> {
-        let Some(source) = self.source_file(file) else {
+        let Some(source) = self.db.file(file) else {
             return Vec::new();
         };
         self.db
             .path_context_related(pair_name, &source.relative_path)
-    }
-
-    /// Returns Go tests related to a source file.
-    ///
-    /// For a production `.go` file, this includes tests in the same file and
-    /// tests from same-directory `_test.go` files. For a `_test.go` file, this
-    /// includes only tests from that same test file.
-    pub fn go_tests_for_related_file(&self, file: FileId) -> Vec<&TestFact> {
-        let Some(source_file) = self.source_file(file) else {
-            return Vec::new();
-        };
-        if source_file.language != Language::Go {
-            return Vec::new();
-        }
-
-        let source_path = Path::new(&source_file.relative_path);
-        let source_name = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-
-        if source_name.ends_with("_test.go") {
-            return self.go_tests_for_file(file).collect();
-        }
-
-        let source_dir = source_path.parent();
-        self.db
-            .tests()
-            .iter()
-            .filter(|test| {
-                if test.file == file {
-                    return true;
-                }
-
-                let Some(test_file) = self.source_file(test.file) else {
-                    return false;
-                };
-                if test_file.language != Language::Go {
-                    return false;
-                }
-
-                let test_path = Path::new(&test_file.relative_path);
-                let test_name = test_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default();
-
-                test_name.ends_with("_test.go") && test_path.parent() == source_dir
-            })
-            .collect()
-    }
-
-    /// Returns TypeScript/JavaScript component facts in database order.
-    pub fn ts_components(&self) -> &[TsComponentFact] {
-        self.db.ts_components()
-    }
-
-    /// Returns TypeScript/JavaScript component facts for a file without cloning facts.
-    pub fn ts_components_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &TsComponentFact> + '_ {
-        self.db
-            .ts_components()
-            .iter()
-            .filter(move |component| component.file == file)
-    }
-
-    /// Returns TypeScript/JavaScript class facts in database order.
-    pub fn ts_classes(&self) -> &[TsClassFact] {
-        self.db.ts_classes()
-    }
-
-    /// Returns TypeScript/JavaScript class facts for a file without cloning facts.
-    pub fn ts_classes_for_file(&self, file: FileId) -> impl Iterator<Item = &TsClassFact> + '_ {
-        self.db
-            .ts_classes()
-            .iter()
-            .filter(move |class| class.file == file)
-    }
-
-    /// Returns string literal facts in deterministic database order.
-    pub fn string_literals(&self) -> &[StringLiteralFact] {
-        self.db.string_literals()
-    }
-
-    /// Returns string literal facts for a file without cloning facts.
-    pub fn string_literals_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &StringLiteralFact> + '_ {
-        self.db
-            .string_literals()
-            .iter()
-            .filter(move |literal| literal.file == file)
-    }
-
-    /// Returns JSX attribute facts in deterministic database order.
-    pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
-        self.db.jsx_attributes()
-    }
-
-    /// Returns JSX attribute facts for a file without cloning facts.
-    pub fn jsx_attributes_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &JsxAttributeFact> + '_ {
-        self.db
-            .jsx_attributes()
-            .iter()
-            .filter(move |attribute| attribute.file == file)
-    }
-
-    /// Returns syntactic import graph edges as `(source file, import)` pairs.
-    ///
-    /// Edges follow import fact insertion order from [`AnalysisDb`].
-    pub fn import_edges(&self) -> impl Iterator<Item = (&SourceFile, &ImportFact)> + '_ {
-        self.db
-            .imports()
-            .iter()
-            .filter_map(move |import| self.source_file(import.file).map(|file| (file, import)))
     }
 
     /// Returns a display path for a file ID, or `<unknown>` if missing.
@@ -1162,7 +964,7 @@ pub(crate) fn run_rules_with_capability_support(
             rule_options,
             capability_support.clone(),
         );
-        let result = catch_unwind(AssertUnwindSafe(|| rule.run(&mut ctx)));
+        let result = catch_unwind(AssertUnwindSafe(|| rule.run(db, &mut ctx)));
         match result {
             Ok(Ok(())) => ctx.into_diagnostics(),
             Ok(Err(error)) => vec![internal_rule_error(db, &meta, error.to_string())],
@@ -1256,6 +1058,10 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sdk::facts::{
+        BranchObligations, FactView, Functions, GoTests, Imports, JsxAttributes, Packages,
+        SourceFiles, StringLiterals, TsClasses, TsComponents,
+    };
     use anyhow::anyhow;
     use proptest::prelude::*;
     use std::sync::Arc;
@@ -1362,7 +1168,7 @@ mod tests {
             self.capabilities
         }
 
-        fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+        fn run(&self, _db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
             if !self.delay.is_zero() {
                 thread::sleep(self.delay);
             }
@@ -1453,7 +1259,7 @@ mod tests {
                 Capabilities::new().imports()
             }
 
-            fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
+            fn run(&self, _db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {
                 if ctx.capability_support().status_for("imports")
                     == Some(CapabilitySupportStatus::Supported)
                 {
@@ -1663,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_ctx_exposes_ts_classes() {
+    fn fact_view_exposes_ts_classes() {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
             PathBuf::from("src/dialog.tsx"),
@@ -1679,19 +1485,11 @@ mod tests {
             is_component_like: true,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/ts-classes".to_string(),
-                description: "TS classes test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let classes = TsClasses::build(&db);
 
-        assert_eq!(ctx.ts_classes().len(), 1);
-        assert_eq!(ctx.ts_classes()[0].name, db.ts_classes()[0].name);
-        assert_eq!(ctx.ts_classes()[0].span, db.ts_classes()[0].span);
+        assert_eq!(classes.all().len(), 1);
+        assert_eq!(classes.all()[0].name, db.ts_classes()[0].name);
+        assert_eq!(classes.all()[0].span, db.ts_classes()[0].span);
     }
 
     #[test]
@@ -1795,61 +1593,65 @@ mod tests {
             span: ts_span,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/sdk-query".to_string(),
-                description: "SDK query helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let packages = Packages::build(&db);
+        let files = SourceFiles::build(&db);
+        let functions = Functions::build(&db);
+        let imports = Imports::build(&db);
+        let branches = BranchObligations::build(&db);
+        let tests = GoTests::build(&db);
+        let components = TsComponents::build(&db);
+        let classes = TsClasses::build(&db);
+        let literals = StringLiterals::build(&db);
+        let jsx = JsxAttributes::build(&db);
 
-        assert_eq!(ctx.packages()[0].name, "payment");
-        assert_eq!(ctx.branches()[0].condition_text, "err != nil");
+        assert_eq!(packages.all()[0].name, "payment");
+        assert_eq!(branches.all()[0].condition_text, "err != nil");
+        assert_eq!(files.get(go_file).unwrap().relative_path, "src/payment.go");
         assert_eq!(
-            ctx.source_file(go_file).unwrap().relative_path,
-            "src/payment.go"
-        );
-        assert_eq!(
-            ctx.functions_for_file(go_file)
+            functions
+                .for_file(go_file)
                 .map(|function| function.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Charge"]
         );
         assert_eq!(
-            ctx.imports_for_file(go_file)
+            imports
+                .for_file(go_file)
                 .map(|import| import.path.as_str())
                 .collect::<Vec<_>>(),
             vec!["context"]
         );
-        assert_eq!(ctx.branch_obligations_for_file(go_file).count(), 1);
+        assert_eq!(branches.for_file(go_file).count(), 1);
         assert_eq!(
-            ctx.go_tests_for_file(go_file)
+            tests
+                .for_file(go_file)
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["TestCharge"]
         );
         assert_eq!(
-            ctx.ts_components_for_file(ts_file)
+            components
+                .for_file(ts_file)
                 .map(|component| component.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Button"]
         );
         assert_eq!(
-            ctx.ts_classes_for_file(ts_file)
+            classes
+                .for_file(ts_file)
                 .map(|class| class.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["Dialog"]
         );
         assert_eq!(
-            ctx.string_literals_for_file(ts_file)
+            literals
+                .for_file(ts_file)
                 .map(|literal| literal.value.as_str())
                 .collect::<Vec<_>>(),
             vec!["Pay"]
         );
         assert_eq!(
-            ctx.jsx_attributes_for_file(ts_file)
+            jsx.for_file(ts_file)
                 .map(|attribute| attribute.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["aria-label"]
@@ -1887,18 +1689,11 @@ mod tests {
             language: Language::Go,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/import-edges".to_string(),
-                description: "Import edge helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let imports = Imports::build(&db);
 
         assert_eq!(
-            ctx.import_edges()
+            imports
+                .edges()
                 .map(|(file, import)| (file.relative_path.as_str(), import.path.as_str()))
                 .collect::<Vec<_>>(),
             vec![("src/second.go", "fmt"), ("src/first.go", "strings")]
@@ -1958,25 +1753,19 @@ mod tests {
             table_rows: 0,
         });
 
-        let ctx = RuleCtx::new(
-            &db,
-            RuleMeta {
-                id: "examples/go-related-tests".to_string(),
-                description: "Related Go test helper test".to_string(),
-                severity: Severity::Warn,
-            },
-            RuleOptions::default(),
-        );
+        let tests = GoTests::build(&db);
 
         assert_eq!(
-            ctx.go_tests_for_related_file(production_file)
+            tests
+                .related_for_file(production_file)
                 .iter()
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["TestInline", "TestPayment"]
         );
         assert_eq!(
-            ctx.go_tests_for_related_file(companion_file)
+            tests
+                .related_for_file(companion_file)
                 .iter()
                 .map(|test| test.name.as_str())
                 .collect::<Vec<_>>(),

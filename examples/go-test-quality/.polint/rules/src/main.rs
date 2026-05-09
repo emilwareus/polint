@@ -1,9 +1,7 @@
 mod go_test_quality;
-use go_test_quality::GoTestQuality;
 
 use std::process::ExitCode;
-use std::sync::Arc;
 
 fn main() -> ExitCode {
-    polint::runner::run_cli(vec![Arc::new(GoTestQuality)])
+    polint::runner::run_cli(vec![go_test_quality::go_test_quality()])
 }

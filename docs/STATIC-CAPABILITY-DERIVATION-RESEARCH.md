@@ -28,6 +28,11 @@ analyzable shape where the function signature is the capability source of
 truth. A procedural macro can then generate the `Rule` implementation and its
 `capabilities()` method from typed fact-view parameters.
 
+Implementation status on the current static-capability branch: this is now the
+normal rule-authoring path. `#[polint::rule]` generates the `Rule`
+implementation, examples and `polint new-rule` use typed fact views, and broad
+fact access moved off `RuleCtx`.
+
 In other words:
 
 - Bad target: scan arbitrary Rust and guess what facts the rule uses.
@@ -48,9 +53,9 @@ polint needs capabilities before it runs analysis. That lets the engine:
 The question is not whether capabilities should exist. They should. The question
 is how the engine obtains them reliably.
 
-## Current Model
+## Previous Model
 
-The current public rule shape is roughly:
+The previous public rule shape was roughly:
 
 ```rust
 pub trait Rule: Send + Sync {
@@ -60,11 +65,11 @@ pub trait Rule: Send + Sync {
 }
 ```
 
-`RuleCtx` exposes many fact accessors, and also has broad access through
-`ctx.db()`. That means `capabilities()` and actual fact usage are separate
+`RuleCtx` exposed many fact accessors, and also had broad access through
+`ctx.db()`. That meant `capabilities()` and actual fact usage were separate
 things.
 
-This works as a planning contract, but it is not a checked contract.
+That worked as a planning contract, but it was not a checked contract.
 
 ## Why Arbitrary Source Inference Is The Wrong Path
 

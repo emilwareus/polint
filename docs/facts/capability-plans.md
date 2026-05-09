@@ -2,7 +2,9 @@
 
 `polint explain plan` shows the analysis plan derived from enabled repo-local
 rules. It is intended for rule authors, CI, and agents that need to inspect
-declared capabilities without parsing source files.
+required capabilities without parsing source files. For normal
+`#[polint::rule]` rules, capabilities come from the typed fact-view parameters in
+the rule function signature.
 
 Use machine output when another tool consumes the plan:
 

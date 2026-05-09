@@ -1,8 +1,9 @@
 # Function Facts
 
 `FunctionFact` describes a function-like declaration found by the Go or TS/JS
-adapter. Rules read these through `RuleCtx::functions()` or
-`RuleCtx::functions_for_file(file_id)`.
+adapter. Rules request the `Functions<'_>` typed fact view on a
+`#[polint::rule]` function. The same parameter is how polint derives the
+`syntax` capability.
 
 ## Fields
 
@@ -30,14 +31,20 @@ adapter. Rules read these through `RuleCtx::functions()` or
 ```rust
 use polint::sdk::prelude::*;
 
-fn check_complexity(ctx: &mut RuleCtx<'_>, max: u32) {
+#[polint::rule(
+    id = "local/high-complexity",
+    description = "Warn on functions over the configured complexity threshold.",
+    severity = "warn"
+)]
+fn check_complexity(ctx: &mut RuleCtx<'_>, functions: Functions<'_>) -> RuleResult {
+    let max = ctx.options().max.unwrap_or(10);
     let mut diagnostics = Vec::new();
-    for function in ctx.functions() {
+    for function in functions.iter() {
         let file = ctx.file_path(function.file);
         if file_in_scope(ctx.options(), &file) && function.cyclomatic_complexity > max {
             diagnostics.push(
                 Diagnostic::warning(
-                    "local/high-complexity",
+                    ctx.rule_id(),
                     file,
                     function.span.diagnostic_range(),
                     "Function is over the configured complexity threshold.",
@@ -50,5 +57,6 @@ fn check_complexity(ctx: &mut RuleCtx<'_>, max: u32) {
     for diagnostic in diagnostics {
         ctx.report(diagnostic);
     }
+    Ok(())
 }
 ```

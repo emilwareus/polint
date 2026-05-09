@@ -2,8 +2,12 @@
 //!
 //! Rule authors primarily use [`sdk`] and [`runner`]. Other modules are internal to this crate.
 
+extern crate self as polint;
+
 pub mod runner;
 pub mod sdk;
+
+pub use polint_macros::rule;
 
 /// CLI entry used by the `polint` binary (`src/main.rs`).
 pub fn run_main() -> anyhow::Result<u8> {

@@ -9,13 +9,15 @@
 
 #![deny(missing_docs)]
 
+pub mod facts;
 pub mod scope;
 
-use crate::core::{FileId, RuleCtx, TestFact};
+use crate::core::{FileId, TestFact};
+use facts::GoTests;
 
-/// Collects [`TestFact`] references for `file` (same facts as [`RuleCtx::go_tests_for_file`], materialized).
-pub fn collect_go_tests<'a>(ctx: &'a RuleCtx<'_>, file: FileId) -> Vec<&'a TestFact> {
-    ctx.go_tests_for_file(file).collect()
+/// Collects [`TestFact`] references for `file` from a typed [`GoTests`] fact view.
+pub fn collect_go_tests<'a>(tests: GoTests<'a>, file: FileId) -> Vec<&'a TestFact> {
+    tests.for_file(file).collect()
 }
 
 /// Re-exports of the stable rule-authoring surface.
@@ -38,37 +40,44 @@ pub mod prelude {
     };
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;
+    pub use crate::sdk::facts::{
+        BranchObligations, CallGraph, Cfg, CoverageFacts, Functions, GoTests, Imports,
+        JsxAttributes, Packages, SourceFiles, StringLiterals, TestSuiteMetrics, TsClasses,
+        TsComponents,
+    };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
+}
+
+/// Hidden implementation details used by generated rule code.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::core::AnalysisDb;
+    pub use crate::sdk::facts::FactView;
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::sdk::facts::FactView;
     use crate::sdk::prelude::*;
 
-    struct PreludeSmokeRule;
-
-    impl Rule for PreludeSmokeRule {
-        fn meta(&self) -> RuleMeta {
-            RuleMeta {
-                id: "examples/prelude-smoke".to_string(),
-                description: "Prelude smoke rule".to_string(),
-                severity: Severity::Warn,
-            }
-        }
-
-        fn capabilities(&self) -> Capabilities {
-            Capabilities::new()
-                .imports()
-                .string_literals()
-                .jsx_attributes()
-        }
-
-        fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-            assert!(ctx.files().is_empty());
-            assert_eq!(ctx.import_edges().count(), 0);
-            ctx.warn(&Span::point(FileId(0), 1, 1), "prelude warning");
-            Ok(())
-        }
+    #[polint::rule(
+        id = "examples/prelude-smoke",
+        description = "Prelude smoke rule",
+        severity = "warn"
+    )]
+    fn prelude_smoke(
+        ctx: &mut RuleCtx<'_>,
+        files: SourceFiles<'_>,
+        imports: Imports<'_>,
+        literals: StringLiterals<'_>,
+        jsx: JsxAttributes<'_>,
+    ) -> RuleResult {
+        assert_eq!(files.iter().count(), 0);
+        assert_eq!(imports.edges().count(), 0);
+        assert!(literals.all().is_empty());
+        assert!(jsx.all().is_empty());
+        ctx.warn(&Span::point(FileId(0), 1, 1), "prelude warning");
+        Ok(())
     }
 
     #[test]
@@ -78,15 +87,17 @@ mod tests {
         assert_exported::<TsClassFact>();
 
         let db = AnalysisDb::new();
-        let rule = PreludeSmokeRule;
+        let rule = prelude_smoke();
         let capabilities = rule.capabilities();
+        assert!(capabilities.syntax);
         assert!(capabilities.imports);
         assert!(capabilities.string_literals);
         assert!(capabilities.jsx_attributes);
 
         let mut ctx = RuleCtx::new(&db, rule.meta(), RuleOptions::default());
-        assert!(collect_go_tests(&ctx, FileId(0)).is_empty());
-        rule.run(&mut ctx).expect("prelude rule runs");
+        let tests = GoTests::build(&db);
+        assert!(collect_go_tests(tests, FileId(0)).is_empty());
+        rule.run(&db, &mut ctx).expect("prelude rule runs");
         let diagnostics = ctx.into_diagnostics();
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].severity, Severity::Warn);

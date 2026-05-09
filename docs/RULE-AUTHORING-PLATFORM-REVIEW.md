@@ -23,6 +23,8 @@ the examples.
 
 This branch has started addressing the review:
 
+- Added `#[polint::rule]` and typed fact views so normal rule capabilities are
+  derived from function parameters instead of handwritten declarations.
 - Added `RuleOptions::settings` so arbitrary `[[rules.config]]` fields reach
   repo-local rules.
 - Added a temp-repo integration test proving a generated external rule can use
@@ -332,16 +334,17 @@ The template loops over facts and counts them, then discards the counts:
 Generated Go rules count tests and branches:
 
 ```rust
-let test_count = ctx.go_tests_for_file(file.id).count();
-let branch_count = ctx.branch_obligations_for_file(file.id).count();
-let _ = (test_count, branch_count);
+for branch in branches.iter() {
+    let related_test_count = tests.related_for_file(branch.file).len();
+    let _ = related_test_count;
+}
 ```
 
 Generated TS rules count literals and JSX attributes:
 
 ```rust
-let literal_count = ctx.string_literals_for_file(file.id).count();
-let attribute_count = ctx.jsx_attributes_for_file(file.id).count();
+let literal_count = literals.iter().count();
+let attribute_count = jsx.iter().count();
 let _ = (literal_count, attribute_count);
 ```
 
@@ -354,7 +357,7 @@ The smoke test proves only that `init`, `new-rule`, and `check` complete:
 The first generated rule is a user's first contact with the SDK. A no-op rule
 does not prove or teach the main product loop:
 
-1. declare capabilities
+1. request typed fact views
 2. inspect facts
 3. apply repo-specific logic
 4. report diagnostics
@@ -379,9 +382,9 @@ rule with a real diagnostic.
 
 ### Plain Statement
 
-The tests check that generated rules compile and that repo examples work. They do
-not yet check that a generated external rule can use real facts to report a real
-diagnostic.
+Before the fix, tests checked that generated rules compiled and that repo
+examples worked. They did not check that a generated external rule could use
+real facts to report a real diagnostic.
 
 ### Evidence
 
@@ -394,8 +397,8 @@ The skeleton tests assert strings in generated source:
 For example, they check that generated modules contain:
 
 - `use polint::sdk::prelude::*;`
-- `ctx.go_tests_for_file(file.id)`
-- `ctx.string_literals_for_file(file.id)`
+- `tests.related_for_file(branch.file)`
+- `literals.iter().count()`
 - no `crate::core::`
 
 The stronger integration tests use checked-in example rule crates through
@@ -422,8 +425,8 @@ The actual test name includes settings too:
 That test creates a temp repo and writes a rule that:
 
 - imports only `polint::sdk::prelude::*`
-- declares `Capabilities::new().string_literals()`
-- reads `ctx.string_literals()`
+- requests `StringLiterals<'_>` in a `#[polint::rule]` signature
+- reads `literals.iter()`
 - reports a diagnostic through `ctx.warn` or `ctx.report`
 - runs through parent `polint check`
 - asserts JSON output contains the diagnostic
@@ -446,7 +449,7 @@ Path-scope helpers live in:
 
 Go related-test lookup is exposed through:
 
-- [`RuleCtx::go_tests_for_related_file`](../crates/polint/src/core/mod.rs#L821-L869)
+- [`GoTests::related_for_file`](../crates/polint/src/sdk/facts.rs)
 - [`collect_go_tests`](../crates/polint/src/sdk/mod.rs#L16-L19)
 
 Examples use these helpers:

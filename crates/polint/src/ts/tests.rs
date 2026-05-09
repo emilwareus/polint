@@ -444,6 +444,7 @@ const unsafePrefix = /^unsafe-/i;
 fn denied_literal_rules_can_see_regex_literal_text() {
     use crate::core::{RuleCtx, RuleMeta, RuleOptions};
     use crate::diagnostics::Severity;
+    use crate::sdk::facts::{FactView, StringLiterals};
 
     let source = r#"
 const allowed = /legacy-testid/;
@@ -464,8 +465,8 @@ const denied = /^unsafe-/i;
         },
     );
 
-    let denied = ctx
-        .string_literals()
+    let literals = StringLiterals::build(&db);
+    let denied = literals
         .iter()
         .filter(|literal| {
             ctx.options()

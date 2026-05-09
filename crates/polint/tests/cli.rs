@@ -84,8 +84,8 @@ impl Rule for NeedsImports {
         Capabilities::new().imports()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let _import_count = ctx.imports().len();
+    fn run(&self, db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let _import_count = db.imports().len();
         Ok(())
     }
 }
@@ -103,7 +103,7 @@ impl Rule for NeedsCfg {
         Capabilities::new().cfg()
     }
 
-    fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+    fn run(&self, _db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
         Ok(())
     }
 }
@@ -177,9 +177,9 @@ impl Rule for CacheCapability {
         Capabilities::new().string_literals()
     }
 
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let _literal_count = ctx.string_literals().len();
-        let _attribute_count = ctx.jsx_attributes().len();
+    fn run(&self, db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+        let _literal_count = db.string_literals().len();
+        let _attribute_count = db.jsx_attributes().len();
         Ok(())
     }
 }
@@ -540,11 +540,17 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(manifest.contains("polint ="));
     assert!(main.contains("polint::runner::run_cli"));
-    assert!(module.contains("id: \"custom/branch-error-paths\""));
+    assert!(main.contains("branch_error_paths::branch_error_paths()"));
+    assert!(module.contains("#[polint::rule("));
+    assert!(module.contains("id = \"custom/branch-error-paths\""));
     assert!(module.contains("use polint::sdk::prelude::*;"));
-    assert!(module.contains(".go_tests().branch_obligations()"));
-    assert!(module.contains("ctx.go_tests_for_file(file.id)"));
-    assert!(module.contains("ctx.branch_obligations_for_file(file.id)"));
+    assert!(!module.contains("SourceFiles<'_>"));
+    assert!(module.contains("tests: GoTests<'_>"));
+    assert!(module.contains("branches: BranchObligations<'_>"));
+    assert!(module.contains("tests.related_for_file(branch.file)"));
+    assert!(module.contains("branches.iter()"));
+    assert!(!module.contains("fn capabilities"));
+    assert!(!module.contains("impl Rule"));
     assert!(!module.contains("crate::core::"));
 }
 
@@ -562,11 +568,17 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
     let module = fs::read_to_string(rules.join("src/no_raw_brand_colors.rs")).unwrap();
     let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(main.contains("polint::runner::run_cli"));
-    assert!(module.contains("id: \"custom/no-raw-brand-colors\""));
+    assert!(main.contains("no_raw_brand_colors::no_raw_brand_colors()"));
+    assert!(module.contains("#[polint::rule("));
+    assert!(module.contains("id = \"custom/no-raw-brand-colors\""));
     assert!(module.contains("use polint::sdk::prelude::*;"));
-    assert!(module.contains(".string_literals().jsx_attributes()"));
-    assert!(module.contains("ctx.string_literals_for_file(file.id)"));
-    assert!(module.contains("ctx.jsx_attributes_for_file(file.id)"));
+    assert!(!module.contains("SourceFiles<'_>"));
+    assert!(module.contains("literals: StringLiterals<'_>"));
+    assert!(module.contains("jsx: JsxAttributes<'_>"));
+    assert!(module.contains("literals.iter().count()"));
+    assert!(module.contains("jsx.iter().count()"));
+    assert!(!module.contains("fn capabilities"));
+    assert!(!module.contains("impl Rule"));
     assert!(!module.contains("crate::core::"));
 }
 
@@ -584,11 +596,74 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     let module = fs::read_to_string(rules.join("src/domain_names.rs")).unwrap();
     let main = fs::read_to_string(rules.join("src/main.rs")).unwrap();
     assert!(main.contains("polint::runner::run_cli"));
-    assert!(module.contains("id: \"custom/domain-names\""));
+    assert!(main.contains("domain_names::domain_names()"));
+    assert!(module.contains("#[polint::rule("));
+    assert!(module.contains("id = \"custom/domain-names\""));
     assert!(module.contains("use polint::sdk::prelude::*;"));
-    assert!(module.contains(".syntax()"));
-    assert!(module.contains("ctx.functions_for_file(file.id)"));
+    assert!(!module.contains("SourceFiles<'_>"));
+    assert!(module.contains("functions: Functions<'_>"));
+    assert!(module.contains("functions.iter().count()"));
+    assert!(!module.contains("fn capabilities"));
+    assert!(!module.contains("impl Rule"));
     assert!(!module.contains("crate::core::"));
+}
+
+#[test]
+fn rule_macro_rejects_unknown_fact_view_parameter() {
+    let temp = tempfile::tempdir().unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    write_file(
+        &temp.path().join("Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-macro-fail-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+"#,
+        ),
+    );
+    write_file(
+        &temp.path().join("src/main.rs"),
+        r#"use polint::sdk::prelude::*;
+use std::process::ExitCode;
+
+struct UserDefinedFacts<'a>(&'a ());
+
+#[polint::rule(
+    id = "local/invalid-facts",
+    description = "Invalid facts.",
+    severity = "warn"
+)]
+fn invalid_facts(
+    ctx: &mut RuleCtx<'_>,
+    facts: UserDefinedFacts<'_>,
+) -> RuleResult {
+    let _ = (ctx, facts);
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![invalid_facts()])
+}
+"#,
+    );
+
+    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+        .current_dir(temp.path())
+        .args(["check", "--quiet"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported polint fact view parameter",
+        ));
 }
 
 #[test]
@@ -629,59 +704,51 @@ message = "Configured forbidden literal found."
         &temp.path().join(".polint/rules/src/no_todo_literals.rs"),
         r#"use polint::sdk::prelude::*;
 
-pub struct NoTodoLiterals;
+#[polint::rule(
+    id = "custom/no-todo-literals",
+    description = "Reject configured placeholder literals.",
+    severity = "warn"
+)]
+pub(crate) fn no_todo_literals(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
+    let token = ctx
+        .options()
+        .settings
+        .get("token")
+        .and_then(|value| value.as_str())
+        .unwrap_or("TODO")
+        .to_string();
+    let message = ctx
+        .options()
+        .settings
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("Forbidden literal found.")
+        .to_string();
+    let rule_id = ctx.rule_id().to_string();
+    let mut diagnostics = Vec::new();
 
-impl Rule for NoTodoLiterals {
-    fn meta(&self) -> RuleMeta {
-        RuleMeta {
-            id: "custom/no-todo-literals".to_string(),
-            description: "Reject configured placeholder literals.".to_string(),
-            severity: Severity::Warn,
+    for literal in literals.iter() {
+        let file = ctx.file_path(literal.file);
+        if file_in_scope(ctx.options(), &file) && literal.value == token {
+            diagnostics.push(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    literal.span.diagnostic_range(),
+                    message.clone(),
+                )
+                .with_evidence("token", token.clone()),
+            );
         }
     }
 
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::new().string_literals()
+    for diagnostic in diagnostics {
+        ctx.report(diagnostic);
     }
-
-    fn run(&self, ctx: &mut RuleCtx<'_>) -> RuleResult {
-        let token = ctx
-            .options()
-            .settings
-            .get("token")
-            .and_then(|value| value.as_str())
-            .unwrap_or("TODO")
-            .to_string();
-        let message = ctx
-            .options()
-            .settings
-            .get("message")
-            .and_then(|value| value.as_str())
-            .unwrap_or("Forbidden literal found.")
-            .to_string();
-        let rule_id = self.meta().id;
-        let mut diagnostics = Vec::new();
-
-        for literal in ctx.string_literals() {
-            let file = ctx.file_path(literal.file);
-            if file_in_scope(ctx.options(), &file) && literal.value == token {
-                diagnostics.push(
-                    Diagnostic::warning(
-                        rule_id.clone(),
-                        file,
-                        literal.span.diagnostic_range(),
-                        message.clone(),
-                    )
-                    .with_evidence("token", token.clone()),
-                );
-            }
-        }
-
-        for diagnostic in diagnostics {
-            ctx.report(diagnostic);
-        }
-        Ok(())
-    }
+    Ok(())
 }
 "#,
     );
@@ -737,6 +804,11 @@ fn check_contains_plan_time_rule_metadata_panic() {
     write_file(
         &temp.path().join(".polint/rules/src/metadata_panic.rs"),
         r#"use polint::sdk::prelude::*;
+use std::sync::Arc;
+
+pub fn metadata_panic() -> Arc<dyn Rule> {
+    Arc::new(MetadataPanic)
+}
 
 pub struct MetadataPanic;
 
@@ -749,7 +821,7 @@ impl Rule for MetadataPanic {
         Capabilities::new().syntax()
     }
 
-    fn run(&self, _ctx: &mut RuleCtx<'_>) -> RuleResult {
+    fn run(&self, _db: &AnalysisDb, _ctx: &mut RuleCtx<'_>) -> RuleResult {
         Ok(())
     }
 }
@@ -2130,6 +2202,7 @@ fn init_new_rule_and_check_json_smoke() {
         .args(["new-rule", "generic", "agent-smoke"])
         .assert()
         .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
     Command::cargo_bin("polint")
         .unwrap()
         .current_dir(temp.path())
