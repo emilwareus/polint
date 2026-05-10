@@ -6,8 +6,8 @@ The product direction is simple:
 
 - Go and TypeScript/JavaScript reach full capability coverage first.
 - Python, Java, and later languages join through the same adapter contract.
-- polint owns the rule SDK, fact model, diagnostics, cache, graph APIs, and
-  capability planning.
+- polint owns the rule SDK, fact model, diagnostics, cache, and capability
+  planning.
 - Future analysis facts are requested as typed `#[polint::rule]` parameters,
   not as broad `RuleCtx` fact helpers.
 - Language adapters may use in-house analysis, parser crates, language-native
@@ -19,10 +19,10 @@ The product direction is simple:
   ([technical plan](01_ENTRY_1_ANALYSIS_PLAN.md))
 
   Completed in Phase 11. polint now builds a deterministic `AnalysisPlan` from
-  enabled rules before parsing, exposes it through `polint explain plan`, passes
-  it to the Go and TS/JS adapters, reports unsupported reserved capabilities,
-  and includes the resolved plan digest in adapter cache keys. This makes
-  `Capabilities` an enforceable planning contract. Later entries still own the
+  enabled rules before parsing, passes it to the Go and TS/JS adapters, reports
+  unsupported reserved capabilities through `polint check`, and includes the
+  resolved plan digest in adapter cache keys. This makes `Capabilities` an
+  enforceable planning contract. Later entries still own the
   real CFG, coverage, symbol, call-graph, dataflow, module-resolution, and
   test-metric facts.
 
@@ -104,7 +104,7 @@ Every roadmap item should ship with:
 - [ ] cache-key participation when harvested facts change
 - [ ] docs under `docs/facts/` when new facts are public
 - [ ] external temp-repo test using only `polint::sdk::prelude::*`
-- [ ] CLI `explain` or `graph` support when useful for debugging
+- [ ] no new visible CLI surface unless the capability is complete and valuable to users
 - [ ] clear unsupported/setup diagnostics instead of silent empty facts
 
 ## Source Research

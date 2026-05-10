@@ -22,7 +22,6 @@ interprocedural analysis.
 - `CallConfidence`
 - `CallGraph<'_>::edges()`
 - `CallGraph<'_>::calls_from(function_id)`
-- `polint graph calls`
 
 ## Build Method
 
@@ -32,8 +31,7 @@ interprocedural analysis.
    spans and call expression kind.
 3. For TS/JS, use Oxc semantic symbols/references plus resolved imports.
 4. For Go, use `go/packages.Load` with syntax, types, and `TypesInfo`.
-5. Add graph rendering through `polint graph calls`.
-6. Make unresolved and dynamic calls explicit instead of hiding them.
+5. Make unresolved and dynamic calls explicit instead of hiding them.
 
 ## Done When
 

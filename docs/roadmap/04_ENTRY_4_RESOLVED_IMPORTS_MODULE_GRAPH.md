@@ -22,7 +22,6 @@ just the text of the import.
 - `UnresolvedReason`
 - `ResolvedImports<'_>`
 - `ModuleGraphFacts<'_>`
-- `polint explain import`
 
 ## Build Method
 
@@ -36,7 +35,6 @@ just the text of the import.
 5. For Go, use `go/packages.Load` and map package IDs and `GoFiles` to polint
    files.
 6. Preserve unresolved imports with explicit reasons.
-7. Add `polint explain import --file <path> --import <path>`.
 
 ## Done When
 

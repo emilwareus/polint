@@ -53,14 +53,6 @@ The JSON shape is documented in
 diagnostics (`polint/unused-ignore`, `polint/malformed-ignore`,
 `polint/ignore-missing-reason`).
 
-## Explaining harvester facts
-
-```bash
-polint explain go-test --file internal/foo/service/bar_test.go --test TestAuthorize
-```
-
-Emits JSON for one [`TestFact`](../crates/polint/src/core/mod.rs). See [facts/go-tests.md](facts/go-tests.md).
-
 ## CI snippet
 
 ```yaml
@@ -90,9 +82,9 @@ See [CONSUMER-SETUP.md](CONSUMER-SETUP.md) for rules-host errors, env vars, and 
 
 Small, composable rule ideas (implement in `.polint/rules`):
 
-1. **Require `t.Run`** for table-style tests — check `subtest_count` / `subtest_names` on [`TestFact`](../crates/polint/src/core/mod.rs).
-2. **Substring in test name** — `TestFact.name.contains("Integration")`.
-3. **Forbid import path** — scan [`ImportFact`](../crates/polint/src/core/mod.rs) for a prefix.
+1. **Require `t.Run`** for table-style tests — request `GoTests<'_>` and check `subtest_count` / `subtest_names`.
+2. **Substring in test name** — request `GoTests<'_>` and check `test.name.contains("Integration")`.
+3. **Forbid import path** — request `Imports<'_>` and scan import paths for a prefix.
 
 Golden JSON: use `examples/ts-design-tokens` or similar; integration tests in
 `crates/polint/tests/cli.rs` assert filters and report shape.

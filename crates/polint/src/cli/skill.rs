@@ -189,8 +189,7 @@ Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color ne
 for plain text. Use `polint check --format sarif` for CI upload paths. Use
 `--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
 --shortstat` or `polint check --stat` for human scan summaries; these flags do
-not add prose to JSON or SARIF output. Use `polint explain go-test --file … --test …`
-to print one harvested `TestFact` as JSON when debugging Go tests.
+not add prose to JSON or SARIF output.
 
 Use `polint ignores` when you need to find suppressions that should be fixed:
 
@@ -297,6 +296,7 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
+- Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.

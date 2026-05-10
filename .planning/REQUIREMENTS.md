@@ -17,42 +17,42 @@ one roadmap phase.
 
 ### Control Flow Graphs
 
-- [ ] **CFG-01**: Rule authors can read real per-function CFG facts through `RuleCtx`.
+- [ ] **CFG-01**: Rule authors can read real per-function control-flow facts through typed SDK fact views.
 - [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
-- [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared graph model.
-- [ ] **CFG-04**: `polint graph cfg` renders non-placeholder CFG output for debugging.
+- [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared control-flow model.
+- [ ] **CFG-04**: CFG facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
 
 ### Coverage Facts
 
-- [ ] **COV-01**: Rule authors can read coverage facts for files, functions, and branches through `RuleCtx`.
+- [ ] **COV-01**: Rule authors can read coverage facts for files, functions, and branches through typed SDK fact views.
 - [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
 - [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
 - [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
 
 ### Module Resolution
 
-- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through `RuleCtx`.
+- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
 - [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
 - [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [ ] **MOD-04**: A module graph exposes file, package, module, and dependency relationships for architecture rules.
+- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
 
 ### Call Graph
 
-- [ ] **CALL-01**: Rule authors can read direct call edge facts through `RuleCtx`.
+- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
 - [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
-- [ ] **CALL-03**: Call graph facts consume resolved imports and symbols when available.
-- [ ] **CALL-04**: `polint graph calls` renders useful call graph output for debugging.
+- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
+- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
 
 ### Symbols And References
 
-- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through `RuleCtx`.
+- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
 - [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
 - [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
 - [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
 
 ### Test Metrics
 
-- [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through `RuleCtx`.
+- [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through typed SDK fact views.
 - [ ] **TEST-02**: Go metrics aggregate existing test facts into assertions, subtests, table rows, evidence terms, and related test evidence.
 - [ ] **TEST-03**: TS/JS metrics detect common Jest/Vitest/Mocha-style test structures and assertion evidence.
 - [ ] **TEST-04**: Test metrics state heuristic limits and avoid claiming exact behavioral coverage.

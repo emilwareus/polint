@@ -1,3 +1,8 @@
+> Historical archive: this file preserves the original project prompt context
+> with superseded CLI examples redacted so it does not advertise unsupported
+> public surface. Use `README.md`, `AGENTS.md`, and `polint --help` for current
+> public behavior.
+
 You are an expert Rust systems engineer and static-analysis/linter architect. Build a high-performance, extensible static-analysis framework in Rust whose primary purpose is to make it extremely easy for users to write their own repo-local linters.
 
 This is not primarily a packaged ruleset.
@@ -20,8 +25,8 @@ parsing
 AST/CST access
 symbols where available
 imports
-control-flow graphs
-call graphs
+control-flow relationships
+call relationships
 branch obligations
 test facts
 coverage facts
@@ -71,7 +76,7 @@ Core dependencies:
 * `ignore = "0.4.25"` for fast repo walking with `.gitignore` support.
 * `globset = "0.4.18"` for file matching.
 * `walkdir = "2.5.0"` only if needed; prefer `ignore`.
-* `petgraph = "0.8.3"` for import graphs, call graphs, CFGs, and DOT export.
+* `petgraph = "0.8.3"` for internal relationship modeling behind stable facts.
 * `salsa = "0.26.2"` if practical for incremental computation. If Salsa integration slows delivery, implement a simpler hash-based cache first and leave Salsa behind an abstraction.
 
 Go parsing:
@@ -115,7 +120,7 @@ polint/
     polint-sdk/
     polint-go/
     polint-ts/
-    polint-graph/
+    polint-internal-relations/
     polint-rules/
   tests/
     fixtures/
@@ -145,12 +150,9 @@ Crate responsibilities:
   * `polint check --format human`
   * `polint check --format json`
   * `polint check --format sarif`
-  * `polint explain <rule-id>`
   * `polint new-rule <rule-name>`
-  * `polint test-rules`
-  * `polint profile-rules`
-  * `polint graph imports --format dot`
-  * `polint graph function <function-name> --format dot`
+  * `polint add-skill`
+  * `polint ignores`
 * Must have good help text and examples.
 * The UX should emphasize custom rules, not built-in rule packs.
 
@@ -245,8 +247,8 @@ pub trait Rule: Send + Sync {
 
   * `ctx.files().matching("internal/**/*.go")`
   * `ctx.functions().matching("internal/domain/**/*.go")`
-  * `ctx.import_graph()`
-  * `ctx.call_graph()`
+  * typed import relationship view
+  * typed direct-call relationship view
   * `ctx.cfg(function)`
   * `ctx.cyclomatic_complexity(function)`
   * `ctx.branch_obligations(function)`
@@ -291,16 +293,16 @@ pub trait Rule: Send + Sync {
   * JSX attributes
   * string literals
   * basic cyclomatic complexity
-  * basic import graph
+  * basic import relationships
 * Implement a practical no-raw-colors example rule using this adapter.
 
-`polint-graph`
+`polint-internal-relations`
 
-* Graph helpers around `petgraph`.
-* Import graph.
-* Basic call graph where possible.
+* Internal relationship helpers around `petgraph`.
+* Internal import relationships.
+* Basic call relationships where possible.
 * CFG representation.
-* DOT export for debugging.
+* Debug rendering only when kept private or explicitly promoted.
 
 `polint-rules`
 
@@ -511,8 +513,8 @@ polint new-rule go branch-error-paths
 
 # Edit .polint/rules/branch-error-paths/src/lib.rs
 
-# Test the rule against fixtures
-polint test-rules
+# Test the rule with the repo's rule-host test workflow
+cargo test
 
 # Run locally
 polint check --profile fast
@@ -581,7 +583,7 @@ These are example rules and SDK dogfooding, not the main product.
 
 3. `examples/go-import-boundaries`
 
-* Build import graph.
+* Build import relationship facts.
 * Enforce that packages/files in one region do not import forbidden regions.
 * Useful for architecture enforcement.
 
@@ -766,7 +768,7 @@ Phase 3: Go adapter
 2. Extract package names, imports, functions, methods, and tests.
 3. Extract `if` and `switch` branch obligations.
 4. Implement Go cyclomatic complexity.
-5. Implement basic Go import graph.
+5. Implement basic Go import relationship facts.
 6. Add tests with fixtures.
 
 Phase 4: TypeScript adapter
@@ -795,14 +797,14 @@ Phase 6: Rule SDK
 2. Make `RuleCtx` ergonomic.
 3. Add examples showing custom native rules.
 4. Add docs for rule authors.
-5. Add a `polint test-rules` command that runs fixture-based rule tests.
+5. Add a documented fixture-testing workflow for repo-local rule crates.
 
 Phase 7: Caching and performance
 
 1. Add parse cache.
 2. Add facts cache where practical.
 3. Parallelize parsing and rule execution.
-4. Add `polint profile-rules`.
+4. Add internal timing instrumentation.
 5. Add performance tests on synthetic repos.
 6. Ensure output remains deterministic under parallel execution.
 
@@ -875,7 +877,7 @@ Performance requirements:
 * Cache by file hash, config hash, and rule hash.
 * Make expensive analyzers capability-gated.
 * A rule must declare capabilities so the engine only computes needed facts.
-* Add `--profile-rules` to show per-rule time.
+* Keep timing metadata available for maintainers without turning it into an unsupported public workflow.
 
 Capability model:
 
@@ -886,7 +888,7 @@ Capabilities::new()
     .syntax()
     .imports()
     .cfg()
-    .call_graph()
+    .direct_calls()
     .go_tests()
     .branch_obligations()
     .coverage_facts()

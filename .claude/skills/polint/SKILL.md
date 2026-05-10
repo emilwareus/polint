@@ -16,14 +16,31 @@ policy rules; every policy belongs to the repository that needs it.
 polint init
 polint new-rule go require-error-branch-tests
 polint new-rule ts no-raw-colors
-polint check --profile fast --fail-on none
+polint check --fail-on none
 ```
 
 Use `polint check --format json` when you need machine-readable diagnostics. JSON
 is a versioned report object with a `diagnostics` array (not a bare array at the
 root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
-Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never` for plain text. Use `polint check --format sarif` for CI upload paths. Use `--fail-on warn`, `error`,
-or `none` to control the exit status. Use `polint explain go-test --file … --test …` to print one harvested `TestFact` as JSON when debugging Go tests.
+Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
+for plain text. Use `polint check --format sarif` for CI upload paths. Use
+`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
+--shortstat` or `polint check --stat` for human scan summaries; these flags do
+not add prose to JSON or SARIF output.
+
+Use `polint ignores` when you need to find suppressions that should be fixed:
+
+```bash
+polint ignores --shortstat
+polint ignores --stat --filter local/no-raw-colors,local/*
+polint ignores --format json --filter local/no-raw-colors
+```
+
+Ignore comments look like
+`// polint-ignore-next-line local/no-raw-colors -- legacy fixture`. Selectors are
+required. Ignores suppress policy diagnostics only; parser, internal,
+capability, and `polint/*` diagnostics stay visible. Repositories can require
+reasons with `[ignores] require_reason = true` in `.polint.toml`.
 
 ## Rule Layout
 
@@ -33,7 +50,7 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 .polint.toml
 .polint/rules/Cargo.toml
 .polint/rules/src/main.rs          # calls polint::runner::run_cli(vec![...])
-.polint/rules/src/my_rule.rs       # one module per #[polint::rule] function
+.polint/rules/src/my_rule.rs       # one #[polint::rule] function per rule
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs` and wires it
@@ -42,11 +59,26 @@ rules in one pack.
 
 ## Writing A Rule
 
-Start with `use polint::sdk::prelude::*;`, give the rule a stable local ID, and
-request the facts it needs as typed parameters. The `#[polint::rule]` macro
-derives capabilities from those fact-view parameters. Keep the function shape
-plain: first parameter `&mut RuleCtx<'_>`, typed fact views like
-`Imports<'_>`, and a `RuleResult` or `RuleResult<()>` return.
+Start with `use polint::sdk::prelude::*;`, register the rule with
+`polint::runner::run_cli`, give the rule a stable local ID in `#[polint::rule]`,
+and request facts as typed fact-view parameters. polint derives the rule's
+capabilities from those parameter types.
+Use `ctx.options().settings` for rule-specific TOML fields that are not covered
+by the common shortcuts (`max`, `deny`, `forbidden_imports`, etc.).
+
+`src/main.rs`:
+
+```rust
+use std::process::ExitCode;
+
+mod no_raw_colors;
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![no_raw_colors::no_raw_colors()])
+}
+```
+
+`src/no_raw_colors.rs`:
 
 ```rust
 use polint::sdk::prelude::*;
@@ -56,17 +88,15 @@ use polint::sdk::prelude::*;
     description = "Require design tokens instead of raw color literals.",
     severity = "error"
 )]
-fn no_raw_colors(
+pub(crate) fn no_raw_colors(
     ctx: &mut RuleCtx<'_>,
     literals: StringLiterals<'_>,
-    jsx: JsxAttributes<'_>,
 ) -> RuleResult {
-    let rule_id = ctx.rule_id().to_string();
     for literal in literals.iter() {
         if literal.value.starts_with('#') {
             ctx.report(
                 Diagnostic::error(
-                    rule_id.clone(),
+                    ctx.rule_id(),
                     ctx.file_path(literal.file),
                     literal.span.diagnostic_range(),
                     "Use a design token instead of a raw color literal.",
@@ -75,14 +105,15 @@ fn no_raw_colors(
             );
         }
     }
-    let _ = jsx.iter().count();
     Ok(())
 }
 ```
 
 ## Config Pattern
 
-Keep the profile explicit so CI and local runs execute the same policies:
+Profiles are explicit named subsets. `polint check` with no `--profile` runs
+every discovered rule. Add a named profile only when the repository explicitly
+needs a subset, and treat unknown profile names as errors:
 
 ```toml
 [workspace]
@@ -91,9 +122,6 @@ exclude = ["**/node_modules/**", "**/vendor/**"]
 
 [rules]
 paths = [".polint/rules"]
-
-[profiles.fast]
-rules = ["local/no-raw-colors"]
 
 [[rules.config]]
 id = "local/no-raw-colors"
@@ -105,11 +133,12 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
+- Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
+- Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
 - Do not implement `Rule` manually or write handwritten capability declarations.
-- Do not use async, generics, local lookalike fact types, or type aliases as
-  fact-view parameters in `#[polint::rule]` functions.
+- For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.
 - Run the rule through the CLI before claiming it works.

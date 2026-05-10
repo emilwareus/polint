@@ -25,36 +25,6 @@ struct Cli {
 enum Command {
     /// Run the registered local rules against the current directory.
     Check(CheckArgs),
-    /// Explain registered local-rule analysis behavior.
-    Explain(ExplainArgs),
-}
-
-#[derive(Debug, Args)]
-struct ExplainArgs {
-    #[command(subcommand)]
-    command: ExplainCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum ExplainCommand {
-    /// Print the resolved analysis plan without parsing source files.
-    Plan(ExplainPlanArgs),
-}
-
-#[derive(Debug, Args)]
-struct ExplainPlanArgs {
-    /// Named profile from .polint.toml. When omitted, all registered rules are planned.
-    #[arg(long)]
-    profile: Option<String>,
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = ExplainPlanFormat::Human)]
-    format: ExplainPlanFormat,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ExplainPlanFormat {
-    Human,
-    Json,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -123,41 +93,7 @@ fn run(rules: Vec<Rule>) -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check(std::env::current_dir()?, &args, &rules),
-        Command::Explain(args) => explain_command(std::env::current_dir()?, &args, &rules),
     }
-}
-
-fn explain_command(root: PathBuf, args: &ExplainArgs, rules: &[Rule]) -> Result<u8> {
-    match &args.command {
-        ExplainCommand::Plan(plan_args) => explain_plan(root, plan_args, rules),
-    }
-}
-
-fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Rule]) -> Result<u8> {
-    let loaded = load_config_for_check(&root, &[])?;
-    let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
-    let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
-    let plan_diagnostics = plan_inputs.diagnostics();
-    if !plan_diagnostics.is_empty() {
-        anyhow::bail!(
-            "failed to collect rule plan inputs: {}",
-            plan_diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    let options = plan_inputs.rule_options_from_config(&loaded);
-    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
-    let report = plan.explain_report();
-
-    match args.format {
-        ExplainPlanFormat::Human => print!("{}", report.to_human()),
-        ExplainPlanFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-    }
-
-    Ok(0)
 }
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {

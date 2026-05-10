@@ -152,7 +152,7 @@ Difficulty: **L**
 Why:
 
 - The model is conceptually simple, but it touches runner orchestration,
-  adapters, cache keys, CLI explainability, and tests.
+  adapters, cache keys, diagnostics, and tests.
 - It must be introduced without regressing today's all-facts behavior.
 
 Concrete build method:
@@ -165,9 +165,7 @@ Concrete build method:
 5. Keep parser diagnostics on by default.
 6. Gate optional harvesters behind plan flags.
 7. Include the encoded plan in `rule_hash` or a new cache digest component.
-8. Add a `polint explain plan --profile <name>` command that prints requested
-   languages, capabilities, setup probes, and unsupported items.
-9. Add external temp-repo tests proving that changing a rule capability changes
+8. Add external temp-repo tests proving that changing a rule capability changes
    the analysis/cache plan.
 
 Useful references:
@@ -193,16 +191,15 @@ Concrete build method:
 1. Add public graph types: `ControlFlowGraph`, `BasicBlock`, `CfgEdge`,
    `CfgNodeId`, and `CfgEdgeKind`.
 2. Add `Cfg<'_>::for_function(function_id) -> Option<&ControlFlowGraph>`.
-3. Add `polint graph cfg --function <name>`.
-4. For TS/JS, adapt Oxc semantic CFG output into polint's graph model.
-5. For Go, start from existing branch extraction and expand to entry, exit,
+3. For TS/JS, adapt Oxc semantic CFG output into polint's graph model.
+4. For Go, start from existing branch extraction and expand to entry, exit,
    sequential statement, branch, loop, switch, defer, and panic/return edges.
-6. For Python later, build from Python AST statements: `If`, `For`, `While`,
+5. For Python later, build from Python AST statements: `If`, `For`, `While`,
    `Try`, `With`, `Return`, `Raise`, `Break`, `Continue`.
-7. For Java later, use `JavacTask.parse()` plus tree scanners, or JavaParser,
+6. For Java later, use `JavacTask.parse()` plus tree scanners, or JavaParser,
    to produce the same graph model.
-8. Store CFG facts in cache only when requested by the plan.
-9. Document precision: syntax-level first, no dataflow or type-sensitive
+7. Store CFG facts in cache only when requested by the plan.
+8. Document precision: syntax-level first, no dataflow or type-sensitive
    dispatch.
 
 ### 3. Coverage Facts Import
@@ -264,7 +261,6 @@ Concrete build method:
 7. For Java later, consume Maven/Gradle classpath setup and resolve packages
    through javac or JavaParser symbol solver.
 8. Preserve unresolved imports as facts with explicit reasons.
-9. Add `polint explain import --file <path> --import <path>`.
 
 ### 5. Resolved Call Graph
 
@@ -293,7 +289,6 @@ Concrete build method:
    module functions; mark attribute/dynamic calls as unresolved or low
    confidence.
 7. Add `CallGraph<'_>::edges()` and `CallGraph<'_>::calls_from(function_id)`.
-8. Add `polint graph calls`.
 
 ### 6. Symbols And References
 
@@ -424,7 +419,6 @@ Add public facts and accessors such as:
 - `BasicBlock`
 - `CfgEdge`
 - `Cfg<'_>::for_function(function_id)`
-- `polint graph cfg`
 
 Start syntax-level for Go and TS/JS and reach full coverage there first. The
 first version does not need type semantics, but it must be a real graph rather
@@ -593,7 +587,7 @@ Every capability should have a verification checklist:
 - cache-key participation when capability changes harvested facts
 - docs under `docs/facts/`
 - at least one external generated-rule test consuming the capability
-- a CLI `explain` or `graph` path when useful for debugging
+- no visible CLI command unless the capability is complete and valuable to users
 - a language support matrix entry with precision/setup notes
 
 This should become the release gate for new capabilities.

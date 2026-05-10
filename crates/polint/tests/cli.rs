@@ -29,6 +29,27 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
     fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
 }
 
+#[test]
+fn top_level_help_only_lists_supported_public_commands() {
+    let help = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .arg("--help")
+            .assert()
+            .success(),
+    );
+
+    for command in ["init", "add-skill", "new-rule", "check", "ignores"] {
+        assert!(help.contains(command), "help should list {command}: {help}");
+    }
+    for command in ["explain", "test-rules", "profile-rules", "graph"] {
+        assert!(
+            !help.contains(command),
+            "help should not expose internal command {command}: {help}"
+        );
+    }
+}
+
 fn write_plan_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -448,7 +469,6 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("polint check --fail-on none"));
     assert!(contents.contains("polint ignores --shortstat"));
     assert!(contents.contains("docs/schemas/polint-report-v1.json"));
-    assert!(contents.contains("polint explain go-test --file"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
     assert!(contents.contains("Do not implement `Rule` manually"));
@@ -1642,23 +1662,6 @@ rules = []
         json.get("version").and_then(|v| v.as_u64()) == Some(1) && diagnostics(&json).is_empty(),
         "check output should be polint JSON report: {json:#?}"
     );
-
-    let dot = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    assert!(
-        dot.contains("digraph"),
-        "graph imports DOT output should be a graph: {dot}"
-    );
-    assert!(
-        dot.contains("mixed/view.ts"),
-        "DOT output should include mixed TS source: {dot}"
-    );
 }
 
 #[test]
@@ -1950,7 +1953,7 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
     let example_dir = repo_root().join("examples/multiple-rules");
     assert!(
         example_dir.join("README.md").exists(),
-        "multiple-rules should explain the rule-pack structure"
+        "multiple-rules should document the rule-pack structure"
     );
     assert!(
         example_dir.join(".polint.toml").exists(),
@@ -2011,98 +2014,6 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
                 .any(|diagnostic| diagnostic["file"] == file),
             "multiple-rules should report a diagnostic in {file}: {json:#?}"
         );
-    }
-}
-
-#[test]
-fn checked_in_multiple_rules_example_explain_plan_reports_real_capabilities() {
-    let example_dir = repo_root().join("examples/multiple-rules");
-
-    let value = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(&example_dir)
-            .args(["explain", "plan", "--format", "json"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(value["schema"], "analysis-plan-v1");
-    assert!(
-        value["digest"]
-            .as_str()
-            .is_some_and(|digest| !digest.is_empty()),
-        "digest should be present: {value:#?}"
-    );
-    assert_eq!(value["setup_checks"], serde_json::json!([]));
-
-    let rules = value["rules"]
-        .as_array()
-        .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
-    let rule_ids = rules
-        .iter()
-        .map(|rule| {
-            rule["id"]
-                .as_str()
-                .unwrap_or_else(|| panic!("rule id must be a string: {rule:#?}"))
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        rule_ids,
-        BTreeSet::from(["local/go-import-boundaries", "local/no-raw-colors"])
-    );
-
-    let import_rule = rules
-        .iter()
-        .find(|rule| rule["id"] == "local/go-import-boundaries")
-        .unwrap_or_else(|| panic!("expected Go import-boundary rule: {value:#?}"));
-    assert_eq!(import_rule["severity"], "error");
-    assert_eq!(import_rule["capabilities"], serde_json::json!(["imports"]));
-
-    let color_rule = rules
-        .iter()
-        .find(|rule| rule["id"] == "local/no-raw-colors")
-        .unwrap_or_else(|| panic!("expected TS raw-color rule: {value:#?}"));
-    assert_eq!(color_rule["severity"], "error");
-    assert_eq!(
-        color_rule["capabilities"],
-        serde_json::json!(["string_literals", "jsx_attributes"])
-    );
-
-    let capabilities = value["capabilities"]
-        .as_array()
-        .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
-    let capability_statuses = capabilities
-        .iter()
-        .map(|capability| {
-            let name = capability["name"]
-                .as_str()
-                .unwrap_or_else(|| panic!("capability name must be a string: {capability:#?}"));
-            let status = capability["status"]
-                .as_str()
-                .unwrap_or_else(|| panic!("capability status must be a string: {capability:#?}"));
-            (name, status)
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        capability_statuses,
-        BTreeSet::from([
-            ("imports", "supported"),
-            ("jsx_attributes", "supported"),
-            ("string_literals", "supported")
-        ])
-    );
-
-    for (name, owner) in [
-        ("imports", "local/go-import-boundaries"),
-        ("jsx_attributes", "local/no-raw-colors"),
-        ("string_literals", "local/no-raw-colors"),
-    ] {
-        let capability = capabilities
-            .iter()
-            .find(|capability| capability["name"] == name)
-            .unwrap_or_else(|| panic!("expected capability `{name}`: {value:#?}"));
-        assert_eq!(capability["rules"], serde_json::json!([owner]));
     }
 }
 
@@ -2269,139 +2180,8 @@ files = ["**/*.tsx"]
     assert_eq!(diagnostic["severity"], "info");
 }
 
-#[test]
-fn explain_example_rule_reports_no_bundled_metadata() {
-    Command::cargo_bin("polint")
-        .unwrap()
-        .args(["explain", "rule", "local/no-raw-colors"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("No bundled rule found"))
-        .stdout(predicate::str::contains("ships no built-in policy rules"));
-}
-
-#[test]
-fn explain_unknown_rule_is_nonfatal_and_clear() {
-    Command::cargo_bin("polint")
-        .unwrap()
-        .args(["explain", "rule", "custom/missing"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("No bundled rule found"));
-}
-
-#[test]
-fn explain_plan_no_rules_outputs_empty_json_without_parsing_sources() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["src/**"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("src/broken.go"),
-        "package broken\nfunc Broken( {\n",
-    );
-
-    let stdout = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["explain", "plan", "--format", "json"])
-            .assert()
-            .success(),
-    );
-    let value: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("stdout was not parseable JSON: {error}\n{stdout}"));
-
-    assert_eq!(value["schema"], "analysis-plan-v1");
-    assert_eq!(value["rules"], serde_json::json!([]));
-    assert_eq!(value["capabilities"], serde_json::json!([]));
-    assert_eq!(value["setup_checks"], serde_json::json!([]));
-}
-
-mod explain_plan {
+mod capability_planning {
     use super::*;
-
-    #[test]
-    fn explain_plan_delegates_to_local_rule_host_json() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-
-        let value = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
-                .current_dir(temp.path())
-                .args(["explain", "plan", "--format", "json"])
-                .assert()
-                .success(),
-        );
-
-        let rules = value["rules"]
-            .as_array()
-            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
-        assert!(rules.iter().any(|rule| {
-            rule["id"] == "local/needs-imports"
-                && rule["capabilities"] == serde_json::json!(["imports"])
-        }));
-        assert!(rules.iter().any(|rule| {
-            rule["id"] == "local/needs-cfg" && rule["capabilities"] == serde_json::json!(["cfg"])
-        }));
-
-        let capabilities = value["capabilities"]
-            .as_array()
-            .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
-        assert!(capabilities.iter().any(|capability| {
-            capability["name"] == "imports" && capability["status"] == "supported"
-        }));
-        assert!(capabilities.iter().any(|capability| {
-            capability["name"] == "cfg" && capability["status"] == "unsupported"
-        }));
-        assert!(
-            value["digest"]
-                .as_str()
-                .is_some_and(|digest| !digest.is_empty()),
-            "digest should be present: {value:#?}"
-        );
-    }
-
-    #[test]
-    fn explain_plan_json_uses_resolved_severity_override() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-        let config_path = temp.path().join(".polint.toml");
-        let config = fs::read_to_string(&config_path).unwrap();
-        write_file(
-            &config_path,
-            &format!(
-                r#"{config}
-[[rules.config]]
-id = "local/needs-imports"
-severity = "error"
-"#
-            ),
-        );
-
-        let value = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
-                .current_dir(temp.path())
-                .args(["explain", "plan", "--format", "json"])
-                .assert()
-                .success(),
-        );
-
-        let rule = value["rules"]
-            .as_array()
-            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"))
-            .iter()
-            .find(|rule| rule["id"] == "local/needs-imports")
-            .unwrap_or_else(|| panic!("expected needs-imports rule: {value:#?}"));
-        assert_eq!(rule["severity"], "error");
-    }
 
     #[test]
     fn check_reports_unsupported_reserved_capability() {
@@ -2475,29 +2255,6 @@ severity = "error"
             "rule",
             "local/needs-cfg"
         ));
-    }
-
-    #[test]
-    fn explain_plan_json_is_deterministic() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-        let run = || {
-            stdout_string(
-                Command::cargo_bin("polint")
-                    .unwrap()
-                    .current_dir(temp.path())
-                    .args(["explain", "plan", "--format", "json"])
-                    .assert()
-                    .success(),
-            )
-        };
-
-        let first = run();
-        let second = run();
-        let third = run();
-
-        assert_eq!(second, first);
-        assert_eq!(third, first);
     }
 
     #[test]
@@ -2603,49 +2360,6 @@ fn check_only_rule_filters_out_diagnostics_when_pattern_matches_nothing() {
 }
 
 #[test]
-fn explain_go_test_prints_harvested_fact_json() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["**/*.go"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("demo_test.go"),
-        r#"
-package demo
-
-import "testing"
-
-func TestHello(t *testing.T) {
-    t.Run("sub", func(t *testing.T) {})
-}
-"#,
-    );
-    let assert = Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args([
-            "explain",
-            "go-test",
-            "--file",
-            "demo_test.go",
-            "--test",
-            "TestHello",
-        ])
-        .assert()
-        .success();
-    let stdout = stdout_string(assert);
-    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(value["name"], "TestHello");
-    let names = value["subtest_names"].as_array().unwrap();
-    assert!(names.contains(&serde_json::Value::String("sub".to_string())));
-}
-
-#[test]
 fn init_new_rule_and_check_json_smoke() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
@@ -2687,7 +2401,7 @@ fn rules_json_stdout_should_be_parseable_json() {
             .unwrap()
             .current_dir(temp.path())
             .args([
-                "test-rules",
+                "check",
                 "--profile",
                 "phase8",
                 "--format",
@@ -2871,80 +2585,6 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
         .assert()
         .failure()
         .code(1);
-}
-
-#[test]
-fn graph_imports_outputs_deterministic_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let first = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    let second = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(first, second);
-    assert!(first.contains("digraph"));
-    assert!(first.contains("main.go"));
-    assert!(first.contains("fmt"));
-}
-
-#[test]
-fn graph_function_outputs_deterministic_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let first = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Authorize", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    let second = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Authorize", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(first, second);
-    assert!(first.contains("digraph"));
-    assert!(first.contains("Authorize"));
-    assert!(first.contains("validateUser"));
-}
-
-#[test]
-fn graph_function_missing_name_is_nonfatal_valid_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let dot = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Missing", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert!(dot.contains("digraph"));
-    assert!(!dot.contains("Missing"));
 }
 
 #[test]
@@ -3193,36 +2833,6 @@ fn check_no_cache_bypasses_cache_reads_and_writes() {
     assert_eq!(warm, cold);
     assert_eq!(no_cache, cold);
     assert_eq!(cache_files_after_no_cache, cache_files_after_cold);
-}
-
-#[test]
-fn profile_rules_reports_no_registered_rules() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase7_cache_fixture(temp.path());
-
-    let output = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["profile-rules", "--profile", "phase7", "--fail-on", "none"])
-            .assert()
-            .success(),
-    );
-
-    assert!(output.contains("No rules registered"));
-}
-
-#[test]
-fn profile_rules_without_registered_policy_rules_succeeds() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase7_cache_fixture(temp.path());
-
-    Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["profile-rules", "--profile", "phase7", "--fail-on", "warn"])
-        .assert()
-        .success();
 }
 
 #[test]

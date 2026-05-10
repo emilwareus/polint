@@ -31,15 +31,5 @@ type-checking — and may miss or over-include tokens.
 - Build tags, generated files, and non-standard layouts may exclude files from analysis.
 - Only syntax visible to the tree-sitter Go parser is considered; invalid parse trees may reduce facts.
 
-## Debugging
-
-Use:
-
-```bash
-polint explain go-test --file path/to/file_test.go --test TestName
-```
-
-to print one harvested fact as JSON (including `subtest_names`).
-
 In rules, `polint::sdk::prelude::collect_go_tests(tests, file_id)` wraps the
 per-file iterator when a `Vec<&TestFact>` is more convenient.

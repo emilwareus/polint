@@ -3,7 +3,7 @@
 
 **polint**
 
-polint is a high-performance Rust framework for writing repo-local static-analysis rules across multiple languages. Adapters today cover **Go** (tree-sitter) and **TypeScript / JavaScript** (Oxc); more languages can be added through the same adapter contract. polint gives rule authors reusable infrastructure for file discovery, parsing, facts, graphs, diagnostics, rule testing, and CI output.
+polint is a high-performance Rust framework for writing repo-local static-analysis rules across multiple languages. Adapters today cover **Go** (tree-sitter) and **TypeScript / JavaScript** (Oxc); more languages can be added through the same adapter contract. polint gives rule authors reusable infrastructure for file discovery, parsing, typed facts, diagnostics, local rule execution, and CI output.
 
 The product is for engineering teams using AI-assisted development who need executable project-specific policies instead of repeating local conventions in prompts. It is not a replacement for ESLint, Ruff, Biome, golangci-lint, or formatters; it is a framework for checks that those generic tools cannot know.
 
@@ -32,10 +32,10 @@ The product is for engineering teams using AI-assisted development who need exec
 | Tracing | `tracing`, `tracing-subscriber` | tracing 0.1.44, subscriber 0.3.23 | Structured internal logging and future profiling integration. | High |
 | Parallelism | `rayon` | 1.12.0 | Straightforward parallel parsing and rule execution. | High |
 | File discovery | `ignore`, `globset` | ignore 0.4.25, globset 0.4.18 | Fast walking with `.gitignore` support and reliable glob matching. | High |
-| Graphs | `petgraph` | 0.8.3 | Suitable for import graphs, call graph skeletons, CFG representation, and DOT export. | High |
+| Internal relations | `petgraph` | 0.8.3 | Internal representation for relationship facts behind the SDK; no public CLI/export contract. | High |
 | Go parsing | `tree-sitter`, `tree-sitter-go` | tree-sitter 0.26.8, tree-sitter-go 0.25.0 | Practical syntax extraction without needing Go type checking in v1. | High |
 | TS/JS parsing | Oxc crates | 0.129.0 | Rust-native high-performance JS/TS parser ecosystem. | Medium |
-| Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import graph precision. Initial v1 can start with syntactic imports. | Medium |
+| Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import-resolution precision. Initial v1 can start with syntactic imports. | Medium |
 | Tests | `insta`, `assert_cmd`, `predicates`, `tempfile`, `pretty_assertions`, `proptest` | Current versions checked | Covers snapshots, CLI integration, fixtures, diffs, and invariants. | High |
 ## What Not To Use First
 - Salsa as a hard dependency for v1 query infrastructure. Keep a cache abstraction and ship the hash-based cache first.
@@ -53,6 +53,7 @@ The product is for engineering teams using AI-assisted development who need exec
 Everything **public** is a **liability**: semver, documentation, stability expectations, and review surface all attach to names users and tools can import. Default to the **narrowest** visibility that still works (`private` → `pub(super)` / `pub(in path)` → `pub(crate)` → `pub` only when crossing an intentional boundary).
 
 - **Supported rule-author surface:** `polint::sdk` (including `prelude` and `scope`) and `polint::runner`, plus what those modules deliberately document and re-export. Treat `core`, `cache`, `config`, `fs`, `go`, `ts`, `graph`, `cli`, and other crate-root modules as **implementation detail** unless a change explicitly promotes something to the SDK.
+- **Public CLI discipline:** treat every visible CLI command, flag, output format, generated skill instruction, README workflow, and example command as a public product contract. Expose only features that are complete, genuinely valuable to users today, documented honestly, and intended to be supportable. Keep internal diagnostics, debug helpers, partial graph/export surfaces, placeholders, and "soon" / TBD functionality private or hidden until they are finished and promoted intentionally.
 - **Inside `crates/polint`:** use **`pub(crate)`** for anything shared across internal modules but not meant for downstream crates. Use bare **`pub`** only when a name must be visible outside its defining module *and* that visibility is intentional (e.g. items in `sdk` / `runner`, or the unstable **`polint::_bench`** tree behind **`feature = "bench"`** for `polint-bench` only).
 - **`pub use` re-exports:** treat each one as widening the API; prefer small, curated surfaces over large barrel re-exports.
 - **Linting:** the workspace enables **`unreachable_pub`**. If it fires, **fix visibility** (usually `pub` → `pub(crate)` or tightening module `pub`) rather than weakening the lint, unless there is a documented false positive.

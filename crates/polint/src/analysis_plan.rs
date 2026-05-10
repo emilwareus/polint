@@ -6,6 +6,7 @@ use crate::core::{
     Rule, RuleMeta, RuleOptions, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -65,6 +66,7 @@ pub(crate) struct SetupCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(test)]
 pub(crate) struct ExplainPlanReport {
     pub(crate) schema: String,
     pub(crate) digest: String,
@@ -74,6 +76,7 @@ pub(crate) struct ExplainPlanReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(test)]
 pub(crate) struct ExplainPlanRule {
     pub(crate) id: String,
     pub(crate) description: String,
@@ -82,6 +85,7 @@ pub(crate) struct ExplainPlanRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(test)]
 pub(crate) struct ExplainPlanCapability {
     pub(crate) name: String,
     pub(crate) status: String,
@@ -92,6 +96,7 @@ pub(crate) struct ExplainPlanCapability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(test)]
 pub(crate) struct ExplainPlanSetupCheck {
     pub(crate) id: String,
     pub(crate) status: String,
@@ -190,6 +195,7 @@ impl AnalysisPlan {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn explain_report(&self) -> ExplainPlanReport {
         ExplainPlanReport {
             schema: ANALYSIS_PLAN_SCHEMA.to_string(),
@@ -260,6 +266,7 @@ impl AnalysisPlan {
     }
 }
 
+#[cfg(test)]
 impl ExplainPlanReport {
     pub(crate) fn to_human(&self) -> String {
         let mut out = String::new();
@@ -483,6 +490,7 @@ fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagn
     .with_help(help)
 }
 
+#[cfg(test)]
 fn setup_check_message(check: &SetupCheck) -> String {
     match (&check.reason, &check.hint) {
         (Some(reason), Some(hint)) => format!("{reason} {hint}"),

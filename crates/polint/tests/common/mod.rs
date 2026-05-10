@@ -146,31 +146,3 @@ files = ["**/*.tsx"]
         "export function Button() { return <button style={{ color: \"#ff00aa\" }}>Pay</button>; }\n",
     );
 }
-
-pub(crate) fn write_phase8_graph_fixture(root: &Path) {
-    write_file(
-        &root.join(".polint.toml"),
-        r#"
-[profiles.phase8]
-rules = []
-"#,
-    );
-    write_file(
-        &root.join("main.go"),
-        r#"
-package main
-
-import "fmt"
-
-func Authorize() {
-    validateUser()
-    charge()
-    fmt.Println("ok")
-}
-
-func validateUser() {}
-
-func charge() {}
-"#,
-    );
-}
