@@ -1,6 +1,6 @@
 use crate::analysis_plan::{ANALYSIS_PLAN_SCHEMA, AnalysisPlan, ExplainPlanReport};
 use crate::config::{LoadedConfig, default_config_toml, load_config};
-use crate::core::{Rule, RuleOptions, run_rules};
+use crate::core::{AnalysisDb, Language, Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
     ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
     apply_report_filters, diagnostics_from_json_report, limit_report_diagnostics,
@@ -189,6 +189,12 @@ struct CheckArgs {
     /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
     #[arg(long, value_name = "N")]
     max_diagnostics: Option<usize>,
+    /// Print grouped scan statistics for human output.
+    #[arg(long)]
+    stat: bool,
+    /// Print one scan summary line for human output.
+    #[arg(long)]
+    shortstat: bool,
     /// Apply polint comment-ignore directives.
     #[arg(long, default_value_t = true, hide = true, action = clap::ArgAction::Set)]
     ignore_comments: bool,
@@ -599,8 +605,11 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     }
 
     let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, true)?;
+    let mut ignore_report = None;
     if args.ignore_comments {
-        diagnostics = apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics;
+        let ignore_application = apply_ignores(&db, diagnostics, &loaded.config.ignores);
+        diagnostics = ignore_application.diagnostics;
+        ignore_report = Some(ignore_application.report);
     }
     let source_map = match args.format {
         FormatArg::Human => db.sources_by_relative_path(),
@@ -613,6 +622,12 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     };
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
+    let stats = check_stats(
+        &db,
+        &diagnostics,
+        rendered_diagnostics.len(),
+        ignore_report.as_ref(),
+    );
     let sources = match args.format {
         FormatArg::Human => Some(&source_map),
         _ => None,
@@ -629,6 +644,9 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
 
     if loaded.missing && matches!(args.format, FormatArg::Human) {
         println!("Config not found. Run `polint init` to create .polint.toml.");
+    }
+    if should_render_check_stats(args) {
+        print!("{}", render_check_stats(&stats, args.stat, args.shortstat));
     }
 
     Ok(exit_code_for(&diagnostics, args.fail_on))
@@ -662,6 +680,8 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
         fail_on: FailOn::None,
         only_rule: None,
         max_diagnostics: None,
+        stat: false,
+        shortstat: false,
         ignore_comments: false,
     };
     let local_rule_hosts = discover_local_rule_hosts(root)?;
@@ -688,6 +708,153 @@ fn parse_ignore_filters(filter: Option<&str>) -> Vec<String> {
         .filter(|filter| !filter.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+#[derive(Debug, Clone, Default)]
+struct CheckStats {
+    scanned_files: usize,
+    by_language: BTreeMap<&'static str, usize>,
+    diagnostics: usize,
+    emitted_diagnostics: usize,
+    by_severity: BTreeMap<&'static str, usize>,
+    by_rule: BTreeMap<String, usize>,
+    ignore_directives: usize,
+    active_ignores: usize,
+    unused_ignores: usize,
+    malformed_ignores: usize,
+    missing_reason_ignores: usize,
+    suppressed_diagnostics: usize,
+}
+
+fn check_stats(
+    db: &AnalysisDb,
+    diagnostics: &[Diagnostic],
+    emitted_diagnostics: usize,
+    ignore_report: Option<&crate::ignores::IgnoreReport>,
+) -> CheckStats {
+    let mut stats = CheckStats {
+        scanned_files: db.files().len(),
+        diagnostics: diagnostics.len(),
+        emitted_diagnostics,
+        ..CheckStats::default()
+    };
+    for file in db.files() {
+        *stats
+            .by_language
+            .entry(language_label(file.language))
+            .or_default() += 1;
+    }
+    for diagnostic in diagnostics {
+        *stats
+            .by_severity
+            .entry(severity_label(diagnostic.severity))
+            .or_default() += 1;
+        *stats.by_rule.entry(diagnostic.rule_id.clone()).or_default() += 1;
+    }
+    if let Some(report) = ignore_report {
+        stats.ignore_directives = report.summary.directives;
+        stats.active_ignores = report.summary.active;
+        stats.unused_ignores = report.summary.unused;
+        stats.malformed_ignores = report.summary.malformed;
+        stats.missing_reason_ignores = report.summary.missing_reasons;
+        stats.suppressed_diagnostics = report.summary.suppressed_diagnostics;
+    }
+    stats
+}
+
+fn should_render_check_stats(args: &CheckArgs) -> bool {
+    matches!(args.format, FormatArg::Human) && (args.stat || args.shortstat)
+}
+
+fn render_check_stats(stats: &CheckStats, stat: bool, shortstat: bool) -> String {
+    let mut out = String::new();
+    if shortstat {
+        out.push_str(&format_check_shortstat(stats));
+        out.push('\n');
+    }
+    if stat {
+        if !shortstat {
+            out.push_str(&format_check_shortstat(stats));
+            out.push('\n');
+        }
+        out.push_str(&format_check_stat_tables(stats));
+    }
+    out
+}
+
+fn format_check_shortstat(stats: &CheckStats) -> String {
+    let emitted = if stats.emitted_diagnostics == stats.diagnostics {
+        String::new()
+    } else {
+        format!(", {} emitted", stats.emitted_diagnostics)
+    };
+    format!(
+        "Scanned {} {}; {} diagnostics{}; {} suppressed by {} ignore directives",
+        stats.scanned_files,
+        plural(stats.scanned_files, "file", "files"),
+        stats.diagnostics,
+        emitted,
+        stats.suppressed_diagnostics,
+        stats.ignore_directives
+    )
+}
+
+fn format_check_stat_tables(stats: &CheckStats) -> String {
+    let mut out = String::new();
+    if !stats.by_language.is_empty() {
+        out.push_str("\nBy language\n");
+        for (language, count) in &stats.by_language {
+            out.push_str(&format!("  {language}: {count}\n"));
+        }
+    }
+    if !stats.by_severity.is_empty() {
+        out.push_str("\nBy severity\n");
+        for (severity, count) in &stats.by_severity {
+            out.push_str(&format!("  {severity}: {count}\n"));
+        }
+    }
+    if !stats.by_rule.is_empty() {
+        out.push_str("\nBy rule\n");
+        for (rule_id, count) in &stats.by_rule {
+            out.push_str(&format!("  {rule_id}: {count}\n"));
+        }
+    }
+    if stats.ignore_directives > 0 || stats.suppressed_diagnostics > 0 {
+        out.push_str("\nIgnores\n");
+        out.push_str(&format!(
+            "  directives={}, active={}, unused={}, malformed={}, missing_reasons={}, suppressed={}\n",
+            stats.ignore_directives,
+            stats.active_ignores,
+            stats.unused_ignores,
+            stats.malformed_ignores,
+            stats.missing_reason_ignores,
+            stats.suppressed_diagnostics
+        ));
+    }
+    out
+}
+
+fn language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "ts",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "js",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Info => "info",
+        Severity::Warn => "warn",
+        Severity::Error => "error",
+    }
+}
+
+fn plural(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
 }
 
 fn analyze_and_run(
@@ -915,6 +1082,8 @@ fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
         fail_on: FailOn::None,
         only_rule: None,
         max_diagnostics: None,
+        stat: false,
+        shortstat: false,
         ignore_comments: true,
     };
     let (_diagnostics, db, _) = analyze_and_run(&root, &args, false)?;
@@ -987,9 +1156,16 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         diagnostics.extend(run_local_rule_host(root, manifest, args)?);
     }
 
+    let mut db = None;
+    let mut ignore_report = None;
     if args.ignore_comments {
-        let db = load_analysis_files(&config)?;
-        diagnostics = apply_ignores(&db, diagnostics, &config.config.ignores).diagnostics;
+        let loaded_db = load_analysis_files(&config)?;
+        let ignore_application = apply_ignores(&loaded_db, diagnostics, &config.config.ignores);
+        diagnostics = ignore_application.diagnostics;
+        ignore_report = Some(ignore_application.report);
+        db = Some(loaded_db);
+    } else if should_render_check_stats(args) {
+        db = Some(load_analysis_files(&config)?);
     }
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
@@ -1016,6 +1192,17 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
             sarif_help_map(&config),
         )
     );
+    if should_render_check_stats(args)
+        && let Some(db) = &db
+    {
+        let stats = check_stats(
+            db,
+            &diagnostics,
+            rendered_diagnostics.len(),
+            ignore_report.as_ref(),
+        );
+        print!("{}", render_check_stats(&stats, args.stat, args.shortstat));
+    }
     Ok(exit_code_for(&diagnostics, args.fail_on))
 }
 

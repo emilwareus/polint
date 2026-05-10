@@ -149,6 +149,16 @@ See [docs/IGNORE-COMMENTS.md](docs/IGNORE-COMMENTS.md).
 The checked-in [comment-ignores example](examples/comment-ignores/README.md)
 shows one suppressed finding and one visible finding from the same rule.
 
+For quick human scan summaries during normal checks:
+
+```bash
+polint check --shortstat
+polint check --stat
+```
+
+These flags summarize scanned files, diagnostics, and ignore suppression counts
+for human output. They do not change JSON or SARIF output.
+
 ## Machine contract (JSON)
 
 Stable JSON reports (`polint check --format json`) match the schema at

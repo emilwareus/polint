@@ -187,9 +187,10 @@ is a versioned report object with a `diagnostics` array (not a bare array at the
 root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
 Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
 for plain text. Use `polint check --format sarif` for CI upload paths. Use
-`--fail-on warn`, `error`, or `none` to control the exit status. Use
-`polint explain go-test --file … --test …` to print one harvested `TestFact` as
-JSON when debugging Go tests.
+`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
+--shortstat` or `polint check --stat` for human scan summaries; these flags do
+not add prose to JSON or SARIF output. Use `polint explain go-test --file … --test …`
+to print one harvested `TestFact` as JSON when debugging Go tests.
 
 Use `polint ignores` when you need to find suppressions that should be fixed:
 

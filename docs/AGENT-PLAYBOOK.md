@@ -21,12 +21,16 @@ Validate against expectations by deserializing with your agent’s JSON stack; d
 - **One rule pattern**: `--only-rule PATTERN` (same matching as profiles: exact id, `prefix/*`, or `*`).
 - **Cap noise**: `--max-diagnostics N`
 - **Severity gate**: `--fail-on warn|error|none`
+- **Scan summary**: `--shortstat` for one line, `--stat` for grouped human stats.
 
 Example:
 
 ```bash
 polint check --format json --fail-on error --only-rule 'local/*' path/to/dir
 ```
+
+`--stat` and `--shortstat` are human-output helpers. They do not append prose to
+JSON or SARIF output.
 
 ## Ignore cleanup
 

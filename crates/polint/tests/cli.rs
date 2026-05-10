@@ -1850,6 +1850,55 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     );
     assert!(stat.contains("1 directives, 1 active"), "{stat}");
     assert!(stat.contains("By rule"), "{stat}");
+
+    let check_shortstat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["check", "--shortstat", "--no-cache", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        check_shortstat
+            .contains("Scanned 1 file; 1 diagnostics; 1 suppressed by 1 ignore directives"),
+        "{check_shortstat}"
+    );
+
+    let check_stat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["check", "--stat", "--no-cache", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(check_stat.contains("By language"), "{check_stat}");
+    assert!(check_stat.contains("  ts: 1"), "{check_stat}");
+    assert!(check_stat.contains("Ignores"), "{check_stat}");
+
+    let check_json_with_stats = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--stat",
+                "--shortstat",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostics_for_rule(&check_json_with_stats, "local/no-denied-literals").len(),
+        1,
+        "{check_json_with_stats:#?}"
+    );
 }
 
 #[test]
