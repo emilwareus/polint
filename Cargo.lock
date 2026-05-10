@@ -1147,6 +1147,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-code-quality-metrics-rule"
+version = "0.1.8"
+dependencies = [
+ "polint",
+]
+
+[[package]]
 name = "polint-example-comment-ignores-rule"
 version = "0.1.8"
 dependencies = [

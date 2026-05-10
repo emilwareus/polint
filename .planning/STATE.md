@@ -65,7 +65,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 12 - CFG Facts for Go and TS/JS
 Plan: Not started
-Last activity: 2026-05-10 - Completed quick task 260510-dbv: Tighten public CLI surface and remove internal debug commands
+Last activity: 2026-05-10 - Completed quick task 260510-dzr: Implement reusable derived metric signals for rules
 
 ## Quick Tasks Completed
 
@@ -91,6 +91,7 @@ Last activity: 2026-05-10 - Completed quick task 260510-dbv: Tighten public CLI 
 | 260509-h5x | Fix capability roadmap docs and add realistic CLI coverage for explain plan | 2026-05-09 | uncommitted | [260509-h5x-fix-capability-roadmap-docs-and-add-real](./quick/260509-h5x-fix-capability-roadmap-docs-and-add-real/) |
 | 260509-ibk | Implement static capability derivation rule authoring API | 2026-05-09 | uncommitted | [260509-ibk-implement-static-capability-derivation-r](./quick/260509-ibk-implement-static-capability-derivation-r/) |
 | 260510-dbv | Tighten public CLI surface and remove internal debug commands | 2026-05-10 | uncommitted | [260510-dbv-tighten-public-cli-surface-and-remove-in](./quick/260510-dbv-tighten-public-cli-surface-and-remove-in/) |
+| 260510-dzr | Implement reusable derived metric signals for rules | 2026-05-10 | uncommitted | [260510-dzr-implement-reusable-derived-metric-signal](./quick/260510-dzr-implement-reusable-derived-metric-signal/) |
 
 ## Phase Progress
 

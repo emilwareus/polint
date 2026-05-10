@@ -173,6 +173,18 @@ impl AnalysisPlan {
         &self.capabilities
     }
 
+    pub(crate) fn requests_capability(&self, capability: &str) -> bool {
+        self.capabilities
+            .iter()
+            .any(|planned| planned.capability == capability)
+    }
+
+    pub(crate) fn requests_any_capability(&self, capabilities: &[&str]) -> bool {
+        capabilities
+            .iter()
+            .any(|capability| self.requests_capability(capability))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn setup_checks(&self) -> &[SetupCheck] {
         &self.setup_checks
@@ -233,6 +245,19 @@ impl AnalysisPlan {
                 })
                 .collect(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_capability_names_for_test(names: &[&str]) -> Self {
+        let rules = vec![PlannedRule {
+            id: "test/requested-capabilities".to_string(),
+            description: "Test rule".to_string(),
+            severity: Severity::Warn,
+            requested_capabilities: names.iter().map(|name| (*name).to_string()).collect(),
+            options_digest: deterministic_rule_options(&RuleOptions::default()),
+        }];
+        let capabilities = plan_capabilities(&rules);
+        Self::finish(rules, capabilities, Vec::new())
     }
 
     fn finish(
@@ -561,8 +586,9 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
 
 fn support_for(capability: &str) -> CapabilityAccumulator {
     let (status, reason, hint, docs_path) = match capability {
-        "syntax" | "imports" | "go_tests" | "branch_obligations" | "ts_components"
-        | "ts_classes" | "string_literals" | "jsx_attributes" => {
+        "syntax" | "imports" | "go_tests" | "branch_obligations" | "file_metrics"
+        | "function_metrics" | "complexity_metrics" | "ts_components" | "ts_classes"
+        | "string_literals" | "jsx_attributes" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
         "test_suite_metrics" => (
@@ -922,6 +948,35 @@ mod tests {
             plan.support_view().status_for("dataflow"),
             Some(crate::core::CapabilitySupportStatus::Unsupported)
         );
+    }
+
+    #[test]
+    fn analysis_plan_supports_derived_metric_capabilities() {
+        let rules = vec![rule(
+            "local/quality-score",
+            "Quality score",
+            Severity::Warn,
+            Capabilities::new()
+                .file_metrics()
+                .function_metrics()
+                .complexity_metrics(),
+        )];
+
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+
+        assert!(plan.diagnostics().is_empty());
+        assert_eq!(
+            plan.capabilities()
+                .iter()
+                .map(|capability| (capability.capability.as_str(), capability.status.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("complexity_metrics", CapabilitySupportStatus::Supported),
+                ("file_metrics", CapabilitySupportStatus::Supported),
+                ("function_metrics", CapabilitySupportStatus::Supported),
+            ]
+        );
+        assert!(plan.requests_any_capability(&["function_metrics"]));
     }
 
     #[test]

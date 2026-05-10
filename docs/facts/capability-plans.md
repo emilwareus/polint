@@ -12,7 +12,10 @@ Current rule-author fact views include:
 - `Imports<'_>`
 - `GoTests<'_>`
 - `BranchObligations<'_>`
+- `FileMetrics<'_>`
 - `Functions<'_>`
+- `FunctionMetrics<'_>`
+- `ComplexityMetrics<'_>`
 - `Packages<'_>`
 - `StringLiterals<'_>`
 - `JsxAttributes<'_>`

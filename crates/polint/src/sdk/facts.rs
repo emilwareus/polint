@@ -5,9 +5,9 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, CoverageFact, FileId, FunctionFact, FunctionId, ImportFact,
-    JsxAttributeFact, Language, PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact,
-    TsComponentFact,
+    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
+    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, JsxAttributeFact, Language,
+    PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -84,6 +84,116 @@ impl<'a> Functions<'a> {
             .functions()
             .iter()
             .filter(move |function| function.file == file)
+    }
+}
+
+/// Source-file metric view. Requesting this view maps to the `file_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct FileMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> FileMetrics<'a> {
+    /// Returns all derived file metrics in deterministic database order.
+    pub fn all(self) -> &'a [FileMetricFact] {
+        self.db.file_metrics()
+    }
+
+    /// Iterates all derived file metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, FileMetricFact> {
+        self.db.file_metrics().iter()
+    }
+
+    /// Returns derived metrics for one source file.
+    pub fn get(self, file: FileId) -> Option<&'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .find(|metric| metric.file == file)
+    }
+
+    /// Returns file metrics for one language.
+    pub fn for_language(self, language: Language) -> impl Iterator<Item = &'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .filter(move |metric| metric.language == language)
+    }
+}
+
+/// Function-size metric view. Requesting this view maps to the `function_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct FunctionMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> FunctionMetrics<'a> {
+    /// Returns all derived function-size metrics in deterministic database order.
+    pub fn all(self) -> &'a [FunctionMetricFact] {
+        self.db.function_metrics()
+    }
+
+    /// Iterates all derived function-size metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, FunctionMetricFact> {
+        self.db.function_metrics().iter()
+    }
+
+    /// Returns function-size metrics for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .filter(move |metric| metric.file == file)
+    }
+
+    /// Returns function-size metrics for one function.
+    pub fn get(self, function: FunctionId) -> Option<&'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .find(|metric| metric.function == function)
+    }
+}
+
+/// Complexity metric view. Requesting this view maps to the `complexity_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct ComplexityMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ComplexityMetrics<'a> {
+    /// Returns all derived complexity metrics in deterministic database order.
+    pub fn all(self) -> &'a [ComplexityMetricFact] {
+        self.db.complexity_metrics()
+    }
+
+    /// Iterates all derived complexity metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ComplexityMetricFact> {
+        self.db.complexity_metrics().iter()
+    }
+
+    /// Returns complexity metrics for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .filter(move |metric| metric.file == file)
+    }
+
+    /// Returns complexity metrics for one function.
+    pub fn get(self, function: FunctionId) -> Option<&'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .find(|metric| metric.function == function)
+    }
+
+    /// Iterates functions whose cyclomatic complexity is greater than `max`.
+    pub fn over(self, max: u32) -> impl Iterator<Item = &'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .filter(move |metric| metric.cyclomatic_complexity > max)
     }
 }
 
@@ -394,6 +504,9 @@ macro_rules! impl_fact_view {
 impl_fact_view!(SourceFiles);
 impl_fact_view!(Packages);
 impl_fact_view!(Functions);
+impl_fact_view!(FileMetrics);
+impl_fact_view!(FunctionMetrics);
+impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);

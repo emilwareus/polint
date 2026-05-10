@@ -264,6 +264,150 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_metric_signal_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+
+[[rules.config]]
+id = "local/code-quality-signals"
+severity = "warn"
+files = ["src/**"]
+max = 1
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/code-quality-signals",
+    description = "Compose reusable file/function/complexity metric signals.",
+    severity = "warn"
+)]
+fn code_quality_signals(
+    ctx: &mut RuleCtx<'_>,
+    files: FileMetrics<'_>,
+    functions: FunctionMetrics<'_>,
+    complexity: ComplexityMetrics<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    let max_complexity = ctx.options().max.unwrap_or(1);
+
+    for file_metric in files.iter() {
+        let file = ctx.file_path(file_metric.file);
+        if file_in_scope(ctx.options(), &file) && file_metric.line_count > 4 {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    DiagnosticRange::point(1, 1),
+                    "File is larger than the local quality signal threshold.",
+                )
+                .with_evidence("file_lines", file_metric.line_count.to_string())
+                .with_evidence("functions", file_metric.function_count.to_string()),
+            );
+        }
+    }
+
+    for function_metric in functions.iter() {
+        let file = ctx.file_path(function_metric.file);
+        if file_in_scope(ctx.options(), &file) && function_metric.line_count > 4 {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    function_metric.span.diagnostic_range(),
+                    "Function is larger than the local quality signal threshold.",
+                )
+                .with_evidence("function", function_metric.name.clone())
+                .with_evidence("function_lines", function_metric.line_count.to_string()),
+            );
+        }
+    }
+
+    for metric in complexity.over(max_complexity) {
+        let file = ctx.file_path(metric.file);
+        if file_in_scope(ctx.options(), &file) {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    metric.span.diagnostic_range(),
+                    "Function is over the local complexity signal threshold.",
+                )
+                .with_evidence("function", metric.name.clone())
+                .with_evidence("complexity", metric.cyclomatic_complexity.to_string()),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![code_quality_signals()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/router.go"),
+        r#"package app
+
+func route(path string) string {
+	if path == "/admin" {
+		return "admin"
+	}
+	if path == "/health" {
+		return "health"
+	}
+	return "public"
+}
+"#,
+    );
+    write_file(
+        &root.join("src/panel.ts"),
+        r#"export function label(value: string) {
+  if (value === "admin") {
+    return "Admin";
+  }
+  if (value === "health") {
+    return "Health";
+  }
+  return value ? value : "Public";
+}
+"#,
+    );
+}
+
 fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
     fs::read_dir(root.join(".polint/cache"))
         .unwrap_or_else(|error| panic!("read cache dir: {error}"))
@@ -471,6 +615,7 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("docs/schemas/polint-report-v1.json"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
+    assert!(contents.contains("FileMetrics<'_>"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
@@ -1114,6 +1259,55 @@ pub(crate) fn no_todo_literals(
 }
 
 #[test]
+fn external_rule_consumes_derived_metric_signals_through_public_sdk() {
+    let temp = tempfile::tempdir().unwrap();
+    write_metric_signal_rule_repo(temp.path());
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/code-quality-signals");
+    assert!(
+        diagnostics.len() >= 6,
+        "expected file, function, and complexity diagnostics for Go and TS: {json:#?}"
+    );
+    for file in ["src/router.go", "src/panel.ts"] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["file"] == file),
+            "expected metric signal diagnostics in {file}: {json:#?}"
+        );
+    }
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "file_lines", "")),
+        "expected file metric evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "function_lines",
+            ""
+        )),
+        "expected function metric evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "complexity", "")),
+        "expected complexity metric evidence: {json:#?}"
+    );
+}
+
+#[test]
 fn check_suppresses_next_line_ignore_and_ignores_reports_stats() {
     let temp = tempfile::tempdir().unwrap();
     write_no_todo_rule_repo(temp.path(), false);
@@ -1666,76 +1860,98 @@ rules = []
 
 #[test]
 fn checked_in_examples_are_runnable_cli_fixtures() {
-    let cases: &[(&str, &str, &str, &[&str])] = &[
-        (
-            "basic",
-            "no_raw_colors.rs",
-            "local/no-raw-colors",
-            &["Button.tsx"],
-        ),
-        (
-            "comment-ignores",
-            "no_denied_literals.rs",
-            "local/no-denied-literals",
-            &["app.ts"],
-        ),
-        (
-            "config-denied-literal",
-            "no_denied_literals.rs",
-            "local/no-denied-literals",
-            &["query.ts"],
-        ),
-        (
-            "custom-rule-go",
-            "require_error_branch_tests.rs",
-            "local/require-error-branch-tests",
-            &["authorize.go"],
-        ),
-        (
-            "custom-rule-ts",
-            "no_product_hex_colors.rs",
-            "local/no-product-hex-colors",
-            &["Button.tsx"],
-        ),
-        (
-            "go-branch-obligations",
-            "go_branch_obligations.rs",
-            "local/go-branch-obligations",
-            &["authorize.go"],
-        ),
-        (
-            "go-complexity",
-            "go_complexity.rs",
-            "local/go-cyclomatic-complexity",
-            &["router.go"],
-        ),
-        (
-            "go-import-boundaries",
-            "go_import_boundaries.rs",
-            "local/go-import-boundaries",
-            &["handler.go"],
-        ),
-        (
-            "go-test-quality",
-            "go_test_quality.rs",
-            "local/go-test-quality",
-            &["payment_test.go"],
-        ),
-        (
-            "ts-complexity",
-            "ts_complexity.rs",
-            "local/ts-cyclomatic-complexity",
-            &["label.ts"],
-        ),
-        (
-            "ts-design-tokens",
-            "no_raw_colors.rs",
-            "local/no-raw-colors",
-            &["Button.tsx"],
-        ),
+    struct ExampleCase {
+        name: &'static str,
+        rule_modules: &'static [&'static str],
+        expected_rules: &'static [&'static str],
+        expected_files: &'static [&'static str],
+    }
+
+    let cases: &[ExampleCase] = &[
+        ExampleCase {
+            name: "basic",
+            rule_modules: &["no_raw_colors.rs"],
+            expected_rules: &["local/no-raw-colors"],
+            expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "code-quality-metrics",
+            rule_modules: &[
+                "large_files.rs",
+                "large_functions.rs",
+                "code_quality_score.rs",
+            ],
+            expected_rules: &[
+                "local/large-file",
+                "local/large-function",
+                "local/code-quality-score",
+            ],
+            expected_files: &["service.go", "Panel.tsx"],
+        },
+        ExampleCase {
+            name: "comment-ignores",
+            rule_modules: &["no_denied_literals.rs"],
+            expected_rules: &["local/no-denied-literals"],
+            expected_files: &["app.ts"],
+        },
+        ExampleCase {
+            name: "config-denied-literal",
+            rule_modules: &["no_denied_literals.rs"],
+            expected_rules: &["local/no-denied-literals"],
+            expected_files: &["query.ts"],
+        },
+        ExampleCase {
+            name: "custom-rule-go",
+            rule_modules: &["require_error_branch_tests.rs"],
+            expected_rules: &["local/require-error-branch-tests"],
+            expected_files: &["authorize.go"],
+        },
+        ExampleCase {
+            name: "custom-rule-ts",
+            rule_modules: &["no_product_hex_colors.rs"],
+            expected_rules: &["local/no-product-hex-colors"],
+            expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "go-branch-obligations",
+            rule_modules: &["go_branch_obligations.rs"],
+            expected_rules: &["local/go-branch-obligations"],
+            expected_files: &["authorize.go"],
+        },
+        ExampleCase {
+            name: "go-complexity",
+            rule_modules: &["go_complexity.rs"],
+            expected_rules: &["local/go-cyclomatic-complexity"],
+            expected_files: &["router.go"],
+        },
+        ExampleCase {
+            name: "go-import-boundaries",
+            rule_modules: &["go_import_boundaries.rs"],
+            expected_rules: &["local/go-import-boundaries"],
+            expected_files: &["handler.go"],
+        },
+        ExampleCase {
+            name: "go-test-quality",
+            rule_modules: &["go_test_quality.rs"],
+            expected_rules: &["local/go-test-quality"],
+            expected_files: &["payment_test.go"],
+        },
+        ExampleCase {
+            name: "ts-complexity",
+            rule_modules: &["ts_complexity.rs"],
+            expected_rules: &["local/ts-cyclomatic-complexity"],
+            expected_files: &["label.ts"],
+        },
+        ExampleCase {
+            name: "ts-design-tokens",
+            rule_modules: &["no_raw_colors.rs"],
+            expected_rules: &["local/no-raw-colors"],
+            expected_files: &["Button.tsx"],
+        },
     ];
 
-    for (example, rule_module, expected_rule, expected_files) in cases {
+    for case in cases {
+        let example = case.name;
         let example_dir = repo_root().join("examples").join(example);
         assert!(
             example_dir.join("README.md").exists(),
@@ -1746,11 +1962,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             "{example} should be runnable as a mini repository"
         );
         assert!(
-            example_dir
+            case.rule_modules.iter().all(|rule_module| example_dir
                 .join(".polint/rules/src")
                 .join(rule_module)
-                .exists(),
-            "{example} should contain its local rule implementation ({rule_module})"
+                .exists()),
+            "{example} should contain its local rule implementations ({:?})",
+            case.rule_modules
         );
 
         let json = stdout_json(
@@ -1773,12 +1990,16 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             .iter()
             .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
             .collect::<std::collections::BTreeSet<_>>();
+        let expected_rules = case
+            .expected_rules
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            actual_rules,
-            std::collections::BTreeSet::from([*expected_rule]),
-            "{example} should emit only its one local rule: {json:#?}"
+            actual_rules, expected_rules,
+            "{example} should emit only its expected local rules: {json:#?}"
         );
-        for file in *expected_files {
+        for file in case.expected_files {
             assert!(
                 diagnostics(&json)
                     .iter()

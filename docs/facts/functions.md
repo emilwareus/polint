@@ -19,6 +19,10 @@ adapter. Rules request the `Functions<'_>` typed fact view on a
 | `cyclomatic_complexity` | Heuristic syntax-level complexity count. It does not use type or semantic analysis. |
 | `calls` | Direct syntactic call names found in the function body. This is not a resolved call graph. |
 
+For reusable size and complexity signals, prefer `FunctionMetrics<'_>` and
+`ComplexityMetrics<'_>` from [Metric Facts](metrics.md). `FunctionFact` remains
+the lower-level syntax fact.
+
 ## Limits
 
 - Calls are names from syntax, not resolved symbols.

@@ -8,6 +8,7 @@ repo-local policies. The examples are only consumers of these facts, not special
 internal entry points.
 
 - [Functions](functions.md)
+- [Metrics](metrics.md)
 - [Imports](imports.md)
 - [Branches](branches.md)
 - [Go tests](go-tests.md)

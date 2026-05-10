@@ -106,6 +106,9 @@ live in `examples/` inside this repository.
   Rule` examples, compatibility shims, or public rule constructors as a beta
   escape hatch; if the old API shape fights the product model, break it and move
   examples/tests to the typed macro path.
+- Higher-level policy rules should compose reusable typed signal views such as
+  `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` instead
+  of calling other rules or treating diagnostics as inputs.
 - `#[polint::rule]` functions should stay plain and analyzable: no generics,
   no async/const/unsafe/extern forms, `&mut RuleCtx<'_>` first, `RuleResult`
   or `RuleResult<()>` return.

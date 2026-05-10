@@ -152,6 +152,9 @@ The public rule-authoring surface is intentionally split:
 | `GoTests<'a>` | Go test facts only |
 | `BranchObligations<'a>` | branch obligation facts only |
 | `Functions<'a>` | function facts only |
+| `FileMetrics<'a>` | derived file-size metrics only |
+| `FunctionMetrics<'a>` | derived function-size metrics only |
+| `ComplexityMetrics<'a>` | derived complexity metrics only |
 | `Packages<'a>` | package facts only |
 | `TsComponents<'a>` | TS component facts only |
 | `TsClasses<'a>` | TS class facts only |

@@ -272,6 +272,14 @@ pub(crate) fn no_raw_colors(
 }}
 ```
 
+## Reusable Metric Signals
+
+For code-quality policies, prefer reusable signal views over rules calling other
+rules. `FileMetrics<'_>` exposes file line/byte/function counts,
+`FunctionMetrics<'_>` exposes per-function size, and `ComplexityMetrics<'_>`
+exposes per-function syntax-level cyclomatic complexity. A composite rule can
+request several of these typed views in one `#[polint::rule]` signature.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs
@@ -301,6 +309,7 @@ allow_files = ["src/theme/**"]
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
+- Compose `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` for higher-level quality rules instead of making rules depend on other rules.
 - Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.

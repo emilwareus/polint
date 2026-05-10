@@ -172,6 +172,7 @@ fn analyze_and_run(
     let ts_diagnostics =
         analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
     diagnostics.extend(ts_diagnostics);
+    crate::metrics::derive_requested_metrics(&mut db, &plan);
     diagnostics.extend(run_rules_with_capability_support(
         &db,
         rules,

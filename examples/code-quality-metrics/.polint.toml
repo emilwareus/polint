@@ -1,0 +1,25 @@
+[workspace]
+include = ["*.go", "*.tsx"]
+exclude = []
+
+[profiles.fast]
+rules = [
+  "local/large-file",
+  "local/large-function",
+  "local/code-quality-score",
+]
+
+[[rules.config]]
+id = "local/large-file"
+max = 8
+files = ["*.go", "*.tsx"]
+
+[[rules.config]]
+id = "local/large-function"
+max = 6
+files = ["*.go", "*.tsx"]
+
+[[rules.config]]
+id = "local/code-quality-score"
+max = 1
+files = ["*.go", "*.tsx"]

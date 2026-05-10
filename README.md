@@ -82,11 +82,11 @@ the analysis capabilities from that function signature. Rule functions are plain
 sync Rust functions with `&mut RuleCtx<'_>` first and a `RuleResult` return.
 `RuleCtx` is for
 reporting diagnostics, source paths, rule options, and capability/setup
-metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw
-building blocks available to rule authors: functions, imports, branches, Go
-tests, TS/JS facts, literals, and JSX attributes. Rule-specific TOML fields that
-are not one of the common shortcuts are available through
-`ctx.options().settings`.
+metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw and
+derived building blocks available to rule authors: functions, reusable metric
+signals, imports, branches, Go tests, TS/JS facts, literals, and JSX attributes.
+Rule-specific TOML fields that are not one of the common shortcuts are available
+through `ctx.options().settings`.
 
 ```rust
 use polint::sdk::prelude::*;
@@ -214,6 +214,7 @@ jobs:
 - [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
 - [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
 - [Comment ignores](docs/IGNORE-COMMENTS.md)
+- [Metric facts](docs/facts/metrics.md)
 - [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)
 - [Release process](docs/RELEASING.md)

@@ -134,6 +134,40 @@ pub struct FunctionFact {
     pub calls: Vec<String>,
 }
 
+/// Source-file size and aggregate function metrics derived from parsed facts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileMetricFact {
+    pub file: FileId,
+    pub language: Language,
+    pub line_count: u32,
+    pub non_empty_line_count: u32,
+    pub byte_count: u32,
+    pub function_count: u32,
+}
+
+/// Function-size metrics derived once per function and shared by requesting rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionMetricFact {
+    pub function: FunctionId,
+    pub file: FileId,
+    pub name: String,
+    pub span: Span,
+    pub language: Language,
+    pub line_count: u32,
+    pub byte_count: u32,
+}
+
+/// Function complexity metrics derived once per function and shared by requesting rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplexityMetricFact {
+    pub function: FunctionId,
+    pub file: FileId,
+    pub name: String,
+    pub span: Span,
+    pub language: Language,
+    pub cyclomatic_complexity: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageFact {
     pub id: PackageId,
@@ -252,6 +286,9 @@ pub struct AnalysisDb {
     branches: Vec<BranchObligation>,
     tests: Vec<TestFact>,
     coverage: Vec<CoverageFact>,
+    file_metrics: Vec<FileMetricFact>,
+    function_metrics: Vec<FunctionMetricFact>,
+    complexity_metrics: Vec<ComplexityMetricFact>,
     ts_components: Vec<TsComponentFact>,
     ts_classes: Vec<TsClassFact>,
     string_literals: Vec<StringLiteralFact>,
@@ -343,6 +380,17 @@ impl AnalysisDb {
         self.coverage.push(fact);
     }
 
+    pub(crate) fn replace_metric_facts(
+        &mut self,
+        file_metrics: Vec<FileMetricFact>,
+        function_metrics: Vec<FunctionMetricFact>,
+        complexity_metrics: Vec<ComplexityMetricFact>,
+    ) {
+        self.file_metrics = file_metrics;
+        self.function_metrics = function_metrics;
+        self.complexity_metrics = complexity_metrics;
+    }
+
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
         self.ts_components.push(fact);
     }
@@ -409,6 +457,18 @@ impl AnalysisDb {
 
     pub fn coverage(&self) -> &[CoverageFact] {
         &self.coverage
+    }
+
+    pub fn file_metrics(&self) -> &[FileMetricFact] {
+        &self.file_metrics
+    }
+
+    pub fn function_metrics(&self) -> &[FunctionMetricFact] {
+        &self.function_metrics
+    }
+
+    pub fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
+        &self.complexity_metrics
     }
 
     pub fn ts_components(&self) -> &[TsComponentFact] {
@@ -619,6 +679,12 @@ pub struct Capabilities {
     pub coverage_facts: bool,
     /// Needs aggregate-like Go test metrics currently stored on [`TestFact`].
     pub test_suite_metrics: bool,
+    /// Needs derived source-file size and aggregate function metrics.
+    pub file_metrics: bool,
+    /// Needs derived per-function size metrics.
+    pub function_metrics: bool,
+    /// Needs derived per-function complexity metrics.
+    pub complexity_metrics: bool,
     /// Needs TypeScript/JavaScript component-like function facts.
     pub ts_components: bool,
     /// Needs TypeScript/JavaScript class facts.
@@ -679,6 +745,21 @@ impl Capabilities {
         self
     }
 
+    pub fn file_metrics(mut self) -> Self {
+        self.file_metrics = true;
+        self
+    }
+
+    pub fn function_metrics(mut self) -> Self {
+        self.function_metrics = true;
+        self
+    }
+
+    pub fn complexity_metrics(mut self) -> Self {
+        self.complexity_metrics = true;
+        self
+    }
+
     pub fn ts_components(mut self) -> Self {
         self.ts_components = true;
         self
@@ -710,6 +791,9 @@ impl Capabilities {
             ("branch_obligations", self.branch_obligations),
             ("coverage_facts", self.coverage_facts),
             ("test_suite_metrics", self.test_suite_metrics),
+            ("file_metrics", self.file_metrics),
+            ("function_metrics", self.function_metrics),
+            ("complexity_metrics", self.complexity_metrics),
             ("ts_components", self.ts_components),
             ("ts_classes", self.ts_classes),
             ("string_literals", self.string_literals),
