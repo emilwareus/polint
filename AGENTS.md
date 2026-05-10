@@ -86,6 +86,13 @@ Use these entry points:
 Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
 <!-- GSD:workflow-end -->
 
+## Rust Skill Usage
+
+Before writing, reviewing, or refactoring Rust code, consult and apply
+`.agents/skills/rust-best-practices/SKILL.md`. When the Rust work touches polint
+rule authoring, SDK contracts, generated agent skills, examples, or rule-pack
+ergonomics, also consult `.claude/skills/polint/SKILL.md`.
+
 ## Rule Authoring Platform Contract
 
 Repo-local rules must be treated as external consumers of polint, even when they
