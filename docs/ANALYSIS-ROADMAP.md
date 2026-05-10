@@ -17,7 +17,7 @@ The table lists **shipped** scenarios (with example repos that prove them) and *
 | Shipped | Go test maintainability | Test facts, assertions, thresholds via config | [go-test-quality](../examples/go-test-quality/README.md) |
 | Shipped | Several rules in one pack | One `.polint/rules/Cargo.toml`, module per rule | [multiple-rules](../examples/multiple-rules/README.md) |
 | Shipped | Minimal TSX starter | Single rule, single diagnostic | [basic](../examples/basic/README.md) |
-| Shipped | CLI: JSON/SARIF, cache, profiling, graph | No dedicated example per subcommand | `polint --help` |
+| Shipped | CLI: checks, JSON/SARIF, cache, comment ignores | Stable user workflows only | `polint --help` |
 | Shipped | Comment ignores and ignore statistics | Inline suppression comments plus `polint ignores --stat --shortstat --filter ...` for humans and agents | [comment-ignores](../examples/comment-ignores/README.md), [docs](IGNORE-COMMENTS.md) |
 | Planned | Scope-accurate module resolution | Path mapping, package exports, build tags / conditions | — |
 | Planned | Symbol / binding resolution | Definitions, references, re-exports; stable symbol IDs | — |

@@ -27,10 +27,11 @@ pub fn collect_go_tests<'a>(tests: GoTests<'a>, file: FileId) -> Vec<&'a TestFac
 pub mod prelude {
     pub use crate::core::{
         BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
-        CapabilitySupportView, CoverageFact, FileId, FunctionFact, FunctionId, ImportFact,
-        ImportId, JsxAttributeFact, Language, NodeId, PackageFact, PackageId, Rule,
-        RuleConfigValue, RuleCtx, RuleId, RuleOptions, SourceFile, Span, StringLiteralFact,
-        TestFact, TextRange, TsClassFact, TsComponentFact,
+        CapabilitySupportView, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
+        FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact,
+        Language, NodeId, PackageFact, PackageId, Rule, RuleConfigValue, RuleCtx, RuleId,
+        RuleOptions, SourceFile, Span, StringLiteralFact, TestFact, TextRange, TsClassFact,
+        TsComponentFact,
     };
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
@@ -40,9 +41,9 @@ pub mod prelude {
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
-        BranchObligations, CallGraph, Cfg, CoverageFacts, DataFlow, Functions, GoTests, Imports,
-        JsxAttributes, Packages, SourceFiles, StringLiterals, TestSuiteMetrics, TsClasses,
-        TsComponents,
+        BranchObligations, CallGraph, Cfg, ComplexityMetrics, CoverageFacts, DataFlow, FileMetrics,
+        FunctionMetrics, Functions, GoTests, Imports, JsxAttributes, Packages, SourceFiles,
+        StringLiterals, TestSuiteMetrics, TsClasses, TsComponents,
     };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }
@@ -94,11 +95,31 @@ mod tests {
         Ok(())
     }
 
+    #[polint::rule(
+        id = "examples/metric-prelude-smoke",
+        description = "Metric prelude smoke rule",
+        severity = "warn"
+    )]
+    fn metric_prelude_smoke(
+        _ctx: &mut RuleCtx<'_>,
+        file_metrics: FileMetrics<'_>,
+        function_metrics: FunctionMetrics<'_>,
+        complexity_metrics: ComplexityMetrics<'_>,
+    ) -> RuleResult {
+        assert_eq!(file_metrics.iter().count(), 0);
+        assert_eq!(function_metrics.iter().count(), 0);
+        assert_eq!(complexity_metrics.iter().count(), 0);
+        Ok(())
+    }
+
     #[test]
     fn sdk_prelude_exports_rule_authoring_surface() {
         fn assert_exported<T>() {}
         assert_exported::<PackageFact>();
         assert_exported::<TsClassFact>();
+        assert_exported::<FileMetricFact>();
+        assert_exported::<FunctionMetricFact>();
+        assert_exported::<ComplexityMetricFact>();
 
         let db = AnalysisDb::new();
         let rule = prelude_smoke();
@@ -107,6 +128,10 @@ mod tests {
         assert!(capabilities.imports);
         assert!(capabilities.string_literals);
         assert!(capabilities.jsx_attributes);
+        let metric_capabilities = metric_prelude_smoke().capabilities();
+        assert!(metric_capabilities.file_metrics);
+        assert!(metric_capabilities.function_metrics);
+        assert!(metric_capabilities.complexity_metrics);
 
         let mut ctx = RuleCtx::new(&db, rule.meta(), RuleOptions::default());
         let tests = GoTests::build(&db);

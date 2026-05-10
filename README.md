@@ -82,11 +82,11 @@ the analysis capabilities from that function signature. Rule functions are plain
 sync Rust functions with `&mut RuleCtx<'_>` first and a `RuleResult` return.
 `RuleCtx` is for
 reporting diagnostics, source paths, rule options, and capability/setup
-metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw
-building blocks available to rule authors: functions, imports, branches, Go
-tests, TS/JS facts, literals, and JSX attributes. Rule-specific TOML fields that
-are not one of the common shortcuts are available through
-`ctx.options().settings`.
+metadata. The fact reference in [docs/facts/](docs/facts/) describes the raw and
+derived building blocks available to rule authors: functions, reusable metric
+signals, imports, branches, Go tests, TS/JS facts, literals, and JSX attributes.
+Rule-specific TOML fields that are not one of the common shortcuts are available
+through `ctx.options().settings`.
 
 ```rust
 use polint::sdk::prelude::*;
@@ -149,6 +149,16 @@ See [docs/IGNORE-COMMENTS.md](docs/IGNORE-COMMENTS.md).
 The checked-in [comment-ignores example](examples/comment-ignores/README.md)
 shows one suppressed finding and one visible finding from the same rule.
 
+For quick human scan summaries during normal checks:
+
+```bash
+polint check --shortstat
+polint check --stat
+```
+
+These flags summarize scanned files, diagnostics, and ignore suppression counts
+for human output. They do not change JSON or SARIF output.
+
 ## Machine contract (JSON)
 
 Stable JSON reports (`polint check --format json`) match the schema at
@@ -204,6 +214,7 @@ jobs:
 - [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
 - [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
 - [Comment ignores](docs/IGNORE-COMMENTS.md)
+- [Metric facts](docs/facts/metrics.md)
 - [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)
 - [Release process](docs/RELEASING.md)

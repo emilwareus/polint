@@ -325,6 +325,9 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident)> {
         "BranchObligations" => "branch_obligations",
         "CoverageFacts" => "coverage_facts",
         "TestSuiteMetrics" => "test_suite_metrics",
+        "FileMetrics" => "file_metrics",
+        "FunctionMetrics" => "function_metrics",
+        "ComplexityMetrics" => "complexity_metrics",
         "TsComponents" => "ts_components",
         "TsClasses" => "ts_classes",
         "StringLiterals" => "string_literals",
@@ -436,6 +439,9 @@ mod tests {
         assert_eq!(capability("GoTests<'_>"), "go_tests");
         assert_eq!(capability("BranchObligations<'_>"), "branch_obligations");
         assert_eq!(capability("DataFlow<'_>"), "dataflow");
+        assert_eq!(capability("FileMetrics<'_>"), "file_metrics");
+        assert_eq!(capability("FunctionMetrics<'_>"), "function_metrics");
+        assert_eq!(capability("ComplexityMetrics<'_>"), "complexity_metrics");
         assert_eq!(capability("StringLiterals<'_>"), "string_literals");
         assert_eq!(
             capability("polint::sdk::facts::JsxAttributes<'_>"),

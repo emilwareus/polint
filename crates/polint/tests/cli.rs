@@ -29,6 +29,27 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
     fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
 }
 
+#[test]
+fn top_level_help_only_lists_supported_public_commands() {
+    let help = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .arg("--help")
+            .assert()
+            .success(),
+    );
+
+    for command in ["init", "add-skill", "new-rule", "check", "ignores"] {
+        assert!(help.contains(command), "help should list {command}: {help}");
+    }
+    for command in ["explain", "test-rules", "profile-rules", "graph"] {
+        assert!(
+            !help.contains(command),
+            "help should not expose internal command {command}: {help}"
+        );
+    }
+}
+
 fn write_plan_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -243,6 +264,150 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_metric_signal_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+
+[[rules.config]]
+id = "local/code-quality-signals"
+severity = "warn"
+files = ["src/**"]
+max = 1
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/code-quality-signals",
+    description = "Compose reusable file/function/complexity metric signals.",
+    severity = "warn"
+)]
+fn code_quality_signals(
+    ctx: &mut RuleCtx<'_>,
+    files: FileMetrics<'_>,
+    functions: FunctionMetrics<'_>,
+    complexity: ComplexityMetrics<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    let max_complexity = ctx.options().max.unwrap_or(1);
+
+    for file_metric in files.iter() {
+        let file = ctx.file_path(file_metric.file);
+        if file_in_scope(ctx.options(), &file) && file_metric.line_count > 4 {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    DiagnosticRange::point(1, 1),
+                    "File is larger than the local quality signal threshold.",
+                )
+                .with_evidence("file_lines", file_metric.line_count.to_string())
+                .with_evidence("functions", file_metric.function_count.to_string()),
+            );
+        }
+    }
+
+    for function_metric in functions.iter() {
+        let file = ctx.file_path(function_metric.file);
+        if file_in_scope(ctx.options(), &file) && function_metric.line_count > 4 {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    function_metric.span.diagnostic_range(),
+                    "Function is larger than the local quality signal threshold.",
+                )
+                .with_evidence("function", function_metric.name.clone())
+                .with_evidence("function_lines", function_metric.line_count.to_string()),
+            );
+        }
+    }
+
+    for metric in complexity.over(max_complexity) {
+        let file = ctx.file_path(metric.file);
+        if file_in_scope(ctx.options(), &file) {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    file,
+                    metric.span.diagnostic_range(),
+                    "Function is over the local complexity signal threshold.",
+                )
+                .with_evidence("function", metric.name.clone())
+                .with_evidence("complexity", metric.cyclomatic_complexity.to_string()),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![code_quality_signals()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/router.go"),
+        r#"package app
+
+func route(path string) string {
+	if path == "/admin" {
+		return "admin"
+	}
+	if path == "/health" {
+		return "health"
+	}
+	return "public"
+}
+"#,
+    );
+    write_file(
+        &root.join("src/panel.ts"),
+        r#"export function label(value: string) {
+  if (value === "admin") {
+    return "Admin";
+  }
+  if (value === "health") {
+    return "Health";
+  }
+  return value ? value : "Public";
+}
+"#,
+    );
+}
+
 fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
     fs::read_dir(root.join(".polint/cache"))
         .unwrap_or_else(|error| panic!("read cache dir: {error}"))
@@ -448,9 +613,9 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("polint check --fail-on none"));
     assert!(contents.contains("polint ignores --shortstat"));
     assert!(contents.contains("docs/schemas/polint-report-v1.json"));
-    assert!(contents.contains("polint explain go-test --file"));
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
+    assert!(contents.contains("FileMetrics<'_>"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
@@ -520,7 +685,7 @@ fn add_skill_prompts_when_agent_is_not_provided() {
 }
 
 #[test]
-fn add_skill_rejects_existing_skill_unless_force_is_used() {
+fn add_skill_prompts_before_overwriting_existing_skill() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
         .unwrap()
@@ -536,18 +701,54 @@ fn add_skill_rejects_existing_skill_unless_force_is_used() {
         .unwrap()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
+        .write_stdin("n\n")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("skill already exists"));
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
+        .stdout(predicate::str::contains("Kept existing Claude Code skill"));
     assert_eq!(fs::read_to_string(&skill).unwrap(), "sentinel");
 
     Command::cargo_bin("polint")
         .unwrap()
         .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
+        .stdout(predicate::str::contains("Installed Claude Code skill"));
+    assert!(fs::read_to_string(&skill).unwrap().contains("name: polint"));
+
+    fs::write(&skill, "sentinel").unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude", "--force"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?").not());
     assert!(fs::read_to_string(skill).unwrap().contains("name: polint"));
+}
+
+#[test]
+fn add_skill_all_continues_when_existing_skill_is_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_skill = temp.path().join(".claude/skills/polint/SKILL.md");
+    write_file(&claude_skill, "sentinel");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--all"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
+        .stdout(predicate::str::contains("Kept existing Claude Code skill"))
+        .stdout(predicate::str::contains("Installed Codex skill"));
+
+    assert_eq!(fs::read_to_string(claude_skill).unwrap(), "sentinel");
+    assert!(temp.path().join(".agents/skills/polint/SKILL.md").exists());
 }
 
 #[cfg(unix)]
@@ -1091,6 +1292,55 @@ pub(crate) fn no_todo_literals(
         "Configured forbidden literal found."
     );
     assert!(diagnostic_has_evidence(diagnostics[0], "token", "TODO"));
+}
+
+#[test]
+fn external_rule_consumes_derived_metric_signals_through_public_sdk() {
+    let temp = tempfile::tempdir().unwrap();
+    write_metric_signal_rule_repo(temp.path());
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/code-quality-signals");
+    assert!(
+        diagnostics.len() >= 6,
+        "expected file, function, and complexity diagnostics for Go and TS: {json:#?}"
+    );
+    for file in ["src/router.go", "src/panel.ts"] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["file"] == file),
+            "expected metric signal diagnostics in {file}: {json:#?}"
+        );
+    }
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "file_lines", "")),
+        "expected file metric evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "function_lines",
+            ""
+        )),
+        "expected function metric evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic_has_evidence(diagnostic, "complexity", "")),
+        "expected complexity metric evidence: {json:#?}"
+    );
 }
 
 #[test]
@@ -1642,97 +1892,102 @@ rules = []
         json.get("version").and_then(|v| v.as_u64()) == Some(1) && diagnostics(&json).is_empty(),
         "check output should be polint JSON report: {json:#?}"
     );
-
-    let dot = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    assert!(
-        dot.contains("digraph"),
-        "graph imports DOT output should be a graph: {dot}"
-    );
-    assert!(
-        dot.contains("mixed/view.ts"),
-        "DOT output should include mixed TS source: {dot}"
-    );
 }
 
 #[test]
 fn checked_in_examples_are_runnable_cli_fixtures() {
-    let cases: &[(&str, &str, &str, &[&str])] = &[
-        (
-            "basic",
-            "no_raw_colors.rs",
-            "local/no-raw-colors",
-            &["Button.tsx"],
-        ),
-        (
-            "comment-ignores",
-            "no_denied_literals.rs",
-            "local/no-denied-literals",
-            &["app.ts"],
-        ),
-        (
-            "config-denied-literal",
-            "no_denied_literals.rs",
-            "local/no-denied-literals",
-            &["query.ts"],
-        ),
-        (
-            "custom-rule-go",
-            "require_error_branch_tests.rs",
-            "local/require-error-branch-tests",
-            &["authorize.go"],
-        ),
-        (
-            "custom-rule-ts",
-            "no_product_hex_colors.rs",
-            "local/no-product-hex-colors",
-            &["Button.tsx"],
-        ),
-        (
-            "go-branch-obligations",
-            "go_branch_obligations.rs",
-            "local/go-branch-obligations",
-            &["authorize.go"],
-        ),
-        (
-            "go-complexity",
-            "go_complexity.rs",
-            "local/go-cyclomatic-complexity",
-            &["router.go"],
-        ),
-        (
-            "go-import-boundaries",
-            "go_import_boundaries.rs",
-            "local/go-import-boundaries",
-            &["handler.go"],
-        ),
-        (
-            "go-test-quality",
-            "go_test_quality.rs",
-            "local/go-test-quality",
-            &["payment_test.go"],
-        ),
-        (
-            "ts-complexity",
-            "ts_complexity.rs",
-            "local/ts-cyclomatic-complexity",
-            &["label.ts"],
-        ),
-        (
-            "ts-design-tokens",
-            "no_raw_colors.rs",
-            "local/no-raw-colors",
-            &["Button.tsx"],
-        ),
+    struct ExampleCase {
+        name: &'static str,
+        rule_modules: &'static [&'static str],
+        expected_rules: &'static [&'static str],
+        expected_files: &'static [&'static str],
+    }
+
+    let cases: &[ExampleCase] = &[
+        ExampleCase {
+            name: "basic",
+            rule_modules: &["no_raw_colors.rs"],
+            expected_rules: &["local/no-raw-colors"],
+            expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "code-quality-metrics",
+            rule_modules: &[
+                "large_files.rs",
+                "large_functions.rs",
+                "code_quality_score.rs",
+            ],
+            expected_rules: &[
+                "local/large-file",
+                "local/large-function",
+                "local/code-quality-score",
+            ],
+            expected_files: &["service.go", "Panel.tsx"],
+        },
+        ExampleCase {
+            name: "comment-ignores",
+            rule_modules: &["no_denied_literals.rs"],
+            expected_rules: &["local/no-denied-literals"],
+            expected_files: &["app.ts"],
+        },
+        ExampleCase {
+            name: "config-denied-literal",
+            rule_modules: &["no_denied_literals.rs"],
+            expected_rules: &["local/no-denied-literals"],
+            expected_files: &["query.ts"],
+        },
+        ExampleCase {
+            name: "custom-rule-go",
+            rule_modules: &["require_error_branch_tests.rs"],
+            expected_rules: &["local/require-error-branch-tests"],
+            expected_files: &["authorize.go"],
+        },
+        ExampleCase {
+            name: "custom-rule-ts",
+            rule_modules: &["no_product_hex_colors.rs"],
+            expected_rules: &["local/no-product-hex-colors"],
+            expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "go-branch-obligations",
+            rule_modules: &["go_branch_obligations.rs"],
+            expected_rules: &["local/go-branch-obligations"],
+            expected_files: &["authorize.go"],
+        },
+        ExampleCase {
+            name: "go-complexity",
+            rule_modules: &["go_complexity.rs"],
+            expected_rules: &["local/go-cyclomatic-complexity"],
+            expected_files: &["router.go"],
+        },
+        ExampleCase {
+            name: "go-import-boundaries",
+            rule_modules: &["go_import_boundaries.rs"],
+            expected_rules: &["local/go-import-boundaries"],
+            expected_files: &["handler.go"],
+        },
+        ExampleCase {
+            name: "go-test-quality",
+            rule_modules: &["go_test_quality.rs"],
+            expected_rules: &["local/go-test-quality"],
+            expected_files: &["payment_test.go"],
+        },
+        ExampleCase {
+            name: "ts-complexity",
+            rule_modules: &["ts_complexity.rs"],
+            expected_rules: &["local/ts-cyclomatic-complexity"],
+            expected_files: &["label.ts"],
+        },
+        ExampleCase {
+            name: "ts-design-tokens",
+            rule_modules: &["no_raw_colors.rs"],
+            expected_rules: &["local/no-raw-colors"],
+            expected_files: &["Button.tsx"],
+        },
     ];
 
-    for (example, rule_module, expected_rule, expected_files) in cases {
+    for case in cases {
+        let example = case.name;
         let example_dir = repo_root().join("examples").join(example);
         assert!(
             example_dir.join("README.md").exists(),
@@ -1743,11 +1998,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             "{example} should be runnable as a mini repository"
         );
         assert!(
-            example_dir
+            case.rule_modules.iter().all(|rule_module| example_dir
                 .join(".polint/rules/src")
                 .join(rule_module)
-                .exists(),
-            "{example} should contain its local rule implementation ({rule_module})"
+                .exists()),
+            "{example} should contain its local rule implementations ({:?})",
+            case.rule_modules
         );
 
         let json = stdout_json(
@@ -1770,12 +2026,16 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             .iter()
             .filter_map(|diagnostic| diagnostic["rule_id"].as_str())
             .collect::<std::collections::BTreeSet<_>>();
+        let expected_rules = case
+            .expected_rules
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            actual_rules,
-            std::collections::BTreeSet::from([*expected_rule]),
-            "{example} should emit only its one local rule: {json:#?}"
+            actual_rules, expected_rules,
+            "{example} should emit only its expected local rules: {json:#?}"
         );
-        for file in *expected_files {
+        for file in case.expected_files {
             assert!(
                 diagnostics(&json)
                     .iter()
@@ -1850,6 +2110,55 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     );
     assert!(stat.contains("1 directives, 1 active"), "{stat}");
     assert!(stat.contains("By rule"), "{stat}");
+
+    let check_shortstat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["check", "--shortstat", "--no-cache", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        check_shortstat
+            .contains("Scanned 1 file; 1 diagnostics; 1 suppressed by 1 ignore directives"),
+        "{check_shortstat}"
+    );
+
+    let check_stat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["check", "--stat", "--no-cache", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(check_stat.contains("By language"), "{check_stat}");
+    assert!(check_stat.contains("  ts: 1"), "{check_stat}");
+    assert!(check_stat.contains("Ignores"), "{check_stat}");
+
+    let check_json_with_stats = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--stat",
+                "--shortstat",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostics_for_rule(&check_json_with_stats, "local/no-denied-literals").len(),
+        1,
+        "{check_json_with_stats:#?}"
+    );
 }
 
 #[test]
@@ -1901,7 +2210,7 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
     let example_dir = repo_root().join("examples/multiple-rules");
     assert!(
         example_dir.join("README.md").exists(),
-        "multiple-rules should explain the rule-pack structure"
+        "multiple-rules should document the rule-pack structure"
     );
     assert!(
         example_dir.join(".polint.toml").exists(),
@@ -1962,98 +2271,6 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
                 .any(|diagnostic| diagnostic["file"] == file),
             "multiple-rules should report a diagnostic in {file}: {json:#?}"
         );
-    }
-}
-
-#[test]
-fn checked_in_multiple_rules_example_explain_plan_reports_real_capabilities() {
-    let example_dir = repo_root().join("examples/multiple-rules");
-
-    let value = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(&example_dir)
-            .args(["explain", "plan", "--format", "json"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(value["schema"], "analysis-plan-v1");
-    assert!(
-        value["digest"]
-            .as_str()
-            .is_some_and(|digest| !digest.is_empty()),
-        "digest should be present: {value:#?}"
-    );
-    assert_eq!(value["setup_checks"], serde_json::json!([]));
-
-    let rules = value["rules"]
-        .as_array()
-        .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
-    let rule_ids = rules
-        .iter()
-        .map(|rule| {
-            rule["id"]
-                .as_str()
-                .unwrap_or_else(|| panic!("rule id must be a string: {rule:#?}"))
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        rule_ids,
-        BTreeSet::from(["local/go-import-boundaries", "local/no-raw-colors"])
-    );
-
-    let import_rule = rules
-        .iter()
-        .find(|rule| rule["id"] == "local/go-import-boundaries")
-        .unwrap_or_else(|| panic!("expected Go import-boundary rule: {value:#?}"));
-    assert_eq!(import_rule["severity"], "error");
-    assert_eq!(import_rule["capabilities"], serde_json::json!(["imports"]));
-
-    let color_rule = rules
-        .iter()
-        .find(|rule| rule["id"] == "local/no-raw-colors")
-        .unwrap_or_else(|| panic!("expected TS raw-color rule: {value:#?}"));
-    assert_eq!(color_rule["severity"], "error");
-    assert_eq!(
-        color_rule["capabilities"],
-        serde_json::json!(["string_literals", "jsx_attributes"])
-    );
-
-    let capabilities = value["capabilities"]
-        .as_array()
-        .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
-    let capability_statuses = capabilities
-        .iter()
-        .map(|capability| {
-            let name = capability["name"]
-                .as_str()
-                .unwrap_or_else(|| panic!("capability name must be a string: {capability:#?}"));
-            let status = capability["status"]
-                .as_str()
-                .unwrap_or_else(|| panic!("capability status must be a string: {capability:#?}"));
-            (name, status)
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        capability_statuses,
-        BTreeSet::from([
-            ("imports", "supported"),
-            ("jsx_attributes", "supported"),
-            ("string_literals", "supported")
-        ])
-    );
-
-    for (name, owner) in [
-        ("imports", "local/go-import-boundaries"),
-        ("jsx_attributes", "local/no-raw-colors"),
-        ("string_literals", "local/no-raw-colors"),
-    ] {
-        let capability = capabilities
-            .iter()
-            .find(|capability| capability["name"] == name)
-            .unwrap_or_else(|| panic!("expected capability `{name}`: {value:#?}"));
-        assert_eq!(capability["rules"], serde_json::json!([owner]));
     }
 }
 
@@ -2220,139 +2437,8 @@ files = ["**/*.tsx"]
     assert_eq!(diagnostic["severity"], "info");
 }
 
-#[test]
-fn explain_example_rule_reports_no_bundled_metadata() {
-    Command::cargo_bin("polint")
-        .unwrap()
-        .args(["explain", "rule", "local/no-raw-colors"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("No bundled rule found"))
-        .stdout(predicate::str::contains("ships no built-in policy rules"));
-}
-
-#[test]
-fn explain_unknown_rule_is_nonfatal_and_clear() {
-    Command::cargo_bin("polint")
-        .unwrap()
-        .args(["explain", "rule", "custom/missing"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("No bundled rule found"));
-}
-
-#[test]
-fn explain_plan_no_rules_outputs_empty_json_without_parsing_sources() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["src/**"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("src/broken.go"),
-        "package broken\nfunc Broken( {\n",
-    );
-
-    let stdout = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["explain", "plan", "--format", "json"])
-            .assert()
-            .success(),
-    );
-    let value: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("stdout was not parseable JSON: {error}\n{stdout}"));
-
-    assert_eq!(value["schema"], "analysis-plan-v1");
-    assert_eq!(value["rules"], serde_json::json!([]));
-    assert_eq!(value["capabilities"], serde_json::json!([]));
-    assert_eq!(value["setup_checks"], serde_json::json!([]));
-}
-
-mod explain_plan {
+mod capability_planning {
     use super::*;
-
-    #[test]
-    fn explain_plan_delegates_to_local_rule_host_json() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-
-        let value = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
-                .current_dir(temp.path())
-                .args(["explain", "plan", "--format", "json"])
-                .assert()
-                .success(),
-        );
-
-        let rules = value["rules"]
-            .as_array()
-            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"));
-        assert!(rules.iter().any(|rule| {
-            rule["id"] == "local/needs-imports"
-                && rule["capabilities"] == serde_json::json!(["imports"])
-        }));
-        assert!(rules.iter().any(|rule| {
-            rule["id"] == "local/needs-cfg" && rule["capabilities"] == serde_json::json!(["cfg"])
-        }));
-
-        let capabilities = value["capabilities"]
-            .as_array()
-            .unwrap_or_else(|| panic!("capabilities must be an array: {value:#?}"));
-        assert!(capabilities.iter().any(|capability| {
-            capability["name"] == "imports" && capability["status"] == "supported"
-        }));
-        assert!(capabilities.iter().any(|capability| {
-            capability["name"] == "cfg" && capability["status"] == "unsupported"
-        }));
-        assert!(
-            value["digest"]
-                .as_str()
-                .is_some_and(|digest| !digest.is_empty()),
-            "digest should be present: {value:#?}"
-        );
-    }
-
-    #[test]
-    fn explain_plan_json_uses_resolved_severity_override() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-        let config_path = temp.path().join(".polint.toml");
-        let config = fs::read_to_string(&config_path).unwrap();
-        write_file(
-            &config_path,
-            &format!(
-                r#"{config}
-[[rules.config]]
-id = "local/needs-imports"
-severity = "error"
-"#
-            ),
-        );
-
-        let value = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
-                .current_dir(temp.path())
-                .args(["explain", "plan", "--format", "json"])
-                .assert()
-                .success(),
-        );
-
-        let rule = value["rules"]
-            .as_array()
-            .unwrap_or_else(|| panic!("rules must be an array: {value:#?}"))
-            .iter()
-            .find(|rule| rule["id"] == "local/needs-imports")
-            .unwrap_or_else(|| panic!("expected needs-imports rule: {value:#?}"));
-        assert_eq!(rule["severity"], "error");
-    }
 
     #[test]
     fn check_reports_unsupported_reserved_capability() {
@@ -2426,29 +2512,6 @@ severity = "error"
             "rule",
             "local/needs-cfg"
         ));
-    }
-
-    #[test]
-    fn explain_plan_json_is_deterministic() {
-        let temp = tempfile::tempdir().unwrap();
-        write_plan_capability_rule_repo(temp.path());
-        let run = || {
-            stdout_string(
-                Command::cargo_bin("polint")
-                    .unwrap()
-                    .current_dir(temp.path())
-                    .args(["explain", "plan", "--format", "json"])
-                    .assert()
-                    .success(),
-            )
-        };
-
-        let first = run();
-        let second = run();
-        let third = run();
-
-        assert_eq!(second, first);
-        assert_eq!(third, first);
     }
 
     #[test]
@@ -2554,49 +2617,6 @@ fn check_only_rule_filters_out_diagnostics_when_pattern_matches_nothing() {
 }
 
 #[test]
-fn explain_go_test_prints_harvested_fact_json() {
-    let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["**/*.go"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("demo_test.go"),
-        r#"
-package demo
-
-import "testing"
-
-func TestHello(t *testing.T) {
-    t.Run("sub", func(t *testing.T) {})
-}
-"#,
-    );
-    let assert = Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args([
-            "explain",
-            "go-test",
-            "--file",
-            "demo_test.go",
-            "--test",
-            "TestHello",
-        ])
-        .assert()
-        .success();
-    let stdout = stdout_string(assert);
-    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(value["name"], "TestHello");
-    let names = value["subtest_names"].as_array().unwrap();
-    assert!(names.contains(&serde_json::Value::String("sub".to_string())));
-}
-
-#[test]
 fn init_new_rule_and_check_json_smoke() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
@@ -2638,7 +2658,7 @@ fn rules_json_stdout_should_be_parseable_json() {
             .unwrap()
             .current_dir(temp.path())
             .args([
-                "test-rules",
+                "check",
                 "--profile",
                 "phase8",
                 "--format",
@@ -2822,80 +2842,6 @@ fn sarif_output_includes_ci_fields_and_honors_fail_threshold() {
         .assert()
         .failure()
         .code(1);
-}
-
-#[test]
-fn graph_imports_outputs_deterministic_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let first = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    let second = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "imports", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(first, second);
-    assert!(first.contains("digraph"));
-    assert!(first.contains("main.go"));
-    assert!(first.contains("fmt"));
-}
-
-#[test]
-fn graph_function_outputs_deterministic_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let first = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Authorize", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-    let second = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Authorize", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert_eq!(first, second);
-    assert!(first.contains("digraph"));
-    assert!(first.contains("Authorize"));
-    assert!(first.contains("validateUser"));
-}
-
-#[test]
-fn graph_function_missing_name_is_nonfatal_valid_dot() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase8_graph_fixture(temp.path());
-
-    let dot = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["graph", "function", "Missing", "--format", "dot"])
-            .assert()
-            .success(),
-    );
-
-    assert!(dot.contains("digraph"));
-    assert!(!dot.contains("Missing"));
 }
 
 #[test]
@@ -3144,36 +3090,6 @@ fn check_no_cache_bypasses_cache_reads_and_writes() {
     assert_eq!(warm, cold);
     assert_eq!(no_cache, cold);
     assert_eq!(cache_files_after_no_cache, cache_files_after_cold);
-}
-
-#[test]
-fn profile_rules_reports_no_registered_rules() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase7_cache_fixture(temp.path());
-
-    let output = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .current_dir(temp.path())
-            .args(["profile-rules", "--profile", "phase7", "--fail-on", "none"])
-            .assert()
-            .success(),
-    );
-
-    assert!(output.contains("No rules registered"));
-}
-
-#[test]
-fn profile_rules_without_registered_policy_rules_succeeds() {
-    let temp = tempfile::tempdir().unwrap();
-    write_phase7_cache_fixture(temp.path());
-
-    Command::cargo_bin("polint")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["profile-rules", "--profile", "phase7", "--fail-on", "warn"])
-        .assert()
-        .success();
 }
 
 #[test]

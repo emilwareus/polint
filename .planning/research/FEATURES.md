@@ -3,10 +3,10 @@
 ## Table Stakes
 
 - Workspace and crate structure that compiles under Rust 2024.
-- CLI commands for init, check, new-rule, test-rules, profile-rules, explain, and graph exports.
+- CLI commands for init, add-skill, new-rule, check, and ignores.
 - `.polint.toml` config with profiles, include/exclude globs, rule paths, severity overrides, and language settings.
 - Fast deterministic file discovery that respects `.gitignore`.
-- Core facts: files, spans, functions, imports, branches, tests, coverage placeholders, graphs, and stable IDs.
+- Core facts: files, spans, functions, imports, branches, tests, coverage placeholders, and stable IDs.
 - Diagnostics rendered as human text and JSON, with stable fingerprints and deterministic sorting.
 - Go syntax extraction for packages, imports, functions, methods, tests, branch obligations, and cyclomatic complexity.
 - TS/JS syntax extraction for imports, functions, classes, JSX attributes, string literals, and cyclomatic complexity.
@@ -37,4 +37,4 @@
 - Example rules depend on SDK ergonomics and adapter facts.
 - Caching depends on stable file/config/rule hashes.
 - SARIF output depends on stable diagnostics.
-- Future analysis tiers (types, deeper graphs) must remain keyed off stable SDK concepts without forcing full AST serialization.
+- Future analysis tiers (types, deeper relationship facts) must remain keyed off stable SDK concepts without forcing full AST serialization.

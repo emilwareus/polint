@@ -23,10 +23,10 @@ through the public SDK.
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
 | 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (Complete: 3/3 plans executed on 2026-05-09.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
-| 12 | CFG Facts for Go and TS/JS | Expose real per-function control-flow graphs through `RuleCtx`. | CFG-01, CFG-02, CFG-03, CFG-04 |
+| 12 | Control-Flow Facts for Go and TS/JS | Add typed SDK views for per-function control flow. | CFG-01, CFG-02, CFG-03, CFG-04 |
 | 13 | Coverage Facts Import | Import Go and TS/JS coverage reports into public coverage facts. | COV-01, COV-02, COV-03, COV-04 |
-| 14 | Resolved Imports and Module Graph | Resolve imports into file/package/module relationships. | MOD-01, MOD-02, MOD-03, MOD-04 |
-| 15 | Direct Call Graph Facts | Expose direct call edges with resolution status and confidence. | CALL-01, CALL-02, CALL-03, CALL-04 |
+| 14 | Resolved Imports and Module Relationships | Resolve imports into file/package/module relationships. | MOD-01, MOD-02, MOD-03, MOD-04 |
+| 15 | Direct Call Facts | Add direct call edges with resolution status and confidence. | CALL-01, CALL-02, CALL-03, CALL-04 |
 | 16 | Symbols and References | Expose definitions, symbols, references, and stable symbol IDs. | SYM-01, SYM-02, SYM-03, SYM-04 |
 | 17 | Test Suite Metrics | Provide reusable Go and TS/JS test-quality metrics. | TEST-01, TEST-02, TEST-03, TEST-04 |
 | 18 | Python Adapter | Add Python with a declared initial capability subset. | PY-01, PY-02, PY-03, PY-04 |
@@ -48,7 +48,7 @@ for before analysis starts.
 Plans:
 - [x] 11-01-PLAN.md — Internal AnalysisPlan contract and RuleCtx support view
 - [x] 11-02-PLAN.md — Runner, adapter, and cache integration
-- [x] 11-03-PLAN.md — Explain plan CLI, external proof, and docs
+- [x] 11-03-PLAN.md — Capability diagnostics, external proof, and docs
 
 **Success criteria:**
 
@@ -56,11 +56,11 @@ Plans:
 2. Go and TS/JS adapters receive the plan before harvesting optional facts.
 3. Cache keys change when the resolved plan changes.
 4. Missing or unsupported setup produces clear diagnostics or structured warnings.
-5. `polint explain plan` shows the requested capabilities and setup checks.
+5. `polint check` reports unsupported or setup-missing requested capabilities clearly.
 
-### Phase 12: CFG Facts for Go and TS/JS
+### Phase 12: Control-Flow Facts for Go and TS/JS
 
-**Goal:** Expose real per-function control-flow graphs through the SDK.
+**Goal:** Add real per-function control-flow facts through the SDK.
 
 **Why:** Rule authors need to reason about function paths without parsing ASTs
 themselves.
@@ -69,11 +69,11 @@ themselves.
 
 **Success criteria:**
 
-1. Public CFG graph types are available through `polint::sdk::prelude::*`.
+1. Public control-flow fact types are available through `polint::sdk::prelude::*`.
 2. Go functions expose syntax-level CFGs for common branch and exit constructs.
-3. TS/JS functions expose syntax-level CFGs through the same graph model.
-4. `RuleCtx::cfg(function_id)` returns CFGs for analyzed functions.
-5. `polint graph cfg` renders non-placeholder DOT output.
+3. TS/JS functions expose syntax-level control-flow facts through the same fact model.
+4. A typed SDK view returns control-flow facts for analyzed functions.
+5. External-consumer tests prove rules can read CFG facts through the public SDK.
 
 ### Phase 13: Coverage Facts Import
 
@@ -91,7 +91,7 @@ themselves.
 4. Coverage facts include source and precision metadata.
 5. Missing coverage setup is reported clearly when coverage is requested.
 
-### Phase 14: Resolved Imports and Module Graph
+### Phase 14: Resolved Imports and Module Relationships
 
 **Goal:** Resolve syntactic imports into module/file/package relationships.
 
@@ -105,14 +105,14 @@ literal strings.
 1. `ResolvedImportFact` records resolved targets or explicit unresolved reasons.
 2. TS/JS imports resolve through project-aware resolver setup.
 3. Go imports resolve through Go package/module metadata where available.
-4. `RuleCtx::module_graph()` exposes module graph relationships.
-5. `polint explain import` helps users debug import resolution.
+4. A typed SDK view exposes module relationship facts.
+5. Unresolved imports are visible to rules with explicit reasons.
 
-### Phase 15: Direct Call Graph Facts
+### Phase 15: Direct Call Facts
 
 **Goal:** Expose direct call relationships with resolution status and confidence.
 
-**Why:** Call graph facts enable architectural, dependency, and future
+**Why:** Direct call facts enable architectural, dependency, and future
 interprocedural rules.
 
 **Requirements:** CALL-01, CALL-02, CALL-03, CALL-04
@@ -122,14 +122,14 @@ interprocedural rules.
 1. Go and TS/JS call expressions produce `CallEdgeFact` entries.
 2. Call facts include caller, callee text, span, resolution status, and confidence.
 3. Call facts attach resolved targets when import/symbol facts make that possible.
-4. `RuleCtx::calls_from(function_id)` exposes function-local call relationships.
-5. `polint graph calls` renders useful call graph output.
+4. A typed SDK view exposes function-local call relationships.
+5. External-consumer tests prove rules can read direct call facts through the public SDK.
 
 ### Phase 16: Symbols and References
 
 **Goal:** Expose stable definitions, symbols, and references.
 
-**Why:** This moves rules beyond string matching and gives later graph features a
+**Why:** This moves rules beyond string matching and gives later relationship facts a
 shared semantic foundation.
 
 **Requirements:** SYM-01, SYM-02, SYM-03, SYM-04
@@ -139,7 +139,7 @@ shared semantic foundation.
 1. Public symbol/reference fact types and IDs are available through the SDK.
 2. Go symbols and references are populated from typed package information where setup exists.
 3. TS/JS symbols and references are populated from Oxc semantic facts where setup exists.
-4. `RuleCtx::references_to(symbol_id)` works for supported symbols.
+4. A typed SDK view exposes references for supported symbols.
 5. Precision tiers distinguish exact, heuristic, unresolved, and ambiguous facts.
 
 ### Phase 17: Test Suite Metrics
@@ -196,13 +196,13 @@ coverage without leaking raw Java tooling into the SDK.
 
 Each phase should ship with:
 
-- public fact types or graph types when new facts are introduced
-- public `RuleCtx` accessors
+- public typed fact views when new facts are introduced
+- SDK query methods on those typed views
 - adapter implementation for the targeted language tier
 - cache-key participation when harvested facts change
 - docs under `docs/facts/` when new facts are public
 - external temp-repo test using only `polint::sdk::prelude::*`
-- CLI `explain` or `graph` support when useful for debugging
+- no new CLI/debug surface unless it is deliberately promoted as supported product behavior
 - clear unsupported/setup diagnostics instead of silent empty facts
 
 ## Traceability

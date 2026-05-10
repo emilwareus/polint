@@ -29,12 +29,22 @@ enum SkillAgent {
 pub(crate) fn add_skill(root: PathBuf, args: &AddSkillArgs) -> Result<()> {
     let agents = selected_agents(args)?;
     for agent in agents {
-        let skill_path = install_skill(&root, agent, args.force)?;
-        println!(
-            "Installed {} skill at {}",
-            agent.label(),
-            display_relative(&root, &skill_path)
-        );
+        match install_skill(&root, agent, args.force)? {
+            SkillInstall::Installed(skill_path) => {
+                println!(
+                    "Installed {} skill at {}",
+                    agent.label(),
+                    display_relative(&root, &skill_path)
+                );
+            }
+            SkillInstall::Skipped(skill_path) => {
+                println!(
+                    "Kept existing {} skill at {}",
+                    agent.label(),
+                    display_relative(&root, &skill_path)
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -95,7 +105,12 @@ fn parse_agent_selection(input: &str) -> Result<Vec<SkillAgent>> {
     Ok(dedupe_agents(&selected))
 }
 
-fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf> {
+enum SkillInstall {
+    Installed(PathBuf),
+    Skipped(PathBuf),
+}
+
+fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<SkillInstall> {
     let target_dir = target_skill_dir(root, agent);
     let skill_dir = target_dir.join("polint");
     let skill_path = skill_dir.join("SKILL.md");
@@ -107,18 +122,28 @@ fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf>
     {
         anyhow::bail!("refusing to overwrite symlink: {}", skill_path.display());
     }
-    if skill_path.exists() && !force {
-        anyhow::bail!(
-            "skill already exists: {} (use --force to overwrite)",
-            skill_path.display()
-        );
+    if skill_path.exists() && !force && !confirm_overwrite(&skill_path)? {
+        return Ok(SkillInstall::Skipped(skill_path));
     }
 
     fs::create_dir_all(&skill_dir)
         .with_context(|| format!("failed to create {}", skill_dir.display()))?;
     fs::write(&skill_path, skill_markdown(agent))
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
-    Ok(skill_path)
+    Ok(SkillInstall::Installed(skill_path))
+}
+
+fn confirm_overwrite(skill_path: &Path) -> Result<bool> {
+    println!("polint skill already exists at {}", skill_path.display());
+    print!("Overwrite existing polint skill? [y/N]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn target_skill_dir(root: &Path, agent: SkillAgent) -> PathBuf {
@@ -187,9 +212,9 @@ is a versioned report object with a `diagnostics` array (not a bare array at the
 root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
 Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
 for plain text. Use `polint check --format sarif` for CI upload paths. Use
-`--fail-on warn`, `error`, or `none` to control the exit status. Use
-`polint explain go-test --file … --test …` to print one harvested `TestFact` as
-JSON when debugging Go tests.
+`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
+--shortstat` or `polint check --stat` for human scan summaries; these flags do
+not add prose to JSON or SARIF output.
 
 Use `polint ignores` when you need to find suppressions that should be fixed:
 
@@ -272,6 +297,14 @@ pub(crate) fn no_raw_colors(
 }}
 ```
 
+## Reusable Metric Signals
+
+For code-quality policies, prefer reusable signal views over rules calling other
+rules. `FileMetrics<'_>` exposes file line/byte/function counts,
+`FunctionMetrics<'_>` exposes per-function size, and `ComplexityMetrics<'_>`
+exposes per-function syntax-level cyclomatic complexity. A composite rule can
+request several of these typed views in one `#[polint::rule]` signature.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs
@@ -296,10 +329,12 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
+- Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
+- Compose `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` for higher-level quality rules instead of making rules depend on other rules.
 - Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.

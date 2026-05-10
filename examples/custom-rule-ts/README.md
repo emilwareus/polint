@@ -66,8 +66,8 @@ fn no_product_hex_colors(
 }
 ```
 
-Use `polint test-rules` to verify product fixture wiring while you iterate:
+Use `polint check` to verify product fixture wiring while you iterate:
 
 ```bash
-polint test-rules --format json
+polint check --format json --fail-on none
 ```

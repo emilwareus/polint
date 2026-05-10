@@ -5,9 +5,9 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, CoverageFact, FileId, FunctionFact, FunctionId, ImportFact,
-    JsxAttributeFact, Language, PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact,
-    TsComponentFact,
+    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
+    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, JsxAttributeFact, Language,
+    PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -84,6 +84,116 @@ impl<'a> Functions<'a> {
             .functions()
             .iter()
             .filter(move |function| function.file == file)
+    }
+}
+
+/// Source-file metric view. Requesting this view maps to the `file_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct FileMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> FileMetrics<'a> {
+    /// Returns all derived file metrics in deterministic database order.
+    pub fn all(self) -> &'a [FileMetricFact] {
+        self.db.file_metrics()
+    }
+
+    /// Iterates all derived file metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, FileMetricFact> {
+        self.db.file_metrics().iter()
+    }
+
+    /// Returns derived metrics for one source file.
+    pub fn get(self, file: FileId) -> Option<&'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .find(|metric| metric.file == file)
+    }
+
+    /// Returns file metrics for one language.
+    pub fn for_language(self, language: Language) -> impl Iterator<Item = &'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .filter(move |metric| metric.language == language)
+    }
+}
+
+/// Function-size metric view. Requesting this view maps to the `function_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct FunctionMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> FunctionMetrics<'a> {
+    /// Returns all derived function-size metrics in deterministic database order.
+    pub fn all(self) -> &'a [FunctionMetricFact] {
+        self.db.function_metrics()
+    }
+
+    /// Iterates all derived function-size metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, FunctionMetricFact> {
+        self.db.function_metrics().iter()
+    }
+
+    /// Returns function-size metrics for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .filter(move |metric| metric.file == file)
+    }
+
+    /// Returns function-size metrics for one function.
+    pub fn get(self, function: FunctionId) -> Option<&'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .find(|metric| metric.function == function)
+    }
+}
+
+/// Complexity metric view. Requesting this view maps to the `complexity_metrics` capability.
+#[derive(Clone, Copy)]
+pub struct ComplexityMetrics<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ComplexityMetrics<'a> {
+    /// Returns all derived complexity metrics in deterministic database order.
+    pub fn all(self) -> &'a [ComplexityMetricFact] {
+        self.db.complexity_metrics()
+    }
+
+    /// Iterates all derived complexity metrics in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ComplexityMetricFact> {
+        self.db.complexity_metrics().iter()
+    }
+
+    /// Returns complexity metrics for a file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .filter(move |metric| metric.file == file)
+    }
+
+    /// Returns complexity metrics for one function.
+    pub fn get(self, function: FunctionId) -> Option<&'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .find(|metric| metric.function == function)
+    }
+
+    /// Iterates functions whose cyclomatic complexity is greater than `max`.
+    pub fn over(self, max: u32) -> impl Iterator<Item = &'a ComplexityMetricFact> {
+        self.db
+            .complexity_metrics()
+            .iter()
+            .filter(move |metric| metric.cyclomatic_complexity > max)
     }
 }
 
@@ -394,6 +504,9 @@ macro_rules! impl_fact_view {
 impl_fact_view!(SourceFiles);
 impl_fact_view!(Packages);
 impl_fact_view!(Functions);
+impl_fact_view!(FileMetrics);
+impl_fact_view!(FunctionMetrics);
+impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
@@ -406,3 +519,150 @@ impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
 impl_fact_view!(DataFlow, _db);
 impl_fact_view!(TestSuiteMetrics, _db);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        AnalysisDb, ComplexityMetricFact, FileMetricFact, FunctionId, FunctionMetricFact, Language,
+        Span,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn metric_views_query_by_file_function_language_and_threshold() {
+        let mut db = AnalysisDb::new();
+        let go_file = db.add_file(
+            PathBuf::from("src/router.go"),
+            "src/router.go".to_string(),
+            "package app\nfunc route() {}\n".to_string(),
+        );
+        let ts_file = db.add_file(
+            PathBuf::from("src/panel.ts"),
+            "src/panel.ts".to_string(),
+            "export function Panel() {}\n".to_string(),
+        );
+        let route_function = FunctionId(0);
+        let panel_function = FunctionId(1);
+        let route_span = Span {
+            file: go_file,
+            start_byte: 12,
+            end_byte: 27,
+            start_line: 2,
+            start_col: 1,
+            end_line: 2,
+            end_col: 16,
+        };
+        let panel_span = Span {
+            file: ts_file,
+            start_byte: 0,
+            end_byte: 26,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 27,
+        };
+
+        db.replace_metric_facts(
+            vec![
+                FileMetricFact {
+                    file: go_file,
+                    language: Language::Go,
+                    line_count: 2,
+                    non_empty_line_count: 2,
+                    byte_count: 28,
+                    function_count: 1,
+                },
+                FileMetricFact {
+                    file: ts_file,
+                    language: Language::TypeScript,
+                    line_count: 1,
+                    non_empty_line_count: 1,
+                    byte_count: 27,
+                    function_count: 1,
+                },
+            ],
+            vec![
+                FunctionMetricFact {
+                    function: route_function,
+                    file: go_file,
+                    name: "route".to_string(),
+                    span: route_span.clone(),
+                    language: Language::Go,
+                    line_count: 1,
+                    byte_count: 15,
+                },
+                FunctionMetricFact {
+                    function: panel_function,
+                    file: ts_file,
+                    name: "Panel".to_string(),
+                    span: panel_span.clone(),
+                    language: Language::TypeScript,
+                    line_count: 1,
+                    byte_count: 26,
+                },
+            ],
+            vec![
+                ComplexityMetricFact {
+                    function: route_function,
+                    file: go_file,
+                    name: "route".to_string(),
+                    span: route_span,
+                    language: Language::Go,
+                    cyclomatic_complexity: 1,
+                },
+                ComplexityMetricFact {
+                    function: panel_function,
+                    file: ts_file,
+                    name: "Panel".to_string(),
+                    span: panel_span,
+                    language: Language::TypeScript,
+                    cyclomatic_complexity: 3,
+                },
+            ],
+        );
+
+        let files = FileMetrics::build(&db);
+        let functions = FunctionMetrics::build(&db);
+        let complexity = ComplexityMetrics::build(&db);
+
+        assert_eq!(
+            files.get(go_file).map(|metric| metric.function_count),
+            Some(1)
+        );
+        assert_eq!(
+            files
+                .for_language(Language::TypeScript)
+                .map(|metric| metric.file)
+                .collect::<Vec<_>>(),
+            vec![ts_file]
+        );
+        assert_eq!(
+            functions
+                .for_file(go_file)
+                .map(|metric| metric.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["route"]
+        );
+        assert_eq!(
+            functions
+                .get(panel_function)
+                .map(|metric| metric.name.as_str()),
+            Some("Panel")
+        );
+        assert_eq!(
+            complexity
+                .for_file(ts_file)
+                .map(|metric| metric.cyclomatic_complexity)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+        assert_eq!(
+            complexity
+                .over(1)
+                .map(|metric| metric.function)
+                .collect::<Vec<_>>(),
+            vec![panel_function]
+        );
+    }
+}

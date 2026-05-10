@@ -21,12 +21,16 @@ Validate against expectations by deserializing with your agent’s JSON stack; d
 - **One rule pattern**: `--only-rule PATTERN` (same matching as profiles: exact id, `prefix/*`, or `*`).
 - **Cap noise**: `--max-diagnostics N`
 - **Severity gate**: `--fail-on warn|error|none`
+- **Scan summary**: `--shortstat` for one line, `--stat` for grouped human stats.
 
 Example:
 
 ```bash
 polint check --format json --fail-on error --only-rule 'local/*' path/to/dir
 ```
+
+`--stat` and `--shortstat` are human-output helpers. They do not append prose to
+JSON or SARIF output.
 
 ## Ignore cleanup
 
@@ -48,14 +52,6 @@ The JSON shape is documented in
 [`docs/IGNORE-COMMENTS.md`](IGNORE-COMMENTS.md) for syntax and health
 diagnostics (`polint/unused-ignore`, `polint/malformed-ignore`,
 `polint/ignore-missing-reason`).
-
-## Explaining harvester facts
-
-```bash
-polint explain go-test --file internal/foo/service/bar_test.go --test TestAuthorize
-```
-
-Emits JSON for one [`TestFact`](../crates/polint/src/core/mod.rs). See [facts/go-tests.md](facts/go-tests.md).
 
 ## CI snippet
 
@@ -86,9 +82,9 @@ See [CONSUMER-SETUP.md](CONSUMER-SETUP.md) for rules-host errors, env vars, and 
 
 Small, composable rule ideas (implement in `.polint/rules`):
 
-1. **Require `t.Run`** for table-style tests — check `subtest_count` / `subtest_names` on [`TestFact`](../crates/polint/src/core/mod.rs).
-2. **Substring in test name** — `TestFact.name.contains("Integration")`.
-3. **Forbid import path** — scan [`ImportFact`](../crates/polint/src/core/mod.rs) for a prefix.
+1. **Require `t.Run`** for table-style tests — request `GoTests<'_>` and check `subtest_count` / `subtest_names`.
+2. **Substring in test name** — request `GoTests<'_>` and check `test.name.contains("Integration")`.
+3. **Forbid import path** — request `Imports<'_>` and scan import paths for a prefix.
 
 Golden JSON: use `examples/ts-design-tokens` or similar; integration tests in
 `crates/polint/tests/cli.rs` assert filters and report shape.

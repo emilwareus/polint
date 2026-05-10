@@ -87,10 +87,11 @@ impl FunctionGraph {
     }
 }
 
-// Placeholders for future CFG / file-graph DOT export (CLI graph command).
+// Placeholders for internal graph experiments; do not expose before the SDK view
+// and user value are finished.
 #[expect(
     dead_code,
-    reason = "Reserved for a future `polint graph` command; not wired yet."
+    reason = "Reserved for internal CFG experiments; not a public surface."
 )]
 pub(crate) fn cfg_to_dot(_db: &AnalysisDb, _function: FunctionId) -> String {
     "digraph cfg {\n  \"entry\" -> \"exit\";\n}\n".to_string()

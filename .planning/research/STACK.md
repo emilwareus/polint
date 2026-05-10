@@ -10,10 +10,10 @@
 | Tracing | `tracing`, `tracing-subscriber` | tracing 0.1.44, subscriber 0.3.23 | Structured internal logging and future profiling integration. | High |
 | Parallelism | `rayon` | 1.12.0 | Straightforward parallel parsing and rule execution. | High |
 | File discovery | `ignore`, `globset` | ignore 0.4.25, globset 0.4.18 | Fast walking with `.gitignore` support and reliable glob matching. | High |
-| Graphs | `petgraph` | 0.8.3 | Suitable for import graphs, call graph skeletons, CFG representation, and DOT export. | High |
+| Internal relations | `petgraph` | 0.8.3 | Internal representation for relationship facts behind the SDK; no public CLI/export contract. | High |
 | Go parsing | `tree-sitter`, `tree-sitter-go` | tree-sitter 0.26.8, tree-sitter-go 0.25.0 | Practical syntax extraction without needing Go type checking in v1. | High |
 | TS/JS parsing | Oxc crates | 0.128.0 | Rust-native high-performance JS/TS parser ecosystem. | Medium |
-| Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import graph precision. Initial v1 can start with syntactic imports. | Medium |
+| Import resolution | `oxc_resolver` | 11.19.1 | Useful for future TS import-resolution precision. Initial v1 can start with syntactic imports. | Medium |
 | Tests | `insta`, `assert_cmd`, `predicates`, `tempfile`, `pretty_assertions`, `proptest` | Current versions checked | Covers snapshots, CLI integration, fixtures, diffs, and invariants. | High |
 
 ## What Not To Use First

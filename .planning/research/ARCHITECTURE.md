@@ -10,7 +10,7 @@
 - `polint-sdk`: public rule-author API. It should wrap core capabilities so rule authors do not need internal parser details.
 - `polint-go`: Go parser and extractor using tree-sitter-go.
 - `polint-ts`: TS/JS parser and extractor using Oxc.
-- `polint-graph`: graph types/helpers around petgraph and DOT export.
+- `polint-graph`: internal relationship helpers around petgraph; not a public CLI or SDK boundary.
 - `polint-rules`: built-in example rules using the SDK.
 - `polint-cache`: content/config/rule hashing and parse/fact cache metadata.
 

@@ -12,7 +12,7 @@ prevents large-repo performance from scaling with what rules actually need.
 
 ## Difficulty
 
-**L**: shared model plus runner, adapter, cache, CLI, and test changes.
+**L**: shared model plus runner, adapter, cache, and test changes.
 
 ## What To Build
 
@@ -21,7 +21,6 @@ prevents large-repo performance from scaling with what rules actually need.
 - capability union logic over enabled rules
 - deterministic analysis-plan encoding
 - setup probes for language-specific deep facts
-- `polint explain plan`
 
 ## Build Method
 
@@ -32,12 +31,11 @@ prevents large-repo performance from scaling with what rules actually need.
 5. Keep parser diagnostics on by default.
 6. Gate optional harvesters behind plan flags.
 7. Include the encoded plan in `rule_hash` or a new cache digest component.
-8. Add `polint explain plan --profile <name>`.
-9. Add external temp-repo tests proving capability changes affect the plan.
+8. Add external temp-repo tests proving capability changes affect the plan.
 
 ## Done When
 
-- Rules can explain which capabilities they requested.
+- Unsupported/setup-missing capabilities produce clear `polint check` diagnostics.
 - Adapters receive an explicit plan.
 - Cache keys change when the plan changes.
 - Missing setup produces structured diagnostics.

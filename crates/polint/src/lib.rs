@@ -22,8 +22,10 @@ pub(crate) mod core;
 pub(crate) mod diagnostics;
 pub(crate) mod fs;
 pub(crate) mod go;
+#[cfg(test)]
 pub(crate) mod graph;
 pub(crate) mod ignores;
+pub(crate) mod metrics;
 pub(crate) mod path_context;
 pub(crate) mod rule_error;
 pub(crate) mod ts;

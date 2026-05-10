@@ -72,8 +72,8 @@ fn require_payment_error_tests(
 }
 ```
 
-Use `polint test-rules` to verify product fixture wiring while you iterate:
+Use `polint check` to verify product fixture wiring while you iterate:
 
 ```bash
-polint test-rules --format json
+polint check --format json --fail-on none
 ```
