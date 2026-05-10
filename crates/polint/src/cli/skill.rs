@@ -29,12 +29,22 @@ enum SkillAgent {
 pub(crate) fn add_skill(root: PathBuf, args: &AddSkillArgs) -> Result<()> {
     let agents = selected_agents(args)?;
     for agent in agents {
-        let skill_path = install_skill(&root, agent, args.force)?;
-        println!(
-            "Installed {} skill at {}",
-            agent.label(),
-            display_relative(&root, &skill_path)
-        );
+        match install_skill(&root, agent, args.force)? {
+            SkillInstall::Installed(skill_path) => {
+                println!(
+                    "Installed {} skill at {}",
+                    agent.label(),
+                    display_relative(&root, &skill_path)
+                );
+            }
+            SkillInstall::Skipped(skill_path) => {
+                println!(
+                    "Kept existing {} skill at {}",
+                    agent.label(),
+                    display_relative(&root, &skill_path)
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -95,7 +105,12 @@ fn parse_agent_selection(input: &str) -> Result<Vec<SkillAgent>> {
     Ok(dedupe_agents(&selected))
 }
 
-fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf> {
+enum SkillInstall {
+    Installed(PathBuf),
+    Skipped(PathBuf),
+}
+
+fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<SkillInstall> {
     let target_dir = target_skill_dir(root, agent);
     let skill_dir = target_dir.join("polint");
     let skill_path = skill_dir.join("SKILL.md");
@@ -108,17 +123,14 @@ fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf>
         anyhow::bail!("refusing to overwrite symlink: {}", skill_path.display());
     }
     if skill_path.exists() && !force && !confirm_overwrite(&skill_path)? {
-        anyhow::bail!(
-            "skill already exists: {} (use --force to overwrite)",
-            skill_path.display()
-        );
+        return Ok(SkillInstall::Skipped(skill_path));
     }
 
     fs::create_dir_all(&skill_dir)
         .with_context(|| format!("failed to create {}", skill_dir.display()))?;
     fs::write(&skill_path, skill_markdown(agent))
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
-    Ok(skill_path)
+    Ok(SkillInstall::Installed(skill_path))
 }
 
 fn confirm_overwrite(skill_path: &Path) -> Result<bool> {

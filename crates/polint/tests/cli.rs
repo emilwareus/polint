@@ -703,9 +703,9 @@ fn add_skill_prompts_before_overwriting_existing_skill() {
         .args(["add-skill", "--agent", "claude"])
         .write_stdin("n\n")
         .assert()
-        .failure()
+        .success()
         .stdout(predicate::str::contains("Overwrite existing polint skill?"))
-        .stderr(predicate::str::contains("skill already exists"));
+        .stdout(predicate::str::contains("Kept existing Claude Code skill"));
     assert_eq!(fs::read_to_string(&skill).unwrap(), "sentinel");
 
     Command::cargo_bin("polint")
@@ -728,6 +728,27 @@ fn add_skill_prompts_before_overwriting_existing_skill() {
         .success()
         .stdout(predicate::str::contains("Overwrite existing polint skill?").not());
     assert!(fs::read_to_string(skill).unwrap().contains("name: polint"));
+}
+
+#[test]
+fn add_skill_all_continues_when_existing_skill_is_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_skill = temp.path().join(".claude/skills/polint/SKILL.md");
+    write_file(&claude_skill, "sentinel");
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["add-skill", "--all"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
+        .stdout(predicate::str::contains("Kept existing Claude Code skill"))
+        .stdout(predicate::str::contains("Installed Codex skill"));
+
+    assert_eq!(fs::read_to_string(claude_skill).unwrap(), "sentinel");
+    assert!(temp.path().join(".agents/skills/polint/SKILL.md").exists());
 }
 
 #[cfg(unix)]
