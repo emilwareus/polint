@@ -107,7 +107,7 @@ fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf>
     {
         anyhow::bail!("refusing to overwrite symlink: {}", skill_path.display());
     }
-    if skill_path.exists() && !force {
+    if skill_path.exists() && !force && !confirm_overwrite(&skill_path)? {
         anyhow::bail!(
             "skill already exists: {} (use --force to overwrite)",
             skill_path.display()
@@ -119,6 +119,19 @@ fn install_skill(root: &Path, agent: SkillAgent, force: bool) -> Result<PathBuf>
     fs::write(&skill_path, skill_markdown(agent))
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
     Ok(skill_path)
+}
+
+fn confirm_overwrite(skill_path: &Path) -> Result<bool> {
+    println!("polint skill already exists at {}", skill_path.display());
+    print!("Overwrite existing polint skill? [y/N]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn target_skill_dir(root: &Path, agent: SkillAgent) -> PathBuf {

@@ -685,7 +685,7 @@ fn add_skill_prompts_when_agent_is_not_provided() {
 }
 
 #[test]
-fn add_skill_rejects_existing_skill_unless_force_is_used() {
+fn add_skill_prompts_before_overwriting_existing_skill() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
         .unwrap()
@@ -701,17 +701,32 @@ fn add_skill_rejects_existing_skill_unless_force_is_used() {
         .unwrap()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
+        .write_stdin("n\n")
         .assert()
         .failure()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
         .stderr(predicate::str::contains("skill already exists"));
     assert_eq!(fs::read_to_string(&skill).unwrap(), "sentinel");
 
     Command::cargo_bin("polint")
         .unwrap()
         .current_dir(temp.path())
+        .args(["add-skill", "--agent", "claude"])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?"))
+        .stdout(predicate::str::contains("Installed Claude Code skill"));
+    assert!(fs::read_to_string(&skill).unwrap().contains("name: polint"));
+
+    fs::write(&skill, "sentinel").unwrap();
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude", "--force"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("Overwrite existing polint skill?").not());
     assert!(fs::read_to_string(skill).unwrap().contains("name: polint"));
 }
 
