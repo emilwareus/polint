@@ -167,6 +167,82 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_no_todo_rule_repo(root: &Path, require_reason: bool) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        &format!(
+            r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+
+[ignores]
+require_reason = {require_reason}
+
+[[rules.config]]
+id = "local/no-todo-literals"
+severity = "warn"
+files = ["src/**/*.ts"]
+"#
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-todo-literals",
+    description = "Reject TODO string literals.",
+    severity = "warn"
+)]
+fn no_todo_literals(ctx: &mut RuleCtx<'_>, literals: StringLiterals<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for literal in literals.iter() {
+        let file = ctx.file_path(literal.file);
+        if file_in_scope(ctx.options(), &file) && literal.value == "TODO" {
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                file,
+                literal.span.diagnostic_range(),
+                "TODO string literal is not allowed.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![no_todo_literals()])
+}
+"#,
+    );
+}
+
 fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
     fs::read_dir(root.join(".polint/cache"))
         .unwrap_or_else(|error| panic!("read cache dir: {error}"))
@@ -370,6 +446,7 @@ fn add_skill_installs_claude_skill_non_interactively() {
     let contents = fs::read_to_string(skill).unwrap();
     assert!(contents.contains("name: polint"));
     assert!(contents.contains("polint check --fail-on none"));
+    assert!(contents.contains("polint ignores --shortstat"));
     assert!(contents.contains("docs/schemas/polint-report-v1.json"));
     assert!(contents.contains("polint explain go-test --file"));
     assert!(contents.contains("polint ships no built-in"));
@@ -1017,6 +1094,130 @@ pub(crate) fn no_todo_literals(
 }
 
 #[test]
+fn check_suppresses_next_line_ignore_and_ignores_reports_stats() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"// polint-ignore-next-line local/no-todo-literals -- legacy fixture
+export const skipped = "TODO";
+export const reported = "TODO";
+"#,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&json, "local/no-todo-literals");
+    assert_eq!(diagnostics.len(), 1, "{json:#?}");
+    assert_eq!(diagnostics[0]["range"]["start_line"], 3);
+
+    let report = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["ignores", "--format", "json", "--filter", "local/*"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(report["summary"]["directives"], 1, "{report:#?}");
+    assert_eq!(report["summary"]["active"], 1);
+    assert_eq!(report["summary"]["suppressed_diagnostics"], 1);
+    assert_eq!(
+        report["directives"][0]["suppressed"][0]["rule_id"],
+        "local/no-todo-literals"
+    );
+
+    let shortstat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["ignores", "--shortstat"])
+            .assert()
+            .success(),
+    );
+    assert!(shortstat.contains("1 directives, 1 active"), "{shortstat}");
+}
+
+#[test]
+fn check_reports_missing_reason_when_config_requires_it_but_still_suppresses() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), true);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"// polint-ignore-next-line local/no-todo-literals
+export const skipped = "TODO";
+"#,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&json, "local/no-todo-literals").is_empty(),
+        "{json:#?}"
+    );
+    let missing = diagnostics_for_rule(&json, "polint/ignore-missing-reason");
+    assert_eq!(missing.len(), 1, "{json:#?}");
+    assert_eq!(missing[0]["file"], "src/component.ts");
+
+    let report = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["ignores", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(report["summary"]["missing_reasons"], 1);
+    assert_eq!(report["summary"]["suppressed_diagnostics"], 1);
+    assert_eq!(report["directives"][0]["status"], "missing_reason");
+}
+
+#[test]
+fn check_reports_unused_and_malformed_ignore_directives() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"// polint-ignore-next-line local/no-todo-literals -- no finding here
+export const ok = "DONE";
+// polint-ignore-next-line
+export const also_ok = "DONE";
+"#,
+    );
+
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostics_for_rule(&json, "polint/unused-ignore").len(),
+        1,
+        "{json:#?}"
+    );
+    assert_eq!(
+        diagnostics_for_rule(&json, "polint/malformed-ignore").len(),
+        1,
+        "{json:#?}"
+    );
+}
+
+#[test]
 fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
     Command::cargo_bin("polint")
@@ -1470,6 +1671,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             &["Button.tsx"],
         ),
         (
+            "comment-ignores",
+            "no_denied_literals.rs",
+            "local/no-denied-literals",
+            &["app.ts"],
+        ),
+        (
             "config-denied-literal",
             "no_denied_literals.rs",
             "local/no-denied-literals",
@@ -1577,6 +1784,72 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             );
         }
     }
+}
+
+#[test]
+fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
+    let example_dir = repo_root().join("examples/comment-ignores");
+
+    let check_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    let visible = diagnostics_for_rule(&check_json, "local/no-denied-literals");
+    assert_eq!(visible.len(), 1, "{check_json:#?}");
+    assert_eq!(visible[0]["range"]["start_line"], 6);
+    assert!(
+        diagnostics_for_rule(&check_json, "polint/ignore-missing-reason").is_empty(),
+        "{check_json:#?}"
+    );
+
+    let ignores_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "ignores",
+                "--format",
+                "json",
+                "--filter",
+                "local/no-denied-literals",
+                "--no-cache",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        ignores_json["summary"]["directives"], 1,
+        "{ignores_json:#?}"
+    );
+    assert_eq!(ignores_json["summary"]["active"], 1);
+    assert_eq!(ignores_json["summary"]["suppressed_diagnostics"], 1);
+    assert_eq!(ignores_json["directives"][0]["line"], 2);
+    assert_eq!(
+        ignores_json["directives"][0]["suppressed"][0]["rule_id"],
+        "local/no-denied-literals"
+    );
+
+    let stat = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args(["ignores", "--stat", "--no-cache"])
+            .assert()
+            .success(),
+    );
+    assert!(stat.contains("1 directives, 1 active"), "{stat}");
+    assert!(stat.contains("By rule"), "{stat}");
 }
 
 #[test]

@@ -191,6 +191,20 @@ for plain text. Use `polint check --format sarif` for CI upload paths. Use
 `polint explain go-test --file … --test …` to print one harvested `TestFact` as
 JSON when debugging Go tests.
 
+Use `polint ignores` when you need to find suppressions that should be fixed:
+
+```bash
+polint ignores --shortstat
+polint ignores --stat --filter local/no-raw-colors,local/*
+polint ignores --format json --filter local/no-raw-colors
+```
+
+Ignore comments look like
+`// polint-ignore-next-line local/no-raw-colors -- legacy fixture`. Selectors are
+required. Ignores suppress policy diagnostics only; parser, internal,
+capability, and `polint/*` diagnostics stay visible. Repositories can require
+reasons with `[ignores] require_reason = true` in `.polint.toml`.
+
 ## Rule Layout
 
 Repo-local rules live in **one** Rust package under `.polint/rules/`:

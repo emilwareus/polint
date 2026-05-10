@@ -8,6 +8,7 @@ use crate::diagnostics::{
 };
 use crate::fs::load_analysis_files;
 use crate::graph::{FunctionGraph, ImportGraph};
+use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,6 +97,8 @@ enum Command {
     NewRule(NewRuleArgs),
     /// Run enabled rules.
     Check(CheckArgs),
+    /// Inspect polint comment-ignore directives and suppression statistics.
+    Ignores(IgnoresArgs),
     /// Explain rules or harvested facts.
     Explain(ExplainArgs),
     /// Run the fixture-based custom-rule harness.
@@ -186,6 +189,34 @@ struct CheckArgs {
     /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
     #[arg(long, value_name = "N")]
     max_diagnostics: Option<usize>,
+    /// Apply polint comment-ignore directives.
+    #[arg(long, default_value_t = true, hide = true, action = clap::ArgAction::Set)]
+    ignore_comments: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+struct IgnoresArgs {
+    /// Files or directories to inspect. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Named profile from .polint.toml. When omitted, all discovered rules run.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Disable .polint/cache reads and writes while collecting diagnostics.
+    #[arg(long)]
+    no_cache: bool,
+    /// Comma-separated rule selectors to show, e.g. `local/no-todo,local/*`.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Print grouped ignore statistics.
+    #[arg(long)]
+    stat: bool,
+    /// Print one summary line.
+    #[arg(long)]
+    shortstat: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = IgnoresFormatArg::Human)]
+    format: IgnoresFormatArg,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -200,6 +231,12 @@ enum FormatArg {
     Human,
     Json,
     Sarif,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum IgnoresFormatArg {
+    Human,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -251,6 +288,7 @@ pub(crate) fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Check(args) => check(std::env::current_dir()?, &args),
+        Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
         Command::Explain(args) => explain_command(std::env::current_dir()?, &args),
         Command::TestRules(args) => {
             if matches!(args.format, FormatArg::Human) {
@@ -561,6 +599,9 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     }
 
     let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, true)?;
+    if args.ignore_comments {
+        diagnostics = apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics;
+    }
     let source_map = match args.format {
         FormatArg::Human => db.sources_by_relative_path(),
         _ => BTreeMap::new(),
@@ -591,6 +632,62 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     }
 
     Ok(exit_code_for(&diagnostics, args.fail_on))
+}
+
+fn ignores(root: PathBuf, args: &IgnoresArgs) -> Result<u8> {
+    let report = collect_ignore_report(&root, args)?;
+    let filters = parse_ignore_filters(args.filter.as_deref());
+    let report = filter_report(&report, &filters);
+    match args.format {
+        IgnoresFormatArg::Human => {
+            print!(
+                "{}",
+                render_ignore_report_human(&report, args.stat, args.shortstat)
+            );
+        }
+        IgnoresFormatArg::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+    }
+    Ok(0)
+}
+
+fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignores::IgnoreReport> {
+    let check_args = CheckArgs {
+        paths: args.paths.clone(),
+        profile: args.profile.clone(),
+        format: FormatArg::Json,
+        color: ColorArg::Never,
+        no_cache: args.no_cache,
+        fail_on: FailOn::None,
+        only_rule: None,
+        max_diagnostics: None,
+        ignore_comments: false,
+    };
+    let local_rule_hosts = discover_local_rule_hosts(root)?;
+    if local_rule_hosts.is_empty() {
+        let (diagnostics, db, loaded) = analyze_and_run(root, &check_args, true)?;
+        return Ok(apply_ignores(&db, diagnostics, &loaded.config.ignores).report);
+    }
+
+    let config = load_config_for_check(root, &args.paths)?;
+    selected_rule_patterns(&config, args.profile.as_deref())?;
+    let db = load_analysis_files(&config)?;
+    let mut diagnostics = Vec::new();
+    for manifest in &local_rule_hosts {
+        diagnostics.extend(run_local_rule_host(root, manifest, &check_args)?);
+    }
+    Ok(apply_ignores(&db, diagnostics, &config.config.ignores).report)
+}
+
+fn parse_ignore_filters(filter: Option<&str>) -> Vec<String> {
+    filter
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn analyze_and_run(
@@ -818,6 +915,7 @@ fn graph(root: PathBuf, command: GraphCommand) -> Result<u8> {
         fail_on: FailOn::None,
         only_rule: None,
         max_diagnostics: None,
+        ignore_comments: true,
     };
     let (_diagnostics, db, _) = analyze_and_run(&root, &args, false)?;
     match command {
@@ -889,6 +987,10 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         diagnostics.extend(run_local_rule_host(root, manifest, args)?);
     }
 
+    if args.ignore_comments {
+        let db = load_analysis_files(&config)?;
+        diagnostics = apply_ignores(&db, diagnostics, &config.config.ignores).diagnostics;
+    }
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let source_map = if matches!(args.format, FormatArg::Human) {
@@ -935,6 +1037,8 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
         "json",
         "--fail-on",
         "none",
+        "--ignore-comments",
+        "false",
     ]);
     if let Some(profile) = &args.profile {
         command.args(["--profile", profile]);

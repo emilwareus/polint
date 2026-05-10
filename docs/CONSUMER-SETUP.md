@@ -67,6 +67,27 @@ let literal = ctx
     .unwrap_or("TODO");
 ```
 
+## Comment ignores
+
+polint supports source comments for suppressing policy diagnostics:
+
+```ts
+// polint-ignore-next-line local/no-placeholder-literals -- generated fixture
+const status = "TODO";
+```
+
+Selectors are required and use the same exact / `prefix/*` / `*` matching as
+profiles. Repositories can require reasons:
+
+```toml
+[ignores]
+require_reason = true
+```
+
+Use `polint ignores --stat` or `polint ignores --format json` to inspect active,
+unused, malformed, and missing-reason ignores. See
+[IGNORE-COMMENTS.md](IGNORE-COMMENTS.md).
+
 ## Monorepo path pairing
 
 Optional section pairs left/right path shapes that share a context segment (same

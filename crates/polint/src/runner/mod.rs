@@ -6,6 +6,7 @@ use crate::diagnostics::{
     limit_report_diagnostics, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files;
+use crate::ignores::apply_ignores;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,6 +83,9 @@ struct CheckArgs {
     /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
     #[arg(long, value_name = "N")]
     max_diagnostics: Option<usize>,
+    /// Apply polint comment-ignore directives.
+    #[arg(long, default_value_t = true, hide = true, action = clap::ArgAction::Set)]
+    ignore_comments: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -158,6 +162,9 @@ fn explain_plan(root: PathBuf, args: &ExplainPlanArgs, rules: &[Rule]) -> Result
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
     let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, rules)?;
+    if args.ignore_comments {
+        diagnostics = apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics;
+    }
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let source_map = match args.format {

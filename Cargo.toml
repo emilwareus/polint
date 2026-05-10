@@ -4,6 +4,7 @@ members = [
     "crates/polint-bench",
     "crates/polint-macros",
     "examples/basic/.polint/rules",
+    "examples/comment-ignores/.polint/rules",
     "examples/config-denied-literal/.polint/rules",
     "examples/custom-rule-go/.polint/rules",
     "examples/custom-rule-ts/.polint/rules",

@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ignores-v1.json",
+  "title": "PolintIgnoresReport",
+  "description": "Machine output from `polint ignores --format json`. It describes comment-ignore directives, their status, and the diagnostics they suppressed.",
+  "type": "object",
+  "required": ["version", "schema", "summary", "directives", "by_rule", "by_file"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "directives": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/directive" }
+    },
+    "by_rule": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ruleSummary" }
+    },
+    "by_file": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fileSummary" }
+    }
+  },
+  "$defs": {
+    "summary": {
+      "type": "object",
+      "required": [
+        "directives",
+        "active",
+        "unused",
+        "malformed",
+        "missing_reasons",
+        "suppressed_diagnostics",
+        "rules",
+        "files"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "directives": { "type": "integer", "minimum": 0 },
+        "active": { "type": "integer", "minimum": 0 },
+        "unused": { "type": "integer", "minimum": 0 },
+        "malformed": { "type": "integer", "minimum": 0 },
+        "missing_reasons": { "type": "integer", "minimum": 0 },
+        "suppressed_diagnostics": { "type": "integer", "minimum": 0 },
+        "rules": { "type": "integer", "minimum": 0 },
+        "files": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "textRange": {
+      "type": "object",
+      "required": ["start_line", "start_col", "end_line", "end_col"],
+      "additionalProperties": false,
+      "properties": {
+        "start_line": { "type": "integer", "minimum": 0 },
+        "start_col": { "type": "integer", "minimum": 0 },
+        "end_line": { "type": "integer", "minimum": 0 },
+        "end_col": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ignoredDiagnostic": {
+      "type": "object",
+      "required": ["rule_id", "fingerprint", "file", "range"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "fingerprint": { "type": "string" },
+        "file": { "type": "string" },
+        "range": { "$ref": "#/$defs/textRange" }
+      }
+    },
+    "directive": {
+      "type": "object",
+      "required": [
+        "file",
+        "line",
+        "column",
+        "kind",
+        "selectors",
+        "status",
+        "suppressed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["line", "next-line", "start", "end", "file"]
+        },
+        "selectors": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "unused", "malformed", "missing_reason"]
+        },
+        "problem": {
+          "type": "string"
+        },
+        "suppressed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ignoredDiagnostic" }
+        }
+      }
+    },
+    "ruleSummary": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "directives",
+        "active_directives",
+        "unused_directives",
+        "suppressed_diagnostics",
+        "files"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "directives": { "type": "integer", "minimum": 0 },
+        "active_directives": { "type": "integer", "minimum": 0 },
+        "unused_directives": { "type": "integer", "minimum": 0 },
+        "suppressed_diagnostics": { "type": "integer", "minimum": 0 },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "fileSummary": {
+      "type": "object",
+      "required": [
+        "file",
+        "directives",
+        "active",
+        "unused",
+        "malformed",
+        "missing_reasons",
+        "suppressed_diagnostics"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "directives": { "type": "integer", "minimum": 0 },
+        "active": { "type": "integer", "minimum": 0 },
+        "unused": { "type": "integer", "minimum": 0 },
+        "malformed": { "type": "integer", "minimum": 0 },
+        "missing_reasons": { "type": "integer", "minimum": 0 },
+        "suppressed_diagnostics": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

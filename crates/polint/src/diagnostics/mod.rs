@@ -370,6 +370,15 @@ fn diagnostic_matches_rule_pattern(pattern: &str, diagnostic: &Diagnostic) -> bo
             && diagnostic.evidence.iter().any(|evidence| {
                 evidence.label == "rule" && crate::core::rule_id_matches(pattern, &evidence.value)
             }))
+        || (diagnostic.rule_id.starts_with("polint/")
+            && diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "selectors"
+                    && evidence.value.split(',').map(str::trim).any(|selector| {
+                        !selector.is_empty()
+                            && (crate::core::rule_id_matches(pattern, selector)
+                                || crate::core::rule_id_matches(selector, pattern))
+                    })
+            }))
 }
 
 /// Truncate diagnostics for rendering only. Exit status must be computed before this cap.
@@ -1116,6 +1125,39 @@ mod tests {
         assert!(rendered.contains("local/b (1)"));
         assert!(rendered.contains("2 infos"));
         assert!(rendered.contains("local/c (2)"));
+    }
+
+    #[test]
+    fn only_rule_keeps_polint_ignore_health_diagnostics_for_matching_selectors() {
+        let diagnostics = vec![
+            Diagnostic::warning(
+                "polint/unused-ignore",
+                "src/a.ts",
+                TextRange::point(1, 1),
+                "unused",
+            )
+            .with_evidence("selectors", "local/*"),
+            Diagnostic::warning(
+                "polint/unused-ignore",
+                "src/b.ts",
+                TextRange::point(1, 1),
+                "unused",
+            )
+            .with_evidence("selectors", "other/rule"),
+            Diagnostic::warning(
+                "local/no-todo",
+                "src/c.ts",
+                TextRange::point(1, 1),
+                "finding",
+            ),
+        ];
+
+        let filtered = apply_report_filters(diagnostics, Some("local/no-todo"));
+        let rule_ids = filtered
+            .iter()
+            .map(|diagnostic| diagnostic.rule_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(rule_ids, ["polint/unused-ignore", "local/no-todo"]);
     }
 
     #[test]
