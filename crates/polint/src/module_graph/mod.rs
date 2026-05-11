@@ -498,11 +498,9 @@ mod tests {
         assert!(db.module_nodes().iter().any(|node| {
             node.kind == ModuleNodeKind::File && node.label == "internal/payments/service.go"
         }));
-        assert!(
-            db.module_nodes().iter().any(|node| {
-                node.kind == ModuleNodeKind::Package && node.label == "go:payments"
-            })
-        );
+        assert!(db.module_nodes().iter().any(|node| {
+            node.kind == ModuleNodeKind::Package && node.label == "go:internal/payments:payments"
+        }));
         let root = db
             .module_nodes()
             .iter()
@@ -512,7 +510,10 @@ mod tests {
         let package = db
             .module_nodes()
             .iter()
-            .find(|node| node.kind == ModuleNodeKind::Package && node.label == "go:payments")
+            .find(|node| {
+                node.kind == ModuleNodeKind::Package
+                    && node.label == "go:internal/payments:payments"
+            })
             .map(|node| node.id)
             .expect("package node exists");
         let file_node = db
@@ -528,6 +529,50 @@ mod tests {
         assert!(db.module_edges().iter().any(|edge| {
             edge.kind == ModuleEdgeKind::Contains && edge.from == package && edge.to == file_node
         }));
+    }
+
+    #[test]
+    fn module_graph_provider_keeps_same_name_go_packages_in_different_directories_distinct() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let mut db = AnalysisDb::new();
+        let api = add_file(&mut db, temp.path(), "cmd/api/main.go", "package main\n");
+        let worker = add_file(&mut db, temp.path(), "cmd/worker/main.go", "package main\n");
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file: api,
+            name: "main".to_string(),
+            span: span(api, 0),
+            language: Language::Go,
+        });
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file: worker,
+            name: "main".to_string(),
+            span: span(worker, 0),
+            language: Language::Go,
+        });
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        let api_package = db
+            .module_nodes()
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::Package && node.label == "go:cmd/api:main")
+            .map(|node| node.id)
+            .expect("api package node exists");
+        let worker_package = db
+            .module_nodes()
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::Package && node.label == "go:cmd/worker:main")
+            .map(|node| node.id)
+            .expect("worker package node exists");
+
+        assert_ne!(api_package, worker_package);
     }
 
     #[test]

@@ -127,7 +127,12 @@ impl ModuleGraphBuilder {
     }
 
     pub(crate) fn ensure_package_node(&mut self, package: &PackageFact) -> ModuleNodeId {
-        let label = package_label(package.language, &package.name);
+        let relative_path = self
+            .files
+            .get(&package.file)
+            .map(|info| info.relative_path.as_str())
+            .unwrap_or(".");
+        let label = fallback_package_label(package.language, relative_path, &package.name);
         self.ensure_package_node_with_label(label, Some(package.id), Some(package.language))
     }
 
@@ -470,8 +475,13 @@ impl ModuleNodeDraft {
     }
 }
 
-pub(crate) fn package_label(language: Language, name: &str) -> String {
-    format!("{}:{name}", language_label(language))
+fn fallback_package_label(language: Language, relative_path: &str, name: &str) -> String {
+    let dir = Path::new(relative_path)
+        .parent()
+        .and_then(Path::to_str)
+        .filter(|dir| !dir.is_empty())
+        .unwrap_or(".");
+    format!("{}:{dir}:{name}", language_label(language))
 }
 
 fn language_label(language: Language) -> &'static str {
