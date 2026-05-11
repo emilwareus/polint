@@ -16,6 +16,8 @@ v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/disco
 
 Phase 11 of v1.1 completed on 2026-05-09. Declared rule capabilities now produce an internal deterministic `AnalysisPlan`, the child rule host passes that plan to Go and TS/JS adapters before harvesting, adapter cache keys include the plan digest, and unsupported reserved capabilities produce structured `polint/capability` diagnostics.
 
+Phase 12 of v1.1 completed on 2026-05-11. Syntactic Go and TS/JS imports now flow into setup-aware resolved import facts and module/file/package/dependency graph facts exposed through typed SDK views for repo-local architecture rules.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -74,13 +76,13 @@ each fact family.
 - [x] Pass the resolved analysis plan to Go and TS/JS adapters before fact harvesting. Validated in Phase 11: Capability-Driven Analysis Plan.
 - [x] Include requested capabilities and setup-sensitive analysis inputs in cache identity through the plan digest. Validated in Phase 11: Capability-Driven Analysis Plan.
 - [x] Report missing or unsupported requested capabilities as clear diagnostics or structured warnings. Validated in Phase 11: Capability-Driven Analysis Plan.
+- [x] Let rule authors read resolved import facts and unresolved import reasons through typed SDK fact views. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Resolve TS/JS imports through project-aware resolver setup including relative paths, package metadata, and `tsconfig` aliases where available. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Resolve Go imports through Go package/module metadata where setup is available. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Expose file, package, module, and dependency relationships for architecture rules through typed module graph facts. Validated in Phase 12: Resolved Imports and Module Relationships.
 
 ### Active
 
-- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
-- [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
-- [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
 - [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
 - [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
 - [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
@@ -141,6 +143,7 @@ each fact family.
 - v1.0 MVP was audited, archived, tagged, and closed on 2026-05-02.
 - Quick task 260502-ehi removed all product built-in policy rules from the CLI while keeping example policies as external rule code.
 - Quick task 260502-qsd made every example self-contained, with one local Rust rule crate under `examples/<name>/.polint/rules/` and no shared example rule pack.
+- Phase 12 completed on 2026-05-11 through GSD plan execution, code review fixes, full workspace regression, clippy, and verification on `main`, closing resolved imports and module relationship facts for Go and TS/JS without claiming symbols, call graph, CFG, dataflow, type checking, or project-level graph caching.
 
 ## Constraints
 
@@ -202,4 +205,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-09 after completing Phase 11 Capability-Driven Analysis Plan*
+*Last updated: 2026-05-11 after completing Phase 12 Resolved Imports and Module Relationships*
