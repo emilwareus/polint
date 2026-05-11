@@ -7,12 +7,14 @@ pub(crate) mod ts;
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, ImportFact,
-    ResolutionStatus, ResolvedImportId,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
+    ImportFact, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
@@ -57,13 +59,19 @@ pub(crate) fn derive_requested_module_graph(
     for file in &files {
         file_nodes.insert(file.id, builder.ensure_file_node(file.id));
     }
+    let file_owner_modules =
+        seed_ts_project_module_nodes(&mut builder, loaded.root.as_path(), &files);
 
     let mut package_nodes_by_file = BTreeMap::new();
     for package in sort_packages(db.packages(), db) {
         let package_node = builder.ensure_package_node(package);
         let file_node = builder.ensure_file_node(package.file);
-        if let Some(root_module) = root_module {
-            builder.link_module_contains(root_module, package_node);
+        if let Some(owner_module) = file_owner_modules
+            .get(&package.file)
+            .copied()
+            .or(root_module)
+        {
+            builder.link_module_contains(owner_module, package_node);
         }
         builder.link_contains(package_node, file_node);
         package_nodes_by_file.insert(package.file, package_node);
@@ -72,31 +80,45 @@ pub(crate) fn derive_requested_module_graph(
     for file in &files {
         if !package_nodes_by_file.contains_key(&file.id) {
             let file_node = builder.ensure_file_node(file.id);
-            if let Some(root_module) = root_module {
-                builder.link_module_contains(root_module, file_node);
+            if let Some(owner_module) = file_owner_modules.get(&file.id).copied().or(root_module) {
+                builder.link_module_contains(owner_module, file_node);
             }
         }
     }
 
     let mut imports = db.imports().iter().collect::<Vec<_>>();
     imports.sort_by(|left, right| import_order(left, right, db));
+    let ts_resolver_context = imports
+        .iter()
+        .any(|import| import.language.is_ts_family())
+        .then(|| ts::TsResolverContext::new(loaded.root.as_path(), db, root_module));
 
     let mut resolved_imports = Vec::with_capacity(imports.len());
     let go_metadata = go::GoPackageIndex::default();
     let mut saw_setup_missing = false;
     for import in imports {
-        let owner = package_nodes_by_file
+        let owner_module = file_owner_modules
+            .get(&import.file)
+            .copied()
+            .or(root_module);
+        let default_owner = package_nodes_by_file
             .get(&import.file)
             .copied()
             .or_else(|| file_nodes.get(&import.file).copied())
-            .or(root_module)
+            .or(owner_module)
             .unwrap_or_else(|| builder.ensure_module_node("."));
+        let owner = if import.language.is_ts_family() {
+            owner_module.unwrap_or(default_owner)
+        } else {
+            default_owner
+        };
         let index = resolved_imports.len();
         let input = ResolverInput {
             root: loaded.root.as_path(),
             db,
             import,
-            owner_module: root_module,
+            ts_resolver: ts_resolver_context.as_ref(),
+            owner_module,
             owner_package: package_nodes_by_file.get(&import.file).copied(),
         };
         let draft = if import.language.is_ts_family() {
@@ -142,6 +164,67 @@ fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::
         ))
 }
 
+fn seed_ts_project_module_nodes(
+    builder: &mut ModuleGraphBuilder,
+    root: &Path,
+    files: &[&SourceFile],
+) -> BTreeMap<FileId, ModuleNodeId> {
+    let mut module_by_root = BTreeMap::<PathBuf, ModuleNodeId>::new();
+    let mut owner_by_file = BTreeMap::new();
+
+    for file in files.iter().filter(|file| file.language.is_ts_family()) {
+        let absolute_file = if file.path.is_absolute() {
+            file.path.clone()
+        } else {
+            root.join(&file.relative_path)
+        };
+        let Some(module_root) = find_ts_project_root(root, &absolute_file) else {
+            continue;
+        };
+        let module = if let Some(module) = module_by_root.get(&module_root).copied() {
+            module
+        } else {
+            let label = ts_project_module_label(root, &module_root);
+            let module = builder.ensure_module_node(label);
+            module_by_root.insert(module_root, module);
+            module
+        };
+        owner_by_file.insert(file.id, module);
+    }
+
+    owner_by_file
+}
+
+fn find_ts_project_root(root: &Path, file_path: &Path) -> Option<PathBuf> {
+    let root = paths::normalize_path(root)?;
+    let mut current = paths::normalize_path(file_path.parent()?)?;
+
+    loop {
+        if current.join("tsconfig.json").is_file() || current.join("package.json").is_file() {
+            return Some(current);
+        }
+        if current == root || !current.starts_with(&root) || !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn ts_project_module_label(root: &Path, module_root: &Path) -> String {
+    package_json_name(&module_root.join("package.json")).unwrap_or_else(|| {
+        paths::normalize_repo_relative_path(root, module_root).unwrap_or_else(|| ".".to_string())
+    })
+}
+
+fn package_json_name(path: &Path) -> Option<String> {
+    let source = fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&source).ok()?;
+    value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn setup_missing_support(plan: &AnalysisPlan, saw_setup_missing: bool) -> Vec<CapabilitySupport> {
     if !saw_setup_missing {
         return Vec::new();
@@ -161,10 +244,11 @@ fn setup_missing_support(plan: &AnalysisPlan, saw_setup_missing: bool) -> Vec<Ca
                 language: None,
                 status: CapabilitySupportStatus::SetupMissing,
                 rules: base.rules.clone(),
-                reason: Some("Go package metadata is required to resolve Go imports.".to_string()),
-                hint: Some(
-                    "Run polint in a Go module with package metadata available.".to_string(),
+                reason: Some(
+                    "Resolver setup is required to resolve requested module relationships."
+                        .to_string(),
                 ),
+                hint: Some("Check language resolver configuration such as tsconfig.json, package.json, or Go package metadata.".to_string()),
                 docs_path: Some(
                     "docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md".to_string(),
                 ),
@@ -203,7 +287,7 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
     .with_evidence("capability", entry.capability.clone())
     .with_evidence("status", "setup_missing")
     .with_help(format!(
-        "Capability `{}` needs Go package metadata before this rule can run; see {docs_path}.",
+        "Capability `{}` needs language resolver setup before this rule can run; see {docs_path}.",
         entry.capability
     ))
 }

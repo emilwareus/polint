@@ -30,6 +30,7 @@ pub(crate) struct ResolverInput<'a> {
     pub(crate) root: &'a Path,
     pub(crate) db: &'a AnalysisDb,
     pub(crate) import: &'a ImportFact,
+    pub(crate) ts_resolver: Option<&'a crate::module_graph::ts::TsResolverContext>,
     pub(crate) owner_module: Option<ModuleNodeId>,
     pub(crate) owner_package: Option<ModuleNodeId>,
 }

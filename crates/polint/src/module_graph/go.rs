@@ -67,6 +67,7 @@ mod tests {
                 root: Path::new("."),
                 db: &db,
                 import,
+                ts_resolver: None,
                 owner_module: None,
                 owner_package: None,
             },
