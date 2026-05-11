@@ -15,6 +15,27 @@ one roadmap phase.
 - [x] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
 - [x] **PLAN-04**: Missing or unsupported setup for requested capabilities becomes a clear diagnostic or structured warning.
 
+### Module Resolution
+
+- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
+- [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
+- [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
+- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
+
+### Symbols And References
+
+- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
+- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
+- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
+- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
+
+### Call Graph
+
+- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
+- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
+- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
+- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
+
 ### Control Flow Graphs
 
 - [ ] **CFG-01**: Rule authors can read real per-function control-flow facts through typed SDK fact views.
@@ -28,27 +49,6 @@ one roadmap phase.
 - [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
 - [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
 - [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
-
-### Module Resolution
-
-- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
-- [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
-- [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
-
-### Call Graph
-
-- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
-- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
-- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
-- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
-
-### Symbols And References
-
-- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
-- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
-- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
-- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
 
 ### Test Metrics
 
@@ -75,6 +75,8 @@ one roadmap phase.
 
 Deferred until after Go and TS/JS prove the full capability model:
 
+- **GRAPH-01**: Rule authors can consume a coherent codebase graph spanning
+  modules, symbols, calls, CFG nodes, and test/coverage evidence.
 - **DATA-01**: Rule authors can consume cross-language dataflow facts.
 - **TAINT-01**: Rule authors can define and consume source/sink taint facts.
 - **TYPE-01**: Rule authors can consume deeper type-aware facts beyond symbol/reference resolution.
@@ -97,26 +99,26 @@ Deferred until after Go and TS/JS prove the full capability model:
 | PLAN-02 | Phase 11 | Complete |
 | PLAN-03 | Phase 11 | Complete |
 | PLAN-04 | Phase 11 | Complete |
-| CFG-01 | Phase 12 | Pending |
-| CFG-02 | Phase 12 | Pending |
-| CFG-03 | Phase 12 | Pending |
-| CFG-04 | Phase 12 | Pending |
-| COV-01 | Phase 13 | Pending |
-| COV-02 | Phase 13 | Pending |
-| COV-03 | Phase 13 | Pending |
-| COV-04 | Phase 13 | Pending |
-| MOD-01 | Phase 14 | Pending |
-| MOD-02 | Phase 14 | Pending |
-| MOD-03 | Phase 14 | Pending |
-| MOD-04 | Phase 14 | Pending |
-| CALL-01 | Phase 15 | Pending |
-| CALL-02 | Phase 15 | Pending |
-| CALL-03 | Phase 15 | Pending |
-| CALL-04 | Phase 15 | Pending |
-| SYM-01 | Phase 16 | Pending |
-| SYM-02 | Phase 16 | Pending |
-| SYM-03 | Phase 16 | Pending |
-| SYM-04 | Phase 16 | Pending |
+| MOD-01 | Phase 12 | Pending |
+| MOD-02 | Phase 12 | Pending |
+| MOD-03 | Phase 12 | Pending |
+| MOD-04 | Phase 12 | Pending |
+| SYM-01 | Phase 13 | Pending |
+| SYM-02 | Phase 13 | Pending |
+| SYM-03 | Phase 13 | Pending |
+| SYM-04 | Phase 13 | Pending |
+| CALL-01 | Phase 14 | Pending |
+| CALL-02 | Phase 14 | Pending |
+| CALL-03 | Phase 14 | Pending |
+| CALL-04 | Phase 14 | Pending |
+| CFG-01 | Phase 15 | Pending |
+| CFG-02 | Phase 15 | Pending |
+| CFG-03 | Phase 15 | Pending |
+| CFG-04 | Phase 15 | Pending |
+| COV-01 | Phase 16 | Pending |
+| COV-02 | Phase 16 | Pending |
+| COV-03 | Phase 16 | Pending |
+| COV-04 | Phase 16 | Pending |
 | TEST-01 | Phase 17 | Pending |
 | TEST-02 | Phase 17 | Pending |
 | TEST-03 | Phase 17 | Pending |
@@ -137,4 +139,4 @@ Deferred until after Go and TS/JS prove the full capability model:
 
 ---
 *Requirements defined: 2026-05-08*
-*Last updated: 2026-05-08 after starting milestone v1.1 Capability Fulfillment*
+*Last updated: 2026-05-11 after resequencing v1.1 toward codebase graph foundations*

@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
 stopped_at: Phase 11 complete
-last_updated: "2026-05-11T13:23:28+02:00"
+last_updated: "2026-05-11T15:20:15+02:00"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 12 — CFG Facts for Go and TS/JS
+**Current focus:** Phase 12 — Resolved Imports and Module Relationships
 
 ## Current Status
 
@@ -57,15 +57,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
-- Next action: discuss and plan Phase 12.
+- Next action: discuss and plan Phase 12, Resolved Imports and Module Relationships.
 
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
-Phase: 12 - CFG Facts for Go and TS/JS
+Phase: 12 - Resolved Imports and Module Relationships
 Plan: Not started
-Last activity: 2026-05-11 - Completed quick task 260511-i7m: Make the baseline file live only at .polint/baseline.yaml and remove user-selectable baseline paths
+Last activity: 2026-05-11 - Added Phase 12 resolved imports/module graph architecture document with Rust implementation guidance
 
 ## Quick Tasks Completed
 
@@ -101,11 +101,11 @@ Last activity: 2026-05-11 - Completed quick task 260511-i7m: Make the baseline f
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 11 | Complete | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
-| 12 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
-| 13 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
-| 14 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
-| 15 | Pending | Direct call graph facts; requirements CALL-01 through CALL-04 |
-| 16 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
+| 12 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
+| 13 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
+| 14 | Pending | Direct and resolved call graph facts; requirements CALL-01 through CALL-04 |
+| 15 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
+| 16 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
 | 17 | Pending | Test suite metrics; requirements TEST-01 through TEST-04 |
 | 18 | Pending | Python adapter with explicit initial capability tier; requirements PY-01 through PY-04 |
 | 19 | Pending | Java adapter with setup-aware initial capability tier; requirements JAVA-01 through JAVA-04 |

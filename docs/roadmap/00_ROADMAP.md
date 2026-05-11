@@ -12,6 +12,11 @@ The product direction is simple:
   not as broad `RuleCtx` fact helpers.
 - Language adapters may use in-house analysis, parser crates, language-native
   tools, or sidecars when that gives better facts.
+- The long-term destination is a fully capable static-analysis platform with a
+  complete codebase graph: module/dependency graph, symbol graph, call graph,
+  per-function CFG, coverage/test-evidence links, dataflow, taint, and
+  interprocedural summaries. Each phase should ship a useful, truthful slice
+  with explicit precision and setup status rather than boiling the ocean.
 
 ## Roadmap
 
@@ -26,26 +31,9 @@ The product direction is simple:
   real CFG, coverage, symbol, call-graph, dataflow, module-resolution, and
   test-metric facts.
 
-- [ ] **2. Add real CFG facts for Go and TS/JS**
-  ([technical plan](02_ENTRY_2_CFG_FACTS.md))
-
-  Give rules a real per-function control-flow graph. This unlocks branch-shape,
-  flow-sensitive, and future dataflow rules. Rule authors should be able to ask
-  "what paths can this function take?" without parsing ASTs themselves. Go and
-  TS/JS get this first so the graph model is proven before new languages inherit
-  it.
-
-- [ ] **3. Import coverage facts**
-  ([technical plan](03_ENTRY_3_COVERAGE_FACTS.md))
-
-  Let rules use CI coverage reports as evidence. This makes policies like
-  "risky branches need coverage" possible. The goal is not to run tests inside
-  polint; it is to consume coverage files teams already produce and map them
-  back to source files, functions, branches, and lines with clear precision
-  labels.
-
-- [ ] **4. Resolve imports and build a module graph**
-  ([technical plan](04_ENTRY_4_RESOLVED_IMPORTS_MODULE_GRAPH.md))
+- [ ] **2. Resolve imports and build a module graph**
+  ([technical plan](04_ENTRY_4_RESOLVED_IMPORTS_MODULE_GRAPH.md),
+  [architecture](12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md))
 
   Turn import strings into file/package/module relationships. This unlocks
   practical architecture and layer-boundary rules. Instead of matching
@@ -53,7 +41,14 @@ The product direction is simple:
   package, module, or external dependency an import points to, and why an import
   could not be resolved when setup is missing.
 
-- [ ] **5. Add direct call graph facts**
+- [ ] **3. Add symbols and references**
+  ([technical plan](06_ENTRY_6_SYMBOLS_REFERENCES.md))
+
+  Give rules definitions, references, and stable symbol IDs. This moves rules
+  beyond string matching and gives call graph, ownership, exported API, and
+  codebase-understanding rules a shared identity model.
+
+- [ ] **4. Add direct and resolved call graph facts**
   ([technical plan](05_ENTRY_5_DIRECT_CALL_GRAPH.md))
 
   Expose caller-to-callee relationships with explicit confidence. This gives
@@ -61,13 +56,21 @@ The product direction is simple:
   first version should support direct syntactic calls; later versions can attach
   resolved symbols when import and symbol facts are available.
 
-- [ ] **6. Add symbols and references**
-  ([technical plan](06_ENTRY_6_SYMBOLS_REFERENCES.md))
+- [ ] **5. Add real CFG facts for Go and TS/JS**
+  ([technical plan](02_ENTRY_2_CFG_FACTS.md))
 
-  Give rules definitions, references, and stable symbol IDs. This moves rules
-  beyond string matching. Rule authors should be able to ask "where is this
-  thing defined?" and "where is it used?" across files, with explicit precision
-  tiers when a language or project setup cannot prove an exact answer.
+  Give rules a real per-function control-flow graph. This unlocks branch-shape,
+  flow-sensitive, and future dataflow rules. Rule authors should be able to ask
+  "what paths can this function take?" without parsing ASTs themselves.
+
+- [ ] **6. Import coverage facts**
+  ([technical plan](03_ENTRY_3_COVERAGE_FACTS.md))
+
+  Let rules use CI coverage reports as evidence. This makes policies like
+  "risky branches need coverage" possible. The goal is not to run tests inside
+  polint; it is to consume coverage files teams already produce and map them
+  back to source files, functions, branches, and lines with clear precision
+  labels.
 
 - [ ] **7. Add reusable test-suite metrics**
   ([technical plan](07_ENTRY_7_TEST_SUITE_METRICS.md))
@@ -77,7 +80,14 @@ The product direction is simple:
   test-quality policies without every rule reimplementing framework detection
   and test evidence scoring.
 
-- [ ] **8. Add Python through the adapter contract**
+- [ ] **8. Add dataflow, taint, and interprocedural facts**
+
+  Build flow-sensitive facts on top of CFG, symbols, resolved calls, and module
+  relationships. Start with conservative local def-use/dataflow slices before
+  adding source/sink taint tracking and interprocedural summaries. This is a
+  later capability track, not the next implementation phase.
+
+- [ ] **9. Add Python through the adapter contract**
   ([technical plan](08_ENTRY_8_PYTHON_ADAPTER.md))
 
   Add Python with an explicit capability subset first, then expand toward parity
@@ -85,7 +95,7 @@ The product direction is simple:
   product surface. It should reuse the same facts and diagnostics, while clearly
   marking dynamic imports/calls and optional virtualenv or interpreter setup.
 
-- [ ] **9. Add Java through the adapter contract**
+- [ ] **10. Add Java through the adapter contract**
   ([technical plan](09_ENTRY_9_JAVA_ADAPTER.md))
 
   Add Java with setup-aware parsing, packages, symbols, test facts, and coverage
