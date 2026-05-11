@@ -205,11 +205,14 @@ pub(crate) fn resolver_context_construction_count_for_test() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_ts_import;
+    use super::{TsResolverContext, resolve_ts_import};
     use crate::core::{
-        AnalysisDb, ImportFact, ImportId, Language, ResolutionStatus, Span, UnresolvedReason,
+        AnalysisDb, ImportFact, ImportId, Language, ResolutionPrecision, ResolutionStatus, Span,
+        UnresolvedReason,
     };
     use crate::module_graph::model::ResolverInput;
+    use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -241,5 +244,43 @@ mod tests {
 
         assert_eq!(draft.status, ResolutionStatus::SetupMissing);
         assert_eq!(draft.reason, Some(UnresolvedReason::SetupMissing));
+    }
+
+    #[test]
+    fn module_graph_ts_dynamic_resolution_marks_sentinel_as_dynamic() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("src/app.ts");
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        fs::write(&path, "const mod = await import(name);\n").expect("write fixture file");
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            path,
+            "src/app.ts".to_string(),
+            "const mod = await import(name);\n".to_string(),
+        );
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: DYNAMIC_IMPORT_SPECIFIER.to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+        });
+        let import = &db.imports()[0];
+        let context = TsResolverContext::new(temp.path(), &db, None);
+
+        let draft = resolve_ts_import(ResolverInput {
+            root: temp.path(),
+            db: &db,
+            import,
+            ts_resolver: Some(&context),
+            owner_module: None,
+            owner_package: None,
+        });
+
+        assert_eq!(draft.status, ResolutionStatus::Dynamic);
+        assert_eq!(draft.precision, ResolutionPrecision::None);
+        assert_eq!(draft.reason, Some(UnresolvedReason::DynamicExpression));
+        assert_eq!(draft.target, None);
     }
 }
