@@ -195,6 +195,143 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_relationship_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/relationships-available",
+    description = "Reads relationship facts.",
+    severity = "warn"
+)]
+fn relationships_available(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+) -> RuleResult {
+    if resolved.iter().count() == 0 && graph.nodes().is_empty() && graph.edges().is_empty() {
+        ctx.report(Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "relationship facts are available",
+        ));
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![relationships_available()])
+}
+"#,
+    );
+    fs::create_dir_all(root.join("src")).unwrap();
+}
+
+fn write_go_relationship_setup_missing_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/go-relationships",
+    description = "Reads Go relationship facts.",
+    severity = "warn"
+)]
+fn go_relationships(ctx: &mut RuleCtx<'_>, resolved: ResolvedImports<'_>) -> RuleResult {
+    let _ = resolved.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this rule should be blocked by setup-missing support",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![go_relationships()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/main.go"),
+        r#"package main
+
+import "example.com/project/pkg"
+
+func main() {}
+"#,
+    );
+}
+
 fn write_no_todo_rule_repo(root: &Path, require_reason: bool) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -2769,6 +2906,71 @@ mod capability_planning {
             diagnostic,
             "rule",
             "local/needs-cfg"
+        ));
+    }
+
+    #[test]
+    fn relationship_capability_rule_runs_on_empty_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        write_relationship_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "{json:#?}"
+        );
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .any(|diagnostic| diagnostic["rule_id"] == "local/relationships-available"),
+            "{json:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_setup_missing_support_blocks_requesting_rule() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_relationship_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "local/go-relationships"),
+            "{json:#?}"
+        );
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("required setup is missing")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "status",
+            "setup_missing"
         ));
     }
 

@@ -986,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_plan_recognizes_module_relationship_capabilities() {
+    fn analysis_plan_supports_module_relationship_capabilities() {
         let plan =
             AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
         let capabilities = plan.capabilities();
@@ -1002,32 +1002,22 @@ mod tests {
         for capability in capabilities {
             assert_eq!(
                 capability.status,
-                crate::core::CapabilitySupportStatus::Unsupported
+                crate::core::CapabilitySupportStatus::Supported
             );
-            assert_eq!(
-                capability.reason.as_deref(),
-                Some("Module relationship provider is not wired into this build step.")
-            );
-            assert_eq!(
-                capability.docs_path.as_deref(),
-                Some("docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md")
-            );
+            assert_eq!(capability.reason, None);
+            assert_eq!(capability.hint, None);
+            assert_eq!(capability.docs_path, None);
         }
 
         assert_eq!(
             plan.support_view().status_for("resolved_imports"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
         assert_eq!(
             plan.support_view().status_for("module_graph"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
-        assert!(plan.diagnostics().iter().all(|diagnostic| {
-            diagnostic
-                .evidence
-                .iter()
-                .any(|evidence| evidence.label == "status" && evidence.value == "unsupported")
-        }));
+        assert!(plan.diagnostics().is_empty());
     }
 
     #[test]
