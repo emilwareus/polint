@@ -216,10 +216,13 @@ pub(crate) fn resolver_context_construction_count_for_test() -> usize {
 #[cfg(test)]
 mod tests {
     use super::{TsResolverContext, resolve_ts_import};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
     use crate::core::{
-        AnalysisDb, ImportFact, ImportId, Language, ResolutionPrecision, ResolutionStatus, Span,
-        UnresolvedReason,
+        AnalysisDb, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeId, ModuleNodeKind,
+        ResolutionPrecision, ResolutionStatus, Span, UnresolvedReason,
     };
+    use crate::module_graph::derive_requested_module_graph;
     use crate::module_graph::model::ResolverInput;
     use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
     use std::fs;
@@ -292,5 +295,161 @@ mod tests {
         assert_eq!(draft.precision, ResolutionPrecision::None);
         assert_eq!(draft.reason, Some(UnresolvedReason::DynamicExpression));
         assert_eq!(draft.target, None);
+    }
+
+    type DeterminismSnapshot = (
+        Vec<(ModuleNodeKind, String)>,
+        Vec<(
+            ResolutionStatus,
+            ResolutionPrecision,
+            Option<UnresolvedReason>,
+            Option<String>,
+        )>,
+        Vec<(String, String, ModuleEdgeKind, ResolutionStatus)>,
+    );
+
+    fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture");
+        path
+    }
+
+    fn add_fixture_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_fixture(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn push_import(db: &mut AnalysisDb, file: crate::core::FileId, path: &str, offset: u32) {
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: Span {
+                file,
+                start_byte: offset,
+                end_byte: offset + 1,
+                start_line: 1,
+                start_col: offset + 1,
+                end_line: 1,
+                end_col: offset + 2,
+            },
+            language: Language::TypeScript,
+        });
+    }
+
+    fn build_determinism_db(root: &Path) -> AnalysisDb {
+        write_fixture(
+            root,
+            "package.json",
+            r#"{"name":"frontend","dependencies":{"react":"latest"}}"#,
+        );
+        write_fixture(
+            root,
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_fixture_file(
+            &mut db,
+            root,
+            "src/app.ts",
+            r#"
+import tokens from "@/tokens";
+import React from "react";
+const lazy = await import("./lazy");
+const dynamic = await import(name);
+"#,
+        );
+        add_fixture_file(
+            &mut db,
+            root,
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        add_fixture_file(&mut db, root, "src/lazy.ts", "export const lazy = true;\n");
+        push_import(&mut db, app, "@/tokens", 0);
+        push_import(&mut db, app, "react", 30);
+        push_import(&mut db, app, "./lazy", 60);
+        push_import(&mut db, app, DYNAMIC_IMPORT_SPECIFIER, 90);
+        db
+    }
+
+    fn node_label(db: &AnalysisDb, id: ModuleNodeId) -> String {
+        db.module_nodes()
+            .iter()
+            .find(|node| node.id == id)
+            .map(|node| node.label.clone())
+            .expect("node exists")
+    }
+
+    fn derive_snapshot(root: &Path) -> DeterminismSnapshot {
+        let mut db = build_determinism_db(root);
+        let config = load_config(root).expect("test config loads");
+        derive_requested_module_graph(
+            &mut db,
+            &config,
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        let nodes = db
+            .module_nodes()
+            .iter()
+            .map(|node| (node.kind, node.label.clone()))
+            .collect::<Vec<_>>();
+        let imports = db
+            .resolved_imports()
+            .iter()
+            .map(|fact| {
+                (
+                    fact.status,
+                    fact.precision,
+                    fact.reason,
+                    fact.target_node.map(|node| node_label(&db, node)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let edges = db
+            .module_edges()
+            .iter()
+            .map(|edge| {
+                (
+                    node_label(&db, edge.from),
+                    node_label(&db, edge.to),
+                    edge.kind,
+                    edge.status,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        (nodes, imports, edges)
+    }
+
+    #[test]
+    fn module_graph_ts_determinism_repeated_provider_runs_match_exact_graph_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let first = derive_snapshot(temp.path());
+        let second = derive_snapshot(temp.path());
+
+        assert_eq!(first, second);
+        assert!(
+            first
+                .0
+                .iter()
+                .any(|(kind, label)| { *kind == ModuleNodeKind::Module && label == "frontend" })
+        );
+        assert!(first.2.iter().any(|(from, to, kind, status)| {
+            from == "frontend"
+                && to == "react"
+                && *kind == ModuleEdgeKind::DependsOn
+                && *status == ResolutionStatus::External
+        }));
     }
 }

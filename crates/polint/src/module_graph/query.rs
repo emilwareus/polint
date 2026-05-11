@@ -80,3 +80,30 @@ where
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::reachable_from;
+    use crate::core::ModuleNodeId;
+
+    #[test]
+    fn module_graph_ts_determinism_reachable_from_uses_deterministic_id_order() {
+        let unsorted_edges = vec![
+            (ModuleNodeId(0), ModuleNodeId(3)),
+            (ModuleNodeId(0), ModuleNodeId(1)),
+            (ModuleNodeId(2), ModuleNodeId(4)),
+            (ModuleNodeId(0), ModuleNodeId(2)),
+            (ModuleNodeId(1), ModuleNodeId(4)),
+        ];
+
+        assert_eq!(
+            reachable_from(ModuleNodeId(0), unsorted_edges),
+            vec![
+                ModuleNodeId(1),
+                ModuleNodeId(2),
+                ModuleNodeId(3),
+                ModuleNodeId(4)
+            ]
+        );
+    }
+}
