@@ -339,11 +339,13 @@ pub(crate) fn resolve_go_import(
 
 #[cfg(test)]
 mod tests {
-    use super::{GoCommandOutput, GoPackageIndex, resolve_go_import};
+    use super::{GoCommandOutput, GoPackageIndex, resolve_go_import, seed_go_module_nodes};
     use crate::core::{
-        AnalysisDb, ImportFact, ImportId, Language, ResolutionStatus, Span, UnresolvedReason,
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportId, Span,
+        UnresolvedReason,
     };
-    use crate::module_graph::model::ResolverInput;
+    use crate::module_graph::model::{ModuleGraphBuilder, ResolverInput};
     use std::cell::Cell;
     use std::path::{Path, PathBuf};
     use std::process::ExitStatus;
@@ -486,6 +488,141 @@ mod tests {
         assert_eq!(package.files().collect::<Vec<_>>(), vec![source, test]);
     }
 
+    #[test]
+    fn module_graph_go_resolution_resolves_local_import_to_package_node_and_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("go.mod"), "module example.com/app\n")
+            .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        let main = add_go_file(&mut db, temp.path(), "cmd/app/main.go", "package main\n");
+        let worker = add_go_file(
+            &mut db,
+            temp.path(),
+            "internal/worker/worker.go",
+            "package worker\n",
+        );
+        push_go_import(&mut db, main, "example.com/app/internal/worker");
+        let index = go_index(
+            temp.path(),
+            &db,
+            &[
+                ("example.com/app/cmd/app", "cmd/app", &["main.go"], false),
+                (
+                    "example.com/app/internal/worker",
+                    "internal/worker",
+                    &["worker.go"],
+                    false,
+                ),
+            ],
+        );
+        let mut builder = ModuleGraphBuilder::new(&db);
+        let ownership = seed_go_module_nodes(&mut builder, &index);
+        let owner = ownership
+            .package_node_for_file(main)
+            .expect("main package owner exists");
+
+        let draft = resolve_go_import(
+            ResolverInput {
+                root: temp.path(),
+                db: &db,
+                import: &db.imports()[0],
+                ts_resolver: None,
+                owner_module: ownership.module_node_for_file(main),
+                owner_package: Some(owner),
+            },
+            &index,
+        );
+        let fact = builder.apply_resolved_import_draft_with_id(
+            &db.imports()[0],
+            owner,
+            draft,
+            ResolvedImportId(0),
+        );
+        let output = builder.finish();
+        let module = node_by_label(&output.nodes, "example.com/app");
+        let worker_package = node_by_label(&output.nodes, "example.com/app/internal/worker");
+        let worker_file = file_node(&output.nodes, worker);
+
+        assert_eq!(fact.status, ResolutionStatus::Resolved);
+        assert_eq!(fact.precision, ResolutionPrecision::Package);
+        assert_eq!(fact.target_node, Some(worker_package));
+        assert!(output.edges.iter().any(|edge| {
+            edge.kind == ModuleEdgeKind::Contains && edge.from == module && edge.to == worker_package
+        }));
+        assert!(output.edges.iter().any(|edge| {
+            edge.kind == ModuleEdgeKind::Contains
+                && edge.from == worker_package
+                && edge.to == worker_file
+        }));
+        assert!(output.edges.iter().any(|edge| {
+            edge.kind == ModuleEdgeKind::DependsOn
+                && edge.from == owner
+                && edge.to == worker_package
+                && edge.status == ResolutionStatus::Resolved
+        }));
+    }
+
+    #[test]
+    fn module_graph_go_resolution_classifies_stdlib_import_as_external() {
+        let (db, index) = db_and_index_for_import("fmt");
+
+        let draft = resolve_go_import(
+            ResolverInput {
+                root: Path::new("."),
+                db: &db,
+                import: &db.imports()[0],
+                ts_resolver: None,
+                owner_module: None,
+                owner_package: None,
+            },
+            &index,
+        );
+
+        assert_eq!(draft.status, ResolutionStatus::External);
+        assert_eq!(draft.precision, ResolutionPrecision::ExternalPackage);
+    }
+
+    #[test]
+    fn module_graph_go_resolution_classifies_dependency_import_as_external() {
+        let (db, index) = db_and_index_for_import("github.com/acme/lib");
+
+        let draft = resolve_go_import(
+            ResolverInput {
+                root: Path::new("."),
+                db: &db,
+                import: &db.imports()[0],
+                ts_resolver: None,
+                owner_module: None,
+                owner_package: None,
+            },
+            &index,
+        );
+
+        assert_eq!(draft.status, ResolutionStatus::External);
+        assert_eq!(draft.precision, ResolutionPrecision::ExternalPackage);
+    }
+
+    #[test]
+    fn module_graph_go_resolution_keeps_unknown_local_import_unresolved_not_found() {
+        let (db, index) = db_and_index_for_import("example.com/app/internal/missing");
+
+        let draft = resolve_go_import(
+            ResolverInput {
+                root: Path::new("."),
+                db: &db,
+                import: &db.imports()[0],
+                ts_resolver: None,
+                owner_module: None,
+                owner_package: None,
+            },
+            &index,
+        );
+
+        assert_eq!(draft.status, ResolutionStatus::Unresolved);
+        assert_eq!(draft.precision, ResolutionPrecision::None);
+        assert_eq!(draft.reason, Some(UnresolvedReason::NotFound));
+    }
+
     fn add_go_file(
         db: &mut AnalysisDb,
         root: &Path,
@@ -497,6 +634,83 @@ mod tests {
             .expect("create parent dirs");
         std::fs::write(&path, source).expect("write fixture");
         db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn push_go_import(db: &mut AnalysisDb, file: FileId, path: &str) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+        })
+    }
+
+    fn db_and_index_for_import(path: &str) -> (AnalysisDb, GoPackageIndex) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("go.mod"), "module example.com/app\n")
+            .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        let main = add_go_file(&mut db, temp.path(), "cmd/app/main.go", "package main\n");
+        push_go_import(&mut db, main, path);
+        let index = go_index(
+            temp.path(),
+            &db,
+            &[("example.com/app/cmd/app", "cmd/app", &["main.go"], false)],
+        );
+        (db, index)
+    }
+
+    fn go_index(
+        root: &Path,
+        db: &AnalysisDb,
+        packages: &[(&str, &str, &[&str], bool)],
+    ) -> GoPackageIndex {
+        let stdout = packages
+            .iter()
+            .map(|(import_path, dir, files, standard)| {
+                let dir = root.join(dir);
+                let files = files
+                    .iter()
+                    .map(|file| serde_json::to_string(file).expect("serialize file"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    r#"{{"ImportPath":{},"Name":"pkg","Dir":{},"GoFiles":[{}],"Standard":{},"Module":{{"Path":"example.com/app"}}}}"#,
+                    serde_json::to_string(import_path).expect("serialize import path"),
+                    serde_json::to_string(&dir.to_string_lossy()).expect("serialize dir"),
+                    files,
+                    standard
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        GoPackageIndex::load_with_runner_for_test(root, db, || {
+            successful_go_output(stdout.as_bytes())
+        })
+    }
+
+    fn node_by_label(nodes: &[crate::core::ModuleNode], label: &str) -> ModuleNodeId {
+        nodes
+            .iter()
+            .find(|node| node.label == label)
+            .map(|node| {
+                assert!(matches!(
+                    node.kind,
+                    ModuleNodeKind::Module | ModuleNodeKind::Package
+                ));
+                node.id
+            })
+            .expect("node exists")
+    }
+
+    fn file_node(nodes: &[crate::core::ModuleNode], file: FileId) -> ModuleNodeId {
+        nodes
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::File && node.file == Some(file))
+            .map(|node| node.id)
+            .expect("file node exists")
     }
 
     fn successful_go_output(stdout: &[u8]) -> GoCommandOutput {
