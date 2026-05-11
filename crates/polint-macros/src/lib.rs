@@ -442,6 +442,11 @@ mod tests {
         assert_eq!(capability("FileMetrics<'_>"), "file_metrics");
         assert_eq!(capability("FunctionMetrics<'_>"), "function_metrics");
         assert_eq!(capability("ComplexityMetrics<'_>"), "complexity_metrics");
+        assert_eq!(capability("ResolvedImports<'_>"), "resolved_imports");
+        assert_eq!(
+            capability("polint::sdk::facts::ModuleGraphFacts<'_>"),
+            "module_graph"
+        );
         assert_eq!(capability("StringLiterals<'_>"), "string_literals");
         assert_eq!(
             capability("polint::sdk::facts::JsxAttributes<'_>"),

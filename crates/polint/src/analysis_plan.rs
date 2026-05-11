@@ -980,6 +980,49 @@ mod tests {
     }
 
     #[test]
+    fn analysis_plan_recognizes_module_relationship_capabilities() {
+        let plan =
+            AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+        let capabilities = plan.capabilities();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|capability| capability.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["module_graph", "resolved_imports"]
+        );
+
+        for capability in capabilities {
+            assert_eq!(
+                capability.status,
+                crate::core::CapabilitySupportStatus::Unsupported
+            );
+            assert_eq!(
+                capability.reason.as_deref(),
+                Some("Module relationship provider is not wired into this build step.")
+            );
+            assert_eq!(
+                capability.docs_path.as_deref(),
+                Some("docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md")
+            );
+        }
+
+        assert_eq!(
+            plan.support_view().status_for("resolved_imports"),
+            Some(crate::core::CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(
+            plan.support_view().status_for("module_graph"),
+            Some(crate::core::CapabilitySupportStatus::Unsupported)
+        );
+        assert!(plan.diagnostics().iter().all(|diagnostic| diagnostic
+            .evidence
+            .iter()
+            .any(|evidence| evidence.label == "status" && evidence.value == "unsupported")));
+    }
+
+    #[test]
     fn analysis_plan_reports_setup_missing_capabilities_as_diagnostics() {
         let plan = AnalysisPlan::finish(
             vec![PlannedRule {
