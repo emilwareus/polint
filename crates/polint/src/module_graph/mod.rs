@@ -211,7 +211,7 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 #[cfg(test)]
 mod tests {
     use super::model::ModuleGraphBuilder;
-    use super::{derive_requested_module_graph, paths, query};
+    use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -219,7 +219,8 @@ mod tests {
         ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNodeId, ModuleNodeKind,
         PackageFact, PackageId, ResolutionPrecision, ResolutionStatus, Span, UnresolvedReason,
     };
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
         Span {
@@ -248,6 +249,51 @@ mod tests {
     fn loaded_config() -> crate::config::LoadedConfig {
         let temp = tempfile::tempdir().expect("tempdir");
         load_config(temp.path()).expect("default config loads")
+    }
+
+    fn loaded_config_for(root: &Path) -> crate::config::LoadedConfig {
+        load_config(root).expect("default config loads")
+    }
+
+    fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture file");
+        path
+    }
+
+    fn add_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_file(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn push_ts_import(
+        db: &mut AnalysisDb,
+        file: crate::core::FileId,
+        path: &str,
+        start_byte: u32,
+    ) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span(file, start_byte),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
+        let id = id?;
+        db.module_nodes()
+            .iter()
+            .find(|node| node.id == id)
+            .map(|node| node.label.as_str())
     }
 
     #[test]
@@ -592,5 +638,235 @@ mod tests {
             db.resolved_imports()[0].reason,
             Some(UnresolvedReason::UnsupportedLanguage)
         );
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_resolves_relative_import_to_local_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let component = add_file(
+            &mut db,
+            temp.path(),
+            "src/component.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut db, component, "./tokens", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Resolved);
+        assert_eq!(fact.precision, ResolutionPrecision::ExactFile);
+        assert_eq!(fact.reason, None);
+        assert_eq!(node_label(&db, fact.target_node), Some("src/tokens.ts"));
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_resolves_tsconfig_path_alias_to_local_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let component = add_file(
+            &mut db,
+            temp.path(),
+            "src/component.ts",
+            "import tokens from '@/tokens';\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut db, component, "@/tokens", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Resolved);
+        assert_eq!(fact.precision, ResolutionPrecision::ExactFile);
+        assert_eq!(node_label(&db, fact.target_node), Some("src/tokens.ts"));
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_classifies_package_imports_as_external_dependencies() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"frontend","dependencies":{"react":"latest","@scope/lib":"latest"}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\nconst lib = require('@scope/lib');\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        push_ts_import(&mut db, app, "@scope/lib", 28);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        let facts = db.resolved_imports();
+        assert!(facts.iter().all(|fact| {
+            fact.status == ResolutionStatus::External
+                && fact.precision == ResolutionPrecision::ExternalPackage
+                && fact.reason.is_none()
+        }));
+        assert!(
+            db.module_nodes()
+                .iter()
+                .any(|node| node.kind == ModuleNodeKind::External && node.label == "react")
+        );
+        assert!(
+            db.module_nodes()
+                .iter()
+                .any(|node| node.kind == ModuleNodeKind::External && node.label == "@scope/lib")
+        );
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_keeps_missing_relative_import_unresolved_not_found() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut db, app, "./missing", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Unresolved);
+        assert_eq!(fact.precision, ResolutionPrecision::None);
+        assert_eq!(fact.reason, Some(UnresolvedReason::NotFound));
+        assert_eq!(fact.target_node, None);
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_constructs_resolver_context_once_per_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import one from './one';\nimport two from './two';\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/one.ts",
+            "export const one = 1;\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/two.ts",
+            "export const two = 2;\n",
+        );
+        push_ts_import(&mut db, app, "./one", 0);
+        push_ts_import(&mut db, app, "./two", 25);
+        ts::reset_resolver_context_construction_count_for_test();
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        assert_eq!(ts::resolver_context_construction_count_for_test(), 1);
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_creates_project_module_with_contains_and_dependency_edges() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"frontend","dependencies":{"react":"latest"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from '@/tokens';\nimport React from 'react';\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut db, app, "@/tokens", 0);
+        push_ts_import(&mut db, app, "react", 32);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]),
+        );
+
+        let module = db
+            .module_nodes()
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::Module && node.label == "frontend")
+            .map(|node| node.id)
+            .expect("package-named module node exists");
+        let app_file = db
+            .module_nodes()
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::File && node.label == "src/app.ts")
+            .map(|node| node.id)
+            .expect("file node exists");
+        let external = db
+            .module_nodes()
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::External && node.label == "react")
+            .map(|node| node.id)
+            .expect("external node exists");
+
+        assert!(db.module_edges().iter().any(|edge| {
+            edge.kind == ModuleEdgeKind::Contains && edge.from == module && edge.to == app_file
+        }));
+        assert!(db.module_edges().iter().any(|edge| {
+            edge.kind == ModuleEdgeKind::DependsOn && edge.from == module && edge.to == external
+        }));
     }
 }
