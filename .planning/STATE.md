@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
-stopped_at: Phase 12 complete
-last_updated: "2026-05-11T17:34:09.849Z"
+stopped_at: Phase 12 shipped - PR #10
+last_updated: "2026-05-11T17:51:41.680Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
@@ -57,6 +57,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
+- Phase 12 shipped in PR #10: https://github.com/emilwareus/polint/pull/10.
 - Next action: discuss and plan Phase 13, Symbols and References.
 
 ## Current Position
@@ -65,7 +66,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 13 - Symbols and References
 Plan: Not started
-Last activity: 2026-05-11 - Phase 12 verification passed; Phase 13 ready to discuss and plan
+Last activity: 2026-05-11 - Phase 12 shipped in PR #10; Phase 13 ready to discuss and plan
 
 ## Quick Tasks Completed
 
