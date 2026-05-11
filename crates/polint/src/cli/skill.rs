@@ -334,8 +334,10 @@ request several of these typed views in one `#[polint::rule]` signature.
 For architecture policies, request `ResolvedImports<'_>` to inspect resolution
 status and unresolved reasons, and request `ModuleGraphFacts<'_>` to inspect
 file, package, module, and dependency edges. Both views are exported by
-`polint::sdk::prelude::*`; keep rules on the typed fact-view path and treat
-`SetupMissing`, `Dynamic`, and `Unsupported` statuses as meaningful data.
+`polint::sdk::prelude::*`; keep rules on the typed fact-view path. When
+relationship rules run, `Unresolved`, `Dynamic`, and `Unsupported` statuses are
+inspectable fact data. `SetupMissing` is reported as a `polint/capability`
+diagnostic and blocks requesting rules until resolver setup exists.
 
 ## Config Pattern
 

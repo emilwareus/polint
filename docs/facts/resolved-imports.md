@@ -25,7 +25,7 @@ Query methods:
 | `all()` | Returns all resolved import facts in deterministic database order. |
 | `iter()` | Iterates all resolved import facts. |
 | `for_file(file)` | Iterates resolved imports from one source file. |
-| `unresolved_for_file(file)` | Iterates `Unresolved`, `SetupMissing`, `Dynamic`, or `Unsupported` imports from one source file. |
+| `unresolved_for_file(file)` | Iterates non-resolved imports from one source file. For running relationship rules this means `Unresolved`, `Dynamic`, or `Unsupported`; `SetupMissing` is reported as a capability diagnostic before rule execution. |
 | `for_import(import)` | Returns the resolved import fact for a syntactic `ImportId`. |
 
 `ResolvedImportFact` fields:
@@ -89,7 +89,7 @@ Query methods:
 | `Resolved` | Target is a repo file, package, or module node. |
 | `External` | Target is outside the repo, including standard library and package-manager dependencies. |
 | `Unresolved` | Resolver setup existed, but no target was found. |
-| `SetupMissing` | Required resolver setup was absent or failed. |
+| `SetupMissing` | Required resolver setup was absent or failed; requesting relationship rules receive `polint/capability` diagnostics and do not run. |
 | `Dynamic` | Import shape is dynamic and cannot be resolved statically. |
 | `Unsupported` | Language or import form is known but not implemented. |
 
@@ -108,10 +108,11 @@ and `OutsideWorkspace`.
   The command runs with fixed arguments from the repository root.
 - Standard library imports and package-manager dependencies are reported as
   `External`.
-- Unresolved, setup-missing, dynamic, and unsupported imports remain visible as
-  facts instead of being dropped.
-- Rules requesting setup-missing hard capabilities receive `polint/capability`
-  diagnostics and do not execute with placeholder facts.
+- `Unresolved`, `Dynamic`, and `Unsupported` imports remain visible as facts to
+  running relationship rules instead of being dropped.
+- `SetupMissing` is surfaced through `polint/capability` diagnostics for
+  requesting rules, and those rules do not execute with placeholder relationship
+  facts.
 
 ## Limits
 
