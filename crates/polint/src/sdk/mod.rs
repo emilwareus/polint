@@ -120,6 +120,19 @@ mod tests {
         assert_exported::<FileMetricFact>();
         assert_exported::<FunctionMetricFact>();
         assert_exported::<ComplexityMetricFact>();
+        assert_exported::<ResolvedImportFact>();
+        assert_exported::<ResolvedImportId>();
+        assert_exported::<ModuleNode>();
+        assert_exported::<ModuleNodeId>();
+        assert_exported::<ModuleEdge>();
+        assert_exported::<ModuleEdgeId>();
+        assert_exported::<ModuleNodeKind>();
+        assert_exported::<ModuleEdgeKind>();
+        assert_exported::<ResolutionStatus>();
+        assert_exported::<ResolutionPrecision>();
+        assert_exported::<UnresolvedReason>();
+        assert_exported::<ResolvedImports<'static>>();
+        assert_exported::<ModuleGraphFacts<'static>>();
 
         let db = AnalysisDb::new();
         let rule = prelude_smoke();
