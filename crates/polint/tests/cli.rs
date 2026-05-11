@@ -910,6 +910,8 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
     assert!(contents.contains("FileMetrics<'_>"));
+    assert!(contents.contains("ResolvedImports<'_>"));
+    assert!(contents.contains("ModuleGraphFacts<'_>"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 

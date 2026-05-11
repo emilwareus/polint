@@ -329,6 +329,14 @@ rules. `FileMetrics<'_>` exposes file line/byte/function counts,
 exposes per-function syntax-level cyclomatic complexity. A composite rule can
 request several of these typed views in one `#[polint::rule]` signature.
 
+## Module Relationship Facts
+
+For architecture policies, request `ResolvedImports<'_>` to inspect resolution
+status and unresolved reasons, and request `ModuleGraphFacts<'_>` to inspect
+file, package, module, and dependency edges. Both views are exported by
+`polint::sdk::prelude::*`; keep rules on the typed fact-view path and treat
+`SetupMissing`, `Dynamic`, and `Unsupported` statuses as meaningful data.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs
@@ -359,6 +367,7 @@ allow_files = ["src/theme/**"]
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
 - Compose `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` for higher-level quality rules instead of making rules depend on other rules.
+- For architecture rules, compose `ResolvedImports<'_>` and `ModuleGraphFacts<'_>` instead of parsing import strings yourself.
 - Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.

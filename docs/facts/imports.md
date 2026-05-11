@@ -17,8 +17,10 @@ parameter is how polint derives the `imports` capability.
 
 ## Limits
 
-- Imports are syntactic. polint does not currently resolve Node, TypeScript, or
-  Go module paths to files.
+- `ImportFact` is syntactic. Use
+  [`ResolvedImports<'_>`](resolved-imports.md) and
+  [`ModuleGraphFacts<'_>`](resolved-imports.md) when a rule needs setup-aware
+  TS/JS or Go resolution.
 - `package` is best-effort and may be `None` for common unaliased imports.
 - Dynamic imports and unusual parser recovery cases may be incomplete.
 

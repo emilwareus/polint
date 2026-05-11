@@ -10,6 +10,8 @@ debug command.
 Current rule-author fact views include:
 
 - `Imports<'_>`
+- `ResolvedImports<'_>`
+- `ModuleGraphFacts<'_>`
 - `GoTests<'_>`
 - `BranchObligations<'_>`
 - `FileMetrics<'_>`
