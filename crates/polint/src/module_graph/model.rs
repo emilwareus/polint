@@ -128,6 +128,16 @@ impl ModuleGraphBuilder {
 
     pub(crate) fn ensure_package_node(&mut self, package: &PackageFact) -> ModuleNodeId {
         let label = package_label(package.language, &package.name);
+        self.ensure_package_node_with_label(label, Some(package.id), Some(package.language))
+    }
+
+    pub(crate) fn ensure_package_node_with_label(
+        &mut self,
+        label: impl Into<String>,
+        package: Option<PackageId>,
+        language: Option<Language>,
+    ) -> ModuleNodeId {
+        let label = label.into();
         if let Some(node) = self.package_nodes.get(&label).copied() {
             return node;
         }
@@ -137,8 +147,8 @@ impl ModuleGraphBuilder {
             kind: ModuleNodeKind::Package,
             label: label.clone(),
             file: None,
-            package: Some(package.id),
-            language: Some(package.language),
+            package,
+            language,
         });
         self.package_nodes.insert(label, node);
         node

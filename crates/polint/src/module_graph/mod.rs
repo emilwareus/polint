@@ -59,12 +59,34 @@ pub(crate) fn derive_requested_module_graph(
     for file in &files {
         file_nodes.insert(file.id, builder.ensure_file_node(file.id));
     }
-    let file_owner_modules =
+    let mut file_owner_modules =
         seed_ts_project_module_nodes(&mut builder, loaded.root.as_path(), &files);
+    let has_go_inputs = files
+        .iter()
+        .any(|file| file.language == crate::core::Language::Go)
+        || db
+            .imports()
+            .iter()
+            .any(|import| import.language == crate::core::Language::Go);
+    let go_metadata = if has_go_inputs {
+        go::GoPackageIndex::load(loaded.root.as_path(), db)
+    } else {
+        go::GoPackageIndex::default()
+    };
+    let go_ownership = go::seed_go_module_nodes(&mut builder, &go_metadata);
+    for (file, module) in go_ownership.file_owner_modules() {
+        file_owner_modules.insert(file, module);
+    }
 
     let mut package_nodes_by_file = BTreeMap::new();
     for package in sort_packages(db.packages(), db) {
-        let package_node = builder.ensure_package_node(package);
+        let package_node = if package.language == crate::core::Language::Go {
+            go_ownership
+                .package_node_for_file(package.file)
+                .unwrap_or_else(|| builder.ensure_package_node(package))
+        } else {
+            builder.ensure_package_node(package)
+        };
         let file_node = builder.ensure_file_node(package.file);
         if let Some(owner_module) = file_owner_modules
             .get(&package.file)
@@ -75,6 +97,9 @@ pub(crate) fn derive_requested_module_graph(
         }
         builder.link_contains(package_node, file_node);
         package_nodes_by_file.insert(package.file, package_node);
+    }
+    for (file, package_node) in go_ownership.package_nodes_by_file() {
+        package_nodes_by_file.entry(file).or_insert(package_node);
     }
 
     for file in &files {
@@ -94,7 +119,6 @@ pub(crate) fn derive_requested_module_graph(
         .then(|| ts::TsResolverContext::new(loaded.root.as_path(), db, root_module));
 
     let mut resolved_imports = Vec::with_capacity(imports.len());
-    let go_metadata = go::GoPackageIndex::default();
     let mut saw_setup_missing = false;
     for import in imports {
         let owner_module = file_owner_modules

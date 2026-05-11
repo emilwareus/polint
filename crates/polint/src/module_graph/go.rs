@@ -1,5 +1,10 @@
-use crate::core::{AnalysisDb, FileId, Language, ResolutionStatus, UnresolvedReason};
-use crate::module_graph::model::{ResolvedImportDraft, ResolverInput};
+use crate::core::{
+    AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision,
+    ResolutionStatus, UnresolvedReason,
+};
+use crate::module_graph::model::{
+    ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft, ResolverInput,
+};
 use crate::module_graph::paths;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +17,36 @@ pub(crate) struct GoPackageIndex {
     file_to_import_path: BTreeMap<FileId, String>,
     module_path: Option<String>,
     setup_missing_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GoModuleOwnership {
+    file_owner_modules: BTreeMap<FileId, ModuleNodeId>,
+    package_nodes_by_file: BTreeMap<FileId, ModuleNodeId>,
+}
+
+impl GoModuleOwnership {
+    pub(crate) fn module_node_for_file(&self, file: FileId) -> Option<ModuleNodeId> {
+        self.file_owner_modules.get(&file).copied()
+    }
+
+    pub(crate) fn package_node_for_file(&self, file: FileId) -> Option<ModuleNodeId> {
+        self.package_nodes_by_file.get(&file).copied()
+    }
+
+    pub(crate) fn file_owner_modules(&self) -> impl Iterator<Item = (FileId, ModuleNodeId)> + '_ {
+        self.file_owner_modules
+            .iter()
+            .map(|(file, node)| (*file, *node))
+    }
+
+    pub(crate) fn package_nodes_by_file(
+        &self,
+    ) -> impl Iterator<Item = (FileId, ModuleNodeId)> + '_ {
+        self.package_nodes_by_file
+            .iter()
+            .map(|(file, node)| (*file, *node))
+    }
 }
 
 impl Default for GoPackageIndex {
@@ -121,8 +156,26 @@ impl GoPackageIndex {
         self.by_import_path.keys().map(String::as_str)
     }
 
-    pub(crate) fn import_path_for_file(&self, file: FileId) -> Option<&str> {
-        self.file_to_import_path.get(&file).map(String::as_str)
+    fn local_packages(&self) -> impl Iterator<Item = &GoPackageMetadata> {
+        self.by_import_path
+            .values()
+            .filter(|package| self.is_local_package(package))
+    }
+
+    fn is_local_package(&self, package: &GoPackageMetadata) -> bool {
+        !package.standard
+            && !package.files.is_empty()
+            && self.module_path.as_deref().is_some_and(|module_path| {
+                import_is_within_module(&package.import_path, module_path)
+            })
+    }
+
+    fn import_is_external_dependency(&self, import_path: &str) -> bool {
+        is_go_stdlib_import_path(import_path)
+            || self
+                .module_path
+                .as_deref()
+                .is_some_and(|module_path| !import_is_within_module(import_path, module_path))
     }
 
     #[cfg(test)]
@@ -135,13 +188,40 @@ impl GoPackageIndex {
     }
 }
 
+pub(crate) fn seed_go_module_nodes(
+    builder: &mut ModuleGraphBuilder,
+    metadata: &GoPackageIndex,
+) -> GoModuleOwnership {
+    let Some(module_path) = metadata.module_path() else {
+        return GoModuleOwnership::default();
+    };
+    let module = builder.ensure_module_node(module_path.clone());
+    let mut ownership = GoModuleOwnership::default();
+
+    for package in metadata.local_packages() {
+        let package_node =
+            builder.ensure_package_node_with_label(package.import_path(), None, Some(Language::Go));
+        builder.link_module_contains(module, package_node);
+        for file in package.files() {
+            let file_node = builder.ensure_file_node(file);
+            builder.link_contains(package_node, file_node);
+            ownership.file_owner_modules.insert(file, module);
+            ownership.package_nodes_by_file.insert(file, package_node);
+        }
+    }
+
+    ownership
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GoPackageMetadata {
     import_path: String,
+    #[allow(dead_code)]
     name: Option<String>,
     files: Vec<FileId>,
     standard: bool,
     module_path: Option<String>,
+    #[allow(dead_code)]
     module_version: Option<String>,
 }
 
@@ -176,24 +256,8 @@ impl GoPackageMetadata {
         &self.import_path
     }
 
-    pub(crate) fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
     pub(crate) fn files(&self) -> impl Iterator<Item = FileId> + '_ {
         self.files.iter().copied()
-    }
-
-    pub(crate) fn standard(&self) -> bool {
-        self.standard
-    }
-
-    pub(crate) fn module_path(&self) -> Option<&str> {
-        self.module_path.as_deref()
-    }
-
-    pub(crate) fn module_version(&self) -> Option<&str> {
-        self.module_version.as_deref()
     }
 }
 
@@ -319,12 +383,7 @@ pub(crate) fn resolve_go_import(
     input: ResolverInput<'_>,
     metadata: &GoPackageIndex,
 ) -> ResolvedImportDraft {
-    let _ = (
-        input.root,
-        input.db.files().len(),
-        input.owner_module,
-        input.owner_package,
-    );
+    let _ = (input.root, input.db.files().len(), input.owner_module);
     if input.import.language != Language::Go {
         return ResolvedImportDraft::unsupported_language();
     }
@@ -332,9 +391,52 @@ pub(crate) fn resolve_go_import(
         return ResolvedImportDraft::setup_missing();
     }
 
-    let mut draft = ResolvedImportDraft::unresolved(UnresolvedReason::NotFound);
-    draft.status = ResolutionStatus::Unresolved;
-    draft
+    if let Some(package) = metadata.package(&input.import.path) {
+        if metadata.is_local_package(package) {
+            return ResolvedImportDraft {
+                target: Some(ModuleNodeDraft::package(
+                    package.import_path(),
+                    None,
+                    Some(Language::Go),
+                )),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::Package,
+                reason: None,
+                edge_kind: Some(ModuleEdgeKind::DependsOn),
+            };
+        }
+        return external_draft(input.import.path.clone());
+    }
+
+    if metadata.import_is_external_dependency(&input.import.path) {
+        return external_draft(input.import.path.clone());
+    }
+
+    ResolvedImportDraft::unresolved(UnresolvedReason::NotFound)
+}
+
+fn external_draft(label: String) -> ResolvedImportDraft {
+    ResolvedImportDraft {
+        target: Some(ModuleNodeDraft::external(label, Some(Language::Go))),
+        status: ResolutionStatus::External,
+        precision: ResolutionPrecision::ExternalPackage,
+        reason: None,
+        edge_kind: Some(ModuleEdgeKind::DependsOn),
+    }
+}
+
+fn import_is_within_module(import_path: &str, module_path: &str) -> bool {
+    import_path == module_path
+        || import_path
+            .strip_prefix(module_path)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn is_go_stdlib_import_path(import_path: &str) -> bool {
+    import_path
+        .split('/')
+        .next()
+        .is_some_and(|first| !first.contains('.') && !first.is_empty())
 }
 
 #[cfg(test)]
@@ -547,7 +649,9 @@ mod tests {
         assert_eq!(fact.precision, ResolutionPrecision::Package);
         assert_eq!(fact.target_node, Some(worker_package));
         assert!(output.edges.iter().any(|edge| {
-            edge.kind == ModuleEdgeKind::Contains && edge.from == module && edge.to == worker_package
+            edge.kind == ModuleEdgeKind::Contains
+                && edge.from == module
+                && edge.to == worker_package
         }));
         assert!(output.edges.iter().any(|edge| {
             edge.kind == ModuleEdgeKind::Contains
