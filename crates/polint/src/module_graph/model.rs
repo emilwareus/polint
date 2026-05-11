@@ -325,3 +325,58 @@ pub(crate) fn sort_packages<'a>(
     });
     packages
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft};
+    use crate::core::{
+        AnalysisDb, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeKind,
+        ResolutionPrecision, ResolutionStatus, Span,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn module_graph_resolver_contracts_external_draft_links_dependency_edge() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import React from 'react';\n".to_string(),
+        );
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "react".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+        });
+        let import = &db.imports()[0];
+        let mut builder = ModuleGraphBuilder::new(&db);
+        let owner = builder.ensure_module_node(".");
+        let draft = ResolvedImportDraft {
+            target: Some(ModuleNodeDraft::external(
+                "react",
+                Some(Language::TypeScript),
+            )),
+            status: ResolutionStatus::External,
+            precision: ResolutionPrecision::ExternalPackage,
+            reason: None,
+            edge_kind: Some(ModuleEdgeKind::DependsOn),
+        };
+
+        let fact = builder.apply_resolved_import_draft(import, owner, draft);
+        let output = builder.finish();
+
+        let external = output
+            .nodes
+            .iter()
+            .find(|node| node.kind == ModuleNodeKind::External && node.label == "react")
+            .map(|node| node.id)
+            .expect("external node exists");
+        assert_eq!(fact.target_node, Some(external));
+        assert!(output.edges.iter().any(|edge| {
+            edge.from == owner && edge.to == external && edge.kind == ModuleEdgeKind::DependsOn
+        }));
+    }
+}

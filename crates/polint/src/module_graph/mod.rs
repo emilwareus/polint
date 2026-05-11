@@ -1,6 +1,8 @@
+pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod paths;
 pub(crate) mod query;
+pub(crate) mod ts;
 
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
