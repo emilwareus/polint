@@ -591,6 +591,12 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         | "string_literals" | "jsx_attributes" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
+        "resolved_imports" | "module_graph" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Module relationship provider is not wired into this build step.".to_string()),
+            None,
+            Some("docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md".to_string()),
+        ),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
@@ -1016,10 +1022,12 @@ mod tests {
             plan.support_view().status_for("module_graph"),
             Some(crate::core::CapabilitySupportStatus::Unsupported)
         );
-        assert!(plan.diagnostics().iter().all(|diagnostic| diagnostic
-            .evidence
-            .iter()
-            .any(|evidence| evidence.label == "status" && evidence.value == "unsupported")));
+        assert!(plan.diagnostics().iter().all(|diagnostic| {
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "status" && evidence.value == "unsupported")
+        }));
     }
 
     #[test]
