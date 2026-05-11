@@ -77,6 +77,15 @@ imports point to, not just their literal strings.
 
 **Requirements:** MOD-01, MOD-02, MOD-03, MOD-04
 
+**Plans:** 5 plans
+
+Plans:
+- [ ] 12-01-PLAN.md — Core fact model, SDK views, and macro capability contract
+- [ ] 12-02-PLAN.md — Project-wide module graph provider and runner wiring
+- [ ] 12-03-PLAN.md — TypeScript/JavaScript resolver integration
+- [ ] 12-04-PLAN.md — Go package metadata resolver integration
+- [ ] 12-05-PLAN.md — External SDK proof and public fact documentation
+
 **Success criteria:**
 
 1. `ResolvedImportFact` records resolved targets or explicit unresolved reasons.
