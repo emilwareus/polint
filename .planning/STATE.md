@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Completed 12-resolved-imports-and-module-relationships-02-PLAN.md
-last_updated: "2026-05-11T15:34:42.515Z"
+stopped_at: Completed 12-resolved-imports-and-module-relationships-03-PLAN.md
+last_updated: "2026-05-11T15:57:46.002Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # State: polint
@@ -64,7 +64,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to execute
 Phase: 12 (Resolved Imports and Module Relationships) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Last activity: 2026-05-11
 
 ## Quick Tasks Completed
@@ -183,6 +183,10 @@ Last activity: 2026-05-11
 - [Phase 12-resolved-imports-and-module-relationships]: Keep TS/JS and Go resolver outputs as crate-private drafts; public facts expose only polint-owned IDs and status enums.
 - [Phase 12-resolved-imports-and-module-relationships]: Do not synthesize a root module node for an empty repository; empty relationship views stay empty.
 - [Phase 12-resolved-imports-and-module-relationships]: Provider-derived setup-missing support rows emit their own capability diagnostics before rules are blocked.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolver output paths are never exposed publicly; they are normalized and mapped to FileIds before becoming relationship facts.
+- [Phase 12-resolved-imports-and-module-relationships]: Use symlinks:false on the TS resolver so path identity stays lexical and matches the AnalysisDb file index.
+- [Phase 12-resolved-imports-and-module-relationships]: Derive TS module ownership from nearest package.json or tsconfig.json, preferring package names for labels.
+- [Phase 12-resolved-imports-and-module-relationships]: Keep the dynamic import sentinel crate-private and convert it into explicit Dynamic relationship facts in the provider.
 
 ## Performance Metrics
 
@@ -219,11 +223,12 @@ Last activity: 2026-05-11
 | Phase 11-capability-driven-analysis-plan P03 | 22m 23s | 3 tasks | 7 files |
 | Phase 12-resolved-imports-and-module-relationships P01 | 11m 4s | 3 tasks | 5 files |
 | Phase 12-resolved-imports-and-module-relationships P02 | 1h 1m | 3 tasks | 11 files |
+| Phase 12-resolved-imports-and-module-relationships P03 | 17 min | 3 tasks | 9 files |
 
 ## Session
 
-**Last Date:** 2026-05-11T15:34:42.512Z
-**Stopped At:** Completed 12-resolved-imports-and-module-relationships-02-PLAN.md
+**Last Date:** 2026-05-11T15:57:45.991Z
+**Stopped At:** Completed 12-resolved-imports-and-module-relationships-03-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
