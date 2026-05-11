@@ -2270,6 +2270,192 @@ mod tests {
     }
 
     #[test]
+    fn module_relationship_core_contract_stores_relationship_facts_with_stable_ids() {
+        let mut db = AnalysisDb::new();
+        let from_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\nimport React from 'react';\n".to_string(),
+        );
+        let target_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "export function Button() {}\n".to_string(),
+        );
+        let span = test_span(from_file, 1);
+        let local_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "./button".to_string(),
+            span: span.clone(),
+            language: Language::TypeScript,
+        });
+        let external_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "react".to_string(),
+            span,
+            language: Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: local_import,
+                    from_file,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: external_import,
+                    from_file,
+                    target_node: Some(ModuleNodeId(2)),
+                    status: ResolutionStatus::External,
+                    precision: ResolutionPrecision::ExternalPackage,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(from_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(target_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::External,
+                    label: "react".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            vec![
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(1),
+                    import: Some(local_import),
+                    resolved_import: Some(ResolvedImportId(0)),
+                    kind: ModuleEdgeKind::Imports,
+                    status: ResolutionStatus::Resolved,
+                },
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(2),
+                    import: Some(external_import),
+                    resolved_import: Some(ResolvedImportId(1)),
+                    kind: ModuleEdgeKind::DependsOn,
+                    status: ResolutionStatus::External,
+                },
+            ],
+        );
+
+        assert_eq!(db.resolved_imports()[0].id, ResolvedImportId(0));
+        assert_eq!(db.resolved_imports()[1].id, ResolvedImportId(1));
+        assert_eq!(db.module_nodes()[0].id, ModuleNodeId(0));
+        assert_eq!(db.module_nodes()[1].id, ModuleNodeId(1));
+        assert_eq!(db.module_nodes()[2].id, ModuleNodeId(2));
+        assert_eq!(db.module_edges()[0].id, ModuleEdgeId(0));
+        assert_eq!(db.module_edges()[1].id, ModuleEdgeId(1));
+        assert_eq!(db.module_edges()[1].resolved_import, Some(ResolvedImportId(1)));
+    }
+
+    #[test]
+    fn module_relationship_core_contract_statuses_are_representable() {
+        let statuses = [
+            ResolutionStatus::Resolved,
+            ResolutionStatus::External,
+            ResolutionStatus::Unresolved,
+            ResolutionStatus::SetupMissing,
+            ResolutionStatus::Dynamic,
+            ResolutionStatus::Unsupported,
+        ];
+        let reasons = [
+            UnresolvedReason::NotFound,
+            UnresolvedReason::SetupMissing,
+            UnresolvedReason::DynamicExpression,
+            UnresolvedReason::UnsupportedLanguage,
+            UnresolvedReason::UnsupportedImport,
+            UnresolvedReason::ResolverError,
+            UnresolvedReason::OutsideWorkspace,
+        ];
+
+        assert!(matches!(statuses[0], ResolutionStatus::Resolved));
+        assert!(matches!(statuses[1], ResolutionStatus::External));
+        assert!(matches!(statuses[2], ResolutionStatus::Unresolved));
+        assert!(matches!(statuses[3], ResolutionStatus::SetupMissing));
+        assert!(matches!(statuses[4], ResolutionStatus::Dynamic));
+        assert!(matches!(statuses[5], ResolutionStatus::Unsupported));
+        assert_eq!(reasons.len(), 7);
+    }
+
+    #[test]
+    fn module_relationship_core_contract_public_enums_match_with_wildcard() {
+        fn status_name(status: ResolutionStatus) -> &'static str {
+            match status {
+                ResolutionStatus::Resolved => "resolved",
+                _ => "not-resolved",
+            }
+        }
+
+        fn node_kind_name(kind: ModuleNodeKind) -> &'static str {
+            match kind {
+                ModuleNodeKind::File => "file",
+                _ => "other",
+            }
+        }
+
+        fn edge_kind_name(kind: ModuleEdgeKind) -> &'static str {
+            match kind {
+                ModuleEdgeKind::Imports => "imports",
+                _ => "other",
+            }
+        }
+
+        fn precision_name(precision: ResolutionPrecision) -> &'static str {
+            match precision {
+                ResolutionPrecision::ExactFile => "exact-file",
+                _ => "other",
+            }
+        }
+
+        fn reason_name(reason: UnresolvedReason) -> &'static str {
+            match reason {
+                UnresolvedReason::NotFound => "not-found",
+                _ => "other",
+            }
+        }
+
+        assert_eq!(status_name(ResolutionStatus::Resolved), "resolved");
+        assert_eq!(node_kind_name(ModuleNodeKind::Package), "other");
+        assert_eq!(edge_kind_name(ModuleEdgeKind::Contains), "other");
+        assert_eq!(
+            precision_name(ResolutionPrecision::ExternalPackage),
+            "other"
+        );
+        assert_eq!(reason_name(UnresolvedReason::SetupMissing), "other");
+    }
+
+    #[test]
     fn analysis_db_exposes_all_phase3_fact_families() {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
