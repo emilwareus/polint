@@ -442,15 +442,25 @@ fn is_go_stdlib_import_path(import_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{GoCommandOutput, GoPackageIndex, resolve_go_import, seed_go_module_nodes};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
     use crate::core::{
-        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeId,
-        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportId, Span,
-        UnresolvedReason,
+        AnalysisDb, Capabilities, CapabilitySupportStatus, FileId, ImportFact, ImportId, Language,
+        ModuleEdgeKind, ModuleNodeId, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
+        ResolvedImportId, Rule, RuleMeta, RuleOptions, Span, UnresolvedReason,
+        run_rules_with_capability_support,
     };
+    use crate::diagnostics::{Diagnostic, Severity, TextRange};
+    use crate::module_graph::derive_requested_module_graph;
     use crate::module_graph::model::{ModuleGraphBuilder, ResolverInput};
+    use std::collections::BTreeMap;
     use std::cell::Cell;
     use std::path::{Path, PathBuf};
     use std::process::ExitStatus;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn module_graph_resolver_contracts_go_without_metadata_is_setup_missing() {
@@ -725,6 +735,75 @@ mod tests {
         assert_eq!(draft.status, ResolutionStatus::Unresolved);
         assert_eq!(draft.precision, ResolutionPrecision::None);
         assert_eq!(draft.reason, Some(UnresolvedReason::NotFound));
+    }
+
+    #[test]
+    fn module_graph_go_setup_missing_blocks_requesting_rule_execution() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let mut db = AnalysisDb::new();
+        let file = add_go_file(&mut db, temp.path(), "main.go", "package main\n");
+        push_go_import(&mut db, file, "example.com/app/internal/worker");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+
+        let derivation = derive_requested_module_graph(&mut db, &loaded, &plan);
+
+        assert_eq!(derivation.diagnostics.len(), 1);
+        let diagnostic = &derivation.diagnostics[0];
+        assert_eq!(diagnostic.rule_id, "polint/capability");
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "capability" && evidence.value == "resolved_imports"
+        }));
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "status" && evidence.value == "setup_missing"
+        }));
+        assert_eq!(
+            derivation.capability_support[0].status,
+            CapabilitySupportStatus::SetupMissing
+        );
+        assert_eq!(
+            derivation.capability_support[0].reason.as_deref(),
+            Some("go.mod was not found at the repository root.")
+        );
+        assert_eq!(db.resolved_imports().len(), 1);
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::SetupMissing);
+        assert_eq!(fact.precision, ResolutionPrecision::None);
+        assert_eq!(fact.reason, Some(UnresolvedReason::SetupMissing));
+        assert_eq!(fact.target_node, None);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_rule = Arc::clone(&ran);
+        let rule = Rule::from_parts(
+            || RuleMeta {
+                id: "test/requested-capabilities".to_string(),
+                description: "Resolved import requester".to_string(),
+                severity: Severity::Warn,
+            },
+            || Capabilities::new().resolved_imports(),
+            move |_db, ctx| {
+                ran_for_rule.store(true, Ordering::SeqCst);
+                ctx.report(Diagnostic::warning(
+                    ctx.rule_id(),
+                    "<workspace>",
+                    TextRange::point(1, 1),
+                    "rule should not run",
+                ));
+                Ok(())
+            },
+        );
+        let capability_support = derivation.support_view(plan.support_view());
+        let rule_diagnostics = run_rules_with_capability_support(
+            &db,
+            &[rule],
+            &BTreeMap::<String, RuleOptions>::new(),
+            None,
+            false,
+            &capability_support,
+        );
+
+        assert!(!ran.load(Ordering::SeqCst));
+        assert!(rule_diagnostics.is_empty());
     }
 
     fn add_go_file(
