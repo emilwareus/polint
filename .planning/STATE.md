@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Phase 12 context gathered
-last_updated: "2026-05-11T14:13:48.447Z"
-last_activity: 2026-05-11 -- Phase 12 execution started
+stopped_at: Completed 12-resolved-imports-and-module-relationships-01-PLAN.md
+last_updated: "2026-05-11T14:28:37.082Z"
+last_activity: 2026-05-11
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 8
-  completed_plans: 3
-  percent: 38
+  completed_plans: 4
+  percent: 50
 ---
 
 # State: polint
@@ -62,10 +62,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Executing Phase 12
+Status: Ready to execute
 Phase: 12 (Resolved Imports and Module Relationships) — EXECUTING
-Plan: 1 of 5
-Last activity: 2026-05-11 -- Phase 12 execution started
+Plan: 2 of 5
+Last activity: 2026-05-11
 
 ## Quick Tasks Completed
 
@@ -176,6 +176,9 @@ Last activity: 2026-05-11 -- Phase 12 execution started
 - [Static capability derivation]: Normal rule authors use `#[polint::rule]` functions with typed fact-view parameters; capabilities are generated from those parameter types instead of handwritten declarations.
 - [Static capability derivation]: `RuleCtx` is the diagnostics/options/path/support surface. Broad fact access belongs in typed SDK fact views, not the normal context API.
 - [Static capability derivation]: `Rule` is an opaque value, not a public trait. Do not preserve manual `impl Rule` compatibility paths during beta; update examples, scaffolds, and tests to the typed macro path instead.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolved imports and module graph are known capabilities but stay Unsupported until Plan 12-02 wires the provider.
+- [Phase 12-resolved-imports-and-module-relationships]: ModuleGraphFacts::reachable_from uses deterministic breadth-first traversal over Resolved and External edges only.
+- [Phase 12-resolved-imports-and-module-relationships]: Public relationship facts expose polint-owned IDs and status enums, not resolver outputs or graph internals.
 
 ## Performance Metrics
 
@@ -210,12 +213,13 @@ Last activity: 2026-05-11 -- Phase 12 execution started
 | Phase 11-capability-driven-analysis-plan P01 | 8 min | 2 tasks | 4 files |
 | Phase 11-capability-driven-analysis-plan P02 | 16m 12s | 2 tasks | 9 files |
 | Phase 11-capability-driven-analysis-plan P03 | 22m 23s | 3 tasks | 7 files |
+| Phase 12-resolved-imports-and-module-relationships P01 | 11m 4s | 3 tasks | 5 files |
 
 ## Session
 
-**Last Date:** 2026-05-11T13:35:06.082Z
-**Stopped At:** Phase 12 context gathered
-**Resume File:** .planning/phases/12-resolved-imports-and-module-relationships/12-CONTEXT.md
+**Last Date:** 2026-05-11T14:28:37.080Z
+**Stopped At:** Completed 12-resolved-imports-and-module-relationships-01-PLAN.md
+**Resume File:** None
 
 ## Important Context For Execution
 

@@ -17,10 +17,10 @@ one roadmap phase.
 
 ### Module Resolution
 
-- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
+- [x] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
 - [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
 - [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
+- [x] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
 
 ### Symbols And References
 
@@ -99,10 +99,10 @@ Deferred until after Go and TS/JS prove the full capability model:
 | PLAN-02 | Phase 11 | Complete |
 | PLAN-03 | Phase 11 | Complete |
 | PLAN-04 | Phase 11 | Complete |
-| MOD-01 | Phase 12 | Pending |
+| MOD-01 | Phase 12 | Complete |
 | MOD-02 | Phase 12 | Pending |
 | MOD-03 | Phase 12 | Pending |
-| MOD-04 | Phase 12 | Pending |
+| MOD-04 | Phase 12 | Complete |
 | SYM-01 | Phase 13 | Pending |
 | SYM-02 | Phase 13 | Pending |
 | SYM-03 | Phase 13 | Pending |
