@@ -30,7 +30,7 @@ once.
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
 | 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (Complete: 3/3 plans executed on 2026-05-09.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
-| 12 | 4/5 | In Progress|  |
+| 12 | 5/5 | Complete   | 2026-05-11 |
 | 13 | Symbols and References | Expose definitions, symbols, references, and stable symbol IDs. | SYM-01, SYM-02, SYM-03, SYM-04 |
 | 14 | Direct and Resolved Call Facts | Add call edges with resolution status and confidence. | CALL-01, CALL-02, CALL-03, CALL-04 |
 | 15 | Control-Flow Facts for Go and TS/JS | Add typed SDK views for per-function control flow. | CFG-01, CFG-02, CFG-03, CFG-04 |
@@ -77,14 +77,14 @@ imports point to, not just their literal strings.
 
 **Requirements:** MOD-01, MOD-02, MOD-03, MOD-04
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 12-01-PLAN.md — Core fact model, SDK views, and macro capability contract
 - [x] 12-02-PLAN.md — Project-wide module graph provider and runner wiring
 - [x] 12-03-PLAN.md — TypeScript/JavaScript resolver integration
 - [x] 12-04-PLAN.md — Go package metadata resolver integration
-- [ ] 12-05-PLAN.md — External SDK proof and public fact documentation
+- [x] 12-05-PLAN.md — External SDK proof and public fact documentation
 
 **Success criteria:**
 

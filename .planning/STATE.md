@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
-status: executing
-stopped_at: Completed 12-resolved-imports-and-module-relationships-04-PLAN.md
-last_updated: "2026-05-11T16:18:13.328Z"
+status: verifying
+stopped_at: Completed 12-resolved-imports-and-module-relationships-05-PLAN.md
+last_updated: "2026-05-11T16:53:45.135Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # State: polint
@@ -62,7 +62,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Phase: 12 (Resolved Imports and Module Relationships) — EXECUTING
 Plan: 5 of 5
 Last activity: 2026-05-11
@@ -190,6 +190,10 @@ Last activity: 2026-05-11
 - [Phase 12-resolved-imports-and-module-relationships]: Go metadata is loaded only from repository-root Go modules using fixed go list command execution with GOFLAGS removed.
 - [Phase 12-resolved-imports-and-module-relationships]: Go package graph nodes are labeled by import path, while Go module nodes are labeled by the go list module path.
 - [Phase 12-resolved-imports-and-module-relationships]: Missing Go module setup remains visible as setup-missing facts/support and blocks requesting rules through the provider support merge.
+- [Phase 12-resolved-imports-and-module-relationships]: TS/JS local import graph edges originate from the importing file node so architecture rules can detect file-level boundaries.
+- [Phase 12-resolved-imports-and-module-relationships]: TS/JS external package imports remain module-level DependsOn edges so project dependency relationships stay compact.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolved import docs treat SetupMissing, Dynamic, Unsupported, and Unresolved as public data, not hidden failures.
+- [Phase 12-resolved-imports-and-module-relationships]: Test-only Go graph helper methods are cfg(test) rather than suppressed with lint allowances.
 
 ## Performance Metrics
 
@@ -228,11 +232,12 @@ Last activity: 2026-05-11
 | Phase 12-resolved-imports-and-module-relationships P02 | 1h 1m | 3 tasks | 11 files |
 | Phase 12-resolved-imports-and-module-relationships P03 | 17 min | 3 tasks | 9 files |
 | Phase 12-resolved-imports-and-module-relationships P04 | 16m 9s | 3 tasks | 3 files |
+| Phase 12-resolved-imports-and-module-relationships P05 | 30 min | 3 tasks | 8 files |
 
 ## Session
 
-**Last Date:** 2026-05-11T16:18:13.317Z
-**Stopped At:** Completed 12-resolved-imports-and-module-relationships-04-PLAN.md
+**Last Date:** 2026-05-11T16:53:45.126Z
+**Stopped At:** Completed 12-resolved-imports-and-module-relationships-05-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
