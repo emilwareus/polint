@@ -1,3 +1,40 @@
+use crate::core::{Language, ResolutionStatus, UnresolvedReason};
+use crate::module_graph::model::{ResolvedImportDraft, ResolverInput};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GoPackageIndex {
+    packages: BTreeMap<String, ()>,
+}
+
+impl GoPackageIndex {
+    fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+}
+
+pub(crate) fn resolve_go_import(
+    input: ResolverInput<'_>,
+    metadata: &GoPackageIndex,
+) -> ResolvedImportDraft {
+    let _ = (
+        input.root,
+        input.db.files().len(),
+        input.owner_module,
+        input.owner_package,
+    );
+    if input.import.language != Language::Go {
+        return ResolvedImportDraft::unsupported_language();
+    }
+    if metadata.is_empty() {
+        return ResolvedImportDraft::setup_missing();
+    }
+
+    let mut draft = ResolvedImportDraft::unresolved(UnresolvedReason::NotFound);
+    draft.status = ResolutionStatus::Unresolved;
+    draft
+}
+
 #[cfg(test)]
 mod tests {
     use super::{GoPackageIndex, resolve_go_import};

@@ -1,8 +1,10 @@
 use crate::core::{
-    AnalysisDb, FileId, ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode,
-    ModuleNodeId, ModuleNodeKind, PackageFact, ResolutionStatus,
+    AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind,
+    ModuleNode, ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision,
+    ResolutionStatus, ResolvedImportFact, ResolvedImportId, UnresolvedReason,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphOutput {
@@ -20,6 +22,33 @@ pub(crate) struct ModuleGraphBuilder {
     external_nodes: BTreeMap<(String, Option<Language>), ModuleNodeId>,
     edge_keys: BTreeSet<EdgeKey>,
     edges: Vec<ModuleEdge>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolverInput<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) db: &'a AnalysisDb,
+    pub(crate) import: &'a ImportFact,
+    pub(crate) owner_module: Option<ModuleNodeId>,
+    pub(crate) owner_package: Option<ModuleNodeId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedImportDraft {
+    pub(crate) target: Option<ModuleNodeDraft>,
+    pub(crate) status: ResolutionStatus,
+    pub(crate) precision: ResolutionPrecision,
+    pub(crate) reason: Option<UnresolvedReason>,
+    pub(crate) edge_kind: Option<ModuleEdgeKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleNodeDraft {
+    kind: ModuleNodeKind,
+    label: String,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    language: Option<Language>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +230,48 @@ impl ModuleGraphBuilder {
         self.link(from, to, Some(import), Some(resolved_import), kind, status);
     }
 
+    pub(crate) fn apply_resolved_import_draft(
+        &mut self,
+        import: &ImportFact,
+        owner: ModuleNodeId,
+        draft: ResolvedImportDraft,
+    ) -> ResolvedImportFact {
+        self.apply_resolved_import_draft_with_id(import, owner, draft, ResolvedImportId(0))
+    }
+
+    pub(crate) fn apply_resolved_import_draft_with_id(
+        &mut self,
+        import: &ImportFact,
+        owner: ModuleNodeId,
+        draft: ResolvedImportDraft,
+        resolved_import: ResolvedImportId,
+    ) -> ResolvedImportFact {
+        let target_node = draft
+            .target
+            .as_ref()
+            .map(|target| self.ensure_draft_node(target));
+        if let (Some(target_node), Some(edge_kind)) = (target_node, draft.edge_kind) {
+            self.link_resolved_import(
+                owner,
+                target_node,
+                import.id,
+                resolved_import,
+                edge_kind,
+                draft.status,
+            );
+        }
+
+        ResolvedImportFact {
+            id: resolved_import,
+            import: import.id,
+            from_file: import.file,
+            target_node,
+            status: draft.status,
+            precision: draft.precision,
+            reason: draft.reason,
+        }
+    }
+
     pub(crate) fn finish(mut self) -> ModuleGraphOutput {
         self.nodes.sort_by(|left, right| {
             (left.id, left.label.as_str()).cmp(&(right.id, right.label.as_str()))
@@ -228,6 +299,38 @@ impl ModuleGraphBuilder {
             nodes: self.nodes,
             edges: self.edges,
         }
+    }
+
+    fn ensure_draft_node(&mut self, draft: &ModuleNodeDraft) -> ModuleNodeId {
+        match draft.kind {
+            ModuleNodeKind::File => draft
+                .file
+                .map(|file| self.ensure_file_node(file))
+                .unwrap_or_else(|| self.insert_draft_node(draft)),
+            ModuleNodeKind::Package => {
+                if let Some(node) = self.package_nodes.get(&draft.label).copied() {
+                    return node;
+                }
+                let node = self.insert_draft_node(draft);
+                self.package_nodes.insert(draft.label.clone(), node);
+                node
+            }
+            ModuleNodeKind::Module => self.ensure_module_node(draft.label.clone()),
+            ModuleNodeKind::External => {
+                self.ensure_external_node(draft.label.clone(), draft.language)
+            }
+        }
+    }
+
+    fn insert_draft_node(&mut self, draft: &ModuleNodeDraft) -> ModuleNodeId {
+        self.insert_node(ModuleNode {
+            id: ModuleNodeId(0),
+            kind: draft.kind,
+            label: draft.label.clone(),
+            file: draft.file,
+            package: draft.package,
+            language: draft.language,
+        })
     }
 
     fn insert_node(&mut self, mut node: ModuleNode) -> ModuleNodeId {
@@ -267,6 +370,84 @@ impl ModuleGraphBuilder {
             kind,
             status,
         });
+    }
+}
+
+impl ResolvedImportDraft {
+    pub(crate) fn unresolved(reason: UnresolvedReason) -> Self {
+        Self {
+            target: None,
+            status: ResolutionStatus::Unresolved,
+            precision: ResolutionPrecision::None,
+            reason: Some(reason),
+            edge_kind: None,
+        }
+    }
+
+    pub(crate) fn setup_missing() -> Self {
+        Self {
+            target: None,
+            status: ResolutionStatus::SetupMissing,
+            precision: ResolutionPrecision::None,
+            reason: Some(UnresolvedReason::SetupMissing),
+            edge_kind: None,
+        }
+    }
+
+    pub(crate) fn unsupported_language() -> Self {
+        Self {
+            target: None,
+            status: ResolutionStatus::Unsupported,
+            precision: ResolutionPrecision::None,
+            reason: Some(UnresolvedReason::UnsupportedLanguage),
+            edge_kind: None,
+        }
+    }
+}
+
+impl ModuleNodeDraft {
+    pub(crate) fn file(file: FileId, label: impl Into<String>, language: Language) -> Self {
+        Self {
+            kind: ModuleNodeKind::File,
+            label: label.into(),
+            file: Some(file),
+            package: None,
+            language: Some(language),
+        }
+    }
+
+    pub(crate) fn package(
+        label: impl Into<String>,
+        package: Option<PackageId>,
+        language: Option<Language>,
+    ) -> Self {
+        Self {
+            kind: ModuleNodeKind::Package,
+            label: label.into(),
+            file: None,
+            package,
+            language,
+        }
+    }
+
+    pub(crate) fn module(label: impl Into<String>) -> Self {
+        Self {
+            kind: ModuleNodeKind::Module,
+            label: label.into(),
+            file: None,
+            package: None,
+            language: None,
+        }
+    }
+
+    pub(crate) fn external(label: impl Into<String>, language: Option<Language>) -> Self {
+        Self {
+            kind: ModuleNodeKind::External,
+            label: label.into(),
+            file: None,
+            package: None,
+            language,
+        }
     }
 }
 
@@ -330,10 +511,22 @@ pub(crate) fn sort_packages<'a>(
 mod tests {
     use super::{ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft};
     use crate::core::{
-        AnalysisDb, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeKind,
-        ResolutionPrecision, ResolutionStatus, Span,
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleEdgeKind, ModuleNodeKind,
+        PackageId, ResolutionPrecision, ResolutionStatus, Span,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn module_graph_resolver_contracts_module_node_draft_supports_all_target_kinds() {
+        let file = ModuleNodeDraft::file(FileId(7), "src/app.ts", Language::TypeScript);
+        let package =
+            ModuleNodeDraft::package("ts:app", Some(PackageId(3)), Some(Language::TypeScript));
+        let module = ModuleNodeDraft::module(".");
+
+        assert_eq!(file.kind, ModuleNodeKind::File);
+        assert_eq!(package.kind, ModuleNodeKind::Package);
+        assert_eq!(module.kind, ModuleNodeKind::Module);
+    }
 
     #[test]
     fn module_graph_resolver_contracts_external_draft_links_dependency_edge() {

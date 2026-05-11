@@ -7,11 +7,10 @@ pub(crate) mod ts;
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportView, ImportFact, ModuleEdgeKind,
-    ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId, UnresolvedReason,
+    AnalysisDb, CapabilitySupport, CapabilitySupportView, ImportFact, ResolvedImportId,
 };
 use crate::diagnostics::Diagnostic;
-use model::{ModuleGraphBuilder, sort_packages};
+use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
@@ -39,7 +38,7 @@ impl ModuleGraphDerivation {
 
 pub(crate) fn derive_requested_module_graph(
     db: &mut AnalysisDb,
-    _loaded: &LoadedConfig,
+    loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> ModuleGraphDerivation {
     if !plan.requests_any_capability(&["resolved_imports", "module_graph"]) {
@@ -76,6 +75,7 @@ pub(crate) fn derive_requested_module_graph(
     imports.sort_by(|left, right| import_order(left, right, db));
 
     let mut resolved_imports = Vec::with_capacity(imports.len());
+    let go_metadata = go::GoPackageIndex::default();
     for import in imports {
         let owner = package_nodes_by_file
             .get(&import.file)
@@ -83,17 +83,26 @@ pub(crate) fn derive_requested_module_graph(
             .or_else(|| file_nodes.get(&import.file).copied())
             .unwrap_or(root_module);
         let index = resolved_imports.len();
-        let fact = unresolved_import_fact(import, index);
-        if let Some(target) = fact.target_node {
-            builder.link_resolved_import(
-                owner,
-                target,
-                import.id,
-                ResolvedImportId(index as u64),
-                ModuleEdgeKind::Imports,
-                fact.status,
-            );
-        }
+        let input = ResolverInput {
+            root: loaded.root.as_path(),
+            db,
+            import,
+            owner_module: Some(root_module),
+            owner_package: package_nodes_by_file.get(&import.file).copied(),
+        };
+        let draft = if import.language.is_ts_family() {
+            ts::resolve_ts_import(input)
+        } else if matches!(import.language, crate::core::Language::Go) {
+            go::resolve_go_import(input, &go_metadata)
+        } else {
+            model::ResolvedImportDraft::unsupported_language()
+        };
+        let fact = builder.apply_resolved_import_draft_with_id(
+            import,
+            owner,
+            draft,
+            ResolvedImportId(index as u64),
+        );
         resolved_imports.push(fact);
     }
 
@@ -116,31 +125,6 @@ fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::
             right.path.as_str(),
             right.id,
         ))
-}
-
-fn unresolved_import_fact(import: &ImportFact, index: usize) -> ResolvedImportFact {
-    let (status, reason) =
-        if import.language.is_ts_family() || matches!(import.language, crate::core::Language::Go) {
-            (
-                ResolutionStatus::Unresolved,
-                Some(UnresolvedReason::NotFound),
-            )
-        } else {
-            (
-                ResolutionStatus::Unsupported,
-                Some(UnresolvedReason::UnsupportedLanguage),
-            )
-        };
-
-    ResolvedImportFact {
-        id: ResolvedImportId(index as u64),
-        import: import.id,
-        from_file: import.file,
-        target_node: None,
-        status,
-        precision: ResolutionPrecision::None,
-        reason,
-    }
 }
 
 #[cfg(test)]

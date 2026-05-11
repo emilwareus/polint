@@ -1,3 +1,22 @@
+use crate::core::{ResolutionStatus, UnresolvedReason};
+use crate::module_graph::model::{ResolvedImportDraft, ResolverInput};
+
+pub(crate) fn resolve_ts_import(input: ResolverInput<'_>) -> ResolvedImportDraft {
+    let _ = (
+        input.root,
+        input.db.files().len(),
+        input.owner_module,
+        input.owner_package,
+    );
+    if !input.import.language.is_ts_family() {
+        return ResolvedImportDraft::unsupported_language();
+    }
+
+    let mut draft = ResolvedImportDraft::unresolved(UnresolvedReason::NotFound);
+    draft.status = ResolutionStatus::Unresolved;
+    draft
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_ts_import;
