@@ -39,7 +39,14 @@ fn top_level_help_only_lists_supported_public_commands() {
             .success(),
     );
 
-    for command in ["init", "add-skill", "new-rule", "check", "ignores"] {
+    for command in [
+        "init",
+        "add-skill",
+        "new-rule",
+        "baseline",
+        "check",
+        "ignores",
+    ] {
         assert!(help.contains(command), "help should list {command}: {help}");
     }
     for command in ["explain", "test-rules", "profile-rules", "graph"] {
@@ -1465,6 +1472,257 @@ export const also_ok = "DONE";
         1,
         "{json:#?}"
     );
+}
+
+#[test]
+fn baseline_create_writes_compact_yaml_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(
+        baseline.starts_with("version: 1\n\nbaseline:\n"),
+        "{baseline}"
+    );
+    assert!(
+        baseline.contains("  - 'local/no-todo-literals "),
+        "{baseline}"
+    );
+    assert!(baseline.contains(" src/component.ts'\n"), "{baseline}");
+    assert!(baseline.ends_with("ignore: []\n"), "{baseline}");
+}
+
+#[test]
+fn check_baseline_new_only_passes_existing_and_fails_new_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/existing.ts"),
+        r#"export const existing = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let existing_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics(&existing_json).len(), 0, "{existing_json:#?}");
+
+    write_file(
+        &temp.path().join("src/new.ts"),
+        r#"export const new_marker = "TODO";
+"#,
+    );
+    let new_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .failure(),
+    );
+    let diagnostics = diagnostics_for_rule(&new_json, "local/no-todo-literals");
+    assert_eq!(diagnostics.len(), 1, "{new_json:#?}");
+    assert_eq!(diagnostics[0]["file"], "src/new.ts");
+}
+
+#[test]
+fn check_baseline_central_ignore_suppresses_matching_diagnostic() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&json, "local/no-todo-literals")[0];
+    let fingerprint = diagnostic["stable_fingerprint"].as_str().unwrap();
+    write_file(
+        &temp.path().join(".polint/baseline.yaml"),
+        &format!(
+            r#"version: 1
+
+baseline: []
+ignore:
+  - "local/no-todo-literals {fingerprint} src/component.ts"
+"#
+        ),
+    );
+
+    let ignored_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(diagnostics(&ignored_json).len(), 0, "{ignored_json:#?}");
+}
+
+#[test]
+fn baseline_update_removes_fixed_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/keep.ts"),
+        r#"export const keep = "TODO";
+"#,
+    );
+    write_file(
+        &temp.path().join("src/fix.ts"),
+        r#"export const fix = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    write_file(
+        &temp.path().join("src/fix.ts"),
+        r#"export const fix = "DONE";
+"#,
+    );
+    let stdout = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["baseline", "update"])
+            .assert()
+            .success(),
+    );
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(baseline.contains("src/keep.ts"), "{baseline}");
+    assert!(!baseline.contains("src/fix.ts"), "{baseline}");
+    assert!(stdout.contains("fixed: 1"), "{stdout}");
+}
+
+#[test]
+fn check_baseline_rejects_malformed_yaml_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+    write_file(
+        &temp.path().join(".polint/baseline.yaml"),
+        r#"version: 1
+baseline:
+  - "local/no-todo-literals"
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid baseline entry"));
+}
+
+#[test]
+fn baseline_commands_reject_custom_baseline_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create", "--output", ".polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "update", "--baseline", ".polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline=.polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected value"));
+}
+
+#[test]
+fn check_new_only_requires_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--new-only"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--new-only requires --baseline"));
 }
 
 #[test]

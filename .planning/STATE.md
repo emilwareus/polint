@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
 stopped_at: Phase 11 complete
-last_updated: "2026-05-09T12:00:31.000Z"
-last_activity: 2026-05-10
+last_updated: "2026-05-11T13:23:28+02:00"
+last_activity: 2026-05-11
 progress:
   total_phases: 9
   completed_phases: 1
@@ -65,7 +65,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 12 - CFG Facts for Go and TS/JS
 Plan: Not started
-Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overwriting existing installed polint skills
+Last activity: 2026-05-11 - Completed quick task 260511-i7m: Make the baseline file live only at .polint/baseline.yaml and remove user-selectable baseline paths
 
 ## Quick Tasks Completed
 
@@ -93,6 +93,8 @@ Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overw
 | 260510-dbv | Tighten public CLI surface and remove internal debug commands | 2026-05-10 | uncommitted | [260510-dbv-tighten-public-cli-surface-and-remove-in](./quick/260510-dbv-tighten-public-cli-surface-and-remove-in/) |
 | 260510-dzr | Implement reusable derived metric signals for rules | 2026-05-10 | uncommitted | [260510-dzr-implement-reusable-derived-metric-signal](./quick/260510-dzr-implement-reusable-derived-metric-signal/) |
 | 260510-eur | Prompt before overwriting existing installed polint skills | 2026-05-10 | uncommitted | [260510-eur-prompt-before-overwriting-existing-insta](./quick/260510-eur-prompt-before-overwriting-existing-insta/) |
+| 260511-gyu | Add compact YAML baseline and central ignore ratchet workflow | 2026-05-11 | uncommitted | [260511-gyu-add-compact-yaml-baseline-and-central-ig](./quick/260511-gyu-add-compact-yaml-baseline-and-central-ig/) |
+| 260511-i7m | Make the baseline file live only at .polint/baseline.yaml and remove user-selectable baseline paths | 2026-05-11 | uncommitted | [260511-i7m-make-the-baseline-file-live-only-at-poli](./quick/260511-i7m-make-the-baseline-file-live-only-at-poli/) |
 
 ## Phase Progress
 

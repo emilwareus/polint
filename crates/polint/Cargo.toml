@@ -29,6 +29,7 @@ polint-macros = { path = "../polint-macros", version = "0.1.7" }
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yml.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true

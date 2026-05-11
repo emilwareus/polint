@@ -159,6 +159,41 @@ polint check --stat
 These flags summarize scanned files, diagnostics, and ignore suppression counts
 for human output. They do not change JSON or SARIF output.
 
+## Baselines
+
+Use a baseline when adopting polint in a repository that already has valid
+findings. The baseline is always checked in at `.polint/baseline.yaml` as
+compact YAML:
+
+```yaml
+version: 1
+
+baseline:
+  - "local/backend-context-propagation e337fbb73d44b2b7 backend/app/handler.go"
+ignore:
+  - "local/no-raw-colors 1b7c9a00e493aa21 frontend/Button.tsx"
+```
+
+Each entry is one string:
+
+```text
+<rule_id> <fingerprint> <file>
+```
+
+`baseline` entries are existing debt: they stay visible in human output but do
+not fail the process. `ignore` entries are central accepted exceptions: they are
+suppressed from output and failure. Matching uses `rule_id + fingerprint`; the
+file path is kept for reviewability and stale-path summaries.
+
+```bash
+polint baseline create
+polint check --baseline --new-only
+polint baseline update
+```
+
+`--new-only` emits and fails only on diagnostics not covered by the baseline or
+central ignore list.
+
 ## Machine contract (JSON)
 
 Stable JSON reports (`polint check --format json`) match the schema at

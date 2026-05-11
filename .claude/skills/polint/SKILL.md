@@ -28,6 +28,30 @@ for plain text. Use `polint check --format sarif` for CI upload paths. Use
 --shortstat` or `polint check --stat` for human scan summaries; these flags do
 not add prose to JSON or SARIF output.
 
+Use a compact YAML baseline at `.polint/baseline.yaml` when existing findings
+should not block new work:
+
+```bash
+polint baseline create
+polint check --baseline --new-only
+polint baseline update
+```
+
+The baseline file has one string per entry:
+
+```yaml
+version: 1
+
+baseline:
+  - "local/backend-context-propagation e337fbb73d44b2b7 backend/app/handler.go"
+ignore:
+  - "local/no-raw-colors 1b7c9a00e493aa21 frontend/Button.tsx"
+```
+
+`baseline` is existing debt; it stays visible but does not fail. `ignore` is a
+central accepted suppression; it is hidden from output and failure. Matching uses
+`rule_id + fingerprint`, with the file path kept for reviewability.
+
 Use `polint ignores` when you need to find suppressions that should be fixed:
 
 ```bash
