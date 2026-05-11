@@ -132,11 +132,6 @@ pub(crate) fn derive_requested_module_graph(
             .or_else(|| file_nodes.get(&import.file).copied())
             .or(owner_module)
             .unwrap_or_else(|| builder.ensure_module_node("."));
-        let owner = if import.language.is_ts_family() {
-            owner_module.unwrap_or(default_owner)
-        } else {
-            default_owner
-        };
         let index = resolved_imports.len();
         let input = ResolverInput {
             root: loaded.root.as_path(),
@@ -152,6 +147,12 @@ pub(crate) fn derive_requested_module_graph(
             go::resolve_go_import(input, &go_metadata)
         } else {
             model::ResolvedImportDraft::unsupported_language()
+        };
+        let owner = if import.language.is_ts_family() && draft.status == ResolutionStatus::External
+        {
+            owner_module.unwrap_or(default_owner)
+        } else {
+            default_owner
         };
         let fact = builder.apply_resolved_import_draft_with_id(
             import,
