@@ -332,6 +332,156 @@ func main() {}
     );
 }
 
+fn write_module_relationship_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/unresolved-import",
+    description = "Report imports that did not resolve.",
+    severity = "warn"
+)]
+fn unresolved_import(ctx: &mut RuleCtx<'_>, resolved: ResolvedImports<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for import in resolved.iter() {
+        if matches!(
+            import.status,
+            ResolutionStatus::Resolved | ResolutionStatus::External
+        ) {
+            continue;
+        }
+
+        let reason = import
+            .reason
+            .map(|reason| format!("{reason:?}"))
+            .unwrap_or_else(|| "None".to_string());
+        ctx.report(
+            Diagnostic::warning(
+                rule_id.clone(),
+                ctx.file_path(import.from_file),
+                DiagnosticRange::point(1, 1),
+                "Import did not resolve.",
+            )
+            .with_evidence("status", format!("{:?}", import.status))
+            .with_evidence("reason", reason),
+        );
+    }
+    Ok(())
+}
+
+#[polint::rule(
+    id = "local/no-ui-to-domain",
+    description = "Disallow UI files importing domain files.",
+    severity = "error"
+)]
+fn no_ui_to_domain(ctx: &mut RuleCtx<'_>, graph: ModuleGraphFacts<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for edge in graph.edges() {
+        let Some(source) = graph.nodes().iter().find(|node| node.id == edge.from) else {
+            continue;
+        };
+        let Some(target) = graph.nodes().iter().find(|node| node.id == edge.to) else {
+            continue;
+        };
+        if !source.label.starts_with("src/ui/") || !target.label.starts_with("src/domain/") {
+            continue;
+        }
+
+        let file = source
+            .file
+            .map(|file| ctx.file_path(file))
+            .unwrap_or_else(|| source.label.clone());
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                file,
+                DiagnosticRange::point(1, 1),
+                "UI code must not import the domain layer directly.",
+            )
+            .with_evidence("source", source.label.clone())
+            .with_evidence("target", target.label.clone())
+            .with_evidence("status", format!("{:?}", graph.dependency_status(edge))),
+        );
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![unresolved_import(), no_ui_to_domain()])
+}
+"#,
+    );
+    write_file(
+        &root.join("package.json"),
+        r#"{"name":"relationship-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("tsconfig.json"),
+        r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@domain/*": ["src/domain/*"]
+    }
+  }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/domain/model.ts"),
+        r#"export const model = "domain";"#,
+    );
+    write_file(
+        &root.join("src/ui/view.ts"),
+        r#"import { model } from "../domain/model";
+import { missing } from "./missing";
+
+export const view = `${model}:${missing}`;
+"#,
+    );
+    write_file(
+        &root.join("src/ui/alias.ts"),
+        r#"import { model } from "@domain/model";
+
+export const aliasView = model;
+"#,
+    );
+}
+
 fn write_no_todo_rule_repo(root: &Path, require_reason: bool) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -943,7 +1093,8 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     assert!(module.contains("branches.iter()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -971,7 +1122,8 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
     assert!(module.contains("jsx.iter().count()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -997,7 +1149,8 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     assert!(module.contains("functions.iter().count()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -2972,6 +3125,53 @@ mod capability_planning {
             "status",
             "setup_missing"
         ));
+    }
+
+    #[test]
+    fn external_rule_consumes_module_relationship_facts_through_public_sdk() {
+        let temp = tempfile::tempdir().unwrap();
+        write_module_relationship_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        let unresolved = diagnostics_for_rule(&json, "local/unresolved-import");
+        assert!(
+            unresolved
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reason", "NotFound")),
+            "expected unresolved import reason evidence: {json:#?}"
+        );
+        assert!(
+            unresolved.iter().any(|diagnostic| diagnostic_has_evidence(
+                diagnostic,
+                "status",
+                "Unresolved"
+            )),
+            "expected unresolved import status evidence: {json:#?}"
+        );
+
+        let graph = diagnostics_for_rule(&json, "local/no-ui-to-domain");
+        assert!(
+            graph.iter().any(|diagnostic| diagnostic_has_evidence(
+                diagnostic,
+                "target",
+                "src/domain/model.ts"
+            )),
+            "expected graph diagnostic target evidence: {json:#?}"
+        );
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "relationship fact views should be available through the public SDK: {json:#?}"
+        );
     }
 
     #[test]
