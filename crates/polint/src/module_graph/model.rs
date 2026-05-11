@@ -3,6 +3,7 @@ use crate::core::{
     ModuleNode, ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision,
     ResolutionStatus, ResolvedImportFact, ResolvedImportId, UnresolvedReason,
 };
+use crate::module_graph::paths::normalize_repo_relative;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -76,7 +77,8 @@ impl ModuleGraphBuilder {
                 (
                     file.id,
                     FileNodeInfo {
-                        relative_path: file.relative_path.clone(),
+                        relative_path: normalize_repo_relative(&file.relative_path)
+                            .unwrap_or_else(|| file.relative_path.clone()),
                         language: file.language,
                     },
                 )
@@ -204,6 +206,7 @@ impl ModuleGraphBuilder {
         );
     }
 
+    #[allow(dead_code)]
     pub(crate) fn link_dependency(
         &mut self,
         from: ModuleNodeId,
@@ -230,6 +233,7 @@ impl ModuleGraphBuilder {
         self.link(from, to, Some(import), Some(resolved_import), kind, status);
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_resolved_import_draft(
         &mut self,
         import: &ImportFact,
@@ -406,6 +410,7 @@ impl ResolvedImportDraft {
 }
 
 impl ModuleNodeDraft {
+    #[allow(dead_code)]
     pub(crate) fn file(file: FileId, label: impl Into<String>, language: Language) -> Self {
         Self {
             kind: ModuleNodeKind::File,
@@ -416,6 +421,7 @@ impl ModuleNodeDraft {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn package(
         label: impl Into<String>,
         package: Option<PackageId>,
@@ -430,6 +436,7 @@ impl ModuleNodeDraft {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn module(label: impl Into<String>) -> Self {
         Self {
             kind: ModuleNodeKind::Module,
@@ -440,6 +447,7 @@ impl ModuleNodeDraft {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn external(label: impl Into<String>, language: Option<Language>) -> Self {
         Self {
             kind: ModuleNodeKind::External,

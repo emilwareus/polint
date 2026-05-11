@@ -7,9 +7,10 @@ pub(crate) mod ts;
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportView, ImportFact, ResolvedImportId,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, ImportFact,
+    ResolutionStatus, ResolvedImportId,
 };
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, TextRange};
 use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
 use std::collections::BTreeMap;
 
@@ -46,7 +47,9 @@ pub(crate) fn derive_requested_module_graph(
     }
 
     let mut builder = ModuleGraphBuilder::new(db);
-    let root_module = builder.ensure_module_node(".");
+    let has_graph_inputs =
+        !db.files().is_empty() || !db.packages().is_empty() || !db.imports().is_empty();
+    let root_module = has_graph_inputs.then(|| builder.ensure_module_node("."));
     let mut file_nodes = BTreeMap::new();
     let mut files = db.files().iter().collect::<Vec<_>>();
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -59,7 +62,9 @@ pub(crate) fn derive_requested_module_graph(
     for package in sort_packages(db.packages(), db) {
         let package_node = builder.ensure_package_node(package);
         let file_node = builder.ensure_file_node(package.file);
-        builder.link_module_contains(root_module, package_node);
+        if let Some(root_module) = root_module {
+            builder.link_module_contains(root_module, package_node);
+        }
         builder.link_contains(package_node, file_node);
         package_nodes_by_file.insert(package.file, package_node);
     }
@@ -67,7 +72,9 @@ pub(crate) fn derive_requested_module_graph(
     for file in &files {
         if !package_nodes_by_file.contains_key(&file.id) {
             let file_node = builder.ensure_file_node(file.id);
-            builder.link_module_contains(root_module, file_node);
+            if let Some(root_module) = root_module {
+                builder.link_module_contains(root_module, file_node);
+            }
         }
     }
 
@@ -76,18 +83,20 @@ pub(crate) fn derive_requested_module_graph(
 
     let mut resolved_imports = Vec::with_capacity(imports.len());
     let go_metadata = go::GoPackageIndex::default();
+    let mut saw_setup_missing = false;
     for import in imports {
         let owner = package_nodes_by_file
             .get(&import.file)
             .copied()
             .or_else(|| file_nodes.get(&import.file).copied())
-            .unwrap_or(root_module);
+            .or(root_module)
+            .unwrap_or_else(|| builder.ensure_module_node("."));
         let index = resolved_imports.len();
         let input = ResolverInput {
             root: loaded.root.as_path(),
             db,
             import,
-            owner_module: Some(root_module),
+            owner_module: root_module,
             owner_package: package_nodes_by_file.get(&import.file).copied(),
         };
         let draft = if import.language.is_ts_family() {
@@ -103,13 +112,19 @@ pub(crate) fn derive_requested_module_graph(
             draft,
             ResolvedImportId(index as u64),
         );
+        saw_setup_missing |= fact.status == ResolutionStatus::SetupMissing;
         resolved_imports.push(fact);
     }
 
     let output = builder.finish();
     db.replace_module_graph_facts(resolved_imports, output.nodes, output.edges);
 
-    ModuleGraphDerivation::default()
+    let capability_support = setup_missing_support(plan, saw_setup_missing);
+    let diagnostics = setup_missing_diagnostics(&capability_support);
+    ModuleGraphDerivation {
+        diagnostics,
+        capability_support,
+    }
 }
 
 fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::cmp::Ordering {
@@ -125,6 +140,72 @@ fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::
             right.path.as_str(),
             right.id,
         ))
+}
+
+fn setup_missing_support(plan: &AnalysisPlan, saw_setup_missing: bool) -> Vec<CapabilitySupport> {
+    if !saw_setup_missing {
+        return Vec::new();
+    }
+
+    ["resolved_imports", "module_graph"]
+        .into_iter()
+        .filter(|capability| plan.requests_capability(capability))
+        .filter_map(|capability| {
+            let base = plan
+                .support_view()
+                .entries()
+                .iter()
+                .find(|entry| entry.capability == capability)?;
+            Some(CapabilitySupport {
+                capability: capability.to_string(),
+                language: None,
+                status: CapabilitySupportStatus::SetupMissing,
+                rules: base.rules.clone(),
+                reason: Some("Go package metadata is required to resolve Go imports.".to_string()),
+                hint: Some(
+                    "Run polint in a Go module with package metadata available.".to_string(),
+                ),
+                docs_path: Some(
+                    "docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md".to_string(),
+                ),
+            })
+        })
+        .collect()
+}
+
+fn setup_missing_diagnostics(support: &[CapabilitySupport]) -> Vec<Diagnostic> {
+    support
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .rules
+                .iter()
+                .map(|rule_id| setup_missing_diagnostic(entry, rule_id))
+        })
+        .collect()
+}
+
+fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnostic {
+    let docs_path = entry
+        .docs_path
+        .as_deref()
+        .unwrap_or("docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md");
+    Diagnostic::error(
+        "polint/capability",
+        "<workspace>",
+        TextRange::point(1, 1),
+        format!(
+            "Rule `{rule_id}` requested capability `{}`, but required setup is missing.",
+            entry.capability
+        ),
+    )
+    .with_evidence("rule", rule_id.to_string())
+    .with_evidence("capability", entry.capability.clone())
+    .with_evidence("status", "setup_missing")
+    .with_help(format!(
+        "Capability `{}` needs Go package metadata before this rule can run; see {docs_path}.",
+        entry.capability
+    ))
 }
 
 #[cfg(test)]

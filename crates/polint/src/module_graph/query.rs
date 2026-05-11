@@ -1,6 +1,7 @@
 use crate::core::{ModuleEdge, ModuleNodeId};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[allow(dead_code)]
 pub(crate) trait EdgeLike {
     fn endpoints(&self) -> (ModuleNodeId, ModuleNodeId);
 }
@@ -23,6 +24,7 @@ impl EdgeLike for (ModuleNodeId, ModuleNodeId) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn outgoing(
     edges: &[ModuleEdge],
     node: ModuleNodeId,
@@ -30,6 +32,7 @@ pub(crate) fn outgoing(
     edges.iter().filter(move |edge| edge.from == node)
 }
 
+#[allow(dead_code)]
 pub(crate) fn incoming(
     edges: &[ModuleEdge],
     node: ModuleNodeId,
@@ -37,6 +40,7 @@ pub(crate) fn incoming(
     edges.iter().filter(move |edge| edge.to == node)
 }
 
+#[allow(dead_code)]
 pub(crate) fn reachable_from<E>(
     start: ModuleNodeId,
     edges: impl IntoIterator<Item = E>,

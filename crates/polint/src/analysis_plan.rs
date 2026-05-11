@@ -584,6 +584,7 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
         .collect()
 }
 
+#[rustfmt::skip]
 fn support_for(capability: &str) -> CapabilityAccumulator {
     let (status, reason, hint, docs_path) = match capability {
         "syntax" | "imports" | "go_tests" | "branch_obligations" | "file_metrics"
@@ -591,12 +592,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         | "string_literals" | "jsx_attributes" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
-        "resolved_imports" | "module_graph" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Module relationship provider is not wired into this build step.".to_string()),
-            None,
-            Some("docs/roadmap/12_RESOLVED_IMPORTS_MODULE_GRAPH_ARCHITECTURE.md".to_string()),
-        ),
+        "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
