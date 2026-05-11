@@ -4,6 +4,7 @@ use crate::core::{
 };
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
 use crate::module_graph::paths::normalize_path;
+use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -56,6 +57,15 @@ pub(crate) fn resolve_ts_import(input: ResolverInput<'_>) -> ResolvedImportDraft
     let _ = (input.root, input.owner_module, input.owner_package);
     if !input.import.language.is_ts_family() {
         return ResolvedImportDraft::unsupported_language();
+    }
+    if input.import.path == DYNAMIC_IMPORT_SPECIFIER {
+        return ResolvedImportDraft {
+            target: None,
+            status: ResolutionStatus::Dynamic,
+            precision: ResolutionPrecision::None,
+            reason: Some(UnresolvedReason::DynamicExpression),
+            edge_kind: None,
+        };
     }
 
     let Some(context) = input.ts_resolver else {
