@@ -173,11 +173,10 @@ impl GoPackageIndex {
     }
 
     fn import_is_external_dependency(&self, import_path: &str) -> bool {
+        if let Some(module_path) = self.module_path.as_deref() {
+            return !import_is_within_module(import_path, module_path);
+        }
         is_go_stdlib_import_path(import_path)
-            || self
-                .module_path
-                .as_deref()
-                .is_some_and(|module_path| !import_is_within_module(import_path, module_path))
     }
 
     #[cfg(test)]
@@ -740,6 +739,37 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_go_resolution_keeps_dotless_module_missing_local_import_unresolved_not_found() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("go.mod"), "module mycorp/app\n").expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        let main = add_go_file(&mut db, temp.path(), "cmd/app/main.go", "package main\n");
+        push_go_import(&mut db, main, "mycorp/app/internal/missing");
+        let index = go_index_with_module_path(
+            temp.path(),
+            &db,
+            "mycorp/app",
+            &[("mycorp/app/cmd/app", "cmd/app", &["main.go"], false)],
+        );
+
+        let draft = resolve_go_import(
+            ResolverInput {
+                root: Path::new("."),
+                db: &db,
+                import: &db.imports()[0],
+                ts_resolver: None,
+                owner_module: None,
+                owner_package: None,
+            },
+            &index,
+        );
+
+        assert_eq!(draft.status, ResolutionStatus::Unresolved);
+        assert_eq!(draft.precision, ResolutionPrecision::None);
+        assert_eq!(draft.reason, Some(UnresolvedReason::NotFound));
+    }
+
+    #[test]
     fn module_graph_go_setup_missing_blocks_requesting_rule_execution() {
         let temp = tempfile::tempdir().expect("tempdir");
         let loaded = load_config(temp.path()).expect("default config loads");
@@ -854,6 +884,15 @@ mod tests {
         db: &AnalysisDb,
         packages: &[(&str, &str, &[&str], bool)],
     ) -> GoPackageIndex {
+        go_index_with_module_path(root, db, "example.com/app", packages)
+    }
+
+    fn go_index_with_module_path(
+        root: &Path,
+        db: &AnalysisDb,
+        module_path: &str,
+        packages: &[(&str, &str, &[&str], bool)],
+    ) -> GoPackageIndex {
         let stdout = packages
             .iter()
             .map(|(import_path, dir, files, standard)| {
@@ -864,11 +903,12 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join(",");
                 format!(
-                    r#"{{"ImportPath":{},"Name":"pkg","Dir":{},"GoFiles":[{}],"Standard":{},"Module":{{"Path":"example.com/app"}}}}"#,
+                    r#"{{"ImportPath":{},"Name":"pkg","Dir":{},"GoFiles":[{}],"Standard":{},"Module":{{"Path":{}}}}}"#,
                     serde_json::to_string(import_path).expect("serialize import path"),
                     serde_json::to_string(&dir.to_string_lossy()).expect("serialize dir"),
                     files,
-                    standard
+                    standard,
+                    serde_json::to_string(module_path).expect("serialize module path")
                 )
             })
             .collect::<Vec<_>>()
