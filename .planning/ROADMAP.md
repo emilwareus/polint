@@ -30,7 +30,7 @@ once.
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
 | 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (Complete: 3/3 plans executed on 2026-05-09.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
-| 12 | 5/5 | Complete   | 2026-05-11 |
+| 12 | Resolved Imports and Module Relationships | Resolve syntactic imports into module/file/package relationships. (Complete: 5/5 plans executed on 2026-05-11.) | MOD-01, MOD-02, MOD-03, MOD-04 |
 | 13 | Symbols and References | Expose definitions, symbols, references, and stable symbol IDs. | SYM-01, SYM-02, SYM-03, SYM-04 |
 | 14 | Direct and Resolved Call Facts | Add call edges with resolution status and confidence. | CALL-01, CALL-02, CALL-03, CALL-04 |
 | 15 | Control-Flow Facts for Go and TS/JS | Add typed SDK views for per-function control flow. | CFG-01, CFG-02, CFG-03, CFG-04 |

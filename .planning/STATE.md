@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
-status: verifying
-stopped_at: Completed 12-resolved-imports-and-module-relationships-05-PLAN.md
-last_updated: "2026-05-11T16:53:45.135Z"
+status: planning
+stopped_at: Phase 12 complete
+last_updated: "2026-05-11T17:34:09.849Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 12 — Resolved Imports and Module Relationships
+**Current focus:** Phase 13 — Symbols and References
 
 ## Current Status
 
@@ -57,15 +57,15 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
-- Next action: discuss and plan Phase 12, Resolved Imports and Module Relationships.
+- Next action: discuss and plan Phase 13, Symbols and References.
 
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Phase complete — ready for verification
-Phase: 12 (Resolved Imports and Module Relationships) — EXECUTING
-Plan: 5 of 5
-Last activity: 2026-05-11
+Status: Ready to plan
+Phase: 13 - Symbols and References
+Plan: Not started
+Last activity: 2026-05-11 - Phase 12 verification passed; Phase 13 ready to discuss and plan
 
 ## Quick Tasks Completed
 
@@ -101,7 +101,7 @@ Last activity: 2026-05-11
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 11 | Complete | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
-| 12 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
+| 12 | Complete | Resolved imports and module graph; requirements MOD-01 through MOD-04; verification passed |
 | 13 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
 | 14 | Pending | Direct and resolved call graph facts; requirements CALL-01 through CALL-04 |
 | 15 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
