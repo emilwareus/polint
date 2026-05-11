@@ -27,6 +27,7 @@ pub(crate) mod go;
 pub(crate) mod graph;
 pub(crate) mod ignores;
 pub(crate) mod metrics;
+pub(crate) mod module_graph;
 pub(crate) mod path_context;
 pub(crate) mod rule_error;
 pub(crate) mod ts;
