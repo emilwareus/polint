@@ -26,6 +26,7 @@ pub(crate) struct GoModuleOwnership {
 }
 
 impl GoModuleOwnership {
+    #[cfg(test)]
     pub(crate) fn module_node_for_file(&self, file: FileId) -> Option<ModuleNodeId> {
         self.file_owner_modules.get(&file).copied()
     }
@@ -152,6 +153,7 @@ impl GoPackageIndex {
         self.by_import_path.get(import_path)
     }
 
+    #[cfg(test)]
     pub(crate) fn import_paths(&self) -> impl Iterator<Item = &str> {
         self.by_import_path.keys().map(String::as_str)
     }
