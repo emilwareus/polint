@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Completed 12-resolved-imports-and-module-relationships-01-PLAN.md
-last_updated: "2026-05-11T14:28:37.082Z"
+stopped_at: Completed 12-resolved-imports-and-module-relationships-02-PLAN.md
+last_updated: "2026-05-11T15:34:42.515Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 8
-  completed_plans: 4
-  percent: 50
+  completed_plans: 5
+  percent: 63
 ---
 
 # State: polint
@@ -64,7 +64,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to execute
 Phase: 12 (Resolved Imports and Module Relationships) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Last activity: 2026-05-11
 
 ## Quick Tasks Completed
@@ -179,6 +179,10 @@ Last activity: 2026-05-11
 - [Phase 12-resolved-imports-and-module-relationships]: Resolved imports and module graph are known capabilities but stay Unsupported until Plan 12-02 wires the provider.
 - [Phase 12-resolved-imports-and-module-relationships]: ModuleGraphFacts::reachable_from uses deterministic breadth-first traversal over Resolved and External edges only.
 - [Phase 12-resolved-imports-and-module-relationships]: Public relationship facts expose polint-owned IDs and status enums, not resolver outputs or graph internals.
+- [Phase 12-resolved-imports-and-module-relationships]: Run module graph derivation after Go and TS/JS syntax analysis and before derived metrics or rule execution.
+- [Phase 12-resolved-imports-and-module-relationships]: Keep TS/JS and Go resolver outputs as crate-private drafts; public facts expose only polint-owned IDs and status enums.
+- [Phase 12-resolved-imports-and-module-relationships]: Do not synthesize a root module node for an empty repository; empty relationship views stay empty.
+- [Phase 12-resolved-imports-and-module-relationships]: Provider-derived setup-missing support rows emit their own capability diagnostics before rules are blocked.
 
 ## Performance Metrics
 
@@ -214,11 +218,12 @@ Last activity: 2026-05-11
 | Phase 11-capability-driven-analysis-plan P02 | 16m 12s | 2 tasks | 9 files |
 | Phase 11-capability-driven-analysis-plan P03 | 22m 23s | 3 tasks | 7 files |
 | Phase 12-resolved-imports-and-module-relationships P01 | 11m 4s | 3 tasks | 5 files |
+| Phase 12-resolved-imports-and-module-relationships P02 | 1h 1m | 3 tasks | 11 files |
 
 ## Session
 
-**Last Date:** 2026-05-11T14:28:37.080Z
-**Stopped At:** Completed 12-resolved-imports-and-module-relationships-01-PLAN.md
+**Last Date:** 2026-05-11T15:34:42.512Z
+**Stopped At:** Completed 12-resolved-imports-and-module-relationships-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
