@@ -73,6 +73,7 @@ pub(crate) fn derive_requested_module_graph(
     } else {
         go::GoPackageIndex::default()
     };
+    let setup_missing_reason = go_metadata.setup_missing_reason().map(ToOwned::to_owned);
     let go_ownership = go::seed_go_module_nodes(&mut builder, &go_metadata);
     for (file, module) in go_ownership.file_owner_modules() {
         file_owner_modules.insert(file, module);
@@ -165,7 +166,8 @@ pub(crate) fn derive_requested_module_graph(
     let output = builder.finish();
     db.replace_module_graph_facts(resolved_imports, output.nodes, output.edges);
 
-    let capability_support = setup_missing_support(plan, saw_setup_missing);
+    let capability_support =
+        setup_missing_support(plan, saw_setup_missing, setup_missing_reason.as_deref());
     let diagnostics = setup_missing_diagnostics(&capability_support);
     ModuleGraphDerivation {
         diagnostics,
@@ -249,7 +251,11 @@ fn package_json_name(path: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn setup_missing_support(plan: &AnalysisPlan, saw_setup_missing: bool) -> Vec<CapabilitySupport> {
+fn setup_missing_support(
+    plan: &AnalysisPlan,
+    saw_setup_missing: bool,
+    setup_missing_reason: Option<&str>,
+) -> Vec<CapabilitySupport> {
     if !saw_setup_missing {
         return Vec::new();
     }
@@ -269,7 +275,10 @@ fn setup_missing_support(plan: &AnalysisPlan, saw_setup_missing: bool) -> Vec<Ca
                 status: CapabilitySupportStatus::SetupMissing,
                 rules: base.rules.clone(),
                 reason: Some(
-                    "Resolver setup is required to resolve requested module relationships."
+                    setup_missing_reason
+                        .unwrap_or(
+                            "Resolver setup is required to resolve requested module relationships.",
+                        )
                         .to_string(),
                 ),
                 hint: Some("Check language resolver configuration such as tsconfig.json, package.json, or Go package metadata.".to_string()),

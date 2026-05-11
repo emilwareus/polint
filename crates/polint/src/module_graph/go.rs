@@ -453,8 +453,8 @@ mod tests {
     use crate::diagnostics::{Diagnostic, Severity, TextRange};
     use crate::module_graph::derive_requested_module_graph;
     use crate::module_graph::model::{ModuleGraphBuilder, ResolverInput};
-    use std::collections::BTreeMap;
     use std::cell::Cell;
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::process::ExitStatus;
     use std::sync::{
@@ -754,9 +754,11 @@ mod tests {
         assert!(diagnostic.evidence.iter().any(|evidence| {
             evidence.label == "capability" && evidence.value == "resolved_imports"
         }));
-        assert!(diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == "status" && evidence.value == "setup_missing"
-        }));
+        assert!(
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "status" && evidence.value == "setup_missing"
+            })
+        );
         assert_eq!(
             derivation.capability_support[0].status,
             CapabilitySupportStatus::SetupMissing
