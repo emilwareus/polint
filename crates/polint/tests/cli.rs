@@ -3175,6 +3175,55 @@ mod capability_planning {
     }
 
     #[test]
+    fn module_relationship_setup_missing_and_determinism() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_relationship_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/go-relationships").is_empty(),
+            "setup-missing capabilities must block the requesting local rule: {json:#?}"
+        );
+        assert!(
+            diagnostics_for_rule(&json, "polint/capability")
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "status", "setup_missing")),
+            "expected setup-missing capability evidence: {json:#?}"
+        );
+
+        let deterministic = tempfile::tempdir().unwrap();
+        write_module_relationship_rule_repo(deterministic.path());
+        let run = || {
+            stdout_json(
+                Command::cargo_bin("polint")
+                    .unwrap()
+                    .current_dir(deterministic.path())
+                    .args(["check", "--format", "json", "--fail-on", "none"])
+                    .assert()
+                    .success(),
+            )
+        };
+
+        let first = run();
+        let second = run();
+        let third = run();
+        let first_diagnostics = diagnostics(&first);
+        let second_diagnostics = diagnostics(&second);
+        let third_diagnostics = diagnostics(&third);
+
+        assert_eq!(first_diagnostics, second_diagnostics);
+        assert_eq!(second_diagnostics, third_diagnostics);
+    }
+
+    #[test]
     fn capability_change_changes_cache_entries() {
         let temp = tempfile::tempdir().unwrap();
         write_cache_capability_rule_repo(temp.path());
