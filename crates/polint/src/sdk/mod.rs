@@ -29,9 +29,11 @@ pub mod prelude {
         BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
         CapabilitySupportView, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
         FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact,
-        Language, NodeId, PackageFact, PackageId, Rule, RuleConfigValue, RuleCtx, RuleId,
-        RuleOptions, SourceFile, Span, StringLiteralFact, TestFact, TextRange, TsClassFact,
-        TsComponentFact,
+        Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, NodeId, PackageFact, PackageId, ResolutionPrecision, ResolutionStatus,
+        ResolvedImportFact, ResolvedImportId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleOptions,
+        SourceFile, Span, StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
+        UnresolvedReason,
     };
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
@@ -42,8 +44,8 @@ pub mod prelude {
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
         BranchObligations, CallGraph, Cfg, ComplexityMetrics, CoverageFacts, DataFlow, FileMetrics,
-        FunctionMetrics, Functions, GoTests, Imports, JsxAttributes, Packages, SourceFiles,
-        StringLiterals, TestSuiteMetrics, TsClasses, TsComponents,
+        FunctionMetrics, Functions, GoTests, Imports, JsxAttributes, ModuleGraphFacts, Packages,
+        ResolvedImports, SourceFiles, StringLiterals, TestSuiteMetrics, TsClasses, TsComponents,
     };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }

@@ -6,8 +6,9 @@
 
 use crate::core::{
     AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
-    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, JsxAttributeFact, Language,
-    PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language,
+    ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ResolutionStatus, ResolvedImportFact,
+    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -228,6 +229,129 @@ impl<'a> Imports<'a> {
             .imports()
             .iter()
             .filter_map(move |import| self.db.file(import.file).map(|file| (file, import)))
+    }
+}
+
+/// Resolved import fact view. Requesting this view maps to the `resolved_imports` capability.
+#[derive(Clone, Copy)]
+pub struct ResolvedImports<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ResolvedImports<'a> {
+    /// Returns all resolved import facts in deterministic database order.
+    pub fn all(self) -> &'a [ResolvedImportFact] {
+        self.db.resolved_imports()
+    }
+
+    /// Iterates all resolved import facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ResolvedImportFact> {
+        self.db.resolved_imports().iter()
+    }
+
+    /// Returns resolved import facts for a source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .filter(move |resolved| resolved.from_file == file)
+    }
+
+    /// Returns setup-missing, dynamic, unsupported, or unresolved imports for a source file.
+    pub fn unresolved_for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.for_file(file).filter(|resolved| {
+            matches!(
+                resolved.status,
+                ResolutionStatus::Unresolved
+                    | ResolutionStatus::SetupMissing
+                    | ResolutionStatus::Dynamic
+                    | ResolutionStatus::Unsupported
+            )
+        })
+    }
+
+    /// Returns the resolved import record for a syntactic import ID.
+    pub fn for_import(self, import: ImportId) -> Option<&'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .find(|resolved| resolved.import == import)
+    }
+}
+
+/// Module relationship graph fact view. Requesting this view maps to the `module_graph` capability.
+#[derive(Clone, Copy)]
+pub struct ModuleGraphFacts<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ModuleGraphFacts<'a> {
+    /// Returns all module graph nodes in deterministic database order.
+    pub fn nodes(self) -> &'a [ModuleNode] {
+        self.db.module_nodes()
+    }
+
+    /// Returns all module graph edges in deterministic database order.
+    pub fn edges(self) -> &'a [ModuleEdge] {
+        self.db.module_edges()
+    }
+
+    /// Returns the first file node for a source file ID, if one exists.
+    pub fn node_for_file(self, file: FileId) -> Option<ModuleNodeId> {
+        self.db
+            .module_nodes()
+            .iter()
+            .find(|node| node.file == Some(file))
+            .map(|node| node.id)
+    }
+
+    /// Returns outgoing graph edges for a node without cloning facts.
+    pub fn outgoing(self, node: ModuleNodeId) -> impl Iterator<Item = &'a ModuleEdge> {
+        self.db
+            .module_edges()
+            .iter()
+            .filter(move |edge| edge.from == node)
+    }
+
+    /// Returns incoming graph edges for a node without cloning facts.
+    pub fn incoming(self, node: ModuleNodeId) -> impl Iterator<Item = &'a ModuleEdge> {
+        self.db
+            .module_edges()
+            .iter()
+            .filter(move |edge| edge.to == node)
+    }
+
+    /// Returns the resolution status attached to a dependency edge.
+    pub fn dependency_status(self, edge: &ModuleEdge) -> ResolutionStatus {
+        edge.status
+    }
+
+    /// Computes deterministic breadth-first reachability over resolved or external edges.
+    pub fn reachable_from(self, node: ModuleNodeId) -> Vec<ModuleNodeId> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut reachable = Vec::new();
+
+        seen.insert(node);
+        queue.push_back(node);
+
+        while let Some(current) = queue.pop_front() {
+            for edge in self.outgoing(current) {
+                if !matches!(
+                    edge.status,
+                    ResolutionStatus::Resolved | ResolutionStatus::External
+                ) {
+                    continue;
+                }
+
+                if seen.insert(edge.to) {
+                    reachable.push(edge.to);
+                    queue.push_back(edge.to);
+                }
+            }
+        }
+
+        reachable
     }
 }
 
@@ -508,6 +632,8 @@ impl_fact_view!(FileMetrics);
 impl_fact_view!(FunctionMetrics);
 impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
+impl_fact_view!(ResolvedImports);
+impl_fact_view!(ModuleGraphFacts);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
 impl_fact_view!(TsComponents);
@@ -762,7 +888,9 @@ mod tests {
             vec![missing_import]
         );
         assert_eq!(
-            resolved.for_import(local_import).map(|fact| fact.target_node),
+            resolved
+                .for_import(local_import)
+                .map(|fact| fact.target_node),
             Some(Some(ModuleNodeId(1)))
         );
     }
@@ -924,7 +1052,7 @@ mod tests {
             vec![ModuleNodeId(1)]
         );
         assert_eq!(
-            graph.dependency_status(graph.edges()[1]),
+            graph.dependency_status(&graph.edges()[1]),
             ResolutionStatus::External
         );
         assert_eq!(
