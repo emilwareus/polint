@@ -19,6 +19,8 @@ The next implementation step should be:
 5. Make all facts carry explicit precision/status fields so rules and agents
    know whether an answer is exact, module-linked, heuristic, unresolved,
    ambiguous, setup-missing, or unsupported.
+6. Add a repo-local Rust scan lifecycle surface so teams can control complex
+   build/setup/integration steps as code, not as a pile of fragile config.
 
 Do this before call graphs, CFG, and dataflow. Stable symbols are the identity
 layer those later analyses need.
@@ -268,6 +270,260 @@ internally because TS/JS import/export linking depends on resolved module
 relationships. That dependency should stay an engine detail; rule authors
 should not have to request `ModuleGraphFacts<'_>` just to get cross-file symbol
 references.
+
+## User Integration And Control
+
+### Core principle
+
+Generic static-analysis tools fail in complex repositories because they must
+guess too much: generated files, unusual build tags, monorepo package roots,
+custom module aliases, codegen outputs, internal frameworks, generated clients,
+vendored code, test variants, environment-specific compilation, and proprietary
+build systems.
+
+polint should solve that by letting users and agents write repo-local Rust code
+that participates in the scan lifecycle.
+
+Simple repos should keep using `.polint.toml`. Complex repos should add Rust
+integration code under `.polint/` that tells polint exactly how the repository
+builds and how facts should be interpreted.
+
+### Recommended user-facing shape
+
+Keep the default entry point as one repo-local Rust package:
+
+```text
+.polint.toml
+.polint/rules/Cargo.toml
+.polint/rules/src/main.rs
+.polint/rules/src/rules/*.rs
+.polint/rules/src/integration.rs
+```
+
+Rules and integration live together because they are both executable repo-local
+knowledge. This also fits the current host model where `polint check` runs
+`.polint/rules/Cargo.toml`.
+
+Future API shape:
+
+```rust
+use std::process::ExitCode;
+
+mod integration;
+mod no_raw_colors;
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(
+        polint::runner::App::new()
+            .rules(vec![no_raw_colors::no_raw_colors()])
+            .lifecycle(integration::scan_lifecycle()),
+    )
+}
+```
+
+This preserves the current rule-authoring model while making integration a
+first-class part of the same executable package.
+
+### Lifecycle stages
+
+Use staged typed contexts, not one giant mutable context. Each stage should
+expose only the operations that make sense at that point.
+
+Recommended stages:
+
+1. `configure_workspace`
+   - Adjust include/exclude roots.
+   - Declare generated source roots.
+   - Register external metadata files that affect analysis.
+   - Add virtual files or generated source maps where needed.
+2. `configure_plan`
+   - Add implicit capabilities required by local integrations.
+   - Select precision mode for expensive analyzers.
+   - Declare setup checks and remediation hints.
+3. `configure_analyzers`
+   - Configure language analyzers before they run.
+   - Go: package patterns, tests mode, build tags, env, overlays.
+   - TS/JS: tsconfig roots, project references, resolver aliases, known globals.
+4. `before_derivation`
+   - Normalize module ownership, generated-file ownership, and external package
+     identity before module/symbol graph derivation.
+5. `augment_facts`
+   - Add repo-specific facts that generic analyzers cannot infer.
+   - Add framework facts, generated API facts, service ownership facts, or
+     external symbol facts.
+6. `after_analysis`
+   - Inspect unresolved/setup-missing facts.
+   - Emit diagnostics or agent-readable remediation hints.
+
+Sketch:
+
+```rust
+pub trait ScanLifecycle {
+    fn configure_workspace(&self, ctx: &mut WorkspaceCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+
+    fn configure_plan(&self, ctx: &mut PlanCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+
+    fn configure_analyzers(&self, ctx: &mut AnalyzerCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+
+    fn before_derivation(&self, ctx: &mut DerivationCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+
+    fn augment_facts(&self, ctx: &mut FactCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+
+    fn after_analysis(&self, ctx: &mut AfterAnalysisCtx<'_>) -> LifecycleResult {
+        Ok(())
+    }
+}
+```
+
+### Analyzer control examples
+
+Complex Go repo:
+
+```rust
+pub fn scan_lifecycle() -> impl ScanLifecycle {
+    polint::sdk::lifecycle::lifecycle()
+        .go(|go| {
+            go.patterns(["./services/...", "./libs/..."]);
+            go.build_tags(["enterprise", "polint"]);
+            go.include_tests(true);
+            go.env("GOFLAGS", "-mod=mod");
+        })
+}
+```
+
+Complex TS monorepo:
+
+```rust
+pub fn scan_lifecycle() -> impl ScanLifecycle {
+    polint::sdk::lifecycle::lifecycle()
+        .typescript(|ts| {
+            ts.project("apps/web/tsconfig.json");
+            ts.project("packages/api/tsconfig.json");
+            ts.alias("@internal/*", ["packages/*/src"]);
+            ts.known_global("React");
+        })
+}
+```
+
+Generated framework facts:
+
+```rust
+pub fn scan_lifecycle() -> impl ScanLifecycle {
+    polint::sdk::lifecycle::lifecycle()
+        .facts(|facts| {
+            facts.external_symbol("schema.generated.UserClient")
+                .kind(SymbolKind::Class)
+                .precision(SymbolPrecision::ExactSemantic)
+                .source("tools/schema-codegen");
+        })
+}
+```
+
+These examples are intentionally code-first. `.polint.toml` remains good for
+paths, profiles, and rule settings; lifecycle Rust is for logic.
+
+### Command execution and reproducibility
+
+Lifecycle hooks should be allowed to run commands, but command execution must
+be explicit and cache-aware.
+
+Recommended command API:
+
+```rust
+ctx.command("generate-ts-metadata")
+    .program("pnpm")
+    .args(["exec", "repo-metadata", "--json"])
+    .input("pnpm-lock.yaml")
+    .input("tools/repo-metadata/**")
+    .env("NODE_ENV", "production")
+    .json_output::<RepoMetadata>()?;
+```
+
+Rules:
+
+- Commands must declare inputs and relevant environment variables.
+- Command stdout/stderr and output files should contribute to the analysis
+  digest when consumed.
+- Undeclared dynamic behavior should mark the affected facts uncacheable or
+  produce a setup diagnostic.
+- Hook failures become structured setup diagnostics, not panics.
+- Hooks run only inside the trusted repo-local rule host, same trust boundary as
+  existing repo-local Rust rules.
+
+### Fact augmentation and custom providers
+
+Max power needs more than configuring built-in analyzers. Some repositories
+have real semantic knowledge in generators, build systems, schemas, service
+registries, GraphQL/OpenAPI files, protobuf descriptors, or internal framework
+manifests.
+
+Add a narrow custom-provider API:
+
+```rust
+pub trait FactProvider {
+    fn capabilities(&self) -> &'static [&'static str];
+    fn provide(&self, ctx: &mut FactProviderCtx<'_>) -> LifecycleResult;
+}
+```
+
+Providers should not get raw mutable access to all internals. They should push
+validated public fact drafts through typed builders:
+
+- `ctx.symbols().external_symbol(...)`
+- `ctx.modules().ownership(...)`
+- `ctx.references().generated_reference(...)`
+- `ctx.tests().coverage_map(...)`
+
+Every user-provided fact should carry:
+
+- origin name
+- precision
+- source file or metadata file
+- digest input
+- optional remediation hint
+
+This lets agents understand whether a fact came from Oxc, Go type checking, a
+repo-specific generator, or a user hook.
+
+### Agent workflow
+
+Agents should use lifecycle hooks as the integration escape hatch.
+
+When `polint check` reports setup-missing or many unresolved facts, an agent
+should be able to:
+
+1. Inspect `polint explain plan` or a future `polint setup doctor` report.
+2. Edit `.polint/rules/src/integration.rs`.
+3. Add build tags, tsconfig paths, package roots, generated metadata commands,
+   or custom fact providers.
+4. Re-run `polint check`.
+5. Commit the integration code with the rule changes.
+
+This is the product wedge: complex setup becomes executable, reviewable Rust
+knowledge in the repo, not a support ticket or tribal prompt.
+
+### Public API caution
+
+The lifecycle API will become a serious public contract. Keep Phase 13 focused:
+
+- Design the lifecycle shape in research and architecture docs.
+- Implement symbol/reference facts without hard-coding assumptions that would
+  block lifecycle hooks.
+- Add the first minimal lifecycle hook only when a real Phase 13 use case needs
+  it, probably analyzer configuration for Go package patterns/build tags and TS
+  projects.
+
+Avoid exposing broad internal mutation APIs just to move quickly.
 
 ## Data Model Recommendation
 
@@ -567,6 +823,10 @@ static-analysis platform.
 - Do not expose Oxc IDs or Go object addresses as public IDs.
 - Do not add a graph database for Phase 13.
 - Do not make rules parse raw ASTs or sidecar JSON.
+- Do not force complex build setup into `.polint.toml`; use repo-local Rust
+  lifecycle hooks for logic.
+- Do not give lifecycle hooks unrestricted mutable access to internal
+  `AnalysisDb`; route additions through typed builders that validate facts.
 - Do not claim exact TS cross-file member resolution until a TypeScript
   type-checker-backed mode exists.
 - Do not report setup-missing capability requests as empty fact arrays.
@@ -586,6 +846,8 @@ static-analysis platform.
   Do not overclaim.
 - Caching: Go symbol facts are package-level, not cleanly per-file. Cache by
   package/setup digest, not only by individual source file.
+- Lifecycle cache holes: if hook code reads files, environment variables, or
+  command output without declaring them, cache restore can become unsound.
 - Diagnostics: setup errors must mention the language analyzer that failed.
 - Performance: sidecars should run only when the plan requests deeper facts.
 - Public API: expose only typed SDK views and fact structs intended for
@@ -718,6 +980,11 @@ Minimum tests:
 - Rule parameter `References<'_>` maps to `references`.
 - Stable `SymbolId` survives cache restore for unchanged source.
 - Moving an unrelated file does not change a package-level Go symbol ID.
+- Lifecycle hook can set Go build tags and make a tagged symbol visible.
+- Lifecycle hook can register multiple TS project roots and make aliases
+  resolve.
+- Lifecycle hook command inputs affect the analysis digest.
+- User-provided generated facts carry origin and precision.
 
 ## Source Notes
 
