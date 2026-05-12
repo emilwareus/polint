@@ -1070,6 +1070,40 @@ mod tests {
     }
 
     #[test]
+    fn references_capability_requires_symbol_identity() {
+        let capabilities = Capabilities::new().references();
+        assert!(capabilities.references);
+        assert!(capabilities.symbols);
+        assert_eq!(
+            capabilities.requested_names().collect::<Vec<_>>(),
+            vec!["symbols", "references"]
+        );
+
+        let rules = vec![rule(
+            "local/needs-references",
+            "Needs references",
+            Severity::Warn,
+            capabilities,
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+
+        assert_eq!(
+            plan.rules()[0].requested_capabilities,
+            vec!["symbols".to_string(), "references".to_string()]
+        );
+        assert_eq!(
+            plan.capabilities()
+                .iter()
+                .map(|capability| (capability.capability.as_str(), capability.status.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("references", CapabilitySupportStatus::Unsupported),
+                ("symbols", CapabilitySupportStatus::Unsupported),
+            ]
+        );
+    }
+
+    #[test]
     fn analysis_plan_reports_setup_missing_capabilities_as_diagnostics() {
         let plan = AnalysisPlan::finish(
             vec![PlannedRule {

@@ -450,6 +450,16 @@ mod tests {
             capability("polint::sdk::facts::ModuleGraphFacts<'_>"),
             "module_graph"
         );
+        assert_eq!(capability("Symbols<'_>"), "symbols");
+        assert_eq!(capability("References<'_>"), "references");
+        assert_eq!(
+            capability("polint::sdk::facts::Symbols<'_>"),
+            "symbols"
+        );
+        assert_eq!(
+            capability("polint::sdk::prelude::References<'_>"),
+            "references"
+        );
         assert_eq!(capability("StringLiterals<'_>"), "string_literals");
         assert_eq!(
             capability("polint::sdk::facts::JsxAttributes<'_>"),
