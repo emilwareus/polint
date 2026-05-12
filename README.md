@@ -182,8 +182,9 @@ Each entry is one string:
 
 `baseline` entries are existing debt: they stay visible in human output but do
 not fail the process. `ignore` entries are central accepted exceptions: they are
-suppressed from output and failure. Matching uses `rule_id + fingerprint`; the
-file path is kept for reviewability and stale-path summaries.
+suppressed from output and failure. Baseline matching uses `rule_id +
+fingerprint` and refreshes unambiguous moved paths; ignore matching is
+file-specific to avoid suppressing unrelated findings with the same fingerprint.
 
 ```bash
 polint baseline create

@@ -992,6 +992,79 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_ts_resolution_keeps_missing_alias_from_commented_tsconfig_unresolved_not_found()
+    {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{
+  // Repo-local aliases are often documented inline.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {"@domain/*": ["src/domain/*"]}
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from '@domain/missing';\n",
+        );
+        push_ts_import(&mut db, app, "@domain/missing", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Unresolved);
+        assert_eq!(fact.precision, ResolutionPrecision::None);
+        assert_eq!(fact.reason, Some(UnresolvedReason::NotFound));
+        assert_eq!(fact.target_node, None);
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_keeps_missing_alias_from_extended_tsconfig_unresolved_not_found()
+    {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@domain/*":["src/domain/*"]}}}"#,
+        );
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"strict":true}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from '@domain/missing';\n",
+        );
+        push_ts_import(&mut db, app, "@domain/missing", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Unresolved);
+        assert_eq!(fact.precision, ResolutionPrecision::None);
+        assert_eq!(fact.reason, Some(UnresolvedReason::NotFound));
+        assert_eq!(fact.target_node, None);
+    }
+
+    #[test]
     fn module_graph_ts_setup_missing_reports_ts_reason_without_go_inputs() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_file(temp.path(), "tsconfig.json", "{ invalid json");

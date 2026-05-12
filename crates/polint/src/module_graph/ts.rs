@@ -7,7 +7,7 @@ use crate::module_graph::paths::normalize_path;
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -244,25 +244,124 @@ fn nearest_tsconfig_path(root: &Path, file_path: &Path) -> Option<PathBuf> {
 }
 
 fn read_tsconfig_path_aliases(path: &Path) -> Vec<String> {
-    let Ok(source) = fs::read_to_string(path) else {
+    let mut visited = BTreeSet::new();
+    read_tsconfig_path_aliases_inner(path, &mut visited)
+}
+
+fn read_tsconfig_path_aliases_inner(path: &Path, visited: &mut BTreeSet<PathBuf>) -> Vec<String> {
+    let Some(path) = normalize_path(path) else {
         return Vec::new();
     };
-    let Ok(config) = serde_json::from_str::<TsconfigAliasWire>(&source) else {
+    if !visited.insert(path.clone()) {
+        return Vec::new();
+    }
+    let Some(config) = read_tsconfig_alias_wire(&path) else {
         return Vec::new();
     };
-    let Some(compiler_options) = config.compiler_options else {
+
+    if let Some(paths) = config
+        .compiler_options
+        .as_ref()
+        .and_then(|options| options.paths.as_ref())
+    {
+        return sorted_ts_path_aliases(paths.keys().cloned());
+    }
+
+    let Some(config_dir) = path.parent() else {
         return Vec::new();
     };
-    compiler_options
-        .paths
-        .unwrap_or_default()
-        .into_keys()
-        .collect()
+    let mut aliases = config
+        .extends
+        .into_iter()
+        .flat_map(TsconfigExtendsWire::into_specifiers)
+        .filter_map(|specifier| resolve_tsconfig_extends_path(config_dir, &specifier))
+        .flat_map(|extended_path| read_tsconfig_path_aliases_inner(&extended_path, visited))
+        .collect::<Vec<_>>();
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn read_tsconfig_alias_wire(path: &Path) -> Option<TsconfigAliasWire> {
+    let Ok(mut source) = fs::read_to_string(path) else {
+        return None;
+    };
+    if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        source = stripped.to_string();
+    }
+    if json_strip_comments::strip(&mut source).is_err() {
+        return None;
+    }
+    serde_json::from_str::<TsconfigAliasWire>(&source).ok()
+}
+
+fn sorted_ts_path_aliases(paths: impl Iterator<Item = String>) -> Vec<String> {
+    let mut aliases = paths.collect::<Vec<_>>();
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn resolve_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let specifier_path = Path::new(specifier);
+    if specifier_path.is_absolute() {
+        return resolve_tsconfig_file_candidate(specifier_path);
+    }
+    if specifier.starts_with('.') {
+        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+    }
+    resolve_package_tsconfig_extends_path(config_dir, specifier)
+}
+
+fn resolve_package_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let mut current = normalize_path(config_dir)?;
+    loop {
+        let candidate = current.join("node_modules").join(specifier);
+        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+            return Some(resolved);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        let mut with_json = base.as_os_str().to_owned();
+        with_json.push(".json");
+        candidates.push(PathBuf::from(with_json));
+    }
+    candidates.push(base.join("tsconfig.json"));
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| normalize_path(&candidate))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TsconfigExtendsWire {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl TsconfigExtendsWire {
+    fn into_specifiers(self) -> Vec<String> {
+        match self {
+            Self::Single(specifier) => vec![specifier],
+            Self::Multiple(specifiers) => specifiers,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TsconfigAliasWire {
+    #[serde(default)]
+    extends: Option<TsconfigExtendsWire>,
     compiler_options: Option<TsconfigCompilerOptionsWire>,
 }
 

@@ -40,11 +40,11 @@ pub(crate) struct BaselineEntry {
 }
 
 impl BaselineEntry {
-    fn from_diagnostic(diagnostic: &Diagnostic) -> Self {
+    fn from_identity(identity: &DiagnosticIdentity) -> Self {
         Self {
-            rule_id: diagnostic.rule_id.clone(),
-            fingerprint: baseline_fingerprint(diagnostic),
-            file: diagnostic.file.clone(),
+            rule_id: identity.rule_id.clone(),
+            fingerprint: identity.baseline_fingerprint.clone(),
+            file: identity.file.clone(),
         }
     }
 
@@ -68,9 +68,9 @@ pub(crate) struct BaselineConfig {
 
 impl BaselineConfig {
     pub(crate) fn from_diagnostics(diagnostics: &[Diagnostic]) -> Self {
-        let baseline = diagnostics
+        let baseline = diagnostic_identities(diagnostics)
             .iter()
-            .map(BaselineEntry::from_diagnostic)
+            .map(BaselineEntry::from_identity)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -81,28 +81,20 @@ impl BaselineConfig {
     }
 
     pub(crate) fn updated_for_current_diagnostics(&self, diagnostics: &[Diagnostic]) -> Self {
-        let ignore_keys = self
-            .ignore
-            .iter()
-            .map(BaselineEntry::key)
-            .collect::<BTreeSet<_>>();
-        let baseline_entries = self
-            .baseline
-            .iter()
-            .filter(|entry| !ignore_keys.contains(&entry.key()))
-            .cloned()
-            .collect::<Vec<_>>();
+        let identities = diagnostic_identities(diagnostics);
+        let baseline_entries = active_baseline_entries(self);
         let ignore_matches =
-            match_entries_to_diagnostics(&self.ignore, diagnostics, &BTreeSet::new());
+            match_entries_to_diagnostics(&self.ignore, &identities, &BTreeSet::new(), false);
         let baseline_matches = match_entries_to_diagnostics(
             &baseline_entries,
-            diagnostics,
+            &identities,
             &ignore_matches.matched_diagnostics,
+            true,
         );
         let baseline = baseline_matches
             .entry_to_diagnostic
             .values()
-            .map(|diagnostic_index| BaselineEntry::from_diagnostic(&diagnostics[*diagnostic_index]))
+            .map(|diagnostic_index| BaselineEntry::from_identity(&identities[*diagnostic_index]))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -133,17 +125,10 @@ impl EntryMatches {
         }
     }
 
-    fn insert(
-        &mut self,
-        entry_index: usize,
-        diagnostic_index: usize,
-        entry: &BaselineEntry,
-        diagnostic: &Diagnostic,
-    ) {
-        self.matched_diagnostics.insert(diagnostic_index);
-        self.entry_to_diagnostic
-            .insert(entry_index, diagnostic_index);
-        if entry.file != diagnostic.file {
+    fn insert(&mut self, entry_index: usize, identity: &DiagnosticIdentity, entry: &BaselineEntry) {
+        self.matched_diagnostics.insert(identity.index);
+        self.entry_to_diagnostic.insert(entry_index, identity.index);
+        if entry.file != identity.file {
             self.stale_path_entries.insert(entry.clone());
         }
     }
@@ -152,18 +137,25 @@ impl EntryMatches {
 #[derive(Debug, Clone)]
 struct DiagnosticIdentity {
     index: usize,
+    rule_id: String,
     file: String,
+    baseline_fingerprint: String,
     keys: BTreeSet<BaselineKey>,
 }
 
 impl DiagnosticIdentity {
-    fn from_diagnostic(index: usize, diagnostic: &Diagnostic) -> Self {
+    fn new(index: usize, diagnostic: &Diagnostic, baseline_fingerprint: String) -> Self {
         let mut keys = BTreeSet::new();
         keys.insert(BaselineKey::from_stable_diagnostic(diagnostic));
-        keys.insert(BaselineKey::from_baseline_diagnostic(diagnostic));
+        keys.insert(BaselineKey {
+            rule_id: diagnostic.rule_id.clone(),
+            fingerprint: baseline_fingerprint.clone(),
+        });
         Self {
             index,
+            rule_id: diagnostic.rule_id.clone(),
             file: diagnostic.file.clone(),
+            baseline_fingerprint,
             keys,
         }
     }
@@ -173,16 +165,108 @@ impl DiagnosticIdentity {
     }
 }
 
-fn match_entries_to_diagnostics(
-    entries: &[BaselineEntry],
-    diagnostics: &[Diagnostic],
-    excluded_diagnostics: &BTreeSet<usize>,
-) -> EntryMatches {
-    let identities = diagnostics
+#[derive(Debug, Clone)]
+struct DiagnosticIdentitySeed {
+    index: usize,
+    rule_id: String,
+    file: String,
+    range: (u32, u32, u32, u32),
+    stable_fingerprint: String,
+    baseline_base: BaselineFingerprint,
+}
+
+#[derive(Debug, Clone)]
+struct BaselineFingerprint {
+    value: String,
+    is_custom: bool,
+}
+
+fn active_baseline_entries(config: &BaselineConfig) -> Vec<BaselineEntry> {
+    let ignored_entries = config.ignore.iter().cloned().collect::<BTreeSet<_>>();
+    config
+        .baseline
+        .iter()
+        .filter(|entry| !ignored_entries.contains(*entry))
+        .cloned()
+        .collect()
+}
+
+fn diagnostic_identities(diagnostics: &[Diagnostic]) -> Vec<DiagnosticIdentity> {
+    let seeds = diagnostics
         .iter()
         .enumerate()
-        .map(|(index, diagnostic)| DiagnosticIdentity::from_diagnostic(index, diagnostic))
+        .map(|(index, diagnostic)| DiagnosticIdentitySeed {
+            index,
+            rule_id: diagnostic.rule_id.clone(),
+            file: diagnostic.file.clone(),
+            range: (
+                diagnostic.range.start_line,
+                diagnostic.range.start_col,
+                diagnostic.range.end_line,
+                diagnostic.range.end_col,
+            ),
+            stable_fingerprint: diagnostic.stable_fingerprint.clone(),
+            baseline_base: baseline_fingerprint_base(diagnostic),
+        })
         .collect::<Vec<_>>();
+
+    let mut baseline_fingerprints = vec![String::new(); seeds.len()];
+    let mut ordered_seed_indices = (0..seeds.len()).collect::<Vec<_>>();
+    ordered_seed_indices.sort_by(|left, right| {
+        let left = &seeds[*left];
+        let right = &seeds[*right];
+        (
+            left.rule_id.as_str(),
+            left.file.as_str(),
+            left.baseline_base.value.as_str(),
+            left.range,
+            left.stable_fingerprint.as_str(),
+            left.index,
+        )
+            .cmp(&(
+                right.rule_id.as_str(),
+                right.file.as_str(),
+                right.baseline_base.value.as_str(),
+                right.range,
+                right.stable_fingerprint.as_str(),
+                right.index,
+            ))
+    });
+
+    let mut next_occurrence_by_scope = BTreeMap::<(String, String, String), usize>::new();
+    for seed_index in ordered_seed_indices {
+        let seed = &seeds[seed_index];
+        if seed.baseline_base.is_custom {
+            baseline_fingerprints[seed_index] = seed.baseline_base.value.clone();
+            continue;
+        }
+        let occurrence = next_occurrence_by_scope
+            .entry((
+                seed.rule_id.clone(),
+                seed.file.clone(),
+                seed.baseline_base.value.clone(),
+            ))
+            .or_default();
+        baseline_fingerprints[seed_index] =
+            baseline_fingerprint_for_occurrence(&seed.baseline_base.value, *occurrence);
+        *occurrence += 1;
+    }
+
+    seeds
+        .into_iter()
+        .zip(baseline_fingerprints)
+        .map(|(seed, baseline_fingerprint)| {
+            DiagnosticIdentity::new(seed.index, &diagnostics[seed.index], baseline_fingerprint)
+        })
+        .collect()
+}
+
+fn match_entries_to_diagnostics(
+    entries: &[BaselineEntry],
+    identities: &[DiagnosticIdentity],
+    excluded_diagnostics: &BTreeSet<usize>,
+    allow_relocation: bool,
+) -> EntryMatches {
     let mut matches = EntryMatches::new();
 
     for (entry_index, entry) in entries.iter().enumerate() {
@@ -194,12 +278,11 @@ fn match_entries_to_diagnostics(
         }) else {
             continue;
         };
-        matches.insert(
-            entry_index,
-            identity.index,
-            entry,
-            &diagnostics[identity.index],
-        );
+        matches.insert(entry_index, identity, entry);
+    }
+
+    if !allow_relocation {
+        return matches;
     }
 
     let mut unmatched_entries_by_key = BTreeMap::<BaselineKey, Vec<usize>>::new();
@@ -215,21 +298,21 @@ fn match_entries_to_diagnostics(
     for (key, entry_indices) in unmatched_entries_by_key {
         let diagnostic_indices = identities
             .iter()
-            .filter(|identity| {
+            .enumerate()
+            .filter(|(_, identity)| {
                 !excluded_diagnostics.contains(&identity.index)
                     && !matches.matched_diagnostics.contains(&identity.index)
                     && identity.keys.contains(&key)
             })
-            .map(|identity| identity.index)
+            .map(|(identity_index, _)| identity_index)
             .collect::<Vec<_>>();
         if entry_indices.len() == 1 && diagnostic_indices.len() == 1 {
             let entry_index = entry_indices[0];
-            let diagnostic_index = diagnostic_indices[0];
+            let identity_index = diagnostic_indices[0];
             matches.insert(
                 entry_index,
-                diagnostic_index,
+                &identities[identity_index],
                 &entries[entry_index],
-                &diagnostics[diagnostic_index],
             );
         }
     }
@@ -264,13 +347,6 @@ impl BaselineKey {
         Self {
             rule_id: diagnostic.rule_id.clone(),
             fingerprint: diagnostic.stable_fingerprint.clone(),
-        }
-    }
-
-    fn from_baseline_diagnostic(diagnostic: &Diagnostic) -> Self {
-        Self {
-            rule_id: diagnostic.rule_id.clone(),
-            fingerprint: baseline_fingerprint(diagnostic),
         }
     }
 }
@@ -330,12 +406,15 @@ pub(crate) fn classify_diagnostics(
     diagnostics: &[Diagnostic],
     config: &BaselineConfig,
 ) -> BaselineClassification {
+    let identities = diagnostic_identities(diagnostics);
+    let baseline_entries = active_baseline_entries(config);
     let ignore_matches =
-        match_entries_to_diagnostics(&config.ignore, diagnostics, &BTreeSet::new());
+        match_entries_to_diagnostics(&config.ignore, &identities, &BTreeSet::new(), false);
     let baseline_matches = match_entries_to_diagnostics(
-        &config.baseline,
-        diagnostics,
+        &baseline_entries,
+        &identities,
         &ignore_matches.matched_diagnostics,
+        true,
     );
     let mut visible_diagnostics = Vec::new();
     let mut new_diagnostics = Vec::new();
@@ -356,9 +435,8 @@ pub(crate) fn classify_diagnostics(
 
     summary.ignored = ignore_matches.matched_diagnostics.len();
     summary.existing = baseline_matches.matched_diagnostics.len();
-    summary.fixed = config.baseline.len() - baseline_matches.entry_to_diagnostic.len();
-    summary.stale_path =
-        ignore_matches.stale_path_entries.len() + baseline_matches.stale_path_entries.len();
+    summary.fixed = baseline_entries.len() - baseline_matches.entry_to_diagnostic.len();
+    summary.stale_path = baseline_matches.stale_path_entries.len();
 
     BaselineClassification {
         visible_diagnostics,
@@ -479,7 +557,7 @@ fn quote_yaml_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn baseline_fingerprint(diagnostic: &Diagnostic) -> String {
+fn baseline_fingerprint_base(diagnostic: &Diagnostic) -> BaselineFingerprint {
     let default_stable = diagnostic_fingerprint(
         &diagnostic.rule_id,
         &diagnostic.file,
@@ -487,7 +565,10 @@ fn baseline_fingerprint(diagnostic: &Diagnostic) -> String {
         &diagnostic.message,
     );
     if diagnostic.stable_fingerprint != default_stable {
-        return diagnostic.stable_fingerprint.clone();
+        return BaselineFingerprint {
+            value: diagnostic.stable_fingerprint.clone(),
+            is_custom: true,
+        };
     }
 
     let severity = diagnostic.severity.to_string();
@@ -521,7 +602,18 @@ fn baseline_fingerprint(diagnostic: &Diagnostic) -> String {
             parts.push(replacement.as_str());
         }
     }
-    fingerprint(&parts)
+    BaselineFingerprint {
+        value: fingerprint(&parts),
+        is_custom: false,
+    }
+}
+
+fn baseline_fingerprint_for_occurrence(base: &str, occurrence: usize) -> String {
+    if occurrence == 0 {
+        return base.to_string();
+    }
+    let occurrence = occurrence.to_string();
+    fingerprint(&["baseline-v1-occurrence", base, occurrence.as_str()])
 }
 
 #[cfg(test)]
@@ -727,5 +819,95 @@ baseline:
 
         assert_eq!(updated.baseline.len(), 1);
         assert_eq!(updated.baseline[0].file, "src/new.ts");
+    }
+
+    #[test]
+    fn from_diagnostics_keeps_repeated_default_diagnostics_in_same_file_distinct() {
+        let diagnostics = vec![
+            default_diagnostic("local/repeated", "src/app.ts", 3, "policy failed"),
+            default_diagnostic("local/repeated", "src/app.ts", 9, "policy failed"),
+        ];
+
+        let config = BaselineConfig::from_diagnostics(&diagnostics);
+
+        assert_eq!(config.baseline.len(), 2);
+        assert_eq!(config.baseline[0].file, "src/app.ts");
+        assert_eq!(config.baseline[1].file, "src/app.ts");
+        assert_ne!(
+            config.baseline[0].fingerprint,
+            config.baseline[1].fingerprint
+        );
+    }
+
+    #[test]
+    fn classify_diagnostics_matches_repeated_default_diagnostics_in_same_file() {
+        let diagnostics = vec![
+            default_diagnostic("local/repeated", "src/app.ts", 3, "policy failed"),
+            default_diagnostic("local/repeated", "src/app.ts", 9, "policy failed"),
+        ];
+        let config = BaselineConfig::from_diagnostics(&diagnostics);
+
+        let classification = classify_diagnostics(&diagnostics, &config);
+
+        assert_eq!(classification.summary.new, 0);
+        assert_eq!(classification.summary.existing, 2);
+        assert_eq!(classification.summary.fixed, 0);
+        assert_eq!(classification.new_diagnostics.len(), 0);
+    }
+
+    #[test]
+    fn updated_for_current_diagnostics_refreshes_repeated_default_relocations() {
+        let original = vec![
+            default_diagnostic("local/repeated", "src/old.ts", 3, "policy failed"),
+            default_diagnostic("local/repeated", "src/old.ts", 9, "policy failed"),
+        ];
+        let config = BaselineConfig::from_diagnostics(&original);
+        let moved = vec![
+            default_diagnostic("local/repeated", "src/new.ts", 10, "policy failed"),
+            default_diagnostic("local/repeated", "src/new.ts", 20, "policy failed"),
+        ];
+
+        let classification = classify_diagnostics(&moved, &config);
+        let updated = config.updated_for_current_diagnostics(&moved);
+
+        assert_eq!(classification.summary.new, 0);
+        assert_eq!(classification.summary.existing, 2);
+        assert_eq!(classification.summary.stale_path, 2);
+        assert_eq!(updated.baseline.len(), 2);
+        assert!(
+            updated
+                .baseline
+                .iter()
+                .all(|entry| entry.file == "src/new.ts")
+        );
+    }
+
+    #[test]
+    fn baseline_ignore_entries_are_file_specific_for_default_fingerprints() {
+        let active = default_diagnostic("local/repeated", "src/active.ts", 3, "policy failed");
+        let ignored = default_diagnostic("local/repeated", "src/ignored.ts", 3, "policy failed");
+        let active_entry = BaselineConfig::from_diagnostics(std::slice::from_ref(&active))
+            .baseline
+            .into_iter()
+            .next()
+            .unwrap();
+        let ignored_entry = BaselineEntry {
+            file: ignored.file.clone(),
+            ..active_entry.clone()
+        };
+        let config = BaselineConfig {
+            baseline: vec![active_entry],
+            ignore: vec![ignored_entry],
+        };
+
+        let classification = classify_diagnostics(&[ignored.clone(), active.clone()], &config);
+        let updated = config.updated_for_current_diagnostics(&[ignored, active]);
+
+        assert_eq!(classification.summary.ignored, 1);
+        assert_eq!(classification.summary.existing, 1);
+        assert_eq!(classification.summary.fixed, 0);
+        assert_eq!(classification.summary.new, 0);
+        assert_eq!(updated.baseline.len(), 1);
+        assert_eq!(updated.baseline[0].file, "src/active.ts");
     }
 }

@@ -1119,6 +1119,7 @@ dependencies = [
  "globset",
  "ignore",
  "insta",
+ "json-strip-comments",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

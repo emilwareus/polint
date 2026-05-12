@@ -1797,6 +1797,46 @@ fn baseline_create_writes_compact_yaml_entries() {
 }
 
 #[test]
+fn baseline_create_preserves_repeated_default_diagnostics_in_same_file() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const first = "TODO";
+export const second = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert_eq!(baseline.matches("local/no-todo-literals").count(), 2);
+
+    let existing_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics(&existing_json).len(), 0, "{existing_json:#?}");
+}
+
+#[test]
 fn check_baseline_new_only_passes_existing_and_fails_new_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
     write_no_todo_rule_repo(temp.path(), false);

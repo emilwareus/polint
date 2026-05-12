@@ -237,8 +237,10 @@ ignore:
 ```
 
 `baseline` is existing debt; it stays visible but does not fail. `ignore` is a
-central accepted suppression; it is hidden from output and failure. Matching uses
-`rule_id + fingerprint`, with the file path kept for reviewability.
+central accepted suppression; it is hidden from output and failure. Baseline
+matching uses `rule_id + fingerprint` and refreshes unambiguous moved paths;
+ignore matching is file-specific so unrelated findings with the same fingerprint
+stay visible.
 
 Use `polint ignores` when you need to find suppressions that should be fixed:
 

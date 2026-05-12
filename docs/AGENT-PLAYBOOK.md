@@ -56,9 +56,9 @@ ignore:
 ```
 
 `baseline` means existing debt; it does not fail CI. `ignore` means accepted
-central suppression; it is hidden from output and failure. Matching uses
-`rule_id + fingerprint`, while the path makes review diffs readable and lets
-polint report stale paths.
+central suppression; it is hidden from output and failure. Baseline matching uses
+`rule_id + fingerprint` and refreshes unambiguous moved paths; ignore matching
+is file-specific so unrelated findings with the same fingerprint stay visible.
 
 ## Ignore cleanup
 
