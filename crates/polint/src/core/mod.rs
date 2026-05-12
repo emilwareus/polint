@@ -42,6 +42,15 @@ pub struct ModuleNodeId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ModuleEdgeId(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SymbolId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DefinitionId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ReferenceId(pub u64);
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RuleId(pub String);
 
@@ -281,6 +290,149 @@ pub enum UnresolvedReason {
     OutsideWorkspace,
 }
 
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SymbolKind {
+    Package,
+    Module,
+    File,
+    Function,
+    Method,
+    Class,
+    Interface,
+    TypeAlias,
+    Enum,
+    EnumMember,
+    Variable,
+    Constant,
+    Parameter,
+    Field,
+    Property,
+    Namespace,
+    Import,
+    Export,
+    Unknown,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SymbolNamespace {
+    Value,
+    Type,
+    Namespace,
+    Package,
+    Module,
+    Unknown,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DefinitionKind {
+    Declaration,
+    Definition,
+    Import,
+    Export,
+    Implicit,
+    Unknown,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReferenceKind {
+    Read,
+    Write,
+    ReadWrite,
+    Call,
+    TypeUse,
+    Import,
+    Export,
+    MemberAccess,
+    Assignment,
+    DeclarationUse,
+    Unknown,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SymbolPrecision {
+    ExactSemantic,
+    ExactLocal,
+    ModuleLinked,
+    Heuristic,
+    Unresolved,
+    Ambiguous,
+    SetupMissing,
+    Unsupported,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SymbolResolutionStatus {
+    Resolved,
+    Unresolved,
+    Ambiguous,
+    SetupMissing,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolFact {
+    pub id: SymbolId,
+    pub language: Language,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: SymbolKind,
+    pub namespace: SymbolNamespace,
+    pub file: Option<FileId>,
+    pub package: Option<PackageId>,
+    pub module: Option<ModuleNodeId>,
+    pub owner: Option<SymbolId>,
+    pub primary_span: Option<Span>,
+    pub is_exported: bool,
+    pub stable_key: String,
+    pub precision: SymbolPrecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefinitionFact {
+    pub id: DefinitionId,
+    pub symbol: SymbolId,
+    pub language: Language,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: DefinitionKind,
+    pub namespace: SymbolNamespace,
+    pub file: Option<FileId>,
+    pub package: Option<PackageId>,
+    pub module: Option<ModuleNodeId>,
+    pub owner: Option<SymbolId>,
+    pub primary_span: Option<Span>,
+    pub is_primary: bool,
+    pub is_exported: bool,
+    pub stable_key: String,
+    pub precision: SymbolPrecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceFact {
+    pub id: ReferenceId,
+    pub language: Language,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: ReferenceKind,
+    pub namespace: SymbolNamespace,
+    pub file: Option<FileId>,
+    pub package: Option<PackageId>,
+    pub module: Option<ModuleNodeId>,
+    pub owner: Option<SymbolId>,
+    pub primary_span: Option<Span>,
+    pub target: Option<SymbolId>,
+    pub candidates: Vec<SymbolId>,
+    pub stable_key: String,
+    pub status: SymbolResolutionStatus,
+    pub precision: SymbolPrecision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchObligation {
     pub id: BranchId,
@@ -380,6 +532,15 @@ pub struct AnalysisDb {
     resolved_imports: Vec<ResolvedImportFact>,
     module_nodes: Vec<ModuleNode>,
     module_edges: Vec<ModuleEdge>,
+    symbols: Vec<SymbolFact>,
+    definitions: Vec<DefinitionFact>,
+    references: Vec<ReferenceFact>,
+    symbols_by_id: BTreeMap<SymbolId, usize>,
+    definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
+    references_by_target: BTreeMap<SymbolId, Vec<usize>>,
+    symbols_by_file: BTreeMap<FileId, Vec<usize>>,
+    references_by_file: BTreeMap<FileId, Vec<usize>>,
+    symbols_by_name: BTreeMap<String, Vec<usize>>,
     branches: Vec<BranchObligation>,
     tests: Vec<TestFact>,
     coverage: Vec<CoverageFact>,
@@ -509,6 +670,78 @@ impl AnalysisDb {
         self.module_edges = module_edges;
     }
 
+    pub(crate) fn replace_symbol_graph_facts(
+        &mut self,
+        symbols: Vec<SymbolFact>,
+        definitions: Vec<DefinitionFact>,
+        references: Vec<ReferenceFact>,
+    ) {
+        self.symbols = symbols;
+        self.definitions = definitions;
+        self.references = references;
+        self.rebuild_symbol_graph_indexes();
+    }
+
+    fn rebuild_symbol_graph_indexes(&mut self) {
+        self.symbols_by_id.clear();
+        self.definitions_by_symbol.clear();
+        self.references_by_target.clear();
+        self.symbols_by_file.clear();
+        self.references_by_file.clear();
+        self.symbols_by_name.clear();
+
+        for (index, symbol) in self.symbols.iter().enumerate() {
+            self.symbols_by_id.insert(symbol.id, index);
+            if let Some(file) = symbol.file {
+                self.symbols_by_file.entry(file).or_default().push(index);
+            }
+            self.symbols_by_name
+                .entry(symbol.name.clone())
+                .or_default()
+                .push(index);
+        }
+
+        for (index, definition) in self.definitions.iter().enumerate() {
+            self.definitions_by_symbol
+                .entry(definition.symbol)
+                .or_default()
+                .push(index);
+        }
+
+        for (index, reference) in self.references.iter().enumerate() {
+            if let Some(target) = reference.target {
+                self.references_by_target
+                    .entry(target)
+                    .or_default()
+                    .push(index);
+            }
+            if let Some(file) = reference.file {
+                self.references_by_file.entry(file).or_default().push(index);
+            }
+        }
+
+        let symbols = &self.symbols;
+        for indexes in self.symbols_by_file.values_mut() {
+            indexes.sort_by_key(|index| symbols[*index].id);
+        }
+        for indexes in self.symbols_by_name.values_mut() {
+            indexes.sort_by_key(|index| symbols[*index].id);
+        }
+
+        let definitions = &self.definitions;
+        for indexes in self.definitions_by_symbol.values_mut() {
+            indexes.sort_by_key(|index| definitions[*index].id);
+        }
+
+        let references = &self.references;
+        for indexes in self.references_by_target.values_mut() {
+            indexes.sort_by_key(|index| references[*index].id);
+        }
+        for indexes in self.references_by_file.values_mut() {
+            indexes.sort_by_key(|index| references[*index].id);
+        }
+    }
+
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
         self.ts_components.push(fact);
     }
@@ -575,6 +808,88 @@ impl AnalysisDb {
 
     pub fn module_edges(&self) -> &[ModuleEdge] {
         &self.module_edges
+    }
+
+    pub fn symbols(&self) -> &[SymbolFact] {
+        &self.symbols
+    }
+
+    pub fn definitions(&self) -> &[DefinitionFact] {
+        &self.definitions
+    }
+
+    pub fn references(&self) -> &[ReferenceFact] {
+        &self.references
+    }
+
+    pub(crate) fn symbol_by_id(&self, id: SymbolId) -> Option<&SymbolFact> {
+        self.symbols_by_id
+            .get(&id)
+            .and_then(|index| self.symbols.get(*index))
+    }
+
+    pub(crate) fn symbols_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn definition_for_symbol(&self, symbol: SymbolId) -> Option<&DefinitionFact> {
+        let mut definitions = self.definitions_for_symbol(symbol);
+        let first = definitions.next();
+        first
+            .filter(|definition| definition.is_primary)
+            .or_else(|| definitions.find(|definition| definition.is_primary))
+            .or(first)
+    }
+
+    pub(crate) fn definitions_for_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &DefinitionFact> + '_ {
+        self.definitions_by_symbol
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.definitions.get(*index))
+            })
+    }
+
+    pub(crate) fn references_to_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_target
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes.iter().filter_map(|index| self.references.get(*index))
+            })
+    }
+
+    pub(crate) fn references_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes.iter().filter_map(|index| self.references.get(*index))
+            })
     }
 
     pub fn branches(&self) -> &[BranchObligation] {
@@ -799,6 +1114,10 @@ pub struct Capabilities {
     pub resolved_imports: bool,
     /// Needs file/package/module relationship graph facts.
     pub module_graph: bool,
+    /// Needs symbol identities and definition facts.
+    pub symbols: bool,
+    /// Needs symbol reference facts; this also requires symbol identities.
+    pub references: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
@@ -851,6 +1170,17 @@ impl Capabilities {
 
     pub fn module_graph(mut self) -> Self {
         self.module_graph = true;
+        self
+    }
+
+    pub fn symbols(mut self) -> Self {
+        self.symbols = true;
+        self
+    }
+
+    pub fn references(mut self) -> Self {
+        self.references = true;
+        self.symbols = true;
         self
     }
 
@@ -930,6 +1260,8 @@ impl Capabilities {
             ("imports", self.imports),
             ("resolved_imports", self.resolved_imports),
             ("module_graph", self.module_graph),
+            ("symbols", self.symbols),
+            ("references", self.references),
             ("cfg", self.cfg),
             ("call_graph", self.call_graph),
             ("dataflow", self.dataflow),
@@ -2660,6 +2992,11 @@ mod tests {
                 .map(|definition| definition.id)
                 .collect::<Vec<_>>(),
             vec![DefinitionId(0x1010_2020)]
+        );
+        assert_eq!(
+            db.definition_for_symbol(SymbolId(0xfeed_beef))
+                .map(|definition| definition.id),
+            Some(DefinitionId(0x1010_2020))
         );
         assert_eq!(
             db.references_to_symbol(SymbolId(0xabc0_1234))
