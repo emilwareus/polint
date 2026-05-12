@@ -93,6 +93,17 @@ Before writing, reviewing, or refactoring Rust code, consult and apply
 rule authoring, SDK contracts, generated agent skills, examples, or rule-pack
 ergonomics, also consult `.claude/skills/polint/SKILL.md`.
 
+## Git Branch Policy
+
+Do not push directly to `main` unless the user explicitly instructs you to push
+to `main` in that turn. For any code, docs, workflow, release, or planning
+change that should be shared remotely, create a named feature/fix branch first
+and push that branch for review.
+
+If work starts on `main`, create the branch before pushing. If `main` is pushed
+by mistake, stop and ask the user before attempting any remote repair, revert,
+or force-push.
+
 ## Rule Authoring Platform Contract
 
 Repo-local rules must be treated as external consumers of polint, even when they
