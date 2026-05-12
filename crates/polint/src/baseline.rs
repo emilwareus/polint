@@ -18,7 +18,7 @@ pub(crate) enum BaselineError {
     #[error("failed to create baseline directory {path}: {source}")]
     CreateDir { path: PathBuf, source: io::Error },
     #[error("failed to parse baseline YAML: {0}")]
-    Yaml(#[from] serde_yml::Error),
+    Yaml(#[from] serde_norway::Error),
     #[error("unsupported baseline version {0}; expected version 1")]
     UnsupportedVersion(u32),
     #[error("invalid {section} entry #{index}: {reason}; entry was `{entry}`")]
@@ -386,7 +386,7 @@ pub(crate) fn write_baseline(path: &Path, config: &BaselineConfig) -> Result<(),
 }
 
 pub(crate) fn parse_baseline(raw: &str) -> Result<BaselineConfig, BaselineError> {
-    let wire: BaselineWire = serde_yml::from_str(raw)?;
+    let wire: BaselineWire = serde_norway::from_str(raw)?;
     if wire.version != BASELINE_VERSION {
         return Err(BaselineError::UnsupportedVersion(wire.version));
     }
