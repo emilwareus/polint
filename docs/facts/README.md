@@ -11,6 +11,7 @@ internal entry points.
 - [Metrics](metrics.md)
 - [Imports](imports.md)
 - [Resolved imports and module graph](resolved-imports.md)
+- [Symbols and references](symbols-and-references.md)
 - [Branches](branches.md)
 - [Go tests](go-tests.md)
 - [Capability support](capability-plans.md)
