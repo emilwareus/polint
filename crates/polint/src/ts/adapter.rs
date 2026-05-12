@@ -774,27 +774,10 @@ fn collect_require_imports_from_array_element(
     ctx: TsAstCtx<'_>,
     element: &ArrayExpressionElement<'_>,
 ) {
-    match element {
-        ArrayExpressionElement::SpreadElement(spread) => {
-            collect_require_imports_from_expression(db, ctx, &spread.argument);
-        }
-        ArrayExpressionElement::CallExpression(call) => {
-            if callee_text(&call.callee).as_deref() == Some("require")
-                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
-            {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
-            }
-            for argument in &call.arguments {
-                collect_require_imports_from_argument(db, ctx, argument);
-            }
-        }
-        _ => {}
+    if let Some(expression) = element.as_expression() {
+        collect_require_imports_from_expression(db, ctx, expression);
+    } else if let ArrayExpressionElement::SpreadElement(spread) = element {
+        collect_require_imports_from_expression(db, ctx, &spread.argument);
     }
 }
 

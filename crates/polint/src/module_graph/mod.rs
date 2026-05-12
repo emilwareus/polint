@@ -8,7 +8,7 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
-    ImportFact, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
+    ImportFact, Language, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
@@ -73,7 +73,6 @@ pub(crate) fn derive_requested_module_graph(
     } else {
         go::GoPackageIndex::default()
     };
-    let setup_missing_reason = go_metadata.setup_missing_reason().map(ToOwned::to_owned);
     let go_ownership = go::seed_go_module_nodes(&mut builder, &go_metadata);
     for (file, module) in go_ownership.file_owner_modules() {
         file_owner_modules.insert(file, module);
@@ -121,6 +120,7 @@ pub(crate) fn derive_requested_module_graph(
 
     let mut resolved_imports = Vec::with_capacity(imports.len());
     let mut saw_setup_missing = false;
+    let mut setup_missing_reason = None;
     for import in imports {
         let owner_module = file_owner_modules
             .get(&import.file)
@@ -148,6 +148,13 @@ pub(crate) fn derive_requested_module_graph(
         } else {
             model::ResolvedImportDraft::unsupported_language()
         };
+        if draft.status == ResolutionStatus::SetupMissing && setup_missing_reason.is_none() {
+            setup_missing_reason = Some(setup_missing_reason_for_import(
+                import.language,
+                &go_metadata,
+                has_go_inputs,
+            ));
+        }
         let owner = if import.language.is_ts_family() && draft.status == ResolutionStatus::External
         {
             owner_module.unwrap_or(default_owner)
@@ -174,6 +181,24 @@ pub(crate) fn derive_requested_module_graph(
         diagnostics,
         capability_support,
     }
+}
+
+fn setup_missing_reason_for_import(
+    language: Language,
+    go_metadata: &go::GoPackageIndex,
+    has_go_inputs: bool,
+) -> String {
+    if matches!(language, Language::Go) && has_go_inputs {
+        return go_metadata
+            .setup_missing_reason()
+            .unwrap_or("Go package metadata was not loaded.")
+            .to_string();
+    }
+    if language.is_ts_family() {
+        return "TypeScript/JavaScript resolver setup failed; check tsconfig.json or package.json."
+            .to_string();
+    }
+    "Resolver setup is required to resolve requested module relationships.".to_string()
 }
 
 fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::cmp::Ordering {
@@ -934,6 +959,67 @@ mod tests {
         assert_eq!(fact.precision, ResolutionPrecision::None);
         assert_eq!(fact.reason, Some(UnresolvedReason::NotFound));
         assert_eq!(fact.target_node, None);
+    }
+
+    #[test]
+    fn module_graph_ts_resolution_keeps_missing_matched_alias_unresolved_not_found() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@domain/*":["src/domain/*"]}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from '@domain/missing';\n",
+        );
+        push_ts_import(&mut db, app, "@domain/missing", 0);
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]),
+        );
+
+        let fact = &db.resolved_imports()[0];
+        assert_eq!(fact.status, ResolutionStatus::Unresolved);
+        assert_eq!(fact.precision, ResolutionPrecision::None);
+        assert_eq!(fact.reason, Some(UnresolvedReason::NotFound));
+        assert_eq!(fact.target_node, None);
+    }
+
+    #[test]
+    fn module_graph_ts_setup_missing_reports_ts_reason_without_go_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "tsconfig.json", "{ invalid json");
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import dependency from './dependency';\n",
+        );
+        push_ts_import(&mut db, app, "./dependency", 0);
+
+        let derivation = derive_requested_module_graph(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]),
+        );
+
+        assert_eq!(
+            db.resolved_imports()[0].status,
+            ResolutionStatus::SetupMissing
+        );
+        let reason = derivation.capability_support[0]
+            .reason
+            .as_deref()
+            .expect("setup missing reason");
+        assert!(reason.contains("TypeScript/JavaScript"), "{reason}");
+        assert!(!reason.contains("Go package metadata"), "{reason}");
     }
 
     #[test]

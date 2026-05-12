@@ -1949,6 +1949,51 @@ fn baseline_update_removes_fixed_entries() {
 }
 
 #[test]
+fn baseline_update_refreshes_unambiguous_moved_default_diagnostic_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/old.ts"),
+        r#"export const old_marker = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    fs::remove_file(temp.path().join("src/old.ts")).unwrap();
+    write_file(
+        &temp.path().join("src/new.ts"),
+        r#"export const new_marker = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline", "--new-only", "--fail-on", "warn"])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["baseline", "update"])
+            .assert()
+            .success(),
+    );
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(baseline.contains("src/new.ts"), "{baseline}");
+    assert!(!baseline.contains("src/old.ts"), "{baseline}");
+    assert!(stdout.contains("existing: 1"), "{stdout}");
+    assert!(stdout.contains("stale_path: 1"), "{stdout}");
+}
+
+#[test]
 fn check_baseline_rejects_malformed_yaml_entry() {
     let temp = tempfile::tempdir().unwrap();
     write_no_todo_rule_repo(temp.path(), false);

@@ -6,7 +6,9 @@ use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverI
 use crate::module_graph::paths::normalize_path;
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
+use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -22,6 +24,7 @@ pub(crate) struct TsResolverContext {
     resolver: Resolver,
     root: PathBuf,
     file_by_absolute_normalized_path: BTreeMap<PathBuf, FileId>,
+    path_aliases_by_config_dir: BTreeMap<PathBuf, Vec<String>>,
     pub(crate) owner_module: Option<ModuleNodeId>,
 }
 
@@ -46,6 +49,7 @@ impl TsResolverContext {
 
         Self {
             resolver: Resolver::new(resolve_options()),
+            path_aliases_by_config_dir: collect_ts_path_aliases(&root, db),
             root,
             file_by_absolute_normalized_path,
             owner_module,
@@ -92,8 +96,13 @@ pub(crate) fn resolve_ts_import(input: ResolverInput<'_>) -> ResolvedImportDraft
         Err(ResolveError::Builtin { resolved, .. }) => {
             external_draft(resolved, input.import.language)
         }
-        Err(ResolveError::NotFound(_) | ResolveError::MatchedAliasNotFound(_, _)) => {
-            if is_external_package_specifier(&input.import.path) {
+        Err(ResolveError::MatchedAliasNotFound(_, _)) => {
+            ResolvedImportDraft::unresolved(UnresolvedReason::NotFound)
+        }
+        Err(ResolveError::NotFound(_)) => {
+            if tsconfig_path_alias_matches(context, &importer_path, &input.import.path) {
+                ResolvedImportDraft::unresolved(UnresolvedReason::NotFound)
+            } else if is_external_package_specifier(&input.import.path) {
                 external_draft(input.import.path.clone(), input.import.language)
             } else {
                 ResolvedImportDraft::unresolved(UnresolvedReason::NotFound)
@@ -166,6 +175,100 @@ fn is_external_package_specifier(specifier: &str) -> bool {
         && !specifier.starts_with('/')
         && !specifier.starts_with('#')
         && !specifier.starts_with("@/")
+}
+
+fn tsconfig_path_alias_matches(
+    context: &TsResolverContext,
+    importer_path: &Path,
+    specifier: &str,
+) -> bool {
+    let Some(mut current) = importer_path.parent().and_then(normalize_path) else {
+        return false;
+    };
+    loop {
+        if let Some(patterns) = context.path_aliases_by_config_dir.get(&current) {
+            return patterns
+                .iter()
+                .any(|pattern| ts_path_pattern_matches(pattern, specifier));
+        }
+        if current == context.root || !current.starts_with(&context.root) || !current.pop() {
+            return false;
+        }
+    }
+}
+
+fn ts_path_pattern_matches(pattern: &str, specifier: &str) -> bool {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        return pattern == specifier;
+    };
+    specifier.starts_with(prefix) && specifier.ends_with(suffix)
+}
+
+fn collect_ts_path_aliases(root: &Path, db: &AnalysisDb) -> BTreeMap<PathBuf, Vec<String>> {
+    let mut aliases = BTreeMap::new();
+    for file in db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+    {
+        let absolute = if file.path.is_absolute() {
+            file.path.clone()
+        } else {
+            root.join(&file.relative_path)
+        };
+        let Some(config_path) = nearest_tsconfig_path(root, &absolute) else {
+            continue;
+        };
+        let Some(config_dir) = config_path.parent().and_then(normalize_path) else {
+            continue;
+        };
+        aliases
+            .entry(config_dir)
+            .or_insert_with(|| read_tsconfig_path_aliases(&config_path));
+    }
+    aliases
+}
+
+fn nearest_tsconfig_path(root: &Path, file_path: &Path) -> Option<PathBuf> {
+    let root = normalize_path(root)?;
+    let mut current = normalize_path(file_path.parent()?)?;
+    loop {
+        let candidate = current.join("tsconfig.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if current == root || !current.starts_with(&root) || !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn read_tsconfig_path_aliases(path: &Path) -> Vec<String> {
+    let Ok(source) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(config) = serde_json::from_str::<TsconfigAliasWire>(&source) else {
+        return Vec::new();
+    };
+    let Some(compiler_options) = config.compiler_options else {
+        return Vec::new();
+    };
+    compiler_options
+        .paths
+        .unwrap_or_default()
+        .into_keys()
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TsconfigAliasWire {
+    compiler_options: Option<TsconfigCompilerOptionsWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TsconfigCompilerOptionsWire {
+    paths: Option<BTreeMap<String, Vec<String>>>,
 }
 
 fn resolve_options() -> ResolveOptions {

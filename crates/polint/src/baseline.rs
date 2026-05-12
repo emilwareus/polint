@@ -1,4 +1,4 @@
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, diagnostic_fingerprint, fingerprint};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -43,7 +43,7 @@ impl BaselineEntry {
     fn from_diagnostic(diagnostic: &Diagnostic) -> Self {
         Self {
             rule_id: diagnostic.rule_id.clone(),
-            fingerprint: diagnostic.stable_fingerprint.clone(),
+            fingerprint: baseline_fingerprint(diagnostic),
             file: diagnostic.file.clone(),
         }
     }
@@ -81,29 +81,28 @@ impl BaselineConfig {
     }
 
     pub(crate) fn updated_for_current_diagnostics(&self, diagnostics: &[Diagnostic]) -> Self {
-        let current_by_key = diagnostics
-            .iter()
-            .map(|diagnostic| (BaselineKey::from_diagnostic(diagnostic), diagnostic))
-            .collect::<BTreeMap<_, _>>();
         let ignore_keys = self
             .ignore
             .iter()
             .map(BaselineEntry::key)
             .collect::<BTreeSet<_>>();
-        let baseline = self
+        let baseline_entries = self
             .baseline
             .iter()
-            .filter_map(|entry| {
-                let key = entry.key();
-                if ignore_keys.contains(&key) {
-                    return None;
-                }
-                current_by_key.get(&key).map(|diagnostic| BaselineEntry {
-                    rule_id: entry.rule_id.clone(),
-                    fingerprint: entry.fingerprint.clone(),
-                    file: diagnostic.file.clone(),
-                })
-            })
+            .filter(|entry| !ignore_keys.contains(&entry.key()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let ignore_matches =
+            match_entries_to_diagnostics(&self.ignore, diagnostics, &BTreeSet::new());
+        let baseline_matches = match_entries_to_diagnostics(
+            &baseline_entries,
+            diagnostics,
+            &ignore_matches.matched_diagnostics,
+        );
+        let baseline = baseline_matches
+            .entry_to_diagnostic
+            .values()
+            .map(|diagnostic_index| BaselineEntry::from_diagnostic(&diagnostics[*diagnostic_index]))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -116,6 +115,126 @@ impl BaselineConfig {
             .collect();
         Self { baseline, ignore }
     }
+}
+
+#[derive(Debug, Clone)]
+struct EntryMatches {
+    matched_diagnostics: BTreeSet<usize>,
+    entry_to_diagnostic: BTreeMap<usize, usize>,
+    stale_path_entries: BTreeSet<BaselineEntry>,
+}
+
+impl EntryMatches {
+    fn new() -> Self {
+        Self {
+            matched_diagnostics: BTreeSet::new(),
+            entry_to_diagnostic: BTreeMap::new(),
+            stale_path_entries: BTreeSet::new(),
+        }
+    }
+
+    fn insert(
+        &mut self,
+        entry_index: usize,
+        diagnostic_index: usize,
+        entry: &BaselineEntry,
+        diagnostic: &Diagnostic,
+    ) {
+        self.matched_diagnostics.insert(diagnostic_index);
+        self.entry_to_diagnostic
+            .insert(entry_index, diagnostic_index);
+        if entry.file != diagnostic.file {
+            self.stale_path_entries.insert(entry.clone());
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DiagnosticIdentity {
+    index: usize,
+    file: String,
+    keys: BTreeSet<BaselineKey>,
+}
+
+impl DiagnosticIdentity {
+    fn from_diagnostic(index: usize, diagnostic: &Diagnostic) -> Self {
+        let mut keys = BTreeSet::new();
+        keys.insert(BaselineKey::from_stable_diagnostic(diagnostic));
+        keys.insert(BaselineKey::from_baseline_diagnostic(diagnostic));
+        Self {
+            index,
+            file: diagnostic.file.clone(),
+            keys,
+        }
+    }
+
+    fn matches_entry(&self, entry: &BaselineEntry) -> bool {
+        self.keys.contains(&entry.key())
+    }
+}
+
+fn match_entries_to_diagnostics(
+    entries: &[BaselineEntry],
+    diagnostics: &[Diagnostic],
+    excluded_diagnostics: &BTreeSet<usize>,
+) -> EntryMatches {
+    let identities = diagnostics
+        .iter()
+        .enumerate()
+        .map(|(index, diagnostic)| DiagnosticIdentity::from_diagnostic(index, diagnostic))
+        .collect::<Vec<_>>();
+    let mut matches = EntryMatches::new();
+
+    for (entry_index, entry) in entries.iter().enumerate() {
+        let Some(identity) = identities.iter().find(|identity| {
+            !excluded_diagnostics.contains(&identity.index)
+                && !matches.matched_diagnostics.contains(&identity.index)
+                && identity.matches_entry(entry)
+                && identity.file == entry.file
+        }) else {
+            continue;
+        };
+        matches.insert(
+            entry_index,
+            identity.index,
+            entry,
+            &diagnostics[identity.index],
+        );
+    }
+
+    let mut unmatched_entries_by_key = BTreeMap::<BaselineKey, Vec<usize>>::new();
+    for (entry_index, entry) in entries.iter().enumerate() {
+        if !matches.entry_to_diagnostic.contains_key(&entry_index) {
+            unmatched_entries_by_key
+                .entry(entry.key())
+                .or_default()
+                .push(entry_index);
+        }
+    }
+
+    for (key, entry_indices) in unmatched_entries_by_key {
+        let diagnostic_indices = identities
+            .iter()
+            .filter(|identity| {
+                !excluded_diagnostics.contains(&identity.index)
+                    && !matches.matched_diagnostics.contains(&identity.index)
+                    && identity.keys.contains(&key)
+            })
+            .map(|identity| identity.index)
+            .collect::<Vec<_>>();
+        if entry_indices.len() == 1 && diagnostic_indices.len() == 1 {
+            let entry_index = entry_indices[0];
+            let diagnostic_index = diagnostic_indices[0];
+            matches.insert(
+                entry_index,
+                diagnostic_index,
+                &entries[entry_index],
+                &diagnostics[diagnostic_index],
+            );
+        }
+    }
+
+    matches
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -141,10 +260,17 @@ struct BaselineKey {
 }
 
 impl BaselineKey {
-    fn from_diagnostic(diagnostic: &Diagnostic) -> Self {
+    fn from_stable_diagnostic(diagnostic: &Diagnostic) -> Self {
         Self {
             rule_id: diagnostic.rule_id.clone(),
             fingerprint: diagnostic.stable_fingerprint.clone(),
+        }
+    }
+
+    fn from_baseline_diagnostic(diagnostic: &Diagnostic) -> Self {
+        Self {
+            rule_id: diagnostic.rule_id.clone(),
+            fingerprint: baseline_fingerprint(diagnostic),
         }
     }
 }
@@ -204,25 +330,22 @@ pub(crate) fn classify_diagnostics(
     diagnostics: &[Diagnostic],
     config: &BaselineConfig,
 ) -> BaselineClassification {
-    let baseline_by_key = entries_by_key(&config.baseline);
-    let ignore_by_key = entries_by_key(&config.ignore);
+    let ignore_matches =
+        match_entries_to_diagnostics(&config.ignore, diagnostics, &BTreeSet::new());
+    let baseline_matches = match_entries_to_diagnostics(
+        &config.baseline,
+        diagnostics,
+        &ignore_matches.matched_diagnostics,
+    );
     let mut visible_diagnostics = Vec::new();
     let mut new_diagnostics = Vec::new();
-    let mut current_keys = BTreeSet::new();
-    let mut stale_path_entries = BTreeSet::new();
     let mut summary = BaselineSummary::default();
 
-    for diagnostic in diagnostics {
-        let key = BaselineKey::from_diagnostic(diagnostic);
-        current_keys.insert(key.clone());
-        if let Some(entries) = ignore_by_key.get(&key) {
-            summary.ignored += 1;
-            collect_stale_path_entries(entries, &diagnostic.file, &mut stale_path_entries);
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        if ignore_matches.matched_diagnostics.contains(&index) {
             continue;
         }
-        if let Some(entries) = baseline_by_key.get(&key) {
-            summary.existing += 1;
-            collect_stale_path_entries(entries, &diagnostic.file, &mut stale_path_entries);
+        if baseline_matches.matched_diagnostics.contains(&index) {
             visible_diagnostics.push(diagnostic.clone());
             continue;
         }
@@ -231,14 +354,11 @@ pub(crate) fn classify_diagnostics(
         new_diagnostics.push(diagnostic.clone());
     }
 
-    summary.fixed = config
-        .baseline
-        .iter()
-        .map(BaselineEntry::key)
-        .collect::<BTreeSet<_>>()
-        .difference(&current_keys)
-        .count();
-    summary.stale_path = stale_path_entries.len();
+    summary.ignored = ignore_matches.matched_diagnostics.len();
+    summary.existing = baseline_matches.matched_diagnostics.len();
+    summary.fixed = config.baseline.len() - baseline_matches.entry_to_diagnostic.len();
+    summary.stale_path =
+        ignore_matches.stale_path_entries.len() + baseline_matches.stale_path_entries.len();
 
     BaselineClassification {
         visible_diagnostics,
@@ -359,26 +479,49 @@ fn quote_yaml_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn entries_by_key(entries: &[BaselineEntry]) -> BTreeMap<BaselineKey, Vec<&BaselineEntry>> {
-    let mut by_key = BTreeMap::<BaselineKey, Vec<&BaselineEntry>>::new();
-    for entry in entries {
-        by_key.entry(entry.key()).or_default().push(entry);
-    }
-    by_key
-}
-
-fn collect_stale_path_entries(
-    entries: &[&BaselineEntry],
-    current_file: &str,
-    stale_path_entries: &mut BTreeSet<BaselineEntry>,
-) {
-    stale_path_entries.extend(
-        entries
-            .iter()
-            .copied()
-            .filter(|entry| entry.file != current_file)
-            .cloned(),
+fn baseline_fingerprint(diagnostic: &Diagnostic) -> String {
+    let default_stable = diagnostic_fingerprint(
+        &diagnostic.rule_id,
+        &diagnostic.file,
+        diagnostic.range,
+        &diagnostic.message,
     );
+    if diagnostic.stable_fingerprint != default_stable {
+        return diagnostic.stable_fingerprint.clone();
+    }
+
+    let severity = diagnostic.severity.to_string();
+    let mut parts = vec![
+        "baseline-v1",
+        diagnostic.rule_id.as_str(),
+        severity.as_str(),
+        diagnostic.message.as_str(),
+    ];
+    for evidence in &diagnostic.evidence {
+        parts.push("evidence");
+        parts.push(evidence.label.as_str());
+        parts.push(evidence.value.as_str());
+    }
+    for label in &diagnostic.labels {
+        parts.push("label");
+        parts.push(label.message.as_str());
+    }
+    if let Some(help) = &diagnostic.help {
+        parts.push("help");
+        parts.push(help.as_str());
+    }
+    for suggestion in &diagnostic.suggestions {
+        parts.push("suggestion");
+        parts.push(suggestion.message.as_str());
+    }
+    if let Some(fix) = &diagnostic.fix {
+        parts.push("fix");
+        parts.push(fix.message.as_str());
+        if let Some(replacement) = &fix.replacement {
+            parts.push(replacement.as_str());
+        }
+    }
+    fingerprint(&parts)
 }
 
 #[cfg(test)]
@@ -395,6 +538,16 @@ mod tests {
             "message",
         )
         .with_fingerprint(fingerprint)
+    }
+
+    fn default_diagnostic(rule_id: &str, file: &str, line: u32, message: &str) -> Diagnostic {
+        Diagnostic::new(
+            rule_id,
+            Severity::Warn,
+            file,
+            TextRange::point(line, 1),
+            message,
+        )
     }
 
     #[test]
@@ -529,5 +682,50 @@ baseline:
 
         assert_eq!(updated.baseline.len(), 1);
         assert_eq!(updated.baseline[0].file, "src/new.go");
+    }
+
+    #[test]
+    fn classify_diagnostics_matches_unambiguous_default_fingerprint_relocations() {
+        let original = default_diagnostic("local/moved", "src/old.ts", 3, "policy failed");
+        let config = BaselineConfig::from_diagnostics(&[original]);
+        let moved = default_diagnostic("local/moved", "src/new.ts", 10, "policy failed");
+
+        let classification = classify_diagnostics(&[moved], &config);
+
+        assert_eq!(classification.summary.new, 0);
+        assert_eq!(classification.summary.existing, 1);
+        assert_eq!(classification.summary.fixed, 0);
+        assert_eq!(classification.summary.stale_path, 1);
+        assert_eq!(classification.new_diagnostics.len(), 0);
+    }
+
+    #[test]
+    fn classify_diagnostics_keeps_ambiguous_relocations_new() {
+        let original = default_diagnostic("local/moved", "src/old.ts", 3, "policy failed");
+        let config = BaselineConfig::from_diagnostics(&[original]);
+        let diagnostics = vec![
+            default_diagnostic("local/moved", "src/new.ts", 10, "policy failed"),
+            default_diagnostic("local/moved", "src/other.ts", 12, "policy failed"),
+        ];
+
+        let classification = classify_diagnostics(&diagnostics, &config);
+
+        assert_eq!(classification.summary.new, 2);
+        assert_eq!(classification.summary.existing, 0);
+        assert_eq!(classification.summary.fixed, 1);
+        assert_eq!(classification.summary.stale_path, 0);
+        assert_eq!(classification.new_diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn updated_for_current_diagnostics_refreshes_unambiguous_default_fingerprint_relocations() {
+        let original = default_diagnostic("local/moved", "src/old.ts", 3, "policy failed");
+        let config = BaselineConfig::from_diagnostics(&[original]);
+        let moved = default_diagnostic("local/moved", "src/new.ts", 10, "policy failed");
+
+        let updated = config.updated_for_current_diagnostics(&[moved]);
+
+        assert_eq!(updated.baseline.len(), 1);
+        assert_eq!(updated.baseline[0].file, "src/new.ts");
     }
 }
