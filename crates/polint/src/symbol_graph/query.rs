@@ -1,3 +1,84 @@
+use crate::core::{
+    AnalysisDb, DefinitionFact, FileId, ReferenceFact, SymbolFact, SymbolId, SymbolResolutionStatus,
+};
+
+pub(crate) fn symbol_by_id(db: &AnalysisDb, id: SymbolId) -> Option<&SymbolFact> {
+    db.symbol_by_id(id)
+}
+
+pub(crate) fn symbols_for_file(db: &AnalysisDb, file: FileId) -> impl Iterator<Item = &SymbolFact> {
+    db.symbols_for_file(file)
+}
+
+pub(crate) fn symbols_by_name<'a>(
+    db: &'a AnalysisDb,
+    name: &'a str,
+) -> impl Iterator<Item = &'a SymbolFact> {
+    db.symbols_by_name(name)
+}
+
+pub(crate) fn definitions_for_symbol(
+    db: &AnalysisDb,
+    symbol: SymbolId,
+) -> impl Iterator<Item = &DefinitionFact> {
+    db.definitions_for_symbol(symbol)
+}
+
+pub(crate) fn references_to_symbol(
+    db: &AnalysisDb,
+    symbol: SymbolId,
+) -> impl Iterator<Item = &ReferenceFact> {
+    db.references_to_symbol(symbol)
+}
+
+pub(crate) fn references_for_file(
+    db: &AnalysisDb,
+    file: FileId,
+) -> impl Iterator<Item = &ReferenceFact> {
+    db.references_for_file(file)
+}
+
+pub(crate) fn unresolved_references(db: &AnalysisDb) -> impl Iterator<Item = &ReferenceFact> {
+    references_with_status(db, SymbolResolutionStatus::Unresolved)
+}
+
+pub(crate) fn ambiguous_references(db: &AnalysisDb) -> impl Iterator<Item = &ReferenceFact> {
+    references_with_status(db, SymbolResolutionStatus::Ambiguous)
+}
+
+fn references_with_status(
+    db: &AnalysisDb,
+    status: SymbolResolutionStatus,
+) -> impl Iterator<Item = &ReferenceFact> {
+    let mut references = db
+        .references()
+        .iter()
+        .filter(move |reference| reference.status == status)
+        .collect::<Vec<_>>();
+    references.sort_by(|left, right| reference_order(left, right));
+    references.into_iter()
+}
+
+fn reference_order(left: &ReferenceFact, right: &ReferenceFact) -> std::cmp::Ordering {
+    (
+        left.id,
+        left.name.as_str(),
+        span_key(left.primary_span.as_ref()),
+        left.stable_key.as_str(),
+    )
+        .cmp(&(
+            right.id,
+            right.name.as_str(),
+            span_key(right.primary_span.as_ref()),
+            right.stable_key.as_str(),
+        ))
+}
+
+fn span_key(span: Option<&crate::core::Span>) -> (u32, u32) {
+    span.map(|span| (span.start_byte, span.end_byte))
+        .unwrap_or((u32::MAX, u32::MAX))
+}
+
 #[cfg(test)]
 mod symbol_graph_query {
     use crate::core::{
@@ -30,7 +111,13 @@ mod symbol_graph_query {
                 symbol_fact(button, "Button", app_file, 1, SymbolKind::Function),
                 symbol_fact(SymbolId(30), "Button", app_file, 10, SymbolKind::Class),
             ],
-            vec![definition_fact(DefinitionId(30), button, "Button", app_file, 1)],
+            vec![definition_fact(
+                DefinitionId(30),
+                button,
+                "Button",
+                app_file,
+                1,
+            )],
             vec![
                 reference_fact(
                     ReferenceId(60),
