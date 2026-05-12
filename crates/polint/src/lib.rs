@@ -30,6 +30,7 @@ pub(crate) mod metrics;
 pub(crate) mod module_graph;
 pub(crate) mod path_context;
 pub(crate) mod rule_error;
+pub(crate) mod symbol_graph;
 pub(crate) mod ts;
 
 /// Internal surfaces for `polint-bench` (`feature = "bench"`). Not part of the supported API.
