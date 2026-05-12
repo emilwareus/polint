@@ -650,10 +650,12 @@ impl_fact_view!(TestSuiteMetrics, _db);
 mod tests {
     use super::*;
     use crate::core::{
-        AnalysisDb, ComplexityMetricFact, FileMetricFact, FunctionId, FunctionMetricFact,
-        ImportFact, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Span, UnresolvedReason,
+        AnalysisDb, ComplexityMetricFact, DefinitionFact, DefinitionId, DefinitionKind,
+        FileMetricFact, FunctionId, FunctionMetricFact, ImportFact, ModuleEdge, ModuleEdgeId,
+        ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact, ReferenceId,
+        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
+        SymbolPrecision, SymbolResolutionStatus, UnresolvedReason,
     };
     use std::path::PathBuf;
 
@@ -1058,6 +1060,210 @@ mod tests {
         assert_eq!(
             graph.reachable_from(ModuleNodeId(0)),
             vec![ModuleNodeId(1), ModuleNodeId(3), ModuleNodeId(2)]
+        );
+    }
+
+    #[test]
+    fn symbol_sdk_views_query_borrowed_facts_deterministically() {
+        let mut db = AnalysisDb::new();
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function Button() { return theme; }\n".to_string(),
+        );
+        let theme_file = db.add_file(
+            PathBuf::from("src/theme.ts"),
+            "src/theme.ts".to_string(),
+            "export const theme = {};\n".to_string(),
+        );
+        let button = SymbolId(10);
+        let theme = SymbolId(20);
+
+        db.replace_symbol_graph_facts(
+            vec![
+                SymbolFact {
+                    id: button,
+                    language: Language::TypeScript,
+                    name: "Button".to_string(),
+                    qualified_name: "src/app.ts::Button".to_string(),
+                    kind: SymbolKind::Function,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: None,
+                    primary_span: Some(Span::point(app_file, 1, 1)),
+                    is_exported: true,
+                    stable_key: "ts|src/app.ts|Button".to_string(),
+                    precision: SymbolPrecision::ExactLocal,
+                },
+                SymbolFact {
+                    id: theme,
+                    language: Language::TypeScript,
+                    name: "theme".to_string(),
+                    qualified_name: "src/theme.ts::theme".to_string(),
+                    kind: SymbolKind::Constant,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(theme_file),
+                    package: None,
+                    module: Some(ModuleNodeId(1)),
+                    owner: None,
+                    primary_span: Some(Span::point(theme_file, 1, 1)),
+                    is_exported: true,
+                    stable_key: "ts|src/theme.ts|theme".to_string(),
+                    precision: SymbolPrecision::ModuleLinked,
+                },
+            ],
+            vec![DefinitionFact {
+                id: DefinitionId(30),
+                symbol: button,
+                language: Language::TypeScript,
+                name: "Button".to_string(),
+                qualified_name: "src/app.ts::Button".to_string(),
+                kind: DefinitionKind::Declaration,
+                namespace: SymbolNamespace::Value,
+                file: Some(app_file),
+                package: None,
+                module: Some(ModuleNodeId(0)),
+                owner: None,
+                primary_span: Some(Span::point(app_file, 1, 1)),
+                is_primary: true,
+                is_exported: true,
+                stable_key: "ts|src/app.ts|definition|Button".to_string(),
+                precision: SymbolPrecision::ExactLocal,
+            }],
+            vec![
+                ReferenceFact {
+                    id: ReferenceId(40),
+                    language: Language::TypeScript,
+                    name: "theme".to_string(),
+                    qualified_name: "src/theme.ts::theme".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 28)),
+                    target: Some(theme),
+                    candidates: Vec::new(),
+                    stable_key: "ts|src/app.ts|reference|theme".to_string(),
+                    status: SymbolResolutionStatus::Resolved,
+                    precision: SymbolPrecision::ModuleLinked,
+                },
+                ReferenceFact {
+                    id: ReferenceId(50),
+                    language: Language::TypeScript,
+                    name: "missing".to_string(),
+                    qualified_name: "missing".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 35)),
+                    target: None,
+                    candidates: Vec::new(),
+                    stable_key: "ts|src/app.ts|reference|missing".to_string(),
+                    status: SymbolResolutionStatus::Unresolved,
+                    precision: SymbolPrecision::Unresolved,
+                },
+                ReferenceFact {
+                    id: ReferenceId(60),
+                    language: Language::TypeScript,
+                    name: "ambiguous".to_string(),
+                    qualified_name: "ambiguous".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 44)),
+                    target: None,
+                    candidates: vec![button, theme],
+                    stable_key: "ts|src/app.ts|reference|ambiguous".to_string(),
+                    status: SymbolResolutionStatus::Ambiguous,
+                    precision: SymbolPrecision::Ambiguous,
+                },
+            ],
+        );
+
+        let symbols = Symbols::build(&db);
+        let references = References::build(&db);
+
+        assert_eq!(symbols.all().len(), 2);
+        assert_eq!(
+            symbols.iter().map(|symbol| symbol.id).collect::<Vec<_>>(),
+            vec![button, theme]
+        );
+        assert!(std::ptr::eq(symbols.get(button).unwrap(), &symbols.all()[0]));
+        assert_eq!(
+            symbols
+                .for_file(app_file)
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![button]
+        );
+        assert_eq!(
+            symbols
+                .by_name("theme")
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![theme]
+        );
+        assert_eq!(
+            symbols.definition(button).map(|definition| definition.id),
+            Some(DefinitionId(30))
+        );
+        assert_eq!(
+            symbols
+                .definitions(button)
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>(),
+            vec![DefinitionId(30)]
+        );
+        assert_eq!(
+            symbols.exported().map(|symbol| symbol.id).collect::<Vec<_>>(),
+            vec![button, theme]
+        );
+
+        assert_eq!(references.all().len(), 3);
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+        );
+        assert_eq!(
+            references
+                .to(theme)
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40)]
+        );
+        assert_eq!(
+            references
+                .for_file(app_file)
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+        );
+        assert_eq!(
+            references
+                .unresolved()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(50)]
+        );
+        assert_eq!(
+            references
+                .ambiguous()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(60)]
         );
     }
 }

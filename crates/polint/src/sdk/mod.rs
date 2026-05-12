@@ -133,8 +133,22 @@ mod tests {
         assert_exported::<ResolutionStatus>();
         assert_exported::<ResolutionPrecision>();
         assert_exported::<UnresolvedReason>();
+        assert_exported::<SymbolId>();
+        assert_exported::<DefinitionId>();
+        assert_exported::<ReferenceId>();
+        assert_exported::<SymbolFact>();
+        assert_exported::<DefinitionFact>();
+        assert_exported::<ReferenceFact>();
+        assert_exported::<SymbolKind>();
+        assert_exported::<SymbolNamespace>();
+        assert_exported::<DefinitionKind>();
+        assert_exported::<ReferenceKind>();
+        assert_exported::<SymbolPrecision>();
+        assert_exported::<SymbolResolutionStatus>();
         assert_exported::<ResolvedImports<'static>>();
         assert_exported::<ModuleGraphFacts<'static>>();
+        assert_exported::<Symbols<'static>>();
+        assert_exported::<References<'static>>();
 
         let db = AnalysisDb::new();
         let rule = prelude_smoke();
