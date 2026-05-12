@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
 stopped_at: Completed quick task 260512-aop
-last_updated: "2026-05-12T05:56:54.000Z"
+last_updated: "2026-05-12T06:36:32.000Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 9
@@ -66,7 +66,7 @@ Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
 Phase: 13 - Symbols and References
 Plan: Not started
-Last activity: 2026-05-12 - Completed quick task 260512-aop: Fix review findings for baseline and module relationships
+Last activity: 2026-05-12 - Completed quick task 260512-aop follow-up: Harden baseline duplicate identity and tsconfig alias fallback
 
 ## Quick Tasks Completed
 
@@ -96,7 +96,7 @@ Last activity: 2026-05-12 - Completed quick task 260512-aop: Fix review findings
 | 260510-eur | Prompt before overwriting existing installed polint skills | 2026-05-10 | uncommitted | [260510-eur-prompt-before-overwriting-existing-insta](./quick/260510-eur-prompt-before-overwriting-existing-insta/) |
 | 260511-gyu | Add compact YAML baseline and central ignore ratchet workflow | 2026-05-11 | uncommitted | [260511-gyu-add-compact-yaml-baseline-and-central-ig](./quick/260511-gyu-add-compact-yaml-baseline-and-central-ig/) |
 | 260511-i7m | Make the baseline file live only at .polint/baseline.yaml and remove user-selectable baseline paths | 2026-05-11 | uncommitted | [260511-i7m-make-the-baseline-file-live-only-at-poli](./quick/260511-i7m-make-the-baseline-file-live-only-at-poli/) |
-| 260512-aop | Fix review findings for baseline and module relationships | 2026-05-12 | 9e38af6 | [260512-aop-fix-review-findings-for-baseline-and-mod](./quick/260512-aop-fix-review-findings-for-baseline-and-mod/) |
+| 260512-aop | Fix review findings for baseline and module relationships | 2026-05-12 | 30098c6 | [260512-aop-fix-review-findings-for-baseline-and-mod](./quick/260512-aop-fix-review-findings-for-baseline-and-mod/) |
 
 ## Phase Progress
 
