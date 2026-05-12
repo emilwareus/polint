@@ -5,10 +5,11 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
-    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language,
-    ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ResolutionStatus, ResolvedImportFact,
-    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileId,
+    FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId,
+    JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ReferenceFact,
+    ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
+    SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
 };
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -355,6 +356,98 @@ impl<'a> ModuleGraphFacts<'a> {
     }
 }
 
+/// Symbol and definition fact view. Requesting this view maps to the `symbols` capability.
+#[derive(Clone, Copy)]
+pub struct Symbols<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> Symbols<'a> {
+    /// Returns all symbol facts in deterministic database order.
+    pub fn all(self) -> &'a [SymbolFact] {
+        self.db.symbols()
+    }
+
+    /// Iterates all symbol facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, SymbolFact> {
+        self.db.symbols().iter()
+    }
+
+    /// Returns a symbol fact for a stable symbol ID.
+    pub fn get(self, symbol: SymbolId) -> Option<&'a SymbolFact> {
+        self.db.symbol_by_id(symbol)
+    }
+
+    /// Returns symbol facts for one source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db.symbols_for_file(file)
+    }
+
+    /// Returns symbol facts with the exact public name.
+    pub fn by_name(self, name: &str) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db.symbols_by_name(name)
+    }
+
+    /// Returns the primary definition for a symbol, if one is known.
+    pub fn definition(self, symbol: SymbolId) -> Option<&'a DefinitionFact> {
+        self.db.definition_for_symbol(symbol)
+    }
+
+    /// Returns all definitions for a symbol, including declaration-merged definitions.
+    pub fn definitions(self, symbol: SymbolId) -> impl Iterator<Item = &'a DefinitionFact> {
+        self.db.definitions_for_symbol(symbol)
+    }
+
+    /// Returns exported symbols without cloning facts.
+    pub fn exported(self) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db.symbols().iter().filter(|symbol| symbol.is_exported)
+    }
+}
+
+/// Reference fact view. Requesting this view maps to the `references` capability.
+#[derive(Clone, Copy)]
+pub struct References<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> References<'a> {
+    /// Returns all reference facts in deterministic database order.
+    pub fn all(self) -> &'a [ReferenceFact] {
+        self.db.references()
+    }
+
+    /// Iterates all reference facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ReferenceFact> {
+        self.db.references().iter()
+    }
+
+    /// Returns resolved references to a symbol without cloning facts.
+    pub fn to(self, symbol: SymbolId) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db.references_to_symbol(symbol)
+    }
+
+    /// Returns references in one source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db.references_for_file(file)
+    }
+
+    /// Returns references explicitly marked unresolved.
+    pub fn unresolved(self) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db
+            .references()
+            .iter()
+            .filter(|reference| reference.status == SymbolResolutionStatus::Unresolved)
+    }
+
+    /// Returns references explicitly marked ambiguous.
+    pub fn ambiguous(self) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db
+            .references()
+            .iter()
+            .filter(|reference| reference.status == SymbolResolutionStatus::Ambiguous)
+    }
+}
+
 /// Branch obligation fact view. Requesting this view maps to the `branch_obligations` capability.
 #[derive(Clone, Copy)]
 pub struct BranchObligations<'a> {
@@ -634,6 +727,8 @@ impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
 impl_fact_view!(ResolvedImports);
 impl_fact_view!(ModuleGraphFacts);
+impl_fact_view!(Symbols);
+impl_fact_view!(References);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
 impl_fact_view!(TsComponents);
@@ -653,9 +748,9 @@ mod tests {
         AnalysisDb, ComplexityMetricFact, DefinitionFact, DefinitionId, DefinitionKind,
         FileMetricFact, FunctionId, FunctionMetricFact, ImportFact, ModuleEdge, ModuleEdgeId,
         ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact, ReferenceId,
-        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
-        SymbolPrecision, SymbolResolutionStatus, UnresolvedReason,
+        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
+        Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        SymbolResolutionStatus, UnresolvedReason,
     };
     use std::path::PathBuf;
 
@@ -1198,7 +1293,10 @@ mod tests {
             symbols.iter().map(|symbol| symbol.id).collect::<Vec<_>>(),
             vec![button, theme]
         );
-        assert!(std::ptr::eq(symbols.get(button).unwrap(), &symbols.all()[0]));
+        assert!(std::ptr::eq(
+            symbols.get(button).unwrap(),
+            &symbols.all()[0]
+        ));
         assert_eq!(
             symbols
                 .for_file(app_file)
@@ -1225,7 +1323,10 @@ mod tests {
             vec![DefinitionId(30)]
         );
         assert_eq!(
-            symbols.exported().map(|symbol| symbol.id).collect::<Vec<_>>(),
+            symbols
+                .exported()
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
             vec![button, theme]
         );
 

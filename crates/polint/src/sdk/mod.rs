@@ -27,12 +27,14 @@ pub fn collect_go_tests<'a>(tests: GoTests<'a>, file: FileId) -> Vec<&'a TestFac
 pub mod prelude {
     pub use crate::core::{
         BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
-        CapabilitySupportView, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
-        FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact,
-        Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, NodeId, PackageFact, PackageId, ResolutionPrecision, ResolutionStatus,
-        ResolvedImportFact, ResolvedImportId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleOptions,
-        SourceFile, Span, StringLiteralFact, TestFact, TextRange, TsClassFact, TsComponentFact,
+        CapabilitySupportView, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
+        DefinitionKind, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
+        ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind,
+        ModuleNode, ModuleNodeId, ModuleNodeKind, NodeId, PackageFact, PackageId, ReferenceFact,
+        ReferenceId, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleOptions, SourceFile, Span,
+        StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        SymbolResolutionStatus, TestFact, TextRange, TsClassFact, TsComponentFact,
         UnresolvedReason,
     };
     pub use crate::diagnostics::{
@@ -45,7 +47,8 @@ pub mod prelude {
     pub use crate::sdk::facts::{
         BranchObligations, CallGraph, Cfg, ComplexityMetrics, CoverageFacts, DataFlow, FileMetrics,
         FunctionMetrics, Functions, GoTests, Imports, JsxAttributes, ModuleGraphFacts, Packages,
-        ResolvedImports, SourceFiles, StringLiterals, TestSuiteMetrics, TsClasses, TsComponents,
+        References, ResolvedImports, SourceFiles, StringLiterals, Symbols, TestSuiteMetrics,
+        TsClasses, TsComponents,
     };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }
