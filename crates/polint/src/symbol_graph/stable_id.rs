@@ -86,11 +86,7 @@ impl StableSymbolKey {
 }
 
 impl StableDefinitionKey {
-    pub(crate) fn new(
-        symbol: StableSymbolKey,
-        file_key: impl Into<String>,
-        span: Span,
-    ) -> Self {
+    pub(crate) fn new(symbol: StableSymbolKey, file_key: impl Into<String>, span: Span) -> Self {
         Self {
             symbol,
             file_key: file_key.into(),
@@ -344,7 +340,10 @@ mod symbol_graph_stable_ids {
         let mut changed = button_key();
         changed.set_namespace(SymbolNamespace::Type);
 
-        assert_ne!(symbol_id_from_key(&button_key()), symbol_id_from_key(&changed));
+        assert_ne!(
+            symbol_id_from_key(&button_key()),
+            symbol_id_from_key(&changed)
+        );
     }
 
     #[test]
@@ -352,7 +351,10 @@ mod symbol_graph_stable_ids {
         let mut changed = button_key();
         changed.set_kind(SymbolKind::Class);
 
-        assert_ne!(symbol_id_from_key(&button_key()), symbol_id_from_key(&changed));
+        assert_ne!(
+            symbol_id_from_key(&button_key()),
+            symbol_id_from_key(&changed)
+        );
     }
 
     #[test]
@@ -361,7 +363,10 @@ mod symbol_graph_stable_ids {
         let first = StableDefinitionKey::new(symbol.clone(), "src/button.ts", span(10, 16));
         let second = StableDefinitionKey::new(symbol, "src/button.ts", span(20, 26));
 
-        assert_ne!(definition_id_from_key(&first), definition_id_from_key(&second));
+        assert_ne!(
+            definition_id_from_key(&first),
+            definition_id_from_key(&second)
+        );
     }
 
     #[test]
@@ -370,7 +375,10 @@ mod symbol_graph_stable_ids {
         let first = StableReferenceKey::resolved(target.clone(), "src/app.ts", span(30, 36));
         let second = StableReferenceKey::resolved(target, "src/app.ts", span(40, 46));
 
-        assert_ne!(reference_id_from_key(&first), reference_id_from_key(&second));
+        assert_ne!(
+            reference_id_from_key(&first),
+            reference_id_from_key(&second)
+        );
     }
 
     #[test]
