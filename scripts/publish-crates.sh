@@ -22,7 +22,19 @@ crate_version() {
 crate_version_exists() {
   local name="$1"
   local version="$2"
-  cargo search "$name" --limit 20 2>/dev/null | grep -q "^${name} = \"${version}\""
+  local tmp_dir
+  local status
+
+  tmp_dir="$(mktemp -d)"
+
+  (
+    cd "$tmp_dir"
+    cargo info "${name}@${version}" --registry crates-io >/dev/null 2>&1
+  )
+  status=$?
+
+  rm -rf "$tmp_dir"
+  return "$status"
 }
 
 wait_for_crate_version() {
@@ -36,8 +48,24 @@ wait_for_crate_version() {
     sleep 10
   done
 
-  echo "error: ${name} ${version} was not visible in the crates.io index after publishing" >&2
+  echo "error: ${name} ${version} was not visible in Cargo registry metadata after publishing" >&2
   return 1
+}
+
+publish_crate() {
+  local name="$1"
+  local version
+
+  version="$(crate_version "$name")"
+  if crate_version_exists "$name" "$version"; then
+    echo "Skipping ${name} ${version}; already published."
+    return 0
+  fi
+
+  echo "Publishing ${name}..."
+  cargo publish -p "$name" --locked
+
+  wait_for_crate_version "$name" "$version"
 }
 
 if [[ "${DRY_RUN:-}" == "1" || "${DRY_RUN:-}" == "true" ]]; then
@@ -57,17 +85,17 @@ if [[ "${DRY_RUN:-}" == "1" || "${DRY_RUN:-}" == "true" ]]; then
   exit 0
 fi
 
-if [[ -z "${CRATES_IO_TOKEN:-}" ]]; then
-  echo "error: set CRATES_IO_TOKEN (create at https://crates.io/settings/tokens)" >&2
+if [[ -z "${CRATES_IO_TOKEN:-}" && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+  echo "error: set CRATES_IO_TOKEN or CARGO_REGISTRY_TOKEN (create at https://crates.io/settings/tokens)" >&2
   exit 1
 fi
 
+if [[ -n "${CRATES_IO_TOKEN:-}" && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+  export CARGO_REGISTRY_TOKEN="$CRATES_IO_TOKEN"
+fi
+
 for p in "${PACKAGES[@]}"; do
-  echo "Publishing ${p}..."
-  cargo publish -p "$p" --locked --token "${CRATES_IO_TOKEN}"
-  if [[ "$p" == "polint-macros" ]]; then
-    wait_for_crate_version "$p" "$(crate_version "$p")"
-  fi
+  publish_crate "$p"
 done
 
 echo "Done. Verify: https://crates.io/crates/polint"
