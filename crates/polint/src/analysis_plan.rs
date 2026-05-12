@@ -1017,6 +1017,53 @@ mod tests {
     }
 
     #[test]
+    fn analysis_plan_recognizes_symbol_capabilities() {
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let capabilities = plan.capabilities();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|capability| capability.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["references", "symbols"]
+        );
+
+        for capability in capabilities {
+            assert_eq!(
+                capability.status,
+                crate::core::CapabilitySupportStatus::Unsupported
+            );
+            assert!(
+                capability
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("not provided yet"))
+            );
+            assert_eq!(
+                capability.docs_path.as_deref(),
+                Some("docs/facts/symbols-and-references.md")
+            );
+        }
+
+        assert_eq!(
+            plan.support_view().status_for("symbols"),
+            Some(crate::core::CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(
+            plan.support_view().status_for("references"),
+            Some(crate::core::CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(plan.diagnostics().len(), 2);
+        assert!(plan.diagnostics().iter().all(|diagnostic| {
+            diagnostic
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("docs/facts/symbols-and-references.md"))
+        }));
+    }
+
+    #[test]
     fn analysis_plan_reports_setup_missing_capabilities_as_diagnostics() {
         let plan = AnalysisPlan::finish(
             vec![PlannedRule {
