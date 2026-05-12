@@ -828,10 +828,7 @@ impl AnalysisDb {
             .and_then(|index| self.symbols.get(*index))
     }
 
-    pub(crate) fn symbols_for_file(
-        &self,
-        file: FileId,
-    ) -> impl Iterator<Item = &SymbolFact> + '_ {
+    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
         self.symbols_by_file
             .get(&file)
             .into_iter()
@@ -876,7 +873,9 @@ impl AnalysisDb {
             .get(&symbol)
             .into_iter()
             .flat_map(|indexes| {
-                indexes.iter().filter_map(|index| self.references.get(*index))
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
             })
     }
 
@@ -888,7 +887,9 @@ impl AnalysisDb {
             .get(&file)
             .into_iter()
             .flat_map(|indexes| {
-                indexes.iter().filter_map(|index| self.references.get(*index))
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
             })
     }
 
