@@ -21,6 +21,9 @@ The next implementation step should be:
    ambiguous, setup-missing, or unsupported.
 6. Add a repo-local Rust scan lifecycle surface so teams can control complex
    build/setup/integration steps as code, not as a pile of fragile config.
+7. Treat lifecycle output as an input manifest for the analysis DAG. Later
+   analyses such as call graph, CFG, dataflow, coverage, and test metrics should
+   consume typed lifecycle products instead of inventing separate setup systems.
 
 Do this before call graphs, CFG, and dataflow. Stable symbols are the identity
 layer those later analyses need.
@@ -525,6 +528,443 @@ The lifecycle API will become a serious public contract. Keep Phase 13 focused:
 
 Avoid exposing broad internal mutation APIs just to move quickly.
 
+## Deeper Lifecycle Architecture
+
+Lifecycle integration should not be "callbacks around a scan." It should be a
+typed way for repo-local code to produce an analysis input manifest and a small
+set of validated fact drafts. That distinction matters because symbols are only
+the first consumer. Call graph, CFG, dataflow, coverage, test metrics, future
+Python/Java adapters, and agent-facing graph queries will all need the same
+answers about workspace shape, build variants, generated code, external APIs,
+and cache inputs.
+
+The closest mature patterns are:
+
+- Bazel aspects: attach extra analysis/actions to an existing dependency graph
+  without making every rule manually know every consumer.
+- Pants plugins: define typed target/field-set needs so the engine can select
+  only relevant work and carry stable addresses through the pipeline.
+- CodeQL extraction setup: correctness depends heavily on build mode, generated
+  files, restored dependencies, test/vendor options, and explicit manual setup
+  when defaults are not enough.
+- Joern/CPG overlays: later analyses should layer richer views over earlier
+  syntax, symbol, CFG, and dataflow layers instead of replacing them.
+- LLVM/Salsa-style analysis managers: derived analyses need explicit dependency
+  and invalidation semantics, including transitive invalidation when lower
+  layers change.
+
+Product translation for polint: lifecycle code should create durable,
+deterministic inputs for a polint-owned analysis DAG. It should not mutate
+`AnalysisDb` directly and should not be a hidden side channel that only one
+analyzer understands.
+
+### Hard scenarios lifecycle must solve
+
+These are the scenarios that justify code extensibility instead of more config
+fields:
+
+1. Multi-root monorepos
+   - Different packages use different Go modules, `go.work`, TS project roots,
+     package managers, generated directories, and test conventions.
+   - A single repository root is not enough context for package identity.
+   - Lifecycle must let teams declare analysis units with stable addresses:
+     `service/api`, `apps/web`, `packages/ui`, `libs/auth`, etc.
+
+2. Build variants and conditional code
+   - Go build tags, `GOOS`, `GOARCH`, `CGO_ENABLED`, test variants, enterprise
+     flags, and TypeScript project references can produce different symbol
+     universes.
+   - The same source file may be present in one variant and absent in another.
+   - Facts must carry `variant_id` or profile identity when precision depends
+     on the variant.
+
+3. Generated code and source maps
+   - Protobuf, GraphQL, OpenAPI, ORM schemas, route generators, CSS-in-TS,
+     frontend framework compilers, and internal code generators often create
+     the types and functions rules care about.
+   - Lifecycle must model generated files as either concrete virtual files,
+     external symbols, or generated fact drafts with origin and digest inputs.
+   - Diagnostics should be able to point at the authored schema/manifest when
+     generated code is not the right user-facing location.
+
+4. Framework and runtime semantics
+   - A route handler may be reachable because a framework scans annotations or
+     filenames. A dependency injection container may create call edges that do
+     not appear as direct calls. A GraphQL resolver may be invoked from schema
+     names rather than imports.
+   - Lifecycle must let users add domain facts such as entrypoints, generated
+     references, external callbacks, ownership, trust boundaries, and framework
+     edges.
+
+5. External services and generated clients
+   - Many repo policies need to know that `payments.ChargeClient` is generated
+     from `payments.proto`, or that `fetchUser` calls an internal service even
+     though the implementation is outside the repository.
+   - Lifecycle should allow external symbols/modules plus summary facts, not
+     fake source files with misleading spans.
+
+6. Dependency and package manager setup
+   - Go modules, private registries, vendoring, pnpm/npm/yarn workspaces,
+     lockfiles, vendored generated packages, and missing toolchains can make
+     semantic analyzers partially unavailable.
+   - Lifecycle should declare setup checks, remediation hints, expected tools,
+     and whether partial facts are allowed.
+
+7. Test and coverage mapping
+   - Coverage reports are usually emitted in tool-specific paths and may refer
+     to generated, transpiled, or container paths.
+   - Lifecycle must be able to remap coverage paths to `FileId`s and connect
+     test targets to source targets before coverage/test metrics run.
+
+8. Incremental and CI scans
+   - CI may scan only changed paths, but call graph/dataflow need context
+     outside changed files. Local agents may want a fast focused scan while a
+     nightly job does max precision.
+   - Lifecycle should support scan profiles that declare context expansion
+     policy: changed files only, changed package, transitive reverse imports,
+     full workspace, or specific target sets.
+
+9. Polyglot boundaries
+   - TS frontend code may call Go services through generated clients, GraphQL,
+     protobuf, or OpenAPI. Security/dataflow policies may need source-to-sink
+     paths that cross language and artifact boundaries.
+   - Lifecycle must provide cross-language bridge facts rather than forcing
+     every language adapter to understand every framework.
+
+10. Agent repair loops
+    - An agent should be able to see "Go symbols setup missing because build tag
+      `enterprise` is required", edit `.polint/rules/src/integration.rs`, rerun
+      `polint check`, and get better facts.
+    - That means lifecycle output must be explainable through `polint explain
+      plan` or a future setup doctor command, not only visible in debug logs.
+
+### Recommended extension model
+
+Split lifecycle into three product surfaces:
+
+1. Configuration builders
+   - Shape analyzer inputs before expensive work starts.
+   - Examples: include roots, source roots, generated roots, Go package
+     patterns, build tags, TS projects, resolver aliases, known globals,
+     coverage report paths, scan profile.
+
+2. Declared commands
+   - Run setup/generation/metadata commands with explicit inputs, environment,
+     outputs, and cache policy.
+   - Examples: schema metadata exporter, codegen dry run, build-system query,
+     coverage report normalizer, service registry dump.
+
+3. Typed fact providers
+   - Add validated fact drafts that generic analyzers cannot know.
+   - Examples: external symbols, framework entrypoints, generated references,
+     service ownership, taint sources/sinks, sanitizer summaries, dependency
+     injection edges.
+
+Sketch:
+
+```rust
+pub trait ScanLifecycle {
+    fn configure_workspace(&self, ctx: &mut WorkspaceCtx<'_>) -> LifecycleResult;
+    fn configure_plan(&self, ctx: &mut PlanCtx<'_>) -> LifecycleResult;
+    fn configure_analyzers(&self, ctx: &mut AnalyzerCtx<'_>) -> LifecycleResult;
+    fn before_derivation(&self, ctx: &mut DerivationCtx<'_>) -> LifecycleResult;
+    fn provide_facts(&self, ctx: &mut FactProviderCtx<'_>) -> LifecycleResult;
+    fn after_analysis(&self, ctx: &mut AfterAnalysisCtx<'_>) -> LifecycleResult;
+}
+
+pub struct AnalysisManifest {
+    pub scan_profile: ScanProfile,
+    pub units: Vec<AnalysisUnit>,
+    pub analyzer_configs: Vec<AnalyzerConfig>,
+    pub command_outputs: Vec<CommandOutputRef>,
+    pub external_fact_sets: Vec<ExternalFactSetRef>,
+    pub digest_inputs: Vec<DigestInput>,
+}
+```
+
+The manifest is the lifecycle product. The engine then lowers it into
+`AnalysisPlan`, language analyzer invocations, derived analysis stages, cache
+digests, and capability support rows.
+
+### Analysis units
+
+Add an internal concept of `AnalysisUnit` before adding many lifecycle hooks.
+An analysis unit is a stable scope of semantic analysis, not necessarily a
+directory:
+
+```rust
+pub struct AnalysisUnit {
+    pub id: AnalysisUnitId,
+    pub label: String,
+    pub root: PathBuf,
+    pub languages: Vec<Language>,
+    pub source_roots: Vec<PathBuf>,
+    pub generated_roots: Vec<PathBuf>,
+    pub variant: Option<VariantId>,
+}
+```
+
+Examples:
+
+- Go package pattern group under one `go.mod`.
+- TS project rooted at one `tsconfig.json`.
+- Generated API package described by a schema file.
+- Service boundary that owns several packages across languages.
+
+Symbols, modules, call graph nodes, CFG nodes, dataflow summaries, coverage
+facts, and test metrics should all be able to point back to an `AnalysisUnitId`
+when unit identity affects interpretation.
+
+### Analyzer profiles
+
+Lifecycle should let users choose precision/cost explicitly:
+
+```rust
+pub enum PrecisionProfile {
+    FastSyntax,
+    LocalSemantic,
+    ProjectSemantic,
+    WholeProgram,
+}
+```
+
+Suggested behavior:
+
+- `FastSyntax`: parser facts, cheap metrics, imports; no sidecars.
+- `LocalSemantic`: Oxc semantic local symbols/references, Go syntax fallback.
+- `ProjectSemantic`: Go package/type sidecar, TS project resolver, module-linked
+  exports/imports.
+- `WholeProgram`: call graph, CFG, interprocedural summaries, dataflow,
+  generated/external provider facts.
+
+Rules still request capabilities through typed fact views. Profiles affect how
+providers try to satisfy them and what precision/status they report.
+
+### Command model
+
+Command hooks need build-system-like discipline. A command is acceptable only if
+polint can explain and hash the parts that affect facts.
+
+```rust
+ctx.command("repo-metadata")
+    .program("pnpm")
+    .args(["exec", "repo-metadata", "--json"])
+    .input("pnpm-lock.yaml")
+    .input("tools/repo-metadata/**")
+    .env("NODE_ENV", "production")
+    .output_json::<RepoMetadata>()?;
+```
+
+Rules:
+
+- Declared inputs and env vars participate in the plan/cache digest.
+- Consumed stdout, output files, and normalized JSON participate in the digest.
+- Undeclared reads should be diagnosed in strict mode, or mark facts
+  uncacheable in permissive mode.
+- Commands are isolated to lifecycle/setup stages, never run from rule
+  evaluation.
+- Command failures create setup diagnostics with remediation hints.
+
+Do not require perfect tracing in Phase 13. Start with explicit declarations and
+make the contract strict enough that cache bugs are visible.
+
+### Fact provider contracts
+
+Fact providers should emit drafts through typed builders:
+
+```rust
+ctx.symbols()
+    .external_symbol("payments.ChargeClient")
+    .kind(SymbolKind::Class)
+    .origin("protobuf")
+    .source("proto/payments.proto")
+    .precision(SymbolPrecision::ExactSemantic);
+
+ctx.call_graph()
+    .entrypoint("http route")
+    .target_symbol(handler)
+    .origin("framework-router")
+    .precision(CallGraphPrecision::FrameworkDeclared);
+
+ctx.dataflow()
+    .summary(function)
+    .source(parameter("request.body"))
+    .sink(call("db.query"))
+    .kind(DataFlowSummaryKind::Taint)
+    .precision(DataFlowPrecision::RepoProvided);
+```
+
+Every draft should require:
+
+- origin/provider name
+- precision/status
+- source path or metadata path where possible
+- digest input
+- optional remediation hint
+- validation against existing `FileId`, `ModuleNodeId`, or `SymbolId` when it
+  references engine-owned facts
+
+Provider facts should never silently override engine facts. If a provider
+contradicts the analyzer, the engine should either keep both with different
+origins/precision or emit an ambiguity/setup diagnostic.
+
+### Dependency DAG for future analyses
+
+The lifecycle API should feed a dependency DAG like this:
+
+```text
+workspace config + CLI paths
+  -> lifecycle configure_workspace
+  -> file discovery / virtual files / generated roots
+  -> rule capability collection
+  -> lifecycle configure_plan
+  -> analysis manifest + digest inputs
+  -> syntax adapters
+  -> lifecycle configure_analyzers
+  -> module graph
+  -> symbols/references
+  -> lifecycle before_derivation/provide_facts
+  -> call graph
+  -> CFG
+  -> dataflow summaries
+  -> coverage/test metrics
+  -> lifecycle after_analysis
+  -> rules
+```
+
+This ordering is intentionally layered:
+
+- Module graph owns file/package/module relationships.
+- Symbols/references own stable identity.
+- Call graph consumes symbols, references, module graph, and framework
+  entrypoints.
+- CFG consumes parsed function bodies and stable function/symbol IDs.
+- Dataflow consumes CFG, symbols, call graph, and summaries.
+- Coverage/test metrics consume path remapping, source ownership, and stable
+  function/test identities.
+
+Lifecycle hooks should not be able to reorder this pipeline. They should provide
+inputs and augmentation points at fixed boundaries so cache digests, diagnostics,
+and capability support remain deterministic.
+
+### How this plays into call graph
+
+Call graph needs more lifecycle help than symbols:
+
+- Entrypoints: HTTP routes, cron jobs, queue handlers, CLI commands, test
+  runners, generated framework callbacks.
+- Dynamic dispatch: dependency injection, service locators, registration
+  functions, component callbacks, event emitters.
+- External calls: SDK/client methods representing services outside the repo.
+- Generated call edges: GraphQL resolvers, protobuf service handlers, OpenAPI
+  clients.
+
+Recommended fact shape:
+
+- `CallGraphNodeFact`: function/method/symbol plus analysis unit and variant.
+- `CallGraphEdgeFact`: caller, callee/candidates, edge kind, precision, origin.
+- `EntrypointFact`: source of reachability with origin and owning unit.
+- `ExternalCallSummaryFact`: external target, effect tags, precision.
+
+Lifecycle-provided call edges should be explicit and lower precision than
+compiler-confirmed direct calls unless the provider can prove exactness.
+
+### How this plays into CFG
+
+CFG is mostly language-adapter owned, but lifecycle still matters:
+
+- Build variants decide which functions exist.
+- Generated/virtual files need stable source mapping.
+- Framework callbacks may create synthetic entry nodes.
+- Analyzer profile decides whether CFG is built for every function or only for
+  functions reachable from requested rules/changed files.
+
+CFG facts should not encode repo-specific framework semantics directly. Keep CFG
+structural, then let call graph/dataflow use lifecycle-provided entrypoints and
+summaries to connect structural blocks to higher-level behavior.
+
+### How this plays into dataflow
+
+Dataflow is where lifecycle extensibility becomes decisive. Useful repo-local
+policies need:
+
+- sources: request bodies, env vars, secrets, generated clients, queue payloads,
+  GraphQL args, test fixtures
+- sinks: SQL execution, shell execution, logging, external service calls,
+  payment/refund actions, analytics events
+- sanitizers: validation helpers, escaping functions, auth checks, feature gates
+- barriers: trusted generated serializers, known framework boundaries
+- summaries: external libraries, generated clients, framework adapters,
+  unmodeled services
+
+Do not make rules encode those as ad hoc regexes. Lifecycle providers should add
+typed dataflow model facts:
+
+```rust
+pub struct DataFlowModelFact {
+    pub target: SymbolId,
+    pub kind: DataFlowModelKind,
+    pub argument: Option<ParameterSelector>,
+    pub return_value: bool,
+    pub effect: DataFlowEffect,
+    pub origin: FactOrigin,
+    pub precision: DataFlowPrecision,
+}
+```
+
+Then the dataflow engine computes over the combined model. Rules consume
+`DataFlow<'_>` views such as `paths_from`, `flows_to`, `unmodeled_sinks`, and
+`setup_gaps`; they should not run provider code themselves.
+
+### Cache and invalidation implications
+
+Lifecycle code introduces new invalidation inputs:
+
+- integration Rust source digest
+- declared metadata files
+- command program/args/env
+- command output digests
+- analyzer version and sidecar version
+- scan profile
+- analysis unit definitions
+- build variant settings
+- provider fact-set schema versions
+
+Separate stable identity from volatile location data. For example, a generated
+client symbol can keep a stable ID based on schema identity while its generated
+file span changes. This mirrors the early-cutoff lesson from incremental
+systems: avoid letting byte positions invalidate higher-level analyses unless
+the higher-level meaning changed.
+
+Each derived stage should declare:
+
+- required upstream capabilities
+- optional upstream augmentations
+- digest inputs
+- output precision/status rules
+- invalidation granularity: file, package, analysis unit, or whole workspace
+
+This keeps future `call_graph`, `cfg`, and `dataflow` providers from each
+inventing their own cache model.
+
+### Public API staging
+
+Do not ship the whole lifecycle surface in Phase 13. Stage it:
+
+1. Internal `AnalysisManifest` and analysis unit model.
+2. Public analyzer configuration lifecycle for Go and TS/JS only:
+   `go.patterns`, `go.build_tags`, `go.include_tests`, `typescript.project`,
+   `typescript.alias`, `typescript.known_global`.
+3. Command declarations for metadata only after the digest model exists.
+4. Symbol/module external fact providers.
+5. Call graph entrypoint/external call providers.
+6. Dataflow source/sink/sanitizer/summary providers.
+7. Coverage/test path remapping providers.
+
+The key architectural constraint: adding lifecycle extensibility for symbols
+should make call graph/dataflow easier later, not commit polint to a broad
+mutable plugin API now.
+
 ## Data Model Recommendation
 
 Add fact IDs:
@@ -1025,3 +1465,21 @@ Primary sources checked:
   https://arxiv.org/abs/2603.24837
 - Language-agnostic taint paper:
   https://arxiv.org/abs/2506.06247
+- Bazel aspects, especially graph augmentation and code-generation use cases:
+  https://bazel.build/versions/8.0.0/extending/aspects
+- Pants plugin/target API, especially typed target addresses, field sets, and
+  dependency resolution:
+  https://www.pantsbuild.org/stable/docs/writing-plugins/the-rules-api/rules-and-the-target-api
+- CodeQL build options for compiled languages, especially build modes,
+  generated source correctness, Go test/vendor extraction, and manual setup:
+  https://docs.github.com/en/enterprise-cloud@latest/code-security/reference/code-scanning/codeql/codeql-build-options-and-steps-for-compiled-languages
+- Joern Code Property Graph docs, especially layered AST/CFG/dataflow overlays:
+  https://docs.joern.io/code-property-graph/
+- LLVM new pass manager docs, especially transitive analysis invalidation:
+  https://llvm.org/docs/NewPassManager.html
+- CodeQL Go DataFlow library, especially local vs global dataflow and summary
+  configuration:
+  https://codeql.github.com/codeql-standard-libraries/go/semmle/go/dataflow/DataFlow.qll/module.DataFlow.html
+- rust-analyzer durable incrementality note, especially early cutoff and avoiding
+  volatile position data in higher-level query identity:
+  https://rust-analyzer.github.io/blog/2023/07/24/durable-incrementality.html
