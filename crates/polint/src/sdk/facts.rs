@@ -6,8 +6,9 @@
 
 use crate::core::{
     AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
-    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, JsxAttributeFact, Language,
-    PackageFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language,
+    ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ResolutionStatus, ResolvedImportFact,
+    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -228,6 +229,129 @@ impl<'a> Imports<'a> {
             .imports()
             .iter()
             .filter_map(move |import| self.db.file(import.file).map(|file| (file, import)))
+    }
+}
+
+/// Resolved import fact view. Requesting this view maps to the `resolved_imports` capability.
+#[derive(Clone, Copy)]
+pub struct ResolvedImports<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ResolvedImports<'a> {
+    /// Returns all resolved import facts in deterministic database order.
+    pub fn all(self) -> &'a [ResolvedImportFact] {
+        self.db.resolved_imports()
+    }
+
+    /// Iterates all resolved import facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ResolvedImportFact> {
+        self.db.resolved_imports().iter()
+    }
+
+    /// Returns resolved import facts for a source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .filter(move |resolved| resolved.from_file == file)
+    }
+
+    /// Returns setup-missing, dynamic, unsupported, or unresolved imports for a source file.
+    pub fn unresolved_for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.for_file(file).filter(|resolved| {
+            matches!(
+                resolved.status,
+                ResolutionStatus::Unresolved
+                    | ResolutionStatus::SetupMissing
+                    | ResolutionStatus::Dynamic
+                    | ResolutionStatus::Unsupported
+            )
+        })
+    }
+
+    /// Returns the resolved import record for a syntactic import ID.
+    pub fn for_import(self, import: ImportId) -> Option<&'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .find(|resolved| resolved.import == import)
+    }
+}
+
+/// Module relationship graph fact view. Requesting this view maps to the `module_graph` capability.
+#[derive(Clone, Copy)]
+pub struct ModuleGraphFacts<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ModuleGraphFacts<'a> {
+    /// Returns all module graph nodes in deterministic database order.
+    pub fn nodes(self) -> &'a [ModuleNode] {
+        self.db.module_nodes()
+    }
+
+    /// Returns all module graph edges in deterministic database order.
+    pub fn edges(self) -> &'a [ModuleEdge] {
+        self.db.module_edges()
+    }
+
+    /// Returns the first file node for a source file ID, if one exists.
+    pub fn node_for_file(self, file: FileId) -> Option<ModuleNodeId> {
+        self.db
+            .module_nodes()
+            .iter()
+            .find(|node| node.file == Some(file))
+            .map(|node| node.id)
+    }
+
+    /// Returns outgoing graph edges for a node without cloning facts.
+    pub fn outgoing(self, node: ModuleNodeId) -> impl Iterator<Item = &'a ModuleEdge> {
+        self.db
+            .module_edges()
+            .iter()
+            .filter(move |edge| edge.from == node)
+    }
+
+    /// Returns incoming graph edges for a node without cloning facts.
+    pub fn incoming(self, node: ModuleNodeId) -> impl Iterator<Item = &'a ModuleEdge> {
+        self.db
+            .module_edges()
+            .iter()
+            .filter(move |edge| edge.to == node)
+    }
+
+    /// Returns the resolution status attached to a dependency edge.
+    pub fn dependency_status(self, edge: &ModuleEdge) -> ResolutionStatus {
+        edge.status
+    }
+
+    /// Computes deterministic breadth-first reachability over resolved or external edges.
+    pub fn reachable_from(self, node: ModuleNodeId) -> Vec<ModuleNodeId> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut reachable = Vec::new();
+
+        seen.insert(node);
+        queue.push_back(node);
+
+        while let Some(current) = queue.pop_front() {
+            for edge in self.outgoing(current) {
+                if !matches!(
+                    edge.status,
+                    ResolutionStatus::Resolved | ResolutionStatus::External
+                ) {
+                    continue;
+                }
+
+                if seen.insert(edge.to) {
+                    reachable.push(edge.to);
+                    queue.push_back(edge.to);
+                }
+            }
+        }
+
+        reachable
     }
 }
 
@@ -508,6 +632,8 @@ impl_fact_view!(FileMetrics);
 impl_fact_view!(FunctionMetrics);
 impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
+impl_fact_view!(ResolvedImports);
+impl_fact_view!(ModuleGraphFacts);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
 impl_fact_view!(TsComponents);
@@ -524,8 +650,10 @@ impl_fact_view!(TestSuiteMetrics, _db);
 mod tests {
     use super::*;
     use crate::core::{
-        AnalysisDb, ComplexityMetricFact, FileMetricFact, FunctionId, FunctionMetricFact, Language,
-        Span,
+        AnalysisDb, ComplexityMetricFact, FileMetricFact, FunctionId, FunctionMetricFact,
+        ImportFact, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, UnresolvedReason,
     };
     use std::path::PathBuf;
 
@@ -663,6 +791,273 @@ mod tests {
                 .map(|metric| metric.function)
                 .collect::<Vec<_>>(),
             vec![panel_function]
+        );
+    }
+
+    #[test]
+    fn module_graph_sdk_views_resolved_imports_queries() {
+        let mut db = AnalysisDb::new();
+        let source_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\nimport missing from './missing';\n".to_string(),
+        );
+        let target_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "export function Button() {}\n".to_string(),
+        );
+        let span = Span::point(source_file, 1, 1);
+        let local_import = db.push_import(ImportFact {
+            id: crate::core::ImportId(99),
+            file: source_file,
+            package: None,
+            path: "./button".to_string(),
+            span: span.clone(),
+            language: crate::core::Language::TypeScript,
+        });
+        let missing_import = db.push_import(ImportFact {
+            id: crate::core::ImportId(99),
+            file: source_file,
+            package: None,
+            path: "./missing".to_string(),
+            span,
+            language: crate::core::Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: local_import,
+                    from_file: source_file,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: missing_import,
+                    from_file: source_file,
+                    target_node: None,
+                    status: ResolutionStatus::Unresolved,
+                    precision: ResolutionPrecision::None,
+                    reason: Some(UnresolvedReason::NotFound),
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(source_file),
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(target_file),
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+
+        let resolved = ResolvedImports::build(&db);
+        assert_eq!(resolved.all().len(), 2);
+        assert_eq!(
+            resolved.iter().map(|fact| fact.id).collect::<Vec<_>>(),
+            vec![ResolvedImportId(0), ResolvedImportId(1)]
+        );
+        assert_eq!(
+            resolved
+                .for_file(source_file)
+                .map(|fact| fact.import)
+                .collect::<Vec<_>>(),
+            vec![local_import, missing_import]
+        );
+        assert_eq!(
+            resolved
+                .unresolved_for_file(source_file)
+                .map(|fact| fact.import)
+                .collect::<Vec<_>>(),
+            vec![missing_import]
+        );
+        assert_eq!(
+            resolved
+                .for_import(local_import)
+                .map(|fact| fact.target_node),
+            Some(Some(ModuleNodeId(1)))
+        );
+    }
+
+    #[test]
+    fn module_graph_sdk_views_graph_queries_are_deterministic() {
+        let mut db = AnalysisDb::new();
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\nimport React from 'react';\n".to_string(),
+        );
+        let button_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "import { token } from './tokens';\nexport function Button() {}\n".to_string(),
+        );
+        let token_file = db.add_file(
+            PathBuf::from("src/tokens.ts"),
+            "src/tokens.ts".to_string(),
+            "export const token = 'primary';\n".to_string(),
+        );
+        let app_import = db.push_import(ImportFact {
+            id: crate::core::ImportId(99),
+            file: app_file,
+            package: None,
+            path: "./button".to_string(),
+            span: Span::point(app_file, 1, 1),
+            language: crate::core::Language::TypeScript,
+        });
+        let react_import = db.push_import(ImportFact {
+            id: crate::core::ImportId(99),
+            file: app_file,
+            package: None,
+            path: "react".to_string(),
+            span: Span::point(app_file, 2, 1),
+            language: crate::core::Language::TypeScript,
+        });
+        let token_import = db.push_import(ImportFact {
+            id: crate::core::ImportId(99),
+            file: button_file,
+            package: None,
+            path: "./tokens".to_string(),
+            span: Span::point(button_file, 1, 1),
+            language: crate::core::Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: app_import,
+                    from_file: app_file,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: react_import,
+                    from_file: app_file,
+                    target_node: Some(ModuleNodeId(3)),
+                    status: ResolutionStatus::External,
+                    precision: ResolutionPrecision::ExternalPackage,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: token_import,
+                    from_file: button_file,
+                    target_node: Some(ModuleNodeId(2)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(app_file),
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(button_file),
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/tokens.ts".to_string(),
+                    file: Some(token_file),
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::External,
+                    label: "react".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(crate::core::Language::TypeScript),
+                },
+            ],
+            vec![
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(1),
+                    import: Some(app_import),
+                    resolved_import: Some(ResolvedImportId(0)),
+                    kind: ModuleEdgeKind::Imports,
+                    status: ResolutionStatus::Resolved,
+                },
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(3),
+                    import: Some(react_import),
+                    resolved_import: Some(ResolvedImportId(1)),
+                    kind: ModuleEdgeKind::DependsOn,
+                    status: ResolutionStatus::External,
+                },
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(1),
+                    to: ModuleNodeId(2),
+                    import: Some(token_import),
+                    resolved_import: Some(ResolvedImportId(2)),
+                    kind: ModuleEdgeKind::Imports,
+                    status: ResolutionStatus::Resolved,
+                },
+            ],
+        );
+
+        let graph = ModuleGraphFacts::build(&db);
+        assert_eq!(graph.nodes().len(), 4);
+        assert_eq!(graph.edges().len(), 3);
+        assert_eq!(graph.node_for_file(app_file), Some(ModuleNodeId(0)));
+        assert_eq!(
+            graph
+                .outgoing(ModuleNodeId(0))
+                .map(|edge| edge.to)
+                .collect::<Vec<_>>(),
+            vec![ModuleNodeId(1), ModuleNodeId(3)]
+        );
+        assert_eq!(
+            graph
+                .incoming(ModuleNodeId(2))
+                .map(|edge| edge.from)
+                .collect::<Vec<_>>(),
+            vec![ModuleNodeId(1)]
+        );
+        assert_eq!(
+            graph.dependency_status(&graph.edges()[1]),
+            ResolutionStatus::External
+        );
+        assert_eq!(
+            graph.reachable_from(ModuleNodeId(0)),
+            vec![ModuleNodeId(1), ModuleNodeId(3), ModuleNodeId(2)]
         );
     }
 }

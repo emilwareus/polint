@@ -16,6 +16,8 @@ v1.0 MVP shipped on 2026-05-02. It includes the Rust workspace, CLI/config/disco
 
 Phase 11 of v1.1 completed on 2026-05-09. Declared rule capabilities now produce an internal deterministic `AnalysisPlan`, the child rule host passes that plan to Go and TS/JS adapters before harvesting, adapter cache keys include the plan digest, and unsupported reserved capabilities produce structured `polint/capability` diagnostics.
 
+Phase 12 of v1.1 completed on 2026-05-11. Syntactic Go and TS/JS imports now flow into setup-aware resolved import facts and module/file/package/dependency graph facts exposed through typed SDK views for repo-local architecture rules.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -31,14 +33,20 @@ and public SDK access.
 **Target features:**
 
 - Capability-driven `AnalysisPlan` for enabled rules.
+- Resolved import and module relationship facts.
+- Symbols and references through the public SDK.
+- Direct and resolved call facts with resolution confidence.
 - Real control-flow facts for Go and TypeScript/JavaScript.
 - Coverage fact import for Go and TypeScript/JavaScript.
-- Resolved import and module relationship facts.
-- Direct call facts with resolution confidence.
-- Symbols and references through the public SDK.
 - Reusable test-suite metrics.
 - Python adapter with an explicit initial capability subset.
 - Java adapter with setup-aware initial capability subset.
+
+The longer-term target is a complete, agent-consumable static-analysis graph of
+the codebase: modules, symbols, references, calls, CFGs, test/coverage evidence,
+dataflow, taint, and interprocedural summaries. v1.1 should sequence toward
+that graph without promising perfect precision in the first implementation of
+each fact family.
 
 ## Requirements
 
@@ -68,9 +76,21 @@ and public SDK access.
 - [x] Pass the resolved analysis plan to Go and TS/JS adapters before fact harvesting. Validated in Phase 11: Capability-Driven Analysis Plan.
 - [x] Include requested capabilities and setup-sensitive analysis inputs in cache identity through the plan digest. Validated in Phase 11: Capability-Driven Analysis Plan.
 - [x] Report missing or unsupported requested capabilities as clear diagnostics or structured warnings. Validated in Phase 11: Capability-Driven Analysis Plan.
+- [x] Let rule authors read resolved import facts and unresolved import reasons through typed SDK fact views. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Resolve TS/JS imports through project-aware resolver setup including relative paths, package metadata, and `tsconfig` aliases where available. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Resolve Go imports through Go package/module metadata where setup is available. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Expose file, package, module, and dependency relationships for architecture rules through typed module graph facts. Validated in Phase 12: Resolved Imports and Module Relationships.
 
 ### Active
 
+- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
+- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
+- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
+- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
+- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
+- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
+- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
+- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
 - [ ] **CFG-01**: Rule authors can read real per-function control-flow facts through typed SDK fact views.
 - [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
 - [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared control-flow model.
@@ -79,18 +99,6 @@ and public SDK access.
 - [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
 - [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
 - [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
-- [ ] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
-- [ ] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
-- [ ] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [ ] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
-- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
-- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
-- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
-- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
-- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
-- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
-- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
-- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
 - [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through typed SDK fact views.
 - [ ] **TEST-02**: Go metrics aggregate existing test facts into assertions, subtests, table rows, evidence terms, and related test evidence.
 - [ ] **TEST-03**: TS/JS metrics detect common Jest/Vitest/Mocha-style test structures and assertion evidence.
@@ -135,6 +143,7 @@ and public SDK access.
 - v1.0 MVP was audited, archived, tagged, and closed on 2026-05-02.
 - Quick task 260502-ehi removed all product built-in policy rules from the CLI while keeping example policies as external rule code.
 - Quick task 260502-qsd made every example self-contained, with one local Rust rule crate under `examples/<name>/.polint/rules/` and no shared example rule pack.
+- Phase 12 completed on 2026-05-11 through GSD plan execution, code review fixes, full workspace regression, clippy, and verification on `main`, closing resolved imports and module relationship facts for Go and TS/JS without claiming symbols, call graph, CFG, dataflow, type checking, or project-level graph caching.
 
 ## Constraints
 
@@ -196,4 +205,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-09 after completing Phase 11 Capability-Driven Analysis Plan*
+*Last updated: 2026-05-11 after completing Phase 12 Resolved Imports and Module Relationships*

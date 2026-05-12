@@ -212,9 +212,35 @@ is a versioned report object with a `diagnostics` array (not a bare array at the
 root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
 Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
 for plain text. Use `polint check --format sarif` for CI upload paths. Use
-`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
---shortstat` or `polint check --stat` for human scan summaries; these flags do
-not add prose to JSON or SARIF output.
+	`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
+	--shortstat` or `polint check --stat` for human scan summaries; these flags do
+	not add prose to JSON or SARIF output.
+
+Use a compact YAML baseline at `.polint/baseline.yaml` when existing findings
+should not block new work:
+
+```bash
+polint baseline create
+polint check --baseline --new-only
+polint baseline update
+```
+
+The baseline file has one string per entry:
+
+```yaml
+version: 1
+
+baseline:
+  - "local/backend-context-propagation e337fbb73d44b2b7 backend/app/handler.go"
+ignore:
+  - "local/no-raw-colors 1b7c9a00e493aa21 frontend/Button.tsx"
+```
+
+`baseline` is existing debt; it stays visible but does not fail. `ignore` is a
+central accepted suppression; it is hidden from output and failure. Baseline
+matching uses `rule_id + fingerprint` and refreshes unambiguous moved paths;
+ignore matching is file-specific so unrelated findings with the same fingerprint
+stay visible.
 
 Use `polint ignores` when you need to find suppressions that should be fixed:
 
@@ -305,6 +331,16 @@ rules. `FileMetrics<'_>` exposes file line/byte/function counts,
 exposes per-function syntax-level cyclomatic complexity. A composite rule can
 request several of these typed views in one `#[polint::rule]` signature.
 
+## Module Relationship Facts
+
+For architecture policies, request `ResolvedImports<'_>` to inspect resolution
+status and unresolved reasons, and request `ModuleGraphFacts<'_>` to inspect
+file, package, module, and dependency edges. Both views are exported by
+`polint::sdk::prelude::*`; keep rules on the typed fact-view path. When
+relationship rules run, `Unresolved`, `Dynamic`, and `Unsupported` statuses are
+inspectable fact data. `SetupMissing` is reported as a `polint/capability`
+diagnostic and blocks requesting rules until resolver setup exists.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs
@@ -335,6 +371,7 @@ allow_files = ["src/theme/**"]
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
 - Compose `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` for higher-level quality rules instead of making rules depend on other rules.
+- For architecture rules, compose `ResolvedImports<'_>` and `ModuleGraphFacts<'_>` instead of parsing import strings yourself.
 - Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.

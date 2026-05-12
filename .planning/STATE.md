@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: planning
-stopped_at: Phase 11 complete
-last_updated: "2026-05-09T12:00:31.000Z"
-last_activity: 2026-05-10
+stopped_at: Completed quick task 260512-aop
+last_updated: "2026-05-12T08:59:00.000Z"
+last_activity: 2026-05-12
 progress:
   total_phases: 9
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 11
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 8
+  percent: 100
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 12 — CFG Facts for Go and TS/JS
+**Current focus:** Phase 13 — Symbols and References
 
 ## Current Status
 
@@ -57,15 +57,16 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 - Human-readable capability roadmap lives in `docs/roadmap/00_ROADMAP.md`.
 - v1.1 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.1 roadmap is defined in `.planning/ROADMAP.md`.
-- Next action: discuss and plan Phase 12.
+- Phase 12 shipped in PR #10: https://github.com/emilwareus/polint/pull/10.
+- Next action: discuss and plan Phase 13, Symbols and References.
 
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to plan
-Phase: 12 - CFG Facts for Go and TS/JS
+Phase: 13 - Symbols and References
 Plan: Not started
-Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overwriting existing installed polint skills
+Last activity: 2026-05-12 - Completed quick task 260512-yml: Replace unsound serde_yml dependency
 
 ## Quick Tasks Completed
 
@@ -93,17 +94,21 @@ Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overw
 | 260510-dbv | Tighten public CLI surface and remove internal debug commands | 2026-05-10 | uncommitted | [260510-dbv-tighten-public-cli-surface-and-remove-in](./quick/260510-dbv-tighten-public-cli-surface-and-remove-in/) |
 | 260510-dzr | Implement reusable derived metric signals for rules | 2026-05-10 | uncommitted | [260510-dzr-implement-reusable-derived-metric-signal](./quick/260510-dzr-implement-reusable-derived-metric-signal/) |
 | 260510-eur | Prompt before overwriting existing installed polint skills | 2026-05-10 | uncommitted | [260510-eur-prompt-before-overwriting-existing-insta](./quick/260510-eur-prompt-before-overwriting-existing-insta/) |
+| 260511-gyu | Add compact YAML baseline and central ignore ratchet workflow | 2026-05-11 | uncommitted | [260511-gyu-add-compact-yaml-baseline-and-central-ig](./quick/260511-gyu-add-compact-yaml-baseline-and-central-ig/) |
+| 260511-i7m | Make the baseline file live only at .polint/baseline.yaml and remove user-selectable baseline paths | 2026-05-11 | uncommitted | [260511-i7m-make-the-baseline-file-live-only-at-poli](./quick/260511-i7m-make-the-baseline-file-live-only-at-poli/) |
+| 260512-aop | Fix review findings for baseline and module relationships | 2026-05-12 | 30098c6 | [260512-aop-fix-review-findings-for-baseline-and-mod](./quick/260512-aop-fix-review-findings-for-baseline-and-mod/) |
+| 260512-yml | Replace unsound serde_yml dependency | 2026-05-12 | c2f678e | [260512-yml-replace-unsound-serde-yml-dependency](./quick/260512-yml-replace-unsound-serde-yml-dependency/) |
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 11 | Complete | Capability-driven AnalysisPlan; requirements PLAN-01 through PLAN-04 |
-| 12 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
-| 13 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
-| 14 | Pending | Resolved imports and module graph; requirements MOD-01 through MOD-04 |
-| 15 | Pending | Direct call graph facts; requirements CALL-01 through CALL-04 |
-| 16 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
+| 12 | Complete | Resolved imports and module graph; requirements MOD-01 through MOD-04; verification passed |
+| 13 | Pending | Symbols and references; requirements SYM-01 through SYM-04 |
+| 14 | Pending | Direct and resolved call graph facts; requirements CALL-01 through CALL-04 |
+| 15 | Pending | CFG facts for Go and TS/JS; requirements CFG-01 through CFG-04 |
+| 16 | Pending | Coverage facts import; requirements COV-01 through COV-04 |
 | 17 | Pending | Test suite metrics; requirements TEST-01 through TEST-04 |
 | 18 | Pending | Python adapter with explicit initial capability tier; requirements PY-01 through PY-04 |
 | 19 | Pending | Java adapter with setup-aware initial capability tier; requirements JAVA-01 through JAVA-04 |
@@ -174,6 +179,24 @@ Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overw
 - [Static capability derivation]: Normal rule authors use `#[polint::rule]` functions with typed fact-view parameters; capabilities are generated from those parameter types instead of handwritten declarations.
 - [Static capability derivation]: `RuleCtx` is the diagnostics/options/path/support surface. Broad fact access belongs in typed SDK fact views, not the normal context API.
 - [Static capability derivation]: `Rule` is an opaque value, not a public trait. Do not preserve manual `impl Rule` compatibility paths during beta; update examples, scaffolds, and tests to the typed macro path instead.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolved imports and module graph are known capabilities but stay Unsupported until Plan 12-02 wires the provider.
+- [Phase 12-resolved-imports-and-module-relationships]: ModuleGraphFacts::reachable_from uses deterministic breadth-first traversal over Resolved and External edges only.
+- [Phase 12-resolved-imports-and-module-relationships]: Public relationship facts expose polint-owned IDs and status enums, not resolver outputs or graph internals.
+- [Phase 12-resolved-imports-and-module-relationships]: Run module graph derivation after Go and TS/JS syntax analysis and before derived metrics or rule execution.
+- [Phase 12-resolved-imports-and-module-relationships]: Keep TS/JS and Go resolver outputs as crate-private drafts; public facts expose only polint-owned IDs and status enums.
+- [Phase 12-resolved-imports-and-module-relationships]: Do not synthesize a root module node for an empty repository; empty relationship views stay empty.
+- [Phase 12-resolved-imports-and-module-relationships]: Provider-derived setup-missing support rows emit their own capability diagnostics before rules are blocked.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolver output paths are never exposed publicly; they are normalized and mapped to FileIds before becoming relationship facts.
+- [Phase 12-resolved-imports-and-module-relationships]: Use symlinks:false on the TS resolver so path identity stays lexical and matches the AnalysisDb file index.
+- [Phase 12-resolved-imports-and-module-relationships]: Derive TS module ownership from nearest package.json or tsconfig.json, preferring package names for labels.
+- [Phase 12-resolved-imports-and-module-relationships]: Keep the dynamic import sentinel crate-private and convert it into explicit Dynamic relationship facts in the provider.
+- [Phase 12-resolved-imports-and-module-relationships]: Go metadata is loaded only from repository-root Go modules using fixed go list command execution with GOFLAGS removed.
+- [Phase 12-resolved-imports-and-module-relationships]: Go package graph nodes are labeled by import path, while Go module nodes are labeled by the go list module path.
+- [Phase 12-resolved-imports-and-module-relationships]: Missing Go module setup remains visible as setup-missing facts/support and blocks requesting rules through the provider support merge.
+- [Phase 12-resolved-imports-and-module-relationships]: TS/JS local import graph edges originate from the importing file node so architecture rules can detect file-level boundaries.
+- [Phase 12-resolved-imports-and-module-relationships]: TS/JS external package imports remain module-level DependsOn edges so project dependency relationships stay compact.
+- [Phase 12-resolved-imports-and-module-relationships]: Resolved import docs treat SetupMissing, Dynamic, Unsupported, and Unresolved as public data, not hidden failures.
+- [Phase 12-resolved-imports-and-module-relationships]: Test-only Go graph helper methods are cfg(test) rather than suppressed with lint allowances.
 
 ## Performance Metrics
 
@@ -208,11 +231,16 @@ Last activity: 2026-05-10 - Completed quick task 260510-eur: Prompt before overw
 | Phase 11-capability-driven-analysis-plan P01 | 8 min | 2 tasks | 4 files |
 | Phase 11-capability-driven-analysis-plan P02 | 16m 12s | 2 tasks | 9 files |
 | Phase 11-capability-driven-analysis-plan P03 | 22m 23s | 3 tasks | 7 files |
+| Phase 12-resolved-imports-and-module-relationships P01 | 11m 4s | 3 tasks | 5 files |
+| Phase 12-resolved-imports-and-module-relationships P02 | 1h 1m | 3 tasks | 11 files |
+| Phase 12-resolved-imports-and-module-relationships P03 | 17 min | 3 tasks | 9 files |
+| Phase 12-resolved-imports-and-module-relationships P04 | 16m 9s | 3 tasks | 3 files |
+| Phase 12-resolved-imports-and-module-relationships P05 | 30 min | 3 tasks | 8 files |
 
 ## Session
 
-**Last Date:** 2026-05-09T08:36:15.422Z
-**Stopped At:** Completed 11-03-PLAN.md
+**Last Date:** 2026-05-11T16:53:45.126Z
+**Stopped At:** Completed 12-resolved-imports-and-module-relationships-05-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution

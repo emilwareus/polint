@@ -318,6 +318,8 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident)> {
     let method = match segment.ident.to_string().as_str() {
         "SourceFiles" | "Packages" | "Functions" => "syntax",
         "Imports" => "imports",
+        "ResolvedImports" => "resolved_imports",
+        "ModuleGraphFacts" => "module_graph",
         "Cfg" => "cfg",
         "CallGraph" => "call_graph",
         "DataFlow" => "dataflow",
@@ -442,6 +444,12 @@ mod tests {
         assert_eq!(capability("FileMetrics<'_>"), "file_metrics");
         assert_eq!(capability("FunctionMetrics<'_>"), "function_metrics");
         assert_eq!(capability("ComplexityMetrics<'_>"), "complexity_metrics");
+        assert_eq!(capability("ResolvedImports<'_>"), "resolved_imports");
+        // capability("polint::sdk::facts::ModuleGraphFacts<'_>") maps to module_graph.
+        assert_eq!(
+            capability("polint::sdk::facts::ModuleGraphFacts<'_>"),
+            "module_graph"
+        );
         assert_eq!(capability("StringLiterals<'_>"), "string_literals");
         assert_eq!(
             capability("polint::sdk::facts::JsxAttributes<'_>"),

@@ -24,6 +24,9 @@ use std::sync::Arc;
 
 const TS_CACHE_SCHEMA: &str = "ts-facts-v1";
 
+// Relationship resolution converts this non-string import expression sentinel to Dynamic.
+pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
+
 /// Convenience wrapper used by TS-adapter unit tests (no cache, sequential).
 #[cfg(test)]
 pub(crate) fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
@@ -482,6 +485,9 @@ fn collect_require_imports_from_expression(
         Expression::FunctionExpression(function) => {
             collect_require_imports_from_function(db, ctx, function);
         }
+        Expression::ImportExpression(import_expression) => {
+            push_dynamic_import_expression(db, ctx, import_expression);
+        }
         Expression::LogicalExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.left);
             collect_require_imports_from_expression(db, ctx, &expression.right);
@@ -729,7 +735,37 @@ fn collect_require_imports_from_argument(
         Argument::ParenthesizedExpression(expression) => {
             collect_require_imports_from_expression(db, ctx, &expression.expression);
         }
+        Argument::ImportExpression(import_expression) => {
+            push_dynamic_import_expression(db, ctx, import_expression);
+        }
         _ => {}
+    }
+}
+
+fn push_dynamic_import_expression(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    import_expression: &oxc_ast::ast::ImportExpression<'_>,
+) {
+    match &import_expression.source {
+        Expression::StringLiteral(path) => {
+            push_module_import(
+                db,
+                ctx.file,
+                path.value.as_str(),
+                span_from_oxc(ctx.file, ctx.source, path.span),
+                ctx.language,
+            );
+        }
+        _ => {
+            push_module_import(
+                db,
+                ctx.file,
+                DYNAMIC_IMPORT_SPECIFIER,
+                span_from_oxc(ctx.file, ctx.source, import_expression.span),
+                ctx.language,
+            );
+        }
     }
 }
 
@@ -738,27 +774,10 @@ fn collect_require_imports_from_array_element(
     ctx: TsAstCtx<'_>,
     element: &ArrayExpressionElement<'_>,
 ) {
-    match element {
-        ArrayExpressionElement::SpreadElement(spread) => {
-            collect_require_imports_from_expression(db, ctx, &spread.argument);
-        }
-        ArrayExpressionElement::CallExpression(call) => {
-            if callee_text(&call.callee).as_deref() == Some("require")
-                && let Some(Argument::StringLiteral(path)) = call.arguments.first()
-            {
-                push_module_import(
-                    db,
-                    ctx.file,
-                    path.value.as_str(),
-                    span_from_oxc(ctx.file, ctx.source, path.span),
-                    ctx.language,
-                );
-            }
-            for argument in &call.arguments {
-                collect_require_imports_from_argument(db, ctx, argument);
-            }
-        }
-        _ => {}
+    if let Some(expression) = element.as_expression() {
+        collect_require_imports_from_expression(db, ctx, expression);
+    } else if let ArrayExpressionElement::SpreadElement(spread) = element {
+        collect_require_imports_from_expression(db, ctx, &spread.argument);
     }
 }
 

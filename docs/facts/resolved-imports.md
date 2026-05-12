@@ -1,0 +1,135 @@
+# Resolved Imports And Module Graph
+
+`ResolvedImports<'_>` and `ModuleGraphFacts<'_>` expose setup-aware import
+resolution and module relationship facts to repo-local rules. Rules request
+these views as typed parameters in a `#[polint::rule]` function, and polint
+derives the `resolved_imports` and `module_graph` capabilities from those
+parameters.
+
+Start rules with:
+
+```rust
+use polint::sdk::prelude::*;
+```
+
+## ResolvedImports<'_>
+
+`ResolvedImports<'_>` is import-centric. It returns one `ResolvedImportFact` for
+each syntactic `ImportFact` that polint harvested, including imports that did
+not resolve.
+
+Query methods:
+
+| Method | Meaning |
+|--------|---------|
+| `all()` | Returns all resolved import facts in deterministic database order. |
+| `iter()` | Iterates all resolved import facts. |
+| `for_file(file)` | Iterates resolved imports from one source file. |
+| `unresolved_for_file(file)` | Iterates non-resolved imports from one source file. For running relationship rules this means `Unresolved`, `Dynamic`, or `Unsupported`; `SetupMissing` is reported as a capability diagnostic before rule execution. |
+| `for_import(import)` | Returns the resolved import fact for a syntactic `ImportId`. |
+
+`ResolvedImportFact` fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable ID for this analysis run. |
+| `import` | The syntactic `ImportId` this fact came from. |
+| `from_file` | Source file containing the import. |
+| `target_node` | Resolved module graph node, when one exists. |
+| `status` | `ResolutionStatus` for the import. |
+| `precision` | `ResolutionPrecision` for the result. |
+| `reason` | Optional `UnresolvedReason` for uncertain results. |
+
+## ModuleGraphFacts<'_>
+
+`ModuleGraphFacts<'_>` is graph-centric. It exposes normalized file, package,
+module, and external dependency nodes plus relationship edges between them.
+
+Query methods:
+
+| Method | Meaning |
+|--------|---------|
+| `nodes()` | Returns all `ModuleNode` records in deterministic order. |
+| `edges()` | Returns all `ModuleEdge` records in deterministic order. |
+| `node_for_file(file)` | Returns the first file node for a source file. |
+| `outgoing(node)` | Iterates outgoing edges for a node. |
+| `incoming(node)` | Iterates incoming edges for a node. |
+| `dependency_status(edge)` | Returns the `ResolutionStatus` attached to an edge. |
+| `reachable_from(node)` | Computes deterministic breadth-first reachability over `Resolved` and `External` edges. |
+
+`ModuleNode` fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable node ID for this analysis run. |
+| `kind` | `File`, `Package`, `Module`, or `External`. |
+| `label` | Repo-relative path, package name, module label, or external package label. |
+| `file` | Source `FileId` for file nodes. |
+| `package` | Source `PackageId` when the node comes from a package fact. |
+| `language` | Language family when the node is language-specific. |
+
+`ModuleEdge` fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Stable edge ID for this analysis run. |
+| `from` | Source `ModuleNodeId`. |
+| `to` | Target `ModuleNodeId`. |
+| `import` | Syntactic `ImportId` when the edge came from an import. |
+| `resolved_import` | `ResolvedImportId` when the edge came from a resolved import fact. |
+| `kind` | `Contains`, `Imports`, or `DependsOn`. |
+| `status` | Resolution status for dependency edges. |
+
+## Status, Precision, And Reasons
+
+`ResolutionStatus` is the main control point for architecture rules:
+
+| Status | Meaning |
+|--------|---------|
+| `Resolved` | Target is a repo file, package, or module node. |
+| `External` | Target is outside the repo, including standard library and package-manager dependencies. |
+| `Unresolved` | Resolver setup existed, but no target was found. |
+| `SetupMissing` | Required resolver setup was absent or failed; requesting relationship rules receive `polint/capability` diagnostics and do not run. |
+| `Dynamic` | Import shape is dynamic and cannot be resolved statically. |
+| `Unsupported` | Language or import form is known but not implemented. |
+
+`ResolutionPrecision` currently includes `ExactFile`, `Package`,
+`ExternalPackage`, `Heuristic`, and `None`.
+
+`UnresolvedReason` currently includes `NotFound`, `SetupMissing`,
+`DynamicExpression`, `UnsupportedLanguage`, `UnsupportedImport`, `ResolverError`,
+and `OutsideWorkspace`.
+
+## Setup-Sensitive Behavior
+
+- TS/JS resolution uses `oxc_resolver` with project-aware settings such as
+  package metadata, extension aliases, and `tsconfig` discovery.
+- Go resolution uses `go list -json ./...` only when a root `go.mod` exists.
+  The command runs with fixed arguments from the repository root.
+- Standard library imports and package-manager dependencies are reported as
+  `External`.
+- `Unresolved`, `Dynamic`, and `Unsupported` imports remain visible as facts to
+  running relationship rules instead of being dropped.
+- `SetupMissing` is surfaced through `polint/capability` diagnostics for
+  requesting rules, and those rules do not execute with placeholder relationship
+  facts.
+
+## Limits
+
+These facts are useful for architecture policies, but they are not a full
+semantic graph:
+
+- no TypeScript type checking
+- no Go type checking
+- no symbols
+- no call graph
+- no CFG
+- no coverage
+- no dataflow or taint analysis
+- no project-level graph cache
+- no public exposure of raw `oxc_resolver` output, `go list` JSON, absolute
+  resolver paths, AST nodes, or graph internals
+
+More precise symbol, call, CFG, coverage, and dataflow facts are later fact
+families. Rules should treat uncertain `ResolutionStatus` and
+`UnresolvedReason` values as part of the contract rather than as errors.

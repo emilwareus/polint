@@ -584,6 +584,7 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
         .collect()
 }
 
+#[rustfmt::skip]
 fn support_for(capability: &str) -> CapabilityAccumulator {
     let (status, reason, hint, docs_path) = match capability {
         "syntax" | "imports" | "go_tests" | "branch_obligations" | "file_metrics"
@@ -591,6 +592,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         | "string_literals" | "jsx_attributes" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
+        "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
@@ -977,6 +979,41 @@ mod tests {
             ]
         );
         assert!(plan.requests_any_capability(&["function_metrics"]));
+    }
+
+    #[test]
+    fn analysis_plan_supports_module_relationship_capabilities() {
+        let plan =
+            AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+        let capabilities = plan.capabilities();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|capability| capability.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["module_graph", "resolved_imports"]
+        );
+
+        for capability in capabilities {
+            assert_eq!(
+                capability.status,
+                crate::core::CapabilitySupportStatus::Supported
+            );
+            assert_eq!(capability.reason, None);
+            assert_eq!(capability.hint, None);
+            assert_eq!(capability.docs_path, None);
+        }
+
+        assert_eq!(
+            plan.support_view().status_for("resolved_imports"),
+            Some(crate::core::CapabilitySupportStatus::Supported)
+        );
+        assert_eq!(
+            plan.support_view().status_for("module_graph"),
+            Some(crate::core::CapabilitySupportStatus::Supported)
+        );
+        assert!(plan.diagnostics().is_empty());
     }
 
     #[test]

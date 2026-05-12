@@ -1030,7 +1030,12 @@ pub(crate) fn fingerprint(parts: &[&str]) -> String {
     format!("{hash:016x}")
 }
 
-fn diagnostic_fingerprint(rule_id: &str, file: &str, range: TextRange, message: &str) -> String {
+pub(crate) fn diagnostic_fingerprint(
+    rule_id: &str,
+    file: &str,
+    range: TextRange,
+    message: &str,
+) -> String {
     let start_line = range.start_line.to_string();
     let start_col = range.start_col.to_string();
     let end_line = range.end_line.to_string();

@@ -172,6 +172,9 @@ fn analyze_and_run(
     let ts_diagnostics =
         analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
     diagnostics.extend(ts_diagnostics);
+    let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
+    let capability_support = module_graph.support_view(plan.support_view());
+    diagnostics.extend(module_graph.diagnostics);
     crate::metrics::derive_requested_metrics(&mut db, &plan);
     diagnostics.extend(run_rules_with_capability_support(
         &db,
@@ -179,7 +182,7 @@ fn analyze_and_run(
         &options,
         enabled.as_ref(),
         true,
-        plan.support_view(),
+        &capability_support,
     ));
     Ok((diagnostics, db, loaded))
 }

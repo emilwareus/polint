@@ -32,6 +32,34 @@ polint check --format json --fail-on error --only-rule 'local/*' path/to/dir
 `--stat` and `--shortstat` are human-output helpers. They do not append prose to
 JSON or SARIF output.
 
+## Baseline ratchets
+
+Use a compact YAML baseline when a repo has existing findings but CI should fail
+only on newly introduced policy violations. The baseline always lives at
+`.polint/baseline.yaml`:
+
+```bash
+polint baseline create
+polint check --baseline --new-only
+polint baseline update
+```
+
+The file uses one string per entry:
+
+```yaml
+version: 1
+
+baseline:
+  - "local/backend-context-propagation e337fbb73d44b2b7 backend/app/handler.go"
+ignore:
+  - "local/no-raw-colors 1b7c9a00e493aa21 frontend/Button.tsx"
+```
+
+`baseline` means existing debt; it does not fail CI. `ignore` means accepted
+central suppression; it is hidden from output and failure. Baseline matching uses
+`rule_id + fingerprint` and refreshes unambiguous moved paths; ignore matching
+is file-specific so unrelated findings with the same fingerprint stay visible.
+
 ## Ignore cleanup
 
 polint supports comment ignores such as
@@ -59,7 +87,7 @@ diagnostics (`polint/unused-ignore`, `polint/malformed-ignore`,
 - uses: actions/checkout@v6
 - uses: dtolnay/rust-toolchain@stable
 - run: cargo install polint --locked
-- run: polint check --format json --fail-on error
+- run: polint check --baseline --new-only --format json --fail-on error
 ```
 
 SARIF for GitHub Code Scanning: `polint check --format sarif` then
@@ -71,7 +99,8 @@ SARIF for GitHub Code Scanning: `polint check --format sarif` then
 > `docs/schemas/polint-report-v1.json`. Parse `diagnostics[]`; each item has
 > `rule_id`, `severity`, `file`, `range`, `message`, optional `fix`. Apply fixes
 > and re-run until the report is empty or only allowed severities remain. To
-> remove suppressed debt, run `polint ignores --stat --filter RULE_ID`, fix the
+> ratchet adoption, run `polint check --baseline --new-only`. To remove
+> suppressed debt, run `polint ignores --stat --filter RULE_ID`, fix the
 > underlying code, remove the ignore comment, and rerun `polint check`.
 
 ## Troubleshooting

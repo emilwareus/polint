@@ -1,4 +1,8 @@
 use crate::analysis_plan::AnalysisPlan;
+use crate::baseline::{
+    BaselineConfig, BaselineSummary, DEFAULT_BASELINE_PATH, classify_diagnostics, load_baseline,
+    render_baseline_summary, write_baseline,
+};
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{AnalysisDb, Language, Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
@@ -91,6 +95,8 @@ enum Command {
     AddSkill(skill::AddSkillArgs),
     /// Scaffold a repo-local Rust rule.
     NewRule(NewRuleArgs),
+    /// Create or update a compact YAML diagnostic baseline.
+    Baseline(BaselineArgs),
     /// Run enabled rules.
     Check(CheckArgs),
     /// Inspect polint comment-ignore directives and suppression statistics.
@@ -103,6 +109,49 @@ struct NewRuleArgs {
     language: String,
     /// Rule directory/name.
     rule_name: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct BaselineArgs {
+    #[command(subcommand)]
+    command: BaselineCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+enum BaselineCommand {
+    /// Write current diagnostics to .polint/baseline.yaml.
+    Create(BaselineCreateArgs),
+    /// Remove fixed entries from .polint/baseline.yaml and refresh moved paths.
+    Update(BaselineUpdateArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct BaselineCreateArgs {
+    /// Overwrite an existing baseline file.
+    #[arg(long)]
+    force: bool,
+    /// Named profile from .polint.toml. When omitted, all discovered rules run.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Disable .polint/cache reads and writes while creating the baseline.
+    #[arg(long)]
+    no_cache: bool,
+    /// Files or directories to baseline. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct BaselineUpdateArgs {
+    /// Named profile from .polint.toml. When omitted, all discovered rules run.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Disable .polint/cache reads and writes while updating the baseline.
+    #[arg(long)]
+    no_cache: bool,
+    /// Files or directories to check. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -137,6 +186,12 @@ struct CheckArgs {
     /// Print one scan summary line for human output.
     #[arg(long)]
     shortstat: bool,
+    /// Suppress known diagnostics from .polint/baseline.yaml.
+    #[arg(long)]
+    baseline: bool,
+    /// Emit and fail only on diagnostics not covered by `--baseline`.
+    #[arg(long)]
+    new_only: bool,
     /// Apply polint comment-ignore directives.
     #[arg(long, default_value_t = true, hide = true, action = clap::ArgAction::Set)]
     ignore_comments: bool,
@@ -215,6 +270,7 @@ pub(crate) fn run() -> Result<u8> {
             new_rule(std::env::current_dir()?, &args)?;
             Ok(0)
         }
+        Command::Baseline(args) => baseline(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
     }
@@ -511,7 +567,63 @@ pub(crate) fn {module}(_ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
     )
 }
 
+fn baseline(root: PathBuf, args: &BaselineArgs) -> Result<u8> {
+    match &args.command {
+        BaselineCommand::Create(create_args) => create_baseline(root, create_args),
+        BaselineCommand::Update(update_args) => update_baseline(root, update_args),
+    }
+}
+
+fn create_baseline(root: PathBuf, args: &BaselineCreateArgs) -> Result<u8> {
+    let output = baseline_path(&root);
+    if output.exists() && !args.force {
+        anyhow::bail!(
+            "baseline file already exists: {}; use --force to overwrite or `polint baseline update`",
+            output.display()
+        );
+    }
+
+    let diagnostics = collect_diagnostics_for_baseline(
+        &root,
+        &args.paths,
+        args.profile.as_deref(),
+        args.no_cache,
+    )?;
+    let config = BaselineConfig::from_diagnostics(&diagnostics);
+    write_baseline(&output, &config)?;
+    println!(
+        "Created baseline {} with {} entries",
+        output.display(),
+        config.baseline.len()
+    );
+    Ok(0)
+}
+
+fn update_baseline(root: PathBuf, args: &BaselineUpdateArgs) -> Result<u8> {
+    let baseline_path = baseline_path(&root);
+    let config = load_baseline(&baseline_path)?;
+    let diagnostics = collect_diagnostics_for_baseline(
+        &root,
+        &args.paths,
+        args.profile.as_deref(),
+        args.no_cache,
+    )?;
+    let classification = classify_diagnostics(&diagnostics, &config);
+    let updated = config.updated_for_current_diagnostics(&diagnostics);
+    write_baseline(&baseline_path, &updated)?;
+    println!(
+        "Updated baseline {} with {} entries",
+        baseline_path.display(),
+        updated.baseline.len()
+    );
+    print!("{}", render_baseline_summary(&classification.summary));
+    Ok(0)
+}
+
 fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
+    if args.new_only && !args.baseline {
+        anyhow::bail!("--new-only requires --baseline");
+    }
     let local_rule_hosts = discover_local_rule_hosts(&root)?;
     if !local_rule_hosts.is_empty() {
         return check_local_rule_hosts(&root, args, &local_rule_hosts);
@@ -534,6 +646,8 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         FormatArg::Sarif => OutputFormat::Sarif,
     };
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+    let baseline = apply_baseline(&root, args, diagnostics)?;
+    diagnostics = baseline.diagnostics;
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let stats = check_stats(
         &db,
@@ -561,8 +675,13 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     if should_render_check_stats(args) {
         print!("{}", render_check_stats(&stats, args.stat, args.shortstat));
     }
+    if matches!(args.format, FormatArg::Human)
+        && let Some(summary) = &baseline.summary
+    {
+        print!("{}", render_baseline_summary(summary));
+    }
 
-    Ok(exit_code_for(&diagnostics, args.fail_on))
+    Ok(exit_code_for(&baseline.failure_diagnostics, args.fail_on))
 }
 
 fn ignores(root: PathBuf, args: &IgnoresArgs) -> Result<u8> {
@@ -595,6 +714,8 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
         max_diagnostics: None,
         stat: false,
         shortstat: false,
+        baseline: false,
+        new_only: false,
         ignore_comments: false,
     };
     let local_rule_hosts = discover_local_rule_hosts(root)?;
@@ -770,6 +891,84 @@ fn plural(count: usize, singular: &'static str, plural: &'static str) -> &'stati
     if count == 1 { singular } else { plural }
 }
 
+struct BaselineApplied {
+    diagnostics: Vec<Diagnostic>,
+    failure_diagnostics: Vec<Diagnostic>,
+    summary: Option<BaselineSummary>,
+}
+
+fn apply_baseline(
+    root: &Path,
+    args: &CheckArgs,
+    diagnostics: Vec<Diagnostic>,
+) -> Result<BaselineApplied> {
+    if !args.baseline {
+        return Ok(BaselineApplied {
+            failure_diagnostics: diagnostics.clone(),
+            diagnostics,
+            summary: None,
+        });
+    }
+
+    let baseline_path = baseline_path(root);
+    let config = load_baseline(&baseline_path)?;
+    let classification = classify_diagnostics(&diagnostics, &config);
+    let failure_diagnostics = classification.new_diagnostics.clone();
+    let diagnostics = if args.new_only {
+        classification.new_diagnostics
+    } else {
+        classification.visible_diagnostics
+    };
+    Ok(BaselineApplied {
+        diagnostics,
+        failure_diagnostics,
+        summary: Some(classification.summary),
+    })
+}
+
+fn baseline_path(root: &Path) -> PathBuf {
+    root.join(DEFAULT_BASELINE_PATH)
+}
+
+fn collect_diagnostics_for_baseline(
+    root: &Path,
+    paths: &[PathBuf],
+    profile: Option<&str>,
+    no_cache: bool,
+) -> Result<Vec<Diagnostic>> {
+    let check_args = CheckArgs {
+        paths: paths.to_vec(),
+        profile: profile.map(ToString::to_string),
+        format: FormatArg::Json,
+        color: ColorArg::Never,
+        no_cache,
+        fail_on: FailOn::None,
+        only_rule: None,
+        max_diagnostics: None,
+        stat: false,
+        shortstat: false,
+        baseline: false,
+        new_only: false,
+        ignore_comments: true,
+    };
+    let local_rule_hosts = discover_local_rule_hosts(root)?;
+    let mut diagnostics = if local_rule_hosts.is_empty() {
+        let (diagnostics, db, loaded) = analyze_and_run(root, &check_args, true)?;
+        apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics
+    } else {
+        let config = load_config_for_check(root, paths)?;
+        selected_rule_patterns(&config, profile)?;
+        let loaded_db = load_analysis_files(&config)?;
+        let mut diagnostics = Vec::new();
+        for manifest in &local_rule_hosts {
+            diagnostics.extend(run_local_rule_host(root, manifest, &check_args)?);
+        }
+        apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics
+    };
+    diagnostics = apply_report_filters(diagnostics, None);
+    Ok(diagnostics)
+}
+
 fn analyze_and_run(
     root: &Path,
     args: &CheckArgs,
@@ -811,6 +1010,8 @@ fn analyze_and_run(
         parallel,
     );
     diagnostics.extend(ts_diagnostics);
+    let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
+    diagnostics.extend(module_graph.diagnostics);
 
     diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
     Ok((diagnostics, db, loaded))
@@ -890,6 +1091,8 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         db = Some(load_analysis_files(&config)?);
     }
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
+    let baseline = apply_baseline(root, args, diagnostics)?;
+    diagnostics = baseline.diagnostics;
     let rendered_diagnostics = limit_report_diagnostics(diagnostics.clone(), args.max_diagnostics);
     let source_map = if matches!(args.format, FormatArg::Human) {
         read_sources_for_diagnostics(root, &rendered_diagnostics)
@@ -925,7 +1128,12 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         );
         print!("{}", render_check_stats(&stats, args.stat, args.shortstat));
     }
-    Ok(exit_code_for(&diagnostics, args.fail_on))
+    if matches!(args.format, FormatArg::Human)
+        && let Some(summary) = &baseline.summary
+    {
+        print!("{}", render_baseline_summary(summary));
+    }
+    Ok(exit_code_for(&baseline.failure_diagnostics, args.fail_on))
 }
 
 fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result<Vec<Diagnostic>> {

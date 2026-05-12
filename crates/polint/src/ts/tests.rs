@@ -157,6 +157,59 @@ export * from "./shared";
 }
 
 #[test]
+fn dynamic_imports_string_literal_emit_import_fact() {
+    let source = r#"
+async function load() {
+  return await import("./lazy");
+}
+"#;
+    let (db, diagnostics) = analyze_source("dynamic.ts", source);
+    assert_no_parser_diagnostics(&diagnostics);
+
+    let paths: Vec<_> = db
+        .imports()
+        .iter()
+        .map(|import| import.path.as_str())
+        .collect();
+    assert_eq!(paths, ["./lazy"]);
+}
+
+#[test]
+fn dynamic_imports_expression_emit_dynamic_sentinel_import_fact() {
+    let source = r#"
+async function load(name: string) {
+  return await import(name);
+}
+"#;
+    let (db, diagnostics) = analyze_source("dynamic-expression.ts", source);
+    assert_no_parser_diagnostics(&diagnostics);
+
+    let paths: Vec<_> = db
+        .imports()
+        .iter()
+        .map(|import| import.path.as_str())
+        .collect();
+    assert_eq!(paths, ["<dynamic>"]);
+}
+
+#[test]
+fn dynamic_imports_inside_array_elements_emit_import_facts() {
+    let source = r#"
+const name = "./runtime";
+const loaders = [import("./lazy"), import(name)];
+"#;
+    let (db, diagnostics) = analyze_source("dynamic-array.ts", source);
+    assert_no_parser_diagnostics(&diagnostics);
+
+    let paths: Vec<_> = db
+        .imports()
+        .iter()
+        .map(|import| import.path.as_str())
+        .collect();
+    assert_eq!(paths, ["./lazy", "<dynamic>"]);
+}
+
+#[test]
 fn extracts_functions_arrows_classes_methods_and_calls_from_oxc_ast() {
     let source = r#"
 function helper(label: string) {

@@ -33,6 +33,15 @@ pub struct BranchId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ImportId(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ResolvedImportId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ModuleNodeId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ModuleEdgeId(pub u64);
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RuleId(pub String);
 
@@ -187,6 +196,91 @@ pub struct ImportFact {
     pub language: Language,
 }
 
+/// File, package, module, or external target participating in the module graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleNode {
+    pub id: ModuleNodeId,
+    pub kind: ModuleNodeKind,
+    pub label: String,
+    pub file: Option<FileId>,
+    pub package: Option<PackageId>,
+    pub language: Option<Language>,
+}
+
+/// Relationship edge between two module graph nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleEdge {
+    pub id: ModuleEdgeId,
+    pub from: ModuleNodeId,
+    pub to: ModuleNodeId,
+    pub import: Option<ImportId>,
+    pub resolved_import: Option<ResolvedImportId>,
+    pub kind: ModuleEdgeKind,
+    pub status: ResolutionStatus,
+}
+
+/// Setup-aware resolution result for one syntactic import fact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedImportFact {
+    pub id: ResolvedImportId,
+    pub import: ImportId,
+    pub from_file: FileId,
+    pub target_node: Option<ModuleNodeId>,
+    pub status: ResolutionStatus,
+    pub precision: ResolutionPrecision,
+    pub reason: Option<UnresolvedReason>,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModuleNodeKind {
+    File,
+    Package,
+    Module,
+    External,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModuleEdgeKind {
+    Contains,
+    Imports,
+    DependsOn,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResolutionStatus {
+    Resolved,
+    External,
+    Unresolved,
+    SetupMissing,
+    Dynamic,
+    Unsupported,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResolutionPrecision {
+    ExactFile,
+    Package,
+    ExternalPackage,
+    Heuristic,
+    None,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnresolvedReason {
+    NotFound,
+    SetupMissing,
+    DynamicExpression,
+    UnsupportedLanguage,
+    UnsupportedImport,
+    ResolverError,
+    OutsideWorkspace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchObligation {
     pub id: BranchId,
@@ -283,6 +377,9 @@ pub struct AnalysisDb {
     packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
+    resolved_imports: Vec<ResolvedImportFact>,
+    module_nodes: Vec<ModuleNode>,
+    module_edges: Vec<ModuleEdge>,
     branches: Vec<BranchObligation>,
     tests: Vec<TestFact>,
     coverage: Vec<CoverageFact>,
@@ -391,6 +488,27 @@ impl AnalysisDb {
         self.complexity_metrics = complexity_metrics;
     }
 
+    pub(crate) fn replace_module_graph_facts(
+        &mut self,
+        mut resolved_imports: Vec<ResolvedImportFact>,
+        mut module_nodes: Vec<ModuleNode>,
+        mut module_edges: Vec<ModuleEdge>,
+    ) {
+        for (index, fact) in resolved_imports.iter_mut().enumerate() {
+            fact.id = ResolvedImportId(index as u64);
+        }
+        for (index, node) in module_nodes.iter_mut().enumerate() {
+            node.id = ModuleNodeId(index as u64);
+        }
+        for (index, edge) in module_edges.iter_mut().enumerate() {
+            edge.id = ModuleEdgeId(index as u64);
+        }
+
+        self.resolved_imports = resolved_imports;
+        self.module_nodes = module_nodes;
+        self.module_edges = module_edges;
+    }
+
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
         self.ts_components.push(fact);
     }
@@ -445,6 +563,18 @@ impl AnalysisDb {
 
     pub fn imports(&self) -> &[ImportFact] {
         &self.imports
+    }
+
+    pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
+        &self.resolved_imports
+    }
+
+    pub fn module_nodes(&self) -> &[ModuleNode] {
+        &self.module_nodes
+    }
+
+    pub fn module_edges(&self) -> &[ModuleEdge] {
+        &self.module_edges
     }
 
     pub fn branches(&self) -> &[BranchObligation] {
@@ -665,6 +795,10 @@ pub struct Capabilities {
     pub syntax: bool,
     /// Needs syntactic import facts.
     pub imports: bool,
+    /// Needs setup-aware resolved import facts.
+    pub resolved_imports: bool,
+    /// Needs file/package/module relationship graph facts.
+    pub module_graph: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
@@ -707,6 +841,16 @@ impl Capabilities {
 
     pub fn imports(mut self) -> Self {
         self.imports = true;
+        self
+    }
+
+    pub fn resolved_imports(mut self) -> Self {
+        self.resolved_imports = true;
+        self
+    }
+
+    pub fn module_graph(mut self) -> Self {
+        self.module_graph = true;
         self
     }
 
@@ -784,6 +928,8 @@ impl Capabilities {
         [
             ("syntax", self.syntax),
             ("imports", self.imports),
+            ("resolved_imports", self.resolved_imports),
+            ("module_graph", self.module_graph),
             ("cfg", self.cfg),
             ("call_graph", self.call_graph),
             ("dataflow", self.dataflow),
@@ -2267,6 +2413,195 @@ mod tests {
         assert_eq!(db.packages()[1].name, "billing");
         assert_eq!(db.packages()[1].span, second_span);
         assert_eq!(db.packages()[1].language, Language::Go);
+    }
+
+    #[test]
+    fn module_relationship_core_contract_stores_relationship_facts_with_stable_ids() {
+        let mut db = AnalysisDb::new();
+        let from_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\nimport React from 'react';\n".to_string(),
+        );
+        let target_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "export function Button() {}\n".to_string(),
+        );
+        let span = test_span(from_file, 1);
+        let local_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "./button".to_string(),
+            span: span.clone(),
+            language: Language::TypeScript,
+        });
+        let external_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "react".to_string(),
+            span,
+            language: Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: local_import,
+                    from_file,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(99),
+                    import: external_import,
+                    from_file,
+                    target_node: Some(ModuleNodeId(2)),
+                    status: ResolutionStatus::External,
+                    precision: ResolutionPrecision::ExternalPackage,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(from_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(target_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::External,
+                    label: "react".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            vec![
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(1),
+                    import: Some(local_import),
+                    resolved_import: Some(ResolvedImportId(0)),
+                    kind: ModuleEdgeKind::Imports,
+                    status: ResolutionStatus::Resolved,
+                },
+                ModuleEdge {
+                    id: ModuleEdgeId(99),
+                    from: ModuleNodeId(0),
+                    to: ModuleNodeId(2),
+                    import: Some(external_import),
+                    resolved_import: Some(ResolvedImportId(1)),
+                    kind: ModuleEdgeKind::DependsOn,
+                    status: ResolutionStatus::External,
+                },
+            ],
+        );
+
+        assert_eq!(db.resolved_imports()[0].id, ResolvedImportId(0));
+        assert_eq!(db.resolved_imports()[1].id, ResolvedImportId(1));
+        assert_eq!(db.module_nodes()[0].id, ModuleNodeId(0));
+        assert_eq!(db.module_nodes()[1].id, ModuleNodeId(1));
+        assert_eq!(db.module_nodes()[2].id, ModuleNodeId(2));
+        assert_eq!(db.module_edges()[0].id, ModuleEdgeId(0));
+        assert_eq!(db.module_edges()[1].id, ModuleEdgeId(1));
+        assert_eq!(
+            db.module_edges()[1].resolved_import,
+            Some(ResolvedImportId(1))
+        );
+    }
+
+    #[test]
+    fn module_relationship_core_contract_statuses_are_representable() {
+        let statuses = [
+            ResolutionStatus::Resolved,
+            ResolutionStatus::External,
+            ResolutionStatus::Unresolved,
+            ResolutionStatus::SetupMissing,
+            ResolutionStatus::Dynamic,
+            ResolutionStatus::Unsupported,
+        ];
+        let reasons = [
+            UnresolvedReason::NotFound,
+            UnresolvedReason::SetupMissing,
+            UnresolvedReason::DynamicExpression,
+            UnresolvedReason::UnsupportedLanguage,
+            UnresolvedReason::UnsupportedImport,
+            UnresolvedReason::ResolverError,
+            UnresolvedReason::OutsideWorkspace,
+        ];
+
+        assert!(matches!(statuses[0], ResolutionStatus::Resolved));
+        assert!(matches!(statuses[1], ResolutionStatus::External));
+        assert!(matches!(statuses[2], ResolutionStatus::Unresolved));
+        assert!(matches!(statuses[3], ResolutionStatus::SetupMissing));
+        assert!(matches!(statuses[4], ResolutionStatus::Dynamic));
+        assert!(matches!(statuses[5], ResolutionStatus::Unsupported));
+        assert_eq!(reasons.len(), 7);
+    }
+
+    #[test]
+    fn module_relationship_core_contract_public_enums_match_with_wildcard() {
+        fn status_name(status: ResolutionStatus) -> &'static str {
+            match status {
+                ResolutionStatus::Resolved => "resolved",
+                _ => "not-resolved",
+            }
+        }
+
+        fn node_kind_name(kind: ModuleNodeKind) -> &'static str {
+            match kind {
+                ModuleNodeKind::File => "file",
+                _ => "other",
+            }
+        }
+
+        fn edge_kind_name(kind: ModuleEdgeKind) -> &'static str {
+            match kind {
+                ModuleEdgeKind::Imports => "imports",
+                _ => "other",
+            }
+        }
+
+        fn precision_name(precision: ResolutionPrecision) -> &'static str {
+            match precision {
+                ResolutionPrecision::ExactFile => "exact-file",
+                _ => "other",
+            }
+        }
+
+        fn reason_name(reason: UnresolvedReason) -> &'static str {
+            match reason {
+                UnresolvedReason::NotFound => "not-found",
+                _ => "other",
+            }
+        }
+
+        assert_eq!(status_name(ResolutionStatus::Resolved), "resolved");
+        assert_eq!(node_kind_name(ModuleNodeKind::Package), "other");
+        assert_eq!(edge_kind_name(ModuleEdgeKind::Contains), "other");
+        assert_eq!(
+            precision_name(ResolutionPrecision::ExternalPackage),
+            "other"
+        );
+        assert_eq!(reason_name(UnresolvedReason::SetupMissing), "other");
     }
 
     #[test]

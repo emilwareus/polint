@@ -15,6 +15,7 @@ pub fn run_main() -> anyhow::Result<u8> {
 }
 
 pub(crate) mod analysis_plan;
+pub(crate) mod baseline;
 pub(crate) mod cache;
 pub(crate) mod cli;
 pub(crate) mod config;
@@ -26,6 +27,7 @@ pub(crate) mod go;
 pub(crate) mod graph;
 pub(crate) mod ignores;
 pub(crate) mod metrics;
+pub(crate) mod module_graph;
 pub(crate) mod path_context;
 pub(crate) mod rule_error;
 pub(crate) mod ts;

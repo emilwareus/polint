@@ -39,6 +39,14 @@ The desired long-term shape:
   a language adapter delegates parsing or semantic facts to existing language
   tooling.
 
+The long-term destination is a fully capable static-analysis platform with a
+complete graph representation of a codebase: module/dependency graph, symbol
+graph, call graph, per-function CFG, coverage/test evidence links, dataflow,
+taint, and interprocedural summaries. The implementation should still avoid
+boiling the ocean. Each phase should ship one truthful, useful slice with
+explicit precision, confidence, setup status, and unsupported diagnostics rather
+than waiting for perfect whole-program analysis.
+
 ## Current Gap
 
 `Capabilities` looks like a contract: a rule declares a capability and polint
@@ -142,6 +150,10 @@ fact sets.
 
 Ratings assume production-quality implementation: public SDK design, docs,
 external-consumer tests, cache behavior, and CLI explain/debug surfaces.
+
+The detailed notes below describe individual capabilities. Their section numbers
+are not the execution order; the current recommended build order is in the
+priority and build-order sections near the end of this document.
 
 ## Difficulty Ratings And Build Methods
 
@@ -409,7 +421,80 @@ Impact:
 - gives future capabilities a concrete implementation contract
 - gives new languages a clear adapter target
 
-## Priority 2: General CFG Facts
+## Priority 2: Resolved Imports And Module Graph
+
+Strengthen `imports()` with resolution facts.
+
+Add:
+
+- `ResolvedImportFact`
+- `ModuleGraph`
+- `ResolvedImports<'_>`
+- `ModuleGraphFacts<'_>`
+
+Start with TS/JS through `oxc_resolver`, then add Go package/module resolution.
+Keep the existing syntactic `ImportFact` because unresolved imports are still
+useful evidence. Later language adapters should map Python imports and Java
+packages/classes into the same module graph model instead of adding unrelated
+language-specific graph APIs.
+
+Impact:
+
+- unlocks common repo-local policies such as layer boundaries
+- gives users file/package targets instead of only import strings
+- provides the project model needed by symbols and resolved calls
+
+## Priority 3: Symbols And References
+
+Add the stable building blocks for precise rules.
+
+Add facts/accessors such as:
+
+- `SymbolFact`
+- `ReferenceFact`
+- `DefinitionFact`
+- `Symbols<'_>`
+- `References<'_>::to(symbol)`
+
+This is the foundation for precise call graphs, ownership rules, exported API
+rules, dead-code style checks, and security rules.
+
+The engine should own the public symbol/reference model. Adapters can fill it
+from Oxc, Go tooling, Python metadata, Java compiler/language-server output, or
+in-house extraction.
+
+Impact:
+
+- moves users beyond string matching
+- makes policies over definitions and usages possible
+- creates the path toward type-aware analysis
+
+## Priority 4: Resolved Call Graph
+
+Fulfill `CallGraph<'_>` in stages.
+
+Start with conservative direct-call facts:
+
+- caller `FunctionId`
+- callee text
+- call span
+- optional resolved target
+- confidence / precision tier
+
+Then improve resolution as symbol and import resolution land. The public API
+should expose uncertainty instead of pretending every call target is exact.
+
+Go and TS/JS should be the full-coverage targets. Python and Java can start with
+direct calls and graduate to resolved calls when module/classpath setup is
+available.
+
+Impact:
+
+- enables architectural rules over function usage
+- builds on existing `FunctionFact::calls`
+- gives users a real graph model while preserving honesty about precision
+
+## Priority 5: General CFG Facts
 
 Fulfill `Cfg<'_>` with an honest intra-procedural control-flow model.
 
@@ -431,7 +516,7 @@ Impact:
 - provides a foundation for dataflow
 - turns an existing capability into a usable rule-author primitive
 
-## Priority 3: Coverage Facts Import
+## Priority 6: Coverage Facts Import
 
 Fulfill `CoverageFacts<'_>` by ingesting external coverage reports.
 
@@ -461,79 +546,6 @@ Impact:
 - enables policies like "new error branches need test coverage evidence"
 - connects static facts to CI/runtime evidence
 - makes the existing `CoverageFact` model useful to real rules
-
-## Priority 4: Resolved Call Graph
-
-Fulfill `CallGraph<'_>` in stages.
-
-Start with conservative direct-call facts:
-
-- caller `FunctionId`
-- callee text
-- call span
-- optional resolved target
-- confidence / precision tier
-
-Then improve resolution as symbol and import resolution land. The public API
-should expose uncertainty instead of pretending every call target is exact.
-
-Go and TS/JS should be the full-coverage targets. Python and Java can start with
-direct calls and graduate to resolved calls when module/classpath setup is
-available.
-
-Impact:
-
-- enables architectural rules over function usage
-- builds on existing `FunctionFact::calls`
-- gives users a real graph model while preserving honesty about precision
-
-## Priority 5: Resolved Imports And Module Graph
-
-Strengthen `imports()` with resolution facts.
-
-Add:
-
-- `ResolvedImportFact`
-- `ModuleGraph`
-- `ResolvedImports<'_>`
-- `ModuleGraphFacts<'_>`
-
-Start with TS/JS through `oxc_resolver`, then add Go package/module resolution.
-Keep the existing syntactic `ImportFact` because unresolved imports are still
-useful evidence. Later language adapters should map Python imports and Java
-packages/classes into the same module graph model instead of adding unrelated
-language-specific graph APIs.
-
-Impact:
-
-- unlocks common repo-local policies such as layer boundaries
-- supports call graph and symbol resolution
-- gives users file/package targets instead of only import strings
-
-## Priority 6: Symbols And References
-
-Add the stable building blocks for precise rules.
-
-Add facts/accessors such as:
-
-- `SymbolFact`
-- `ReferenceFact`
-- `DefinitionFact`
-- `Symbols<'_>`
-- `References<'_>::to(symbol)`
-
-This is the foundation for precise call graphs, ownership rules, exported API
-rules, dead-code style checks, and security rules.
-
-The engine should own the public symbol/reference model. Adapters can fill it
-from Oxc, Go tooling, Python metadata, Java compiler/language-server output, or
-in-house extraction.
-
-Impact:
-
-- moves users beyond string matching
-- makes policies over definitions and usages possible
-- creates the path toward type-aware analysis
 
 ## Priority 7: Test Suite Metrics
 
@@ -595,18 +607,20 @@ This should become the release gate for new capabilities.
 ## Recommended Build Order
 
 1. `AnalysisPlan` with language/capability/setup planning.
-2. Go and TS/JS CFG facts.
-3. Go and TS/JS coverage import.
-4. Go and TS/JS resolved imports / module graph.
-5. Go and TS/JS direct call graph facts.
-6. Go and TS/JS symbols and references.
-7. Go and TS/JS dataflow facts on top of CFG/symbol/call graph support.
-8. Go and TS/JS richer test-suite metrics.
+2. Go and TS/JS resolved imports / module graph.
+3. Go and TS/JS symbols and references.
+4. Go and TS/JS direct and then resolved call graph facts.
+5. Go and TS/JS CFG facts.
+6. Go and TS/JS coverage import.
+7. Go and TS/JS richer test-suite metrics.
+8. Go and TS/JS dataflow and taint facts on top of CFG/symbol/call graph support.
 9. Python adapter with a declared subset, then expand toward parity.
 10. Java adapter with a declared subset, then expand toward parity.
 
 This order makes Go and TS/JS prove full feature coverage first, while the
-engine stays shaped for more languages from the beginning.
+engine stays shaped for more languages from the beginning. It also prioritizes
+the codebase-understanding graph layers that agents and architecture rules need
+before deeper flow-sensitive analysis.
 
 ## Research References
 

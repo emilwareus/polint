@@ -39,7 +39,14 @@ fn top_level_help_only_lists_supported_public_commands() {
             .success(),
     );
 
-    for command in ["init", "add-skill", "new-rule", "check", "ignores"] {
+    for command in [
+        "init",
+        "add-skill",
+        "new-rule",
+        "baseline",
+        "check",
+        "ignores",
+    ] {
         assert!(help.contains(command), "help should list {command}: {help}");
     }
     for command in ["explain", "test-rules", "profile-rules", "graph"] {
@@ -185,6 +192,293 @@ fn main() -> ExitCode {
   return <div data-color="#fff">ok</div>;
 }
 "##,
+    );
+}
+
+fn write_relationship_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/relationships-available",
+    description = "Reads relationship facts.",
+    severity = "warn"
+)]
+fn relationships_available(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+) -> RuleResult {
+    if resolved.iter().count() == 0 && graph.nodes().is_empty() && graph.edges().is_empty() {
+        ctx.report(Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "relationship facts are available",
+        ));
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![relationships_available()])
+}
+"#,
+    );
+    fs::create_dir_all(root.join("src")).unwrap();
+}
+
+fn write_go_relationship_setup_missing_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/go-relationships",
+    description = "Reads Go relationship facts.",
+    severity = "warn"
+)]
+fn go_relationships(ctx: &mut RuleCtx<'_>, resolved: ResolvedImports<'_>) -> RuleResult {
+    let _ = resolved.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this rule should be blocked by setup-missing support",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![go_relationships()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/main.go"),
+        r#"package main
+
+import "example.com/project/pkg"
+
+func main() {}
+"#,
+    );
+}
+
+fn write_module_relationship_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/unresolved-import",
+    description = "Report imports that did not resolve.",
+    severity = "warn"
+)]
+fn unresolved_import(ctx: &mut RuleCtx<'_>, resolved: ResolvedImports<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for import in resolved.iter() {
+        if matches!(
+            import.status,
+            ResolutionStatus::Resolved | ResolutionStatus::External
+        ) {
+            continue;
+        }
+
+        let reason = import
+            .reason
+            .map(|reason| format!("{reason:?}"))
+            .unwrap_or_else(|| "None".to_string());
+        ctx.report(
+            Diagnostic::warning(
+                rule_id.clone(),
+                ctx.file_path(import.from_file),
+                DiagnosticRange::point(1, 1),
+                "Import did not resolve.",
+            )
+            .with_evidence("status", format!("{:?}", import.status))
+            .with_evidence("reason", reason),
+        );
+    }
+    Ok(())
+}
+
+#[polint::rule(
+    id = "local/no-ui-to-domain",
+    description = "Disallow UI files importing domain files.",
+    severity = "error"
+)]
+fn no_ui_to_domain(ctx: &mut RuleCtx<'_>, graph: ModuleGraphFacts<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for edge in graph.edges() {
+        let Some(source) = graph.nodes().iter().find(|node| node.id == edge.from) else {
+            continue;
+        };
+        let Some(target) = graph.nodes().iter().find(|node| node.id == edge.to) else {
+            continue;
+        };
+        if !source.label.starts_with("src/ui/") || !target.label.starts_with("src/domain/") {
+            continue;
+        }
+
+        let file = source
+            .file
+            .map(|file| ctx.file_path(file))
+            .unwrap_or_else(|| source.label.clone());
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                file,
+                DiagnosticRange::point(1, 1),
+                "UI code must not import the domain layer directly.",
+            )
+            .with_evidence("source", source.label.clone())
+            .with_evidence("target", target.label.clone())
+            .with_evidence("status", format!("{:?}", graph.dependency_status(edge))),
+        );
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![unresolved_import(), no_ui_to_domain()])
+}
+"#,
+    );
+    write_file(
+        &root.join("package.json"),
+        r#"{"name":"relationship-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("tsconfig.json"),
+        r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@domain/*": ["src/domain/*"]
+    }
+  }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/domain/model.ts"),
+        r#"export const model = "domain";"#,
+    );
+    write_file(
+        &root.join("src/ui/view.ts"),
+        r#"import { model } from "../domain/model";
+import { missing } from "./missing";
+
+export const view = `${model}:${missing}`;
+"#,
+    );
+    write_file(
+        &root.join("src/ui/alias.ts"),
+        r#"import { model } from "@domain/model";
+
+export const aliasView = model;
+"#,
     );
 }
 
@@ -616,6 +910,8 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("polint ships no built-in"));
     assert!(contents.contains("use polint::sdk::prelude::*;"));
     assert!(contents.contains("FileMetrics<'_>"));
+    assert!(contents.contains("ResolvedImports<'_>"));
+    assert!(contents.contains("ModuleGraphFacts<'_>"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
@@ -799,7 +1095,8 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     assert!(module.contains("branches.iter()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -827,7 +1124,8 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
     assert!(module.contains("jsx.iter().count()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -853,7 +1151,8 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     assert!(module.contains("functions.iter().count()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
-    assert!(!module.contains("crate::core::"));
+    let internal_core_path = ["crate", "core"].join("::");
+    assert!(!module.contains(&internal_core_path));
 }
 
 #[test]
@@ -1465,6 +1764,342 @@ export const also_ok = "DONE";
         1,
         "{json:#?}"
     );
+}
+
+#[test]
+fn baseline_create_writes_compact_yaml_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(
+        baseline.starts_with("version: 1\n\nbaseline:\n"),
+        "{baseline}"
+    );
+    assert!(
+        baseline.contains("  - 'local/no-todo-literals "),
+        "{baseline}"
+    );
+    assert!(baseline.contains(" src/component.ts'\n"), "{baseline}");
+    assert!(baseline.ends_with("ignore: []\n"), "{baseline}");
+}
+
+#[test]
+fn baseline_create_preserves_repeated_default_diagnostics_in_same_file() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const first = "TODO";
+export const second = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert_eq!(baseline.matches("local/no-todo-literals").count(), 2);
+
+    let existing_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics(&existing_json).len(), 0, "{existing_json:#?}");
+}
+
+#[test]
+fn check_baseline_new_only_passes_existing_and_fails_new_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/existing.ts"),
+        r#"export const existing = "TODO";
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    let existing_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics(&existing_json).len(), 0, "{existing_json:#?}");
+
+    write_file(
+        &temp.path().join("src/new.ts"),
+        r#"export const new_marker = "TODO";
+"#,
+    );
+    let new_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--new-only",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .failure(),
+    );
+    let diagnostics = diagnostics_for_rule(&new_json, "local/no-todo-literals");
+    assert_eq!(diagnostics.len(), 1, "{new_json:#?}");
+    assert_eq!(diagnostics[0]["file"], "src/new.ts");
+}
+
+#[test]
+fn check_baseline_central_ignore_suppresses_matching_diagnostic() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostic = diagnostics_for_rule(&json, "local/no-todo-literals")[0];
+    let fingerprint = diagnostic["stable_fingerprint"].as_str().unwrap();
+    write_file(
+        &temp.path().join(".polint/baseline.yaml"),
+        &format!(
+            r#"version: 1
+
+baseline: []
+ignore:
+  - "local/no-todo-literals {fingerprint} src/component.ts"
+"#
+        ),
+    );
+
+    let ignored_json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--baseline",
+                "--format",
+                "json",
+                "--fail-on",
+                "warn",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(diagnostics(&ignored_json).len(), 0, "{ignored_json:#?}");
+}
+
+#[test]
+fn baseline_update_removes_fixed_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/keep.ts"),
+        r#"export const keep = "TODO";
+"#,
+    );
+    write_file(
+        &temp.path().join("src/fix.ts"),
+        r#"export const fix = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    write_file(
+        &temp.path().join("src/fix.ts"),
+        r#"export const fix = "DONE";
+"#,
+    );
+    let stdout = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["baseline", "update"])
+            .assert()
+            .success(),
+    );
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(baseline.contains("src/keep.ts"), "{baseline}");
+    assert!(!baseline.contains("src/fix.ts"), "{baseline}");
+    assert!(stdout.contains("fixed: 1"), "{stdout}");
+}
+
+#[test]
+fn baseline_update_refreshes_unambiguous_moved_default_diagnostic_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/old.ts"),
+        r#"export const old_marker = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create"])
+        .assert()
+        .success();
+
+    fs::remove_file(temp.path().join("src/old.ts")).unwrap();
+    write_file(
+        &temp.path().join("src/new.ts"),
+        r#"export const new_marker = "TODO";
+"#,
+    );
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline", "--new-only", "--fail-on", "warn"])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["baseline", "update"])
+            .assert()
+            .success(),
+    );
+
+    let baseline = fs::read_to_string(temp.path().join(".polint/baseline.yaml")).unwrap();
+    assert!(baseline.contains("src/new.ts"), "{baseline}");
+    assert!(!baseline.contains("src/old.ts"), "{baseline}");
+    assert!(stdout.contains("existing: 1"), "{stdout}");
+    assert!(stdout.contains("stale_path: 1"), "{stdout}");
+}
+
+#[test]
+fn check_baseline_rejects_malformed_yaml_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const marker = "TODO";
+"#,
+    );
+    write_file(
+        &temp.path().join(".polint/baseline.yaml"),
+        r#"version: 1
+baseline:
+  - "local/no-todo-literals"
+"#,
+    );
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid baseline entry"));
+}
+
+#[test]
+fn baseline_commands_reject_custom_baseline_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    write_no_todo_rule_repo(temp.path(), false);
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "create", "--output", ".polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["baseline", "update", "--baseline", ".polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--baseline=.polint-baseline.yaml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected value"));
+}
+
+#[test]
+fn check_new_only_requires_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("polint")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["check", "--new-only"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--new-only requires --baseline"));
 }
 
 #[test]
@@ -2512,6 +3147,167 @@ mod capability_planning {
             "rule",
             "local/needs-cfg"
         ));
+    }
+
+    #[test]
+    fn relationship_capability_rule_runs_on_empty_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        write_relationship_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "{json:#?}"
+        );
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .any(|diagnostic| diagnostic["rule_id"] == "local/relationships-available"),
+            "{json:#?}"
+        );
+    }
+
+    #[test]
+    fn provider_setup_missing_support_blocks_requesting_rule() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_relationship_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "local/go-relationships"),
+            "{json:#?}"
+        );
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("required setup is missing")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "status",
+            "setup_missing"
+        ));
+    }
+
+    #[test]
+    fn external_rule_consumes_module_relationship_facts_through_public_sdk() {
+        let temp = tempfile::tempdir().unwrap();
+        write_module_relationship_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        let unresolved = diagnostics_for_rule(&json, "local/unresolved-import");
+        assert!(
+            unresolved
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reason", "NotFound")),
+            "expected unresolved import reason evidence: {json:#?}"
+        );
+        assert!(
+            unresolved.iter().any(|diagnostic| diagnostic_has_evidence(
+                diagnostic,
+                "status",
+                "Unresolved"
+            )),
+            "expected unresolved import status evidence: {json:#?}"
+        );
+
+        let graph = diagnostics_for_rule(&json, "local/no-ui-to-domain");
+        assert!(
+            graph.iter().any(|diagnostic| diagnostic_has_evidence(
+                diagnostic,
+                "target",
+                "src/domain/model.ts"
+            )),
+            "expected graph diagnostic target evidence: {json:#?}"
+        );
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "relationship fact views should be available through the public SDK: {json:#?}"
+        );
+    }
+
+    #[test]
+    fn module_relationship_setup_missing_and_determinism() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_relationship_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/go-relationships").is_empty(),
+            "setup-missing capabilities must block the requesting local rule: {json:#?}"
+        );
+        assert!(
+            diagnostics_for_rule(&json, "polint/capability")
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "status", "setup_missing")),
+            "expected setup-missing capability evidence: {json:#?}"
+        );
+
+        let deterministic = tempfile::tempdir().unwrap();
+        write_module_relationship_rule_repo(deterministic.path());
+        let run = || {
+            stdout_json(
+                Command::cargo_bin("polint")
+                    .unwrap()
+                    .current_dir(deterministic.path())
+                    .args(["check", "--format", "json", "--fail-on", "none"])
+                    .assert()
+                    .success(),
+            )
+        };
+
+        let first = run();
+        let second = run();
+        let third = run();
+        let first_diagnostics = diagnostics(&first);
+        let second_diagnostics = diagnostics(&second);
+        let third_diagnostics = diagnostics(&third);
+
+        assert_eq!(first_diagnostics, second_diagnostics);
+        assert_eq!(second_diagnostics, third_diagnostics);
     }
 
     #[test]

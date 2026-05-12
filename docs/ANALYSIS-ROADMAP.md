@@ -2,6 +2,11 @@
 
 polint is a **facts-first**, **multi-language** analyzer: rules read stable extractions (literals, imports, functions, branches, tests, …) through a shared fact model. Today's adapters cover **Go** (tree-sitter) and **TypeScript / JavaScript** (Oxc); the same contract is the entry point for additional languages and for deeper analysis features.
 
+The long-term target is a complete, agent-consumable static-analysis graph of
+the codebase: modules, symbols, references, calls, CFGs, test/coverage evidence,
+dataflow, taint, and interprocedural summaries. The sequence below favors
+truthful, useful slices over broad placeholder analysis.
+
 The table lists **shipped** scenarios (with example repos that prove them) and **planned** work in rough dependency order. Heuristic and future typed rules should state their precision tier in messaging so teams know what they are enforcing.
 
 | Status | Scenario | Notes | Examples |
@@ -22,9 +27,9 @@ The table lists **shipped** scenarios (with example repos that prove them) and *
 | Planned | Scope-accurate module resolution | Path mapping, package exports, build tags / conditions | — |
 | Planned | Symbol / binding resolution | Definitions, references, re-exports; stable symbol IDs | — |
 | Planned | Type-aware analysis | TS semantic layer; Go `go/types` (or equivalent); syntax vs typed rule tiers | — |
+| Planned | Resolved call graph | Caller → callee symbols; approximate virtual/dynamic dispatch | — |
 | Planned | General intra-procedural CFG | First-class per-function graph, not only branch heuristics | — |
 | Planned | Dataflow | Def-use / SSA-style IR; value propagation where types exist | — |
-| Planned | Resolved call graph | Caller → callee symbols; approximate virtual/dynamic dispatch | — |
 | Planned | Interprocedural analysis | Summaries; whole-program or scoped modes; finer-grained invalidation | — |
 | Planned | Taint / source–sink tracking | On top of dataflow + configurable sources/sinks | — |
 | Planned | Alias / points-to (conservative) | Stronger security-style rules when needed | — |
