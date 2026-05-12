@@ -156,20 +156,44 @@ impl StableReferenceKey {
     }
 }
 
+pub(crate) type StableKeyHash = fn(&str) -> String;
+
+pub(crate) fn default_stable_key_hash(stable_key: &str) -> String {
+    stable_hash(&[stable_key])
+}
+
 pub(crate) fn symbol_id_from_key(key: &StableSymbolKey) -> SymbolId {
-    SymbolId(id_from_stable_key(&key.stable_key()))
+    symbol_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
 pub(crate) fn definition_id_from_key(key: &StableDefinitionKey) -> DefinitionId {
-    DefinitionId(id_from_stable_key(&key.stable_key()))
+    definition_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
 pub(crate) fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
-    ReferenceId(id_from_stable_key(&key.stable_key()))
+    reference_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
-fn id_from_stable_key(stable_key: &str) -> u64 {
-    digest_to_u64(&stable_hash(&[stable_key]))
+pub(crate) fn symbol_id_from_key_with_hash(key: &StableSymbolKey, hash: StableKeyHash) -> SymbolId {
+    SymbolId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+}
+
+pub(crate) fn definition_id_from_key_with_hash(
+    key: &StableDefinitionKey,
+    hash: StableKeyHash,
+) -> DefinitionId {
+    DefinitionId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+}
+
+pub(crate) fn reference_id_from_key_with_hash(
+    key: &StableReferenceKey,
+    hash: StableKeyHash,
+) -> ReferenceId {
+    ReferenceId(id_from_stable_key_with_hash(&key.stable_key(), hash))
+}
+
+fn id_from_stable_key_with_hash(stable_key: &str, hash: StableKeyHash) -> u64 {
+    digest_to_u64(&hash(stable_key))
 }
 
 fn digest_to_u64(digest: &str) -> u64 {
