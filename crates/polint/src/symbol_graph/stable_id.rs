@@ -1,3 +1,300 @@
+use crate::cache::stable_hash;
+use crate::core::{
+    DefinitionId, Language, ReferenceId, Span, SymbolId, SymbolKind, SymbolNamespace,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StableSymbolKey {
+    language: Language,
+    module_key: Option<String>,
+    package_key: Option<String>,
+    file_key: Option<String>,
+    owner_chain: Vec<String>,
+    namespace: SymbolNamespace,
+    kind: SymbolKind,
+    name: String,
+    primary_span: Option<Span>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StableDefinitionKey {
+    symbol: StableSymbolKey,
+    file_key: String,
+    span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StableReferenceKey {
+    target: Option<StableSymbolKey>,
+    language: Language,
+    file_key: String,
+    name: String,
+    span: Span,
+}
+
+impl StableSymbolKey {
+    pub(crate) fn new(
+        language: Language,
+        module_key: Option<String>,
+        package_key: Option<String>,
+        file_key: Option<String>,
+        owner_chain: Vec<String>,
+        namespace: SymbolNamespace,
+        kind: SymbolKind,
+        name: String,
+        primary_span: Option<Span>,
+    ) -> Self {
+        Self {
+            language,
+            module_key,
+            package_key,
+            file_key,
+            owner_chain,
+            namespace,
+            kind,
+            name,
+            primary_span,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_namespace(&mut self, namespace: SymbolNamespace) {
+        self.namespace = namespace;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_kind(&mut self, kind: SymbolKind) {
+        self.kind = kind;
+    }
+
+    pub(crate) fn stable_key(&self) -> String {
+        encode_tagged_parts(
+            "symbol",
+            [
+                ("language", language_key(self.language).to_string()),
+                ("module", optional_part(self.module_key.as_deref())),
+                ("package", optional_part(self.package_key.as_deref())),
+                ("file", optional_part(self.file_key.as_deref())),
+                ("owner", encode_repeated_parts(&self.owner_chain)),
+                ("namespace", namespace_key(self.namespace).to_string()),
+                ("kind", kind_key(self.kind).to_string()),
+                ("name", self.name.clone()),
+                ("span", optional_span_part(self.primary_span.as_ref())),
+            ],
+        )
+    }
+}
+
+impl StableDefinitionKey {
+    pub(crate) fn new(
+        symbol: StableSymbolKey,
+        file_key: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            symbol,
+            file_key: file_key.into(),
+            span,
+        }
+    }
+
+    pub(crate) fn stable_key(&self) -> String {
+        encode_tagged_parts(
+            "definition",
+            [
+                ("symbol", self.symbol.stable_key()),
+                ("file", self.file_key.clone()),
+                ("span", span_part(&self.span)),
+            ],
+        )
+    }
+}
+
+impl StableReferenceKey {
+    pub(crate) fn resolved(
+        target: StableSymbolKey,
+        file_key: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        let language = target.language;
+        let name = target.name.clone();
+        Self {
+            target: Some(target),
+            language,
+            file_key: file_key.into(),
+            name,
+            span,
+        }
+    }
+
+    pub(crate) fn unresolved(
+        language: Language,
+        file_key: impl Into<String>,
+        name: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            target: None,
+            language,
+            file_key: file_key.into(),
+            name: name.into(),
+            span,
+        }
+    }
+
+    pub(crate) fn stable_key(&self) -> String {
+        encode_tagged_parts(
+            "reference",
+            [
+                ("target", optional_part(self.target_stable_key().as_deref())),
+                ("language", language_key(self.language).to_string()),
+                ("file", self.file_key.clone()),
+                ("name", self.name.clone()),
+                ("span", span_part(&self.span)),
+            ],
+        )
+    }
+
+    fn target_stable_key(&self) -> Option<String> {
+        self.target.as_ref().map(StableSymbolKey::stable_key)
+    }
+}
+
+pub(crate) fn symbol_id_from_key(key: &StableSymbolKey) -> SymbolId {
+    SymbolId(id_from_stable_key(&key.stable_key()))
+}
+
+pub(crate) fn definition_id_from_key(key: &StableDefinitionKey) -> DefinitionId {
+    DefinitionId(id_from_stable_key(&key.stable_key()))
+}
+
+pub(crate) fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
+    ReferenceId(id_from_stable_key(&key.stable_key()))
+}
+
+fn id_from_stable_key(stable_key: &str) -> u64 {
+    digest_to_u64(&stable_hash(&[stable_key]))
+}
+
+fn digest_to_u64(digest: &str) -> u64 {
+    let prefix = digest.get(..16).unwrap_or(digest);
+    match u64::from_str_radix(prefix, 16) {
+        Ok(value) => value,
+        Err(_) => {
+            let fallback = stable_hash(&[digest]);
+            let fallback_prefix = fallback.get(..16).unwrap_or(fallback.as_str());
+            u64::from_str_radix(fallback_prefix, 16)
+                .unwrap_or_else(|_| deterministic_bytes_to_u64(fallback.as_bytes()))
+        }
+    }
+}
+
+fn deterministic_bytes_to_u64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn encode_tagged_parts<const N: usize>(kind: &str, parts: [(&str, String); N]) -> String {
+    let mut encoded = length_prefixed(kind);
+    for (label, value) in parts {
+        encoded.push('|');
+        encoded.push_str(label);
+        encoded.push('=');
+        encoded.push_str(&length_prefixed(&normalize_key_part(&value)));
+    }
+    encoded
+}
+
+fn length_prefixed(part: &str) -> String {
+    format!("{}:{part}", part.len())
+}
+
+fn encode_repeated_parts(parts: &[String]) -> String {
+    let mut encoded = String::new();
+    for part in parts {
+        if !encoded.is_empty() {
+            encoded.push('/');
+        }
+        encoded.push_str(&length_prefixed(&normalize_key_part(part)));
+    }
+    encoded
+}
+
+fn normalize_key_part(part: &str) -> String {
+    part.replace('\\', "/").replace('\n', "\\n")
+}
+
+fn optional_part(part: Option<&str>) -> String {
+    part.unwrap_or("<none>").to_string()
+}
+
+fn optional_span_part(span: Option<&Span>) -> String {
+    span.map_or_else(|| "<none>".to_string(), span_part)
+}
+
+fn span_part(span: &Span) -> String {
+    format!(
+        "file:{}:{}-{}:{}:{}-{}:{}",
+        span.file.0,
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col
+    )
+}
+
+fn language_key(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn namespace_key(namespace: SymbolNamespace) -> &'static str {
+    match namespace {
+        SymbolNamespace::Value => "value",
+        SymbolNamespace::Type => "type",
+        SymbolNamespace::Namespace => "namespace",
+        SymbolNamespace::Package => "package",
+        SymbolNamespace::Module => "module",
+        SymbolNamespace::Unknown => "unknown",
+    }
+}
+
+fn kind_key(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Package => "package",
+        SymbolKind::Module => "module",
+        SymbolKind::File => "file",
+        SymbolKind::Function => "function",
+        SymbolKind::Method => "method",
+        SymbolKind::Class => "class",
+        SymbolKind::Interface => "interface",
+        SymbolKind::TypeAlias => "type_alias",
+        SymbolKind::Enum => "enum",
+        SymbolKind::EnumMember => "enum_member",
+        SymbolKind::Variable => "variable",
+        SymbolKind::Constant => "constant",
+        SymbolKind::Parameter => "parameter",
+        SymbolKind::Field => "field",
+        SymbolKind::Property => "property",
+        SymbolKind::Namespace => "namespace",
+        SymbolKind::Import => "import",
+        SymbolKind::Export => "export",
+        SymbolKind::Unknown => "unknown",
+    }
+}
+
 #[cfg(test)]
 mod symbol_graph_stable_ids {
     use crate::core::{
@@ -81,8 +378,36 @@ mod symbol_graph_stable_ids {
         let key = button_key();
         let encoded = key.stable_key();
 
-        assert!(encoded.contains("10:src/button.ts"));
+        assert!(encoded.contains("13:src/button.ts"));
         assert!(!encoded.contains("function Button()"));
+    }
+
+    #[test]
+    fn stable_ids_change_when_part_boundaries_change() {
+        let left = StableSymbolKey::new(
+            Language::TypeScript,
+            Some("ab".to_string()),
+            Some("c".to_string()),
+            Some("src/button.ts".to_string()),
+            Vec::new(),
+            SymbolNamespace::Value,
+            SymbolKind::Function,
+            "render".to_string(),
+            Some(span(10, 16)),
+        );
+        let right = StableSymbolKey::new(
+            Language::TypeScript,
+            Some("a".to_string()),
+            Some("bc".to_string()),
+            Some("src/button.ts".to_string()),
+            Vec::new(),
+            SymbolNamespace::Value,
+            SymbolKind::Function,
+            "render".to_string(),
+            Some(span(10, 16)),
+        );
+
+        assert_ne!(symbol_id_from_key(&left), symbol_id_from_key(&right));
     }
 
     #[test]
