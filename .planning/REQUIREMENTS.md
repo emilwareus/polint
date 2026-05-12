@@ -24,10 +24,10 @@ one roadmap phase.
 
 ### Symbols And References
 
-- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
+- [x] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
 - [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
 - [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
-- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
+- [x] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
 
 ### Call Graph
 
@@ -103,10 +103,10 @@ Deferred until after Go and TS/JS prove the full capability model:
 | MOD-02 | Phase 12 | Complete |
 | MOD-03 | Phase 12 | Complete |
 | MOD-04 | Phase 12 | Complete |
-| SYM-01 | Phase 13 | Pending |
+| SYM-01 | Phase 13 | Complete |
 | SYM-02 | Phase 13 | Pending |
 | SYM-03 | Phase 13 | Pending |
-| SYM-04 | Phase 13 | Pending |
+| SYM-04 | Phase 13 | Complete |
 | CALL-01 | Phase 14 | Pending |
 | CALL-02 | Phase 14 | Pending |
 | CALL-03 | Phase 14 | Pending |
