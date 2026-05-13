@@ -104,8 +104,10 @@ and `OutsideWorkspace`.
 
 - TS/JS resolution uses `oxc_resolver` with project-aware settings such as
   package metadata, extension aliases, and `tsconfig` discovery.
-- Go resolution uses `go list -json ./...` only when a root `go.mod` exists.
-  The command runs with fixed arguments from the repository root.
+- Go resolution uses the same `[languages.go]` lifecycle as symbol/reference
+  facts: module roots are inferred from discovered Go files or declared with
+  `module_roots`, package patterns are interpreted inside those roots, and a
+  temporary internal `go.work` is used when needed.
 - Standard library imports and package-manager dependencies are reported as
   `External`.
 - `Unresolved`, `Dynamic`, and `Unsupported` imports remain visible as facts to

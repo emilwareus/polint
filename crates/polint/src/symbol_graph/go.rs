@@ -6,11 +6,12 @@ use crate::core::{
     span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::go::lifecycle::{self, GoAnalysisConfig};
 use crate::symbol_graph::model::SymbolGraphBuilder;
 use crate::symbol_graph::model::{DefinitionDraft, ReferenceDraft, SymbolDraft};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -36,13 +37,6 @@ const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
         include_str!("../../go-sidecar/polint-go-symbols/internal/symbols/emit.go"),
     ),
 ];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GoSymbolConfig {
-    package_patterns: Vec<String>,
-    build_tags: Vec<String>,
-    include_tests: bool,
-}
 
 #[derive(Debug, Clone)]
 enum GoSidecarFailure {
@@ -148,24 +142,52 @@ fn derive_go_symbols_with_runner(
     db: &AnalysisDb,
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
-    runner: impl FnOnce(&GoSymbolConfig) -> Result<Vec<u8>, GoSidecarFailure>,
+    runner: impl FnOnce(&GoAnalysisConfig) -> Result<Vec<u8>, GoSidecarFailure>,
 ) -> LanguageSymbolOutput {
-    let files = go_files(db);
+    let files = lifecycle::go_files(db);
     if files.is_empty() || !plan.requests_any_capability(GO_SYMBOL_GRAPH_CAPABILITIES) {
         return LanguageSymbolOutput::default();
     }
 
-    if !loaded.root.join("go.mod").is_file() {
+    let config = match GoAnalysisConfig::from_loaded_files(loaded, &files) {
+        Ok(config) => config,
+        Err(error) => {
+            return setup_missing_output(
+                builder,
+                &files,
+                plan,
+                error.reason(),
+                "Configure languages.go.module_roots with repository-relative Go module roots.",
+            );
+        }
+    };
+    let uncovered_files = files_matching_paths(&files, &config.files_without_module_root);
+    if !uncovered_files.is_empty() {
+        let missing = setup_missing_output(
+            builder,
+            &uncovered_files,
+            plan,
+            "some Go files are not under a go.mod module root.",
+            "Move those files under a Go module or set languages.go.module_roots in .polint.toml.",
+        );
+        if !missing.capability_support.is_empty() {
+            return missing;
+        }
+    }
+    let missing_roots = config.missing_module_roots(&loaded.root);
+    if !missing_roots.is_empty() {
         return setup_missing_output(
             builder,
             &files,
             plan,
-            "go.mod was not found at the repository root.",
-            "Add a repository-root go.mod or configure Go symbol package loading in a future lifecycle hook.",
+            &format!(
+                "configured Go module roots are missing go.mod: {}.",
+                missing_roots.join(", ")
+            ),
+            "Check languages.go.module_roots in .polint.toml.",
         );
     }
 
-    let config = GoSymbolConfig::from_loaded(loaded);
     let stdout = match runner(&config) {
         Ok(stdout) => stdout,
         Err(error) => {
@@ -204,30 +226,6 @@ fn derive_go_symbols_with_runner(
     output
 }
 
-fn go_files(db: &AnalysisDb) -> Vec<&SourceFile> {
-    let mut files = db
-        .files()
-        .iter()
-        .filter(|file| file.language == Language::Go)
-        .collect::<Vec<_>>();
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    files
-}
-
-impl GoSymbolConfig {
-    fn from_loaded(loaded: &LoadedConfig) -> Self {
-        let settings = &loaded.config.languages.go;
-        Self {
-            package_patterns: string_or_array_setting(settings, "package_patterns", &["./..."]),
-            build_tags: string_or_array_setting(settings, "build_tags", &[]),
-            include_tests: settings
-                .get("include_tests")
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(true),
-        }
-    }
-}
-
 impl GoSidecarFailure {
     fn reason(&self) -> String {
         match self {
@@ -239,35 +237,19 @@ impl GoSidecarFailure {
     }
 }
 
-fn string_or_array_setting(
-    settings: &BTreeMap<String, toml::Value>,
-    key: &str,
-    default: &[&str],
-) -> Vec<String> {
-    let Some(value) = settings.get(key) else {
-        return default.iter().map(|value| (*value).to_string()).collect();
-    };
-    match value {
-        toml::Value::String(value) => split_comma(value),
-        toml::Value::Array(values) => values
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .flat_map(split_comma)
-            .collect::<Vec<_>>(),
-        _ => default.iter().map(|value| (*value).to_string()).collect(),
-    }
-}
-
-fn split_comma(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
+fn files_matching_paths<'a>(
+    files: &'a [&'a SourceFile],
+    relative_paths: &[String],
+) -> Vec<&'a SourceFile> {
+    let relative_paths = relative_paths.iter().collect::<BTreeSet<_>>();
+    files
+        .iter()
+        .copied()
+        .filter(|file| relative_paths.contains(&file.relative_path))
         .collect()
 }
 
-fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSidecarFailure> {
+fn run_go_sidecar(root: &Path, config: &GoAnalysisConfig) -> Result<Vec<u8>, GoSidecarFailure> {
     let sidecar = resolve_go_sidecar()?;
     let mut command = match sidecar {
         GoSidecarCommand::Binary(path) => {
@@ -291,6 +273,8 @@ fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSid
         .arg("symbols")
         .arg("--root")
         .arg(root.as_os_str())
+        .arg("--module-roots")
+        .arg(config.module_roots.join(","))
         .arg("--patterns")
         .arg(config.package_patterns.join(","))
         .arg("--tests")
@@ -1015,6 +999,7 @@ mod symbol_graph_go_setup {
             temp.path().join(".polint.toml"),
             r#"
 [languages.go]
+module_roots = ["cmd/service", "libs/platform"]
 package_patterns = ["./cmd/...", "./pkg/..."]
 build_tags = "enterprise,polint"
 include_tests = false
@@ -1022,15 +1007,95 @@ include_tests = false
         )
         .expect("write config");
 
-        let config = GoSymbolConfig::from_loaded(&loaded_config_for(temp.path()));
+        let files = Vec::new();
+        let config =
+            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
 
         assert_eq!(
             config,
-            GoSymbolConfig {
+            GoAnalysisConfig {
+                module_roots: vec!["cmd/service".to_string(), "libs/platform".to_string(),],
                 package_patterns: vec!["./cmd/...".to_string(), "./pkg/...".to_string()],
                 build_tags: vec!["enterprise".to_string(), "polint".to_string()],
                 include_tests: false,
+                files_without_module_root: Vec::new(),
             }
+        );
+    }
+
+    #[test]
+    fn go_symbol_config_infers_nearest_module_roots_for_monorepos() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/payments")).expect("mkdirs");
+        std::fs::create_dir_all(temp.path().join("libs/money")).expect("mkdirs");
+        std::fs::write(
+            temp.path().join("services/payments/go.mod"),
+            "module example.com/payments\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
+        std::fs::write(
+            temp.path().join("libs/money/go.mod"),
+            "module example.com/money\n\ngo 1.24\n",
+        )
+        .expect("write lib go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/payments/main.go",
+            "package payments\n",
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "libs/money/money.go",
+            "package money\n",
+        );
+        let files = lifecycle::go_files(&db);
+
+        let config =
+            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
+
+        assert_eq!(
+            config.module_roots,
+            vec!["libs/money".to_string(), "services/payments".to_string()]
+        );
+        assert!(config.files_without_module_root.is_empty());
+    }
+
+    #[test]
+    fn go_symbol_config_treats_files_outside_configured_roots_as_uncovered() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(".polint.toml"),
+            r#"
+[languages.go]
+module_roots = ["services/payments"]
+"#,
+        )
+        .expect("write config");
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/payments/main.go",
+            "package payments\n",
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/ledger/main.go",
+            "package ledger\n",
+        );
+        let files = lifecycle::go_files(&db);
+
+        let config =
+            GoAnalysisConfig::from_loaded_files(&loaded_config_for(temp.path()), &files).unwrap();
+
+        assert_eq!(config.module_roots, vec!["services/payments".to_string()]);
+        assert_eq!(
+            config.files_without_module_root,
+            vec!["services/ledger/main.go".to_string()]
         );
     }
 
@@ -1325,6 +1390,14 @@ mod symbol_graph_go {
             })
     }
 
+    fn file_id(db: &AnalysisDb, relative_path: &str) -> FileId {
+        db.files()
+            .iter()
+            .find(|file| file.relative_path == relative_path)
+            .map(|file| file.id)
+            .unwrap_or_else(|| panic!("missing file {relative_path}"))
+    }
+
     #[test]
     fn go_function_definition_and_call_reference_are_exact_semantic() {
         let Some((graph, output)) = derive_go_fixture(&[(
@@ -1409,6 +1482,87 @@ func Use() {
         let reference = resolved_reference(&graph.references, println.id, ReferenceKind::Call);
         assert_eq!(reference.name, "Println");
         assert_eq!(reference.precision, SymbolPrecision::ExactSemantic);
+    }
+
+    #[test]
+    fn go_multi_module_monorepo_infers_module_roots_without_repo_go_mod() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::create_dir_all(temp.path().join("libs/shared")).expect("mkdir lib");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            r#"module example.com/app
+
+go 1.24
+
+require example.com/shared v0.0.0
+"#,
+        )
+        .expect("write app go.mod");
+        std::fs::write(
+            temp.path().join("libs/shared/go.mod"),
+            r#"module example.com/shared
+
+go 1.24
+"#,
+        )
+        .expect("write shared go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/app/main.go",
+            r#"package app
+
+import "example.com/shared"
+
+func Use() string {
+	return shared.Build()
+}
+"#,
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "libs/shared/shared.go",
+            r#"package shared
+
+func Build() string {
+	return "ok"
+}
+"#,
+        );
+        let mut builder = SymbolGraphBuilder::new();
+        let output = derive_go_symbols(
+            &mut builder,
+            &db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]),
+        );
+        if output
+            .capability_support
+            .iter()
+            .any(|entry| entry.status == CapabilitySupportStatus::SetupMissing)
+        {
+            eprintln!(
+                "skipping Go sidecar-backed monorepo test; setup missing: {:#?}",
+                output.capability_support
+            );
+            return;
+        }
+
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let graph = builder.finish();
+        assert!(
+            graph.diagnostics.is_empty(),
+            "monorepo derivation should not produce duplicate symbol diagnostics: {:#?}",
+            graph.diagnostics
+        );
+        let build = symbol(&graph.symbols, "Build", SymbolKind::Function);
+        let definition = primary_definition(&graph.definitions, build.id);
+        assert_eq!(definition.file, Some(file_id(&db, "libs/shared/shared.go")));
+        let reference = resolved_reference(&graph.references, build.id, ReferenceKind::Call);
+        assert_eq!(reference.file, Some(file_id(&db, "services/app/main.go")));
     }
 
     #[test]

@@ -4336,6 +4336,58 @@ mod capability_planning {
     }
 
     #[test]
+    fn external_rule_consumes_go_symbols_from_monorepo_submodule_without_repo_go_mod() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_go_symbol_reference_rule_repo(temp.path());
+        write_file(
+            &temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["services/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+        );
+        fs::create_dir_all(temp.path().join("services/app/src")).unwrap();
+        fs::rename(
+            temp.path().join("go.mod"),
+            temp.path().join("services/app/go.mod"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path().join("src/main.go"),
+            temp.path().join("services/app/src/main.go"),
+        )
+        .unwrap();
+        fs::remove_dir(temp.path().join("src")).unwrap();
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let report = run_external_symbol_reference_check(temp.path());
+        if has_go_symbol_setup_missing_diagnostic(&report) {
+            eprintln!("skipping external Go monorepo SDK fixture; setup missing: {report:#?}");
+            return;
+        }
+        assert_no_capability_diagnostics(&report);
+
+        let diagnostics =
+            report_diagnostics_for_rule(&report, "local/go-symbol-reference-public-sdk");
+        let mut cases = diagnostic_cases(&diagnostics);
+        cases.sort();
+        assert_eq!(
+            cases,
+            [
+                "go-reference:field-selector",
+                "go-reference:function-call",
+                "go-reference:local-variable",
+                "go-reference:method-call",
+            ],
+            "{report:#?}"
+        );
+    }
+
+    #[test]
     fn symbol_reference_macro_mapping_and_determinism() {
         let temp = tempfile::tempdir().unwrap();
         write_external_ts_symbol_reference_rule_repo(temp.path());

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -19,6 +20,7 @@ const SchemaVersion = "polint-go-symbols-v1"
 
 type Config struct {
 	Root         string
+	ModuleRoots  []string
 	Patterns     []string
 	IncludeTests bool
 	BuildTags    []string
@@ -121,10 +123,20 @@ func Emit(config Config) (Output, error) {
 	if err != nil {
 		return Output{}, fmt.Errorf("resolve root: %w", err)
 	}
+	moduleRoots, err := normalizeModuleRoots(config.ModuleRoots)
+	if err != nil {
+		return Output{}, err
+	}
 	patterns := config.Patterns
 	if len(patterns) == 0 {
 		patterns = []string{"./..."}
 	}
+	patterns = rootedPackagePatterns(moduleRoots, patterns)
+	env, cleanup, err := goPackageEnv(root, moduleRoots)
+	if err != nil {
+		return Output{}, err
+	}
+	defer cleanup()
 
 	fset := token.NewFileSet()
 	loadConfig := &packages.Config{
@@ -140,7 +152,7 @@ func Emit(config Config) (Output, error) {
 		Dir:   root,
 		Fset:  fset,
 		Tests: config.IncludeTests,
-		Env:   goPackageEnv(root),
+		Env:   env,
 	}
 	if len(config.BuildTags) > 0 {
 		loadConfig.BuildFlags = []string{"-tags=" + strings.Join(config.BuildTags, ",")}
@@ -185,14 +197,143 @@ func Emit(config Config) (Output, error) {
 	return e.out, nil
 }
 
-func goPackageEnv(root string) []string {
-	env := os.Environ()
-	gowork := "off"
-	if path := filepath.Join(root, "go.work"); fileExists(path) {
-		gowork = path
+func normalizeModuleRoots(roots []string) ([]string, error) {
+	if len(roots) == 0 {
+		roots = []string{"."}
 	}
-	env = append(env, "GOWORK="+gowork)
-	return env
+	seen := make(map[string]bool)
+	var normalized []string
+	for _, raw := range roots {
+		root := strings.TrimSpace(raw)
+		if root == "" || root == "." {
+			root = "."
+		}
+		if filepath.IsAbs(root) {
+			return nil, fmt.Errorf("module root %q must be relative to repository root", raw)
+		}
+		clean := filepath.Clean(filepath.FromSlash(root))
+		if clean == "." {
+			root = "."
+		} else {
+			if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("module root %q escapes repository root", raw)
+			}
+			root = filepath.ToSlash(clean)
+		}
+		if !seen[root] {
+			normalized = append(normalized, root)
+			seen[root] = true
+		}
+	}
+	return normalized, nil
+}
+
+func rootedPackagePatterns(moduleRoots []string, patterns []string) []string {
+	seen := make(map[string]bool)
+	var rooted []string
+	for _, root := range moduleRoots {
+		for _, pattern := range patterns {
+			pattern = strings.TrimSpace(pattern)
+			if pattern == "" {
+				continue
+			}
+			rootedPattern := rootedPackagePattern(root, pattern)
+			if !seen[rootedPattern] {
+				rooted = append(rooted, rootedPattern)
+				seen[rootedPattern] = true
+			}
+		}
+	}
+	return rooted
+}
+
+func rootedPackagePattern(root string, pattern string) string {
+	if root == "." {
+		return pattern
+	}
+	base := "./" + strings.TrimPrefix(root, "./")
+	if pattern == "." {
+		return base
+	}
+	if strings.HasPrefix(pattern, "./") {
+		suffix := strings.TrimPrefix(pattern, "./")
+		if suffix == "" {
+			return base
+		}
+		return base + "/" + suffix
+	}
+	return pattern
+}
+
+func goPackageEnv(root string, moduleRoots []string) ([]string, func(), error) {
+	env := os.Environ()
+	if path := filepath.Join(root, "go.work"); fileExists(path) {
+		env = append(env, "GOWORK="+path)
+		return env, func() {}, nil
+	}
+	if needsSyntheticWorkspace(root, moduleRoots) {
+		gowork, cleanup, err := writeSyntheticGoWork(root, moduleRoots)
+		if err != nil {
+			return nil, nil, err
+		}
+		env = append(env, "GOWORK="+gowork)
+		return env, cleanup, nil
+	}
+	env = append(env, "GOWORK=off")
+	return env, func() {}, nil
+}
+
+func needsSyntheticWorkspace(root string, moduleRoots []string) bool {
+	if len(moduleRoots) != 1 || moduleRoots[0] != "." {
+		return true
+	}
+	return !fileExists(filepath.Join(root, "go.mod"))
+}
+
+func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), error) {
+	file, err := os.CreateTemp("", "polint-go-symbols-*.work")
+	if err != nil {
+		return "", nil, fmt.Errorf("create synthetic go.work: %w", err)
+	}
+	path := file.Name()
+	cleanup := func() {
+		_ = os.Remove(path)
+	}
+	var builder strings.Builder
+	builder.WriteString("go ")
+	builder.WriteString(workspaceGoVersion())
+	builder.WriteString("\n\nuse (\n")
+	for _, moduleRoot := range moduleRoots {
+		path := root
+		if moduleRoot != "." {
+			path = filepath.Join(root, filepath.FromSlash(moduleRoot))
+		}
+		builder.WriteString("\t")
+		builder.WriteString(strconv.Quote(filepath.ToSlash(path)))
+		builder.WriteString("\n")
+	}
+	builder.WriteString(")\n")
+	if _, err := file.WriteString(builder.String()); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("write synthetic go.work: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("close synthetic go.work: %w", err)
+	}
+	return path, cleanup, nil
+}
+
+func workspaceGoVersion() string {
+	version := strings.TrimPrefix(runtime.Version(), "go")
+	version = strings.TrimFunc(version, func(r rune) bool {
+		return !(r == '.' || r >= '0' && r <= '9')
+	})
+	if version == "" {
+		return "1.24"
+	}
+	return version
 }
 
 func fileExists(path string) bool {

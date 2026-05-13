@@ -72,7 +72,7 @@ pub(crate) fn derive_requested_module_graph(
             .iter()
             .any(|import| import.language == crate::core::Language::Go);
     let go_metadata = if has_go_inputs {
-        go::GoPackageIndex::load(loaded.root.as_path(), db)
+        go::GoPackageIndex::load(loaded, db)
     } else {
         go::GoPackageIndex::default()
     };

@@ -385,6 +385,10 @@ mod tests {
             toml::Value::String("./...".to_string()),
         );
         baseline.config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/app".to_string())]),
+        );
+        baseline.config.languages.go.insert(
             "build_tags".to_string(),
             toml::Value::String("enterprise".to_string()),
         );
@@ -398,6 +402,12 @@ mod tests {
         changed_patterns.config.languages.go.insert(
             "package_patterns".to_string(),
             toml::Value::Array(vec![toml::Value::String("./cmd/...".to_string())]),
+        );
+
+        let mut changed_roots = baseline.clone();
+        changed_roots.config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/worker".to_string())]),
         );
 
         let mut changed_tags = baseline.clone();
@@ -414,6 +424,7 @@ mod tests {
             .insert("include_tests".to_string(), toml::Value::Boolean(false));
 
         assert_ne!(config_hash(&baseline), config_hash(&changed_patterns));
+        assert_ne!(config_hash(&baseline), config_hash(&changed_roots));
         assert_ne!(config_hash(&baseline), config_hash(&changed_tags));
         assert_ne!(config_hash(&baseline), config_hash(&changed_tests));
     }

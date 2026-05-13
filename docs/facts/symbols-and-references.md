@@ -299,13 +299,20 @@ Current strengths:
   type-use references
 - `ExactSemantic` precision for typed facts emitted by the sidecar
 - setup-aware diagnostics when Go package loading cannot run
+- monorepos with Go modules below the repository root, inferred automatically or
+  declared through `[languages.go].module_roots`
 
 Current limits:
 
-- requires a repository-root `go.mod` for Go symbol/reference support
+- requires Go 1.24 or newer on `PATH` when using the default embedded source
+  sidecar, unless `POLINT_GO_SYMBOLS` points to a prebuilt sidecar binary
+- each analyzed Go file must belong to a Go module with a `go.mod`
 - package loading must succeed for the configured package patterns and build tags
 - setup failures produce `polint/capability` diagnostics and block requesting
   Go symbol/reference rules instead of running them with placeholder facts
+- package patterns are interpreted inside each configured module root; repo-level
+  `go.work` is honored, otherwise polint can use a temporary internal workspace
+  for package loading below the repository root
 - no Go SSA, pointer analysis, call graph, CFG, coverage, or dataflow facts
 - no public exposure of Go object values, object addresses, package loader JSON,
   sidecar DTOs, or sidecar internals

@@ -13,12 +13,13 @@ import (
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] != "symbols" {
-		fmt.Fprintln(os.Stderr, "usage: polint-go-symbols symbols --root <path> --patterns <comma-list> --tests <bool> --build-tags <comma-list> --json")
+		fmt.Fprintln(os.Stderr, "usage: polint-go-symbols symbols --root <path> --module-roots <comma-list> --patterns <comma-list> --tests <bool> --build-tags <comma-list> --json")
 		os.Exit(2)
 	}
 
 	flags := flag.NewFlagSet("symbols", flag.ExitOnError)
 	root := flags.String("root", ".", "repository root")
+	moduleRoots := flags.String("module-roots", ".", "comma-separated module roots relative to --root")
 	patterns := flags.String("patterns", "./...", "comma-separated package patterns")
 	tests := flags.String("tests", "true", "include test package variants")
 	buildTags := flags.String("build-tags", "", "comma-separated Go build tags")
@@ -39,6 +40,7 @@ func main() {
 
 	out, err := symbols.Emit(symbols.Config{
 		Root:         *root,
+		ModuleRoots:  splitComma(*moduleRoots),
 		Patterns:     splitComma(*patterns),
 		IncludeTests: includeTests,
 		BuildTags:    splitComma(*buildTags),

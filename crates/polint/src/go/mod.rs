@@ -2,6 +2,7 @@
 //! parser diagnostics into [`crate::core::AnalysisDb`], with optional disk cache.
 
 mod adapter;
+pub(crate) mod lifecycle;
 #[cfg(test)]
 mod tests;
 

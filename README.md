@@ -244,6 +244,19 @@ jobs:
       - run: polint check --format sarif > polint.sarif
 ```
 
+Rules that request Go symbol/reference facts use the embedded Go sidecar by
+default, which needs Go 1.24 or newer on `PATH`. polint supports monorepos by
+inferring Go module roots from discovered files, or from
+`[languages.go].module_roots` in `.polint.toml`; no repository-root `go.mod` is
+required. In GitHub Actions, add this before `polint check` when using those
+facts:
+
+```yaml
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+```
+
 ## More
 
 - [Examples](examples/)

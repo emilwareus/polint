@@ -155,6 +155,29 @@ live in `examples/` inside this repository.
 - Document new public facts under `docs/facts/`, including limits and heuristic
   behavior.
 
+## Go Analysis Lifecycle Contract
+
+Go semantic analysis must support monorepos from day one without requiring a
+repository-root `go.mod` or extra checked-in setup files. Keep the user-facing
+configuration in the single `.polint.toml` file.
+
+- Go analyzers should infer module roots by walking from discovered Go files to
+  the nearest `go.mod`, and should also honor explicit `[languages.go]`
+  `module_roots = [...]` when users want deterministic lifecycle control.
+- If Go module roots live below the repository root, or multiple roots are
+  analyzed, and the repository does not provide a root `go.work`, use an internal
+  temporary workspace for package loading rather than writing generated lifecycle
+  files into the repository.
+- `package_patterns`, `build_tags`, and `include_tests` are analysis lifecycle
+  inputs and must remain in `[languages.go]`; they must participate in cache or
+  deterministic analysis digests when the affected analyzer is cached.
+- Future Go analysis families such as module graph, call graph, CFG, dataflow,
+  coverage, symbols, and references should share the same root-selection model.
+  Do not introduce one-off root flags, hidden side files, or per-analyzer config
+  files for these lifecycle concerns.
+- Setup gaps should be explicit `polint/capability` diagnostics. Do not run rules
+  with placeholder semantic facts when the configured Go lifecycle cannot load.
+
 
 
 <!-- GSD:profile-start -->

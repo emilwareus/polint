@@ -1,7 +1,9 @@
+use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision,
     ResolutionStatus, UnresolvedReason,
 };
+use crate::go::lifecycle::{self, GoAnalysisConfig};
 use crate::module_graph::model::{
     ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft, ResolverInput,
 };
@@ -9,13 +11,13 @@ use crate::module_graph::paths;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 
 #[derive(Debug, Clone)]
 pub(crate) struct GoPackageIndex {
     by_import_path: BTreeMap<String, GoPackageMetadata>,
     file_to_import_path: BTreeMap<FileId, String>,
-    module_path: Option<String>,
+    module_paths: BTreeSet<String>,
     setup_missing_reason: Option<String>,
 }
 
@@ -57,20 +59,32 @@ impl Default for GoPackageIndex {
 }
 
 impl GoPackageIndex {
-    pub(crate) fn load(root: &Path, db: &AnalysisDb) -> Self {
-        Self::load_with_runner(root, db, run_go_list)
+    pub(crate) fn load(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
+        let config = match GoAnalysisConfig::from_loaded(loaded, db) {
+            Ok(config) => config,
+            Err(error) => return Self::setup_missing(error.reason()),
+        };
+        Self::load_with_runner(loaded.root.as_path(), db, &config, run_go_list)
     }
 
     fn load_with_runner(
         root: &Path,
         db: &AnalysisDb,
-        run: impl FnOnce(&Path) -> GoCommandOutput,
+        config: &GoAnalysisConfig,
+        run: impl FnOnce(&Path, &GoAnalysisConfig) -> GoCommandOutput,
     ) -> Self {
-        if !root.join("go.mod").is_file() {
-            return Self::setup_missing("go.mod was not found at the repository root.");
+        if !config.files_without_module_root.is_empty() {
+            return Self::setup_missing("some Go files are not under a go.mod module root.");
+        }
+        let missing_roots = config.missing_module_roots(root);
+        if !missing_roots.is_empty() {
+            return Self::setup_missing(format!(
+                "configured Go module roots are missing go.mod: {}.",
+                missing_roots.join(", ")
+            ));
         }
 
-        let output = run(root);
+        let output = run(root, config);
         if !output.status.success() {
             return Self::setup_missing(go_list_failure_reason(&output));
         }
@@ -105,7 +119,7 @@ impl GoPackageIndex {
         let mut index = Self {
             by_import_path: BTreeMap::new(),
             file_to_import_path: BTreeMap::new(),
-            module_path: None,
+            module_paths: BTreeSet::new(),
             setup_missing_reason: None,
         };
         for package in packages {
@@ -113,8 +127,8 @@ impl GoPackageIndex {
                 continue;
             }
             let metadata = GoPackageMetadata::from_go_list_package(root, &file_ids, package);
-            if index.module_path.is_none() {
-                index.module_path.clone_from(&metadata.module_path);
+            if let Some(module_path) = &metadata.module_path {
+                index.module_paths.insert(module_path.clone());
             }
             for file in &metadata.files {
                 index
@@ -132,7 +146,7 @@ impl GoPackageIndex {
         Self {
             by_import_path: BTreeMap::new(),
             file_to_import_path: BTreeMap::new(),
-            module_path: None,
+            module_paths: BTreeSet::new(),
             setup_missing_reason: Some(reason.into()),
         }
     }
@@ -145,8 +159,9 @@ impl GoPackageIndex {
         self.setup_missing_reason.is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn module_path(&self) -> Option<&String> {
-        self.module_path.as_ref()
+        self.module_paths.iter().next()
     }
 
     pub(crate) fn package(&self, import_path: &str) -> Option<&GoPackageMetadata> {
@@ -167,14 +182,18 @@ impl GoPackageIndex {
     fn is_local_package(&self, package: &GoPackageMetadata) -> bool {
         !package.standard
             && !package.files.is_empty()
-            && self.module_path.as_deref().is_some_and(|module_path| {
-                import_is_within_module(&package.import_path, module_path)
+            && package.module_path.as_deref().is_some_and(|module_path| {
+                self.module_paths.contains(module_path)
+                    && import_is_within_module(&package.import_path, module_path)
             })
     }
 
     fn import_is_external_dependency(&self, import_path: &str) -> bool {
-        if let Some(module_path) = self.module_path.as_deref() {
-            return !import_is_within_module(import_path, module_path);
+        if !self.module_paths.is_empty() {
+            return !self
+                .module_paths
+                .iter()
+                .any(|module_path| import_is_within_module(import_path, module_path));
         }
         is_go_stdlib_import_path(import_path)
     }
@@ -185,7 +204,9 @@ impl GoPackageIndex {
         db: &AnalysisDb,
         run: impl FnOnce() -> GoCommandOutput,
     ) -> Self {
-        Self::load_with_runner(root, db, |_| run())
+        let loaded = crate::config::load_config(root).expect("config loads");
+        let config = GoAnalysisConfig::from_loaded(&loaded, db).expect("Go lifecycle config loads");
+        Self::load_with_runner(root, db, &config, |_, _| run())
     }
 }
 
@@ -193,13 +214,13 @@ pub(crate) fn seed_go_module_nodes(
     builder: &mut ModuleGraphBuilder,
     metadata: &GoPackageIndex,
 ) -> GoModuleOwnership {
-    let Some(module_path) = metadata.module_path() else {
-        return GoModuleOwnership::default();
-    };
-    let module = builder.ensure_module_node(module_path.clone());
     let mut ownership = GoModuleOwnership::default();
 
     for package in metadata.local_packages() {
+        let Some(module_path) = &package.module_path else {
+            continue;
+        };
+        let module = builder.ensure_module_node(module_path.clone());
         let package_node =
             builder.ensure_package_node_with_label(package.import_path(), None, Some(Language::Go));
         builder.link_module_contains(module, package_node);
@@ -306,11 +327,24 @@ impl From<std::process::Output> for GoCommandOutput {
     }
 }
 
-fn run_go_list(root: &Path) -> GoCommandOutput {
-    Command::new("go")
-        .current_dir(root)
-        .env_remove("GOFLAGS")
-        .args(["list", "-json", "./..."])
+fn run_go_list(root: &Path, config: &GoAnalysisConfig) -> GoCommandOutput {
+    let (mut command, _workspace) = match lifecycle::command_with_go_env(root, &config.module_roots)
+    {
+        Ok(command) => command,
+        Err(error) => {
+            return GoCommandOutput {
+                status: failed_exit_status(),
+                stdout: Vec::new(),
+                stderr: error.reason().as_bytes().to_vec(),
+            };
+        }
+    };
+    command.args(["list", "-json"]);
+    if !config.build_tags.is_empty() {
+        command.arg(format!("-tags={}", config.build_tags.join(",")));
+    }
+    command
+        .args(config.rooted_package_patterns())
         .output()
         .map(Into::into)
         .unwrap_or_else(|error| GoCommandOutput {
@@ -498,9 +532,10 @@ mod tests {
     }
 
     #[test]
-    fn module_graph_go_metadata_missing_go_mod_is_setup_missing_without_running_go() {
+    fn module_graph_go_metadata_missing_module_root_is_setup_missing_without_running_go() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let db = AnalysisDb::new();
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package main\n");
         let command_ran = Cell::new(false);
 
         let index = GoPackageIndex::load_with_runner_for_test(temp.path(), &db, || {
@@ -511,7 +546,7 @@ mod tests {
         assert!(!command_ran.get());
         assert_eq!(
             index.setup_missing_reason(),
-            Some("go.mod was not found at the repository root.")
+            Some("some Go files are not under a go.mod module root.")
         );
     }
 
@@ -599,6 +634,41 @@ mod tests {
             .expect("package metadata exists");
 
         assert_eq!(package.files().collect::<Vec<_>>(), vec![source, test]);
+    }
+
+    #[test]
+    fn module_graph_go_metadata_loads_monorepo_submodule_without_repo_go_mod() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        let main = add_go_file(
+            &mut db,
+            temp.path(),
+            "services/app/main.go",
+            "package app\n",
+        );
+        let dir = temp.path().join("services/app");
+        let stdout = format!(
+            r#"{{"ImportPath":"example.com/app","Name":"app","Dir":{},"GoFiles":["main.go"],"Standard":false,"Module":{{"Path":"example.com/app"}}}}
+"#,
+            serde_json::to_string(&dir.to_string_lossy()).expect("serialize dir"),
+        );
+        let command_ran = Cell::new(false);
+
+        let index = GoPackageIndex::load_with_runner_for_test(temp.path(), &db, || {
+            command_ran.set(true);
+            successful_go_output(stdout.as_bytes())
+        });
+
+        assert!(command_ran.get());
+        assert_eq!(index.setup_missing_reason(), None);
+        let package = index.package("example.com/app").expect("package exists");
+        assert_eq!(package.files().collect::<Vec<_>>(), vec![main]);
     }
 
     #[test]
@@ -797,7 +867,7 @@ mod tests {
         );
         assert_eq!(
             derivation.capability_support[0].reason.as_deref(),
-            Some("go.mod was not found at the repository root.")
+            Some("some Go files are not under a go.mod module root.")
         );
         assert_eq!(db.resolved_imports().len(), 1);
         let fact = &db.resolved_imports()[0];
