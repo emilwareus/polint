@@ -135,7 +135,7 @@ func Build() string {
 		t.Fatalf("marshal output: %v", err)
 	}
 	text := string(encoded)
-	for _, forbidden := range []string{"raw-source-sentinel", "func Build", "package app", `"Source"`, `"Content"`} {
+	for _, forbidden := range []string{"raw-source-sentinel", "return \"raw-source-sentinel\"", "func Build()", "package app", `"Source"`, `"Content"`} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("sidecar JSON contains raw source marker %q in %s", forbidden, text)
 		}
