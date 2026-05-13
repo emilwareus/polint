@@ -31,7 +31,7 @@ once.
 |-------|------|------|--------------|
 | 11 | Capability-Driven Analysis Plan | Make `Capabilities` drive analysis, setup checks, and cache semantics. (Complete: 3/3 plans executed on 2026-05-09.) | PLAN-01, PLAN-02, PLAN-03, PLAN-04 |
 | 12 | Resolved Imports and Module Relationships | Resolve syntactic imports into module/file/package relationships. (Complete: 5/5 plans executed on 2026-05-11.) | MOD-01, MOD-02, MOD-03, MOD-04 |
-| 13 | 1/6 | In Progress|  |
+| 13 | 2/6 | In Progress|  |
 | 14 | Direct and Resolved Call Facts | Add call edges with resolution status and confidence. | CALL-01, CALL-02, CALL-03, CALL-04 |
 | 15 | Control-Flow Facts for Go and TS/JS | Add typed SDK views for per-function control flow. | CFG-01, CFG-02, CFG-03, CFG-04 |
 | 16 | Coverage Facts Import | Import Go and TS/JS coverage reports into public coverage facts. | COV-01, COV-02, COV-03, COV-04 |

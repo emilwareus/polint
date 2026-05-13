@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-05-12T20:25:31.638Z"
-last_activity: 2026-05-12
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-05-13T05:15:14.739Z"
+last_activity: 2026-05-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 14
-  completed_plans: 9
-  percent: 64
+  completed_plans: 10
+  percent: 71
 ---
 
 # State: polint
@@ -65,8 +65,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to execute
 Phase: 13 (symbols-and-references) — EXECUTING
-Plan: 2 of 6
-Last activity: 2026-05-12
+Plan: 3 of 6
+Last activity: 2026-05-13
 
 ## Quick Tasks Completed
 
@@ -202,6 +202,9 @@ Last activity: 2026-05-12
 - [Phase 13-symbols-and-references]: References capability internally enables symbols so reference consumers always get symbol identity.
 - [Phase 13-symbols-and-references]: Symbol/reference provider names are recognized but remain Unsupported until provider plans promote support.
 - [Phase 13-symbols-and-references]: Definitions are queried through the Symbols view rather than a separate Definitions view.
+- [Phase 13-symbols-and-references]: Stable symbol/reference IDs are derived from length-prefixed semantic stable keys using cache::stable_hash, never storage position or randomized hashing.
+- [Phase 13-symbols-and-references]: SymbolGraphBuilder stages facts in BTree-backed maps and emits deterministic polint/internal diagnostics for ID collisions or incompatible duplicate stable keys.
+- [Phase 13-symbols-and-references]: Internal query helpers remain crate-private and delegate to AnalysisDb/SDK-compatible semantics instead of widening the public API.
 
 ## Performance Metrics
 
@@ -242,11 +245,12 @@ Last activity: 2026-05-12
 | Phase 12-resolved-imports-and-module-relationships P04 | 16m 9s | 3 tasks | 3 files |
 | Phase 12-resolved-imports-and-module-relationships P05 | 30 min | 3 tasks | 8 files |
 | Phase 13-symbols-and-references P01 | 17min | 3 tasks | 8 files |
+| Phase 13-symbols-and-references P02 | 8h 46m | 3 tasks | 6 files |
 
 ## Session
 
-**Last Date:** 2026-05-12T20:25:31.635Z
-**Stopped At:** Completed 13-01-PLAN.md
+**Last Date:** 2026-05-13T05:15:14.735Z
+**Stopped At:** Completed 13-02-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
