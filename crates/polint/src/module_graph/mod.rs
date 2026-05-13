@@ -467,6 +467,40 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_derives_for_symbol_capabilities() {
+        for capability in ["symbols", "references"] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut db = AnalysisDb::new();
+            let app = add_file(
+                &mut db,
+                temp.path(),
+                "src/app.ts",
+                "import tokens from './tokens';\n",
+            );
+            add_file(
+                &mut db,
+                temp.path(),
+                "src/tokens.ts",
+                "export const tokens = {};\n",
+            );
+            push_ts_import(&mut db, app, "./tokens", 0);
+
+            derive_requested_module_graph(
+                &mut db,
+                &loaded_config_for(temp.path()),
+                &AnalysisPlan::from_capability_names_for_test(&[capability]),
+            );
+
+            assert_eq!(
+                db.resolved_imports().len(),
+                1,
+                "{capability} should trigger module graph derivation"
+            );
+            assert_eq!(db.resolved_imports()[0].status, ResolutionStatus::Resolved);
+        }
+    }
+
+    #[test]
     fn module_graph_derivation_support_view_overrides_base_rows() {
         let derivation = super::ModuleGraphDerivation {
             diagnostics: Vec::new(),
