@@ -718,3 +718,143 @@ export interface MergeMe {
         assert!(!answer.stable_key.contains("export const answer"));
     }
 }
+
+#[cfg(test)]
+mod symbol_graph_ts_references {
+    use super::derive_ts_symbols;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ReferenceFact, ReferenceKind, SymbolFact, SymbolPrecision,
+        SymbolResolutionStatus,
+    };
+    use crate::symbol_graph::model::SymbolGraphBuilder;
+    use std::fs;
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
+        fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn derive_ts_reference_facts(source: &str) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/component.ts", source);
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut builder = SymbolGraphBuilder::new();
+
+        derive_ts_symbols(&mut builder, &db, &loaded, &plan);
+        let output = builder.finish();
+        (output.symbols, output.references)
+    }
+
+    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
+        symbols
+            .iter()
+            .find(|symbol| symbol.name == name)
+            .unwrap_or_else(|| panic!("missing symbol `{name}` in {symbols:#?}"))
+    }
+
+    fn references_to<'a>(
+        symbols: &[SymbolFact],
+        references: &'a [ReferenceFact],
+        name: &str,
+    ) -> Vec<&'a ReferenceFact> {
+        let target = symbol(symbols, name).id;
+        references
+            .iter()
+            .filter(|reference| reference.target == Some(target))
+            .collect()
+    }
+
+    #[test]
+    fn extracts_resolved_reference_kinds_from_oxc_semantic_data() {
+        let (symbols, references) = derive_ts_reference_facts(
+            r#"
+type Model = { value: number };
+
+function helper(input: Model) {
+    return input.value;
+}
+
+let count = 0;
+count = helper({ value: count });
+"#,
+        );
+
+        assert!(references_to(&symbols, &references, "helper").iter().any(
+            |reference| reference.kind == ReferenceKind::Call
+                && reference.status == SymbolResolutionStatus::Resolved
+                && reference.precision == SymbolPrecision::ExactLocal
+        ));
+        assert!(references_to(&symbols, &references, "Model")
+            .iter()
+            .any(|reference| reference.kind == ReferenceKind::TypeUse));
+        assert!(references_to(&symbols, &references, "input")
+            .iter()
+            .any(|reference| reference.kind == ReferenceKind::Read));
+        assert!(references_to(&symbols, &references, "count")
+            .iter()
+            .any(|reference| reference.kind == ReferenceKind::Write));
+    }
+
+    #[test]
+    fn emits_visible_unresolved_references_from_root_unresolved_set() {
+        let (_symbols, references) = derive_ts_reference_facts(
+            r#"
+export function run() {
+    return missingValue + anotherMissing();
+}
+"#,
+        );
+
+        assert!(references.iter().any(|reference| {
+            reference.name == "missingValue"
+                && reference.target.is_none()
+                && reference.status == SymbolResolutionStatus::Unresolved
+                && reference.precision == SymbolPrecision::Unresolved
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.name == "anotherMissing"
+                && reference.kind == ReferenceKind::Call
+                && reference.status == SymbolResolutionStatus::Unresolved
+        }));
+    }
+
+    #[test]
+    fn stable_reference_ids_are_deterministic_across_repeated_extraction() {
+        let source = "const value = 1;\nexport const doubled = value + value;\n";
+        let (_first_symbols, first_references) = derive_ts_reference_facts(source);
+        let (_second_symbols, second_references) = derive_ts_reference_facts(source);
+
+        let first = first_references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.name.as_str(),
+                    reference.id,
+                    reference.target,
+                    reference.status.clone(),
+                    reference.stable_key.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let second = second_references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.name.as_str(),
+                    reference.id,
+                    reference.target,
+                    reference.status.clone(),
+                    reference.stable_key.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(first, second);
+    }
+}
