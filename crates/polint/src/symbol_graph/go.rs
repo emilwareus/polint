@@ -281,7 +281,8 @@ fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSid
                 .arg("run")
                 .arg(".")
                 .current_dir(path)
-                .env("GOWORK", "off");
+                .env("GOWORK", "off")
+                .env("GOTOOLCHAIN", "local");
             command
         }
     };
@@ -1211,13 +1212,15 @@ include_tests = false
 mod symbol_graph_go {
     use super::*;
     use crate::core::{
-        DefinitionFact, DefinitionKind, ReferenceFact, ReferenceKind, SymbolFact, SymbolId,
-        SymbolKind, SymbolPrecision, SymbolResolutionStatus,
+        CapabilitySupportStatus, DefinitionFact, DefinitionKind, ReferenceFact, ReferenceKind,
+        SymbolFact, SymbolId, SymbolKind, SymbolPrecision, SymbolResolutionStatus,
     };
     use crate::symbol_graph::model::SymbolGraphOutput;
     use std::path::Path;
 
-    fn derive_go_fixture(files: &[(&str, &str)]) -> (SymbolGraphOutput, LanguageSymbolOutput) {
+    fn derive_go_fixture(
+        files: &[(&str, &str)],
+    ) -> Option<(SymbolGraphOutput, LanguageSymbolOutput)> {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             temp.path().join("go.mod"),
@@ -1235,7 +1238,28 @@ mod symbol_graph_go {
             &loaded_config_for(temp.path()),
             &AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]),
         );
-        (builder.finish(), output)
+        if output
+            .capability_support
+            .iter()
+            .any(|entry| entry.status == CapabilitySupportStatus::SetupMissing)
+        {
+            eprintln!(
+                "skipping Go sidecar-backed symbol test; setup missing: {:#?}",
+                output.capability_support
+            );
+            return None;
+        }
+        assert!(
+            !output.capability_support.is_empty()
+                && output
+                    .capability_support
+                    .iter()
+                    .all(|entry| entry.status == CapabilitySupportStatus::Supported),
+            "expected supported Go symbol capabilities; support = {:#?}; diagnostics = {:#?}",
+            output.capability_support,
+            output.diagnostics
+        );
+        Some((builder.finish(), output))
     }
 
     fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
@@ -1284,7 +1308,7 @@ mod symbol_graph_go {
 
     #[test]
     fn go_function_definition_and_call_reference_are_exact_semantic() {
-        let (graph, output) = derive_go_fixture(&[(
+        let Some((graph, output)) = derive_go_fixture(&[(
             "main.go",
             r#"package app
 
@@ -1296,7 +1320,9 @@ func Use() int {
 	return Build() + 1
 }
 "#,
-        )]);
+        )]) else {
+            return;
+        };
 
         assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
         let build = symbol(&graph.symbols, "Build", SymbolKind::Function);
@@ -1310,7 +1336,7 @@ func Use() int {
 
     #[test]
     fn go_method_and_field_selector_references_are_exact_semantic() {
-        let (graph, output) = derive_go_fixture(&[(
+        let Some((graph, output)) = derive_go_fixture(&[(
             "widget.go",
             r#"package app
 
@@ -1326,7 +1352,9 @@ func Use(w Widget) string {
 	return w.Label()
 }
 "#,
-        )]);
+        )]) else {
+            return;
+        };
 
         assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
         let method = symbol(&graph.symbols, "Label", SymbolKind::Method);
@@ -1341,7 +1369,7 @@ func Use(w Widget) string {
 
     #[test]
     fn go_package_qualified_external_call_is_resolved_call_reference() {
-        let (graph, output) = derive_go_fixture(&[(
+        let Some((graph, output)) = derive_go_fixture(&[(
             "main.go",
             r#"package app
 
@@ -1351,7 +1379,9 @@ func Use() {
 	fmt.Println("ok")
 }
 "#,
-        )]);
+        )]) else {
+            return;
+        };
 
         assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
         let println = symbol(&graph.symbols, "Println", SymbolKind::Function);
@@ -1372,7 +1402,7 @@ func Use() {
 
     #[test]
     fn go_package_objectpath_symbol_id_survives_unrelated_file_move() {
-        let (first, _) = derive_go_fixture(&[
+        let Some((first, _)) = derive_go_fixture(&[
             (
                 "main.go",
                 r#"package app
@@ -1383,8 +1413,10 @@ func Build() int {
 "#,
             ),
             ("unused/a.go", "package app\n\nconst Unused = 1\n"),
-        ]);
-        let (second, _) = derive_go_fixture(&[
+        ]) else {
+            return;
+        };
+        let Some((second, _)) = derive_go_fixture(&[
             (
                 "main.go",
                 r#"package app
@@ -1395,7 +1427,9 @@ func Build() int {
 "#,
             ),
             ("other/a.go", "package app\n\nconst Unused = 1\n"),
-        ]);
+        ]) else {
+            return;
+        };
 
         assert_eq!(
             symbol(&first.symbols, "Build", SymbolKind::Function).id,
@@ -1412,8 +1446,12 @@ func Use() int {
 	return local + 1
 }
 "#;
-        let (first, _) = derive_go_fixture(&[("main.go", source)]);
-        let (second, _) = derive_go_fixture(&[("main.go", source)]);
+        let Some((first, _)) = derive_go_fixture(&[("main.go", source)]) else {
+            return;
+        };
+        let Some((second, _)) = derive_go_fixture(&[("main.go", source)]) else {
+            return;
+        };
 
         assert_eq!(
             symbol(&first.symbols, "local", SymbolKind::Variable).id,

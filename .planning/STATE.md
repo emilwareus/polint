@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
 stopped_at: Completed 13-05-PLAN.md
-last_updated: "2026-05-13T10:34:00.000Z"
+last_updated: "2026-05-13T10:45:00.000Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 9
@@ -102,6 +102,7 @@ Last activity: 2026-05-13
 | 260512-tga | Research lifecycle extensibility architecture for Phase 13 scan lifecycle and update research doc | 2026-05-12 | uncommitted | [260512-tga-research-lifecycle-extensibility-archite](./quick/260512-tga-research-lifecycle-extensibility-archite/) |
 | 260513-fga | Add customer-facing symbol/reference examples | 2026-05-13 | committed | [260513-fga-add-customer-facing-symbol-reference-exa](./quick/260513-fga-add-customer-facing-symbol-reference-exa/) |
 | 260513-gld | Fix symbol reference PR review findings and rerun deep review | 2026-05-13 | committed | [260513-gld-fix-symbol-reference-pr-review-findings-](./quick/260513-gld-fix-symbol-reference-pr-review-findings-/) |
+| 260513-hkw | Fix macOS CI Go symbol sidecar test failure | 2026-05-13 | committed | [260513-hkw-fix-macos-ci-go-symbol-sidecar-test-fail](./quick/260513-hkw-fix-macos-ci-go-symbol-sidecar-test-fail/) |
 
 ## Phase Progress
 
