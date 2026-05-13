@@ -67,6 +67,59 @@ func Use() string {
 	}
 }
 
+func TestEmitClassifiesAssignmentReferences(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"widget.go": `package app
+
+type Widget struct {
+	Count int
+}
+
+func Use(w Widget) int {
+	value := 1
+	value = 2
+	value += 3
+	value++
+	w.Count = value
+	w.Count++
+	return value + w.Count
+}
+`,
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	value := symbolByName(out.Symbols, "value")
+	if value == nil {
+		t.Fatalf("value symbol missing from %#v", out.Symbols)
+	}
+	if !hasReference(out.References, value.Key, "write") {
+		t.Fatalf("value write reference missing from %#v", out.References)
+	}
+	if !hasReference(out.References, value.Key, "read_write") {
+		t.Fatalf("value read_write reference missing from %#v", out.References)
+	}
+
+	count := symbolByName(out.Symbols, "Count")
+	if count == nil {
+		t.Fatalf("Count symbol missing from %#v", out.Symbols)
+	}
+	if !hasReference(out.References, count.Key, "write") {
+		t.Fatalf("Count write reference missing from %#v", out.References)
+	}
+	if !hasReference(out.References, count.Key, "read_write") {
+		t.Fatalf("Count read_write reference missing from %#v", out.References)
+	}
+}
+
 func TestEmitLocalSymbolKeysIncludePackageFileOwnerNameAndPosition(t *testing.T) {
 	root := writeModule(t, map[string]string{
 		"go.mod": "module example.com/app\n\ngo 1.25.0\n",

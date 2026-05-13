@@ -668,7 +668,7 @@ fn reference_precision(precision: &str) -> SymbolPrecision {
         "heuristic" => SymbolPrecision::Heuristic,
         "setup_missing" => SymbolPrecision::SetupMissing,
         "unsupported" => SymbolPrecision::Unsupported,
-        _ => SymbolPrecision::ExactSemantic,
+        _ => SymbolPrecision::Unsupported,
     }
 }
 
@@ -1048,6 +1048,14 @@ func Use(w Widget) string {
             resolved_reference(&graph.references, field.id, ReferenceKind::MemberAccess);
         assert_eq!(method_reference.precision, SymbolPrecision::ExactSemantic);
         assert_eq!(field_reference.precision, SymbolPrecision::ExactSemantic);
+    }
+
+    #[test]
+    fn unknown_go_reference_precision_is_unsupported() {
+        assert_eq!(
+            reference_precision("sidecar_typo"),
+            SymbolPrecision::Unsupported
+        );
     }
 
     #[test]

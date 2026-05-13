@@ -265,8 +265,7 @@ fn optional_span_part(span: Option<&Span>) -> String {
 
 fn span_part(span: &Span) -> String {
     format!(
-        "file:{}:{}-{}:{}:{}-{}:{}",
-        span.file.0,
+        "{}-{}:{}:{}-{}:{}",
         span.start_byte,
         span.end_byte,
         span.start_line,
@@ -410,6 +409,42 @@ mod symbol_graph_stable_ids {
             reference_id_from_key(&first),
             reference_id_from_key(&second)
         );
+    }
+
+    #[test]
+    fn stable_ids_do_not_include_transient_file_ids() {
+        let first = Span {
+            file: crate::core::FileId(1),
+            ..span(10, 16)
+        };
+        let second = Span {
+            file: crate::core::FileId(99),
+            ..span(10, 16)
+        };
+        let left = StableSymbolKey::new(
+            Language::TypeScript,
+            Some("module:ui".to_string()),
+            None,
+            Some("src/button.ts".to_string()),
+            Vec::new(),
+            SymbolNamespace::Value,
+            SymbolKind::Function,
+            "render".to_string(),
+            Some(first),
+        );
+        let right = StableSymbolKey::new(
+            Language::TypeScript,
+            Some("module:ui".to_string()),
+            None,
+            Some("src/button.ts".to_string()),
+            Vec::new(),
+            SymbolNamespace::Value,
+            SymbolKind::Function,
+            "render".to_string(),
+            Some(second),
+        );
+
+        assert_eq!(symbol_id_from_key(&left), symbol_id_from_key(&right));
     }
 
     #[test]

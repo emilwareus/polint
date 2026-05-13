@@ -584,12 +584,18 @@ func (e *emitter) referenceKind(ident *ast.Ident, obj types.Object) string {
 	if e.isCallIdentifier(ident) {
 		return "call"
 	}
+	if kind := e.assignmentKind(ident); kind != "" {
+		return kind
+	}
 	return "read"
 }
 
 func (e *emitter) selectionReferenceKind(selector *ast.SelectorExpr, selection *types.Selection) string {
 	if e.isCallSelector(selector) {
 		return "call"
+	}
+	if kind := e.assignmentKind(selector); kind != "" {
+		return kind
 	}
 	switch selection.Kind() {
 	case types.FieldVal:
@@ -611,6 +617,34 @@ func (e *emitter) isCallSelector(selector *ast.SelectorExpr) bool {
 	parent := e.parents[selector]
 	call, ok := parent.(*ast.CallExpr)
 	return ok && call.Fun == selector
+}
+
+func (e *emitter) assignmentKind(expr ast.Expr) string {
+	parent := e.parents[expr]
+	switch p := parent.(type) {
+	case *ast.AssignStmt:
+		if !exprListContains(p.Lhs, expr) {
+			return ""
+		}
+		if p.Tok == token.ASSIGN || p.Tok == token.DEFINE {
+			return "write"
+		}
+		return "read_write"
+	case *ast.IncDecStmt:
+		if p.X == expr {
+			return "read_write"
+		}
+	}
+	return ""
+}
+
+func exprListContains(expressions []ast.Expr, target ast.Expr) bool {
+	for _, expression := range expressions {
+		if expression == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *emitter) selectorParent(ident *ast.Ident) *ast.SelectorExpr {
