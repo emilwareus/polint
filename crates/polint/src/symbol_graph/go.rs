@@ -1,9 +1,13 @@
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, FileId, Language, SourceFile,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
+    ReferenceKind, SourceFile, Span, SymbolKind, SymbolNamespace, SymbolPrecision,
+    span_from_byte_range,
 };
+use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::model::SymbolGraphBuilder;
+use crate::symbol_graph::model::{DefinitionDraft, ReferenceDraft, SymbolDraft};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -31,11 +35,6 @@ enum GoSidecarFailure {
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarOutput {
     schema: String,
-    #[serde(default)]
-    go_version: String,
-    #[serde(default)]
-    module_path: String,
-    #[serde(default)]
     packages: Vec<GoSidecarPackage>,
     #[serde(default)]
     symbols: Vec<GoSidecarSymbol>,
@@ -49,12 +48,6 @@ struct GoSidecarOutput {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarPackage {
-    id: String,
-    path: String,
-    name: String,
-    #[serde(default)]
-    module_path: String,
-    test_variant: String,
     #[serde(default)]
     files: Vec<String>,
 }
@@ -62,21 +55,15 @@ struct GoSidecarPackage {
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarSymbol {
     key: String,
-    package_id: String,
     package_path: String,
-    test_variant: String,
     #[serde(default)]
     file: String,
-    #[serde(default)]
-    owner_key: String,
     #[serde(default)]
     owner_chain: Vec<String>,
     name: String,
     qualified_name: String,
     namespace: String,
     kind: String,
-    #[serde(default)]
-    objectpath: String,
     span: GoSidecarSpan,
     #[serde(default)]
     exported: bool,
@@ -85,21 +72,17 @@ struct GoSidecarSymbol {
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarDefinition {
     symbol_key: String,
-    package_id: String,
     #[serde(default)]
     file: String,
     name: String,
     kind: String,
     span: GoSidecarSpan,
     #[serde(default)]
-    implicit: bool,
-    #[serde(default)]
     primary: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarReference {
-    package_id: String,
     #[serde(default)]
     file: String,
     name: String,
@@ -121,10 +104,6 @@ struct GoSidecarPackageError {
 struct GoSidecarSpan {
     start_byte: usize,
     end_byte: usize,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
 }
 
 pub(crate) fn derive_go_symbols(
@@ -173,7 +152,8 @@ fn derive_go_symbols_with_runner(
             );
         }
     };
-    let sidecar = match parse_sidecar_output(&stdout).and_then(|output| validate_paths(output, db)) {
+    let sidecar = match parse_sidecar_output(&stdout).and_then(|output| validate_paths(output, db))
+    {
         Ok(output) => output,
         Err(error) => {
             return setup_missing_output(
@@ -190,13 +170,10 @@ fn derive_go_symbols_with_runner(
     output
         .capability_support
         .extend(supported_language_support(plan));
-    if !sidecar.errors.is_empty() {
-        output.capability_support.extend(setup_support(
-            plan,
-            "Go packages loaded with errors; exact available facts were retained.",
-            "Fix the reported Go package load errors for complete symbol/reference coverage.",
-        ));
-    }
+    convert_sidecar_output(builder, db, &sidecar);
+    output
+        .diagnostics
+        .extend(package_error_diagnostics(&sidecar.errors));
 
     output
 }
@@ -266,6 +243,7 @@ fn split_comma(value: &str) -> Vec<String> {
 
 fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSidecarFailure> {
     let sidecar_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/polint-go-symbols");
+    let sidecar_workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../go.work");
     let output = Command::new("go")
         .arg("run")
         .arg(sidecar_dir.as_os_str())
@@ -280,6 +258,7 @@ fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSid
         .arg(config.build_tags.join(","))
         .arg("--json")
         .current_dir(root)
+        .env("GOWORK", sidecar_workspace.as_os_str())
         .env_remove("GOFLAGS")
         .output()
         .map_err(|error| {
@@ -479,6 +458,260 @@ fn supported_language_support(plan: &AnalysisPlan) -> Vec<CapabilitySupport> {
         .collect()
 }
 
+fn convert_sidecar_output(
+    builder: &mut SymbolGraphBuilder,
+    db: &AnalysisDb,
+    sidecar: &GoSidecarOutput,
+) {
+    let files = go_files_by_path(db);
+    let symbol_rows = sidecar
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.key.as_str(), symbol))
+        .collect::<BTreeMap<_, _>>();
+    let mut symbols = BTreeMap::new();
+
+    for symbol in &sidecar.symbols {
+        let id = builder.add_symbol(symbol_draft(symbol, &files));
+        symbols.insert(symbol.key.clone(), id);
+    }
+
+    for definition in &sidecar.definitions {
+        let Some(symbol) = symbols.get(&definition.symbol_key).copied() else {
+            continue;
+        };
+        let source_symbol = symbol_rows.get(definition.symbol_key.as_str()).copied();
+        builder.add_definition(symbol, definition_draft(definition, source_symbol, &files));
+    }
+
+    for reference in &sidecar.references {
+        let draft = reference_draft(reference, &files);
+        if let Some(target) = symbols.get(&reference.target_key).copied() {
+            builder.add_reference(target, draft);
+        } else {
+            builder.add_unresolved_reference(draft);
+        }
+    }
+}
+
+fn go_files_by_path(db: &AnalysisDb) -> BTreeMap<&str, &SourceFile> {
+    db.files()
+        .iter()
+        .filter(|file| file.language == Language::Go)
+        .map(|file| (file.relative_path.as_str(), file))
+        .collect()
+}
+
+fn symbol_draft(symbol: &GoSidecarSymbol, files: &BTreeMap<&str, &SourceFile>) -> SymbolDraft {
+    let file = file_for_path(files, &symbol.file).map(|file| file.id);
+    let primary_span = span_for_file(files, &symbol.file, &symbol.span);
+    SymbolDraft {
+        language: Language::Go,
+        name: symbol.name.clone(),
+        qualified_name: symbol.qualified_name.clone(),
+        kind: symbol_kind(&symbol.kind),
+        namespace: symbol_namespace(&symbol.namespace),
+        file,
+        package: None,
+        module: None,
+        owner: None,
+        module_key: if symbol.package_path.is_empty() {
+            None
+        } else {
+            Some(format!("go:module:{}", symbol.package_path))
+        },
+        package_key: Some(format!("go:sidecar:{}", symbol.key)),
+        file_key: None,
+        owner_chain: symbol.owner_chain.clone(),
+        primary_span: if symbol.key.starts_with("go:local") {
+            primary_span
+        } else {
+            None
+        },
+        is_exported: symbol.exported,
+        precision: SymbolPrecision::ExactSemantic,
+    }
+}
+
+fn definition_draft(
+    definition: &GoSidecarDefinition,
+    symbol: Option<&GoSidecarSymbol>,
+    files: &BTreeMap<&str, &SourceFile>,
+) -> DefinitionDraft {
+    let file = file_for_path(files, &definition.file).map(|file| file.id);
+    DefinitionDraft {
+        language: Language::Go,
+        name: definition.name.clone(),
+        qualified_name: symbol
+            .map(|symbol| symbol.qualified_name.clone())
+            .unwrap_or_else(|| definition.name.clone()),
+        kind: definition_kind(&definition.kind),
+        namespace: symbol
+            .map(|symbol| symbol_namespace(&symbol.namespace))
+            .unwrap_or(SymbolNamespace::Unknown),
+        file,
+        package: None,
+        module: None,
+        owner: None,
+        file_key: definition.file.clone(),
+        primary_span: span_for_file(files, &definition.file, &definition.span),
+        is_primary: definition.primary,
+        is_exported: symbol.is_some_and(|symbol| symbol.exported),
+        precision: SymbolPrecision::ExactSemantic,
+    }
+}
+
+fn reference_draft(
+    reference: &GoSidecarReference,
+    files: &BTreeMap<&str, &SourceFile>,
+) -> ReferenceDraft {
+    let file = file_for_path(files, &reference.file).map(|file| file.id);
+    ReferenceDraft {
+        language: Language::Go,
+        name: reference.name.clone(),
+        qualified_name: reference.name.clone(),
+        kind: reference_kind(&reference.kind),
+        namespace: reference_namespace(&reference.kind),
+        file,
+        package: None,
+        module: None,
+        owner: None,
+        file_key: reference.file.clone(),
+        primary_span: span_for_file(files, &reference.file, &reference.span),
+        precision: reference_precision(&reference.precision),
+    }
+}
+
+fn file_for_path<'a>(files: &'a BTreeMap<&str, &SourceFile>, path: &str) -> Option<&'a SourceFile> {
+    if path.is_empty() {
+        None
+    } else {
+        files.get(path).copied()
+    }
+}
+
+fn span_for_file(
+    files: &BTreeMap<&str, &SourceFile>,
+    path: &str,
+    span: &GoSidecarSpan,
+) -> Option<Span> {
+    let file = file_for_path(files, path)?;
+    Some(span_from_byte_range(
+        file.id,
+        file.source.as_ref(),
+        span.start_byte,
+        span.end_byte,
+    ))
+}
+
+fn symbol_kind(kind: &str) -> SymbolKind {
+    match kind {
+        "package" => SymbolKind::Package,
+        "function" => SymbolKind::Function,
+        "method" => SymbolKind::Method,
+        "variable" => SymbolKind::Variable,
+        "constant" => SymbolKind::Constant,
+        "type" => SymbolKind::TypeAlias,
+        "field" => SymbolKind::Field,
+        "parameter" => SymbolKind::Parameter,
+        _ => SymbolKind::Unknown,
+    }
+}
+
+fn symbol_namespace(namespace: &str) -> SymbolNamespace {
+    match namespace {
+        "value" => SymbolNamespace::Value,
+        "type" => SymbolNamespace::Type,
+        "package" => SymbolNamespace::Package,
+        "module" => SymbolNamespace::Module,
+        _ => SymbolNamespace::Unknown,
+    }
+}
+
+fn definition_kind(kind: &str) -> DefinitionKind {
+    match kind {
+        "declaration" => DefinitionKind::Declaration,
+        "definition" => DefinitionKind::Definition,
+        "import" => DefinitionKind::Import,
+        "export" => DefinitionKind::Export,
+        "implicit" => DefinitionKind::Implicit,
+        _ => DefinitionKind::Unknown,
+    }
+}
+
+fn reference_kind(kind: &str) -> ReferenceKind {
+    match kind {
+        "read" => ReferenceKind::Read,
+        "write" => ReferenceKind::Write,
+        "read_write" => ReferenceKind::ReadWrite,
+        "call" => ReferenceKind::Call,
+        "type" => ReferenceKind::TypeUse,
+        "package" => ReferenceKind::Import,
+        "field" | "method" | "member" => ReferenceKind::MemberAccess,
+        _ => ReferenceKind::Unknown,
+    }
+}
+
+fn reference_namespace(kind: &str) -> SymbolNamespace {
+    match kind {
+        "type" => SymbolNamespace::Type,
+        "package" => SymbolNamespace::Package,
+        _ => SymbolNamespace::Value,
+    }
+}
+
+fn reference_precision(precision: &str) -> SymbolPrecision {
+    match precision {
+        "exact_semantic" => SymbolPrecision::ExactSemantic,
+        "exact_local" => SymbolPrecision::ExactLocal,
+        "module_linked" => SymbolPrecision::ModuleLinked,
+        "heuristic" => SymbolPrecision::Heuristic,
+        "setup_missing" => SymbolPrecision::SetupMissing,
+        "unsupported" => SymbolPrecision::Unsupported,
+        _ => SymbolPrecision::ExactSemantic,
+    }
+}
+
+fn package_error_diagnostics(errors: &[GoSidecarPackageError]) -> Vec<Diagnostic> {
+    let mut diagnostics = errors
+        .iter()
+        .map(|error| {
+            Diagnostic::error(
+                "polint/capability",
+                "<workspace>",
+                TextRange::point(1, 1),
+                format!(
+                    "Go package `{}` loaded with errors while deriving symbols and references.",
+                    error.package_path
+                ),
+            )
+            .with_evidence("capability", "symbols".to_string())
+            .with_evidence("language", "Go".to_string())
+            .with_evidence("package_id", error.package_id.clone())
+            .with_evidence("package_path", error.package_path.clone())
+            .with_evidence("reason", error.message.clone())
+            .with_evidence("docs_path", SYMBOL_FACTS_DOCS_PATH.to_string())
+            .with_help(format!(
+                "Fix Go package setup for `{}` to make symbol/reference coverage complete.",
+                error.package_path
+            ))
+        })
+        .collect::<Vec<_>>();
+    diagnostics.sort_by(|left, right| {
+        (
+            left.file.as_str(),
+            left.message.as_str(),
+            left.stable_fingerprint.as_str(),
+        )
+            .cmp(&(
+                right.file.as_str(),
+                right.message.as_str(),
+                right.stable_fingerprint.as_str(),
+            ))
+    });
+    diagnostics
+}
+
 #[cfg(test)]
 mod symbol_graph_go_setup {
     use super::*;
@@ -533,8 +766,12 @@ include_tests = false
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
         let mut builder = SymbolGraphBuilder::new();
 
-        let output =
-            derive_go_symbols(&mut builder, &db, &loaded_config_for(temp.path()), &requested_plan());
+        let output = derive_go_symbols(
+            &mut builder,
+            &db,
+            &loaded_config_for(temp.path()),
+            &requested_plan(),
+        );
         let graph = builder.finish();
 
         assert_eq!(
@@ -557,8 +794,11 @@ include_tests = false
     #[test]
     fn sidecar_command_failure_reports_setup_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("go.mod"), "module example.com/app\n\ngo 1.25.0\n")
-            .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.25.0\n",
+        )
+        .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
         let mut builder = SymbolGraphBuilder::new();
@@ -568,13 +808,20 @@ include_tests = false
             &db,
             &loaded_config_for(temp.path()),
             &requested_plan(),
-            |_config| Err(GoSidecarFailure::CommandFailed("sidecar failed".to_string())),
+            |_config| {
+                Err(GoSidecarFailure::CommandFailed(
+                    "sidecar failed".to_string(),
+                ))
+            },
         );
 
         assert!(
             output.capability_support.iter().all(|entry| {
                 entry.status == CapabilitySupportStatus::SetupMissing
-                    && entry.reason.as_deref().is_some_and(|reason| reason.contains("sidecar failed"))
+                    && entry
+                        .reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("sidecar failed"))
             }),
             "{:#?}",
             output.capability_support
@@ -584,8 +831,11 @@ include_tests = false
     #[test]
     fn invalid_sidecar_json_reports_setup_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("go.mod"), "module example.com/app\n\ngo 1.25.0\n")
-            .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.25.0\n",
+        )
+        .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
         let mut builder = SymbolGraphBuilder::new();
@@ -614,8 +864,11 @@ include_tests = false
     #[test]
     fn repo_escaping_sidecar_file_path_reports_setup_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("go.mod"), "module example.com/app\n\ngo 1.25.0\n")
-            .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.25.0\n",
+        )
+        .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
         let mut builder = SymbolGraphBuilder::new();
@@ -655,7 +908,10 @@ include_tests = false
         assert!(
             output.capability_support.iter().all(|entry| {
                 entry.status == CapabilitySupportStatus::SetupMissing
-                    && entry.reason.as_deref().is_some_and(|reason| reason.contains("escapes repository"))
+                    && entry
+                        .reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("escapes repository"))
             }),
             "{:#?}",
             output.capability_support
@@ -705,11 +961,7 @@ mod symbol_graph_go {
         crate::config::load_config(root).expect("config loads")
     }
 
-    fn symbol<'a>(
-        symbols: &'a [SymbolFact],
-        name: &str,
-        kind: SymbolKind,
-    ) -> &'a SymbolFact {
+    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str, kind: SymbolKind) -> &'a SymbolFact {
         symbols
             .iter()
             .find(|symbol| symbol.name == name && symbol.kind == kind)
@@ -723,7 +975,9 @@ mod symbol_graph_go {
         definitions
             .iter()
             .find(|definition| definition.symbol == symbol_id && definition.is_primary)
-            .unwrap_or_else(|| panic!("missing definition for {symbol_id:?}; definitions = {definitions:#?}"))
+            .unwrap_or_else(|| {
+                panic!("missing definition for {symbol_id:?}; definitions = {definitions:#?}")
+            })
     }
 
     fn resolved_reference<'a>(
@@ -738,7 +992,9 @@ mod symbol_graph_go {
                     && reference.kind == kind
                     && reference.status == SymbolResolutionStatus::Resolved
             })
-            .unwrap_or_else(|| panic!("missing {kind:?} reference to {target:?}; references = {references:#?}"))
+            .unwrap_or_else(|| {
+                panic!("missing {kind:?} reference to {target:?}; references = {references:#?}")
+            })
     }
 
     #[test]
@@ -789,7 +1045,8 @@ func Use(w Widget) string {
         assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
         let method = symbol(&graph.symbols, "Label", SymbolKind::Method);
         let field = symbol(&graph.symbols, "Name", SymbolKind::Field);
-        let method_reference = resolved_reference(&graph.references, method.id, ReferenceKind::Call);
+        let method_reference =
+            resolved_reference(&graph.references, method.id, ReferenceKind::Call);
         let field_reference =
             resolved_reference(&graph.references, field.id, ReferenceKind::MemberAccess);
         assert_eq!(method_reference.precision, SymbolPrecision::ExactSemantic);
@@ -862,12 +1119,9 @@ func Use() int {
         assert!(
             derivation.diagnostics.iter().any(|diagnostic| {
                 diagnostic.rule_id == "polint/capability"
-                    && diagnostic
-                        .evidence
-                        .iter()
-                        .any(|evidence| {
-                            evidence.label == "status" && evidence.value == "setup_missing"
-                        })
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "status" && evidence.value == "setup_missing"
+                    })
             }),
             "{:#?}",
             derivation.diagnostics

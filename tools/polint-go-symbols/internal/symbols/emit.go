@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -139,6 +140,7 @@ func Emit(config Config) (Output, error) {
 		Dir:   root,
 		Fset:  fset,
 		Tests: config.IncludeTests,
+		Env:   goPackageEnv(root),
 	}
 	if len(config.BuildTags) > 0 {
 		loadConfig.BuildFlags = []string{"-tags=" + strings.Join(config.BuildTags, ",")}
@@ -181,6 +183,21 @@ func Emit(config Config) (Output, error) {
 	}
 	e.finish()
 	return e.out, nil
+}
+
+func goPackageEnv(root string) []string {
+	env := os.Environ()
+	gowork := "off"
+	if path := filepath.Join(root, "go.work"); fileExists(path) {
+		gowork = path
+	}
+	env = append(env, "GOWORK="+gowork)
+	return env
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func (e *emitter) indexSyntax(pkg *packages.Package) {

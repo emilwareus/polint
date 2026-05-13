@@ -82,34 +82,6 @@ fn merge_language_output(derivation: &mut SymbolGraphDerivation, output: Languag
         .extend(output.capability_support);
 }
 
-pub(crate) fn unsupported_language_support(
-    plan: &AnalysisPlan,
-    language: Language,
-    reason: &str,
-    hint: &str,
-) -> Vec<CapabilitySupport> {
-    SYMBOL_GRAPH_CAPABILITIES
-        .iter()
-        .filter(|capability| plan.requests_capability(capability))
-        .filter_map(|capability| {
-            let base = plan
-                .support_view()
-                .entries()
-                .iter()
-                .find(|entry| entry.capability == *capability)?;
-            Some(CapabilitySupport {
-                capability: (*capability).to_string(),
-                language: Some(language),
-                status: CapabilitySupportStatus::Unsupported,
-                rules: base.rules.clone(),
-                reason: Some(reason.to_string()),
-                hint: Some(hint.to_string()),
-                docs_path: Some(SYMBOL_FACTS_DOCS_PATH.to_string()),
-            })
-        })
-        .collect()
-}
-
 fn capability_diagnostics(support: &[CapabilitySupport]) -> Vec<Diagnostic> {
     support
         .iter()

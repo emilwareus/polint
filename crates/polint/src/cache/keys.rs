@@ -388,10 +388,11 @@ mod tests {
             "build_tags".to_string(),
             toml::Value::String("enterprise".to_string()),
         );
-        baseline.config.languages.go.insert(
-            "include_tests".to_string(),
-            toml::Value::Boolean(true),
-        );
+        baseline
+            .config
+            .languages
+            .go
+            .insert("include_tests".to_string(), toml::Value::Boolean(true));
 
         let mut changed_patterns = baseline.clone();
         changed_patterns.config.languages.go.insert(

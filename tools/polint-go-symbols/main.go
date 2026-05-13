@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/emilwareus/polint/tools/polint-go-symbols/internal/symbols"
@@ -19,7 +20,7 @@ func main() {
 	flags := flag.NewFlagSet("symbols", flag.ExitOnError)
 	root := flags.String("root", ".", "repository root")
 	patterns := flags.String("patterns", "./...", "comma-separated package patterns")
-	tests := flags.Bool("tests", true, "include test package variants")
+	tests := flags.String("tests", "true", "include test package variants")
 	buildTags := flags.String("build-tags", "", "comma-separated Go build tags")
 	jsonOutput := flags.Bool("json", false, "emit JSON")
 	if err := flags.Parse(os.Args[2:]); err != nil {
@@ -30,11 +31,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--json is required")
 		os.Exit(2)
 	}
+	includeTests, err := strconv.ParseBool(*tests)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid --tests value %q: %v\n", *tests, err)
+		os.Exit(2)
+	}
 
 	out, err := symbols.Emit(symbols.Config{
 		Root:         *root,
 		Patterns:     splitComma(*patterns),
-		IncludeTests: *tests,
+		IncludeTests: includeTests,
 		BuildTags:    splitComma(*buildTags),
 	})
 	if err != nil {
