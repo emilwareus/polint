@@ -3,7 +3,7 @@ use crate::cache::stable_hash;
 use crate::config::{LoadedConfig, RuleConfig};
 use crate::core::{
     Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, Language,
-    Rule, RuleMeta, RuleOptions, rule_id_matches,
+    Rule, RuleMeta, RuleOptions, SourceFile, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
 #[cfg(test)]
@@ -40,6 +40,8 @@ pub(crate) struct PlannedRule {
     pub(crate) description: String,
     pub(crate) severity: Severity,
     pub(crate) requested_capabilities: Vec<String>,
+    pub(crate) files: Vec<String>,
+    pub(crate) allow_files: Vec<String>,
     pub(crate) options_digest: String,
 }
 
@@ -137,6 +139,8 @@ impl AnalysisPlan {
                     description: input.meta.description.clone(),
                     severity: rule_options.severity.unwrap_or(input.meta.severity),
                     requested_capabilities: capabilities,
+                    files: rule_options.files.clone(),
+                    allow_files: rule_options.allow_files.clone(),
                     options_digest,
                 }
             })
@@ -183,6 +187,23 @@ impl AnalysisPlan {
         capabilities
             .iter()
             .any(|capability| self.requests_capability(capability))
+    }
+
+    pub(crate) fn rules_for_capability_matching_files(
+        &self,
+        capability: &str,
+        files: &[&SourceFile],
+    ) -> Vec<String> {
+        self.rules
+            .iter()
+            .filter(|rule| {
+                rule.requested_capabilities
+                    .iter()
+                    .any(|requested| requested == capability)
+            })
+            .filter(|rule| rule_matches_any_file(rule, files))
+            .map(|rule| rule.id.clone())
+            .collect()
     }
 
     #[allow(dead_code)]
@@ -254,6 +275,8 @@ impl AnalysisPlan {
             description: "Test rule".to_string(),
             severity: Severity::Warn,
             requested_capabilities: names.iter().map(|name| (*name).to_string()).collect(),
+            files: Vec::new(),
+            allow_files: Vec::new(),
             options_digest: deterministic_rule_options(&RuleOptions::default()),
         }];
         let capabilities = plan_capabilities(&rules);
@@ -539,6 +562,17 @@ fn rule_options_from_config(config: Option<&RuleConfig>) -> RuleOptions {
         forbidden_imports: config.forbidden_imports.clone(),
         settings: config.settings.clone(),
     }
+}
+
+fn rule_matches_any_file(rule: &PlannedRule, files: &[&SourceFile]) -> bool {
+    let options = RuleOptions {
+        files: rule.files.clone(),
+        allow_files: rule.allow_files.clone(),
+        ..RuleOptions::default()
+    };
+    files
+        .iter()
+        .any(|file| crate::sdk::scope::file_matches_globs(&options, &file.relative_path))
 }
 
 fn parse_severity(value: &str) -> Option<Severity> {
@@ -1117,6 +1151,8 @@ mod tests {
                 description: "Needs coverage".to_string(),
                 severity: Severity::Warn,
                 requested_capabilities: vec!["coverage_facts".to_string()],
+                files: Vec::new(),
+                allow_files: Vec::new(),
                 options_digest: "options".to_string(),
             }],
             vec![PlannedCapability {

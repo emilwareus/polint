@@ -120,6 +120,49 @@ func Use(w Widget) int {
 	}
 }
 
+func TestEmitClassifiesPackageQualifiedCallsAsExternalCalls(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"main.go": `package app
+
+import "fmt"
+
+func Use() {
+	fmt.Println("ok")
+}
+`,
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	println := symbolByName(out.Symbols, "Println")
+	if println == nil {
+		t.Fatalf("Println symbol missing from %#v", out.Symbols)
+	}
+	if println.File != "" {
+		t.Fatalf("Println file = %q, want external symbol without a local file", println.File)
+	}
+	if println.PackagePath != "fmt" {
+		t.Fatalf("Println package path = %q, want fmt", println.PackagePath)
+	}
+	if println.QualifiedName != "fmt.Println" {
+		t.Fatalf("Println qualified name = %q, want fmt.Println", println.QualifiedName)
+	}
+	if !hasReference(out.References, println.Key, "call") {
+		t.Fatalf("Println call reference missing from %#v", out.References)
+	}
+	if hasReference(out.References, println.Key, "read") {
+		t.Fatalf("Println was also emitted as a read reference: %#v", out.References)
+	}
+}
+
 func TestEmitLocalSymbolKeysIncludePackageFileOwnerNameAndPosition(t *testing.T) {
 	root := writeModule(t, map[string]string{
 		"go.mod": "module example.com/app\n\ngo 1.25.0\n",

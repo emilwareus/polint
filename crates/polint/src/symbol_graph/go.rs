@@ -11,11 +11,31 @@ use crate::symbol_graph::model::{DefinitionDraft, ReferenceDraft, SymbolDraft};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const GO_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const GO_SYMBOL_SIDECAR_SCHEMA: &str = "polint-go-symbols-v1";
+const GO_SYMBOL_SIDECAR_ENV: &str = "POLINT_GO_SYMBOLS";
+const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
+    (
+        "go.mod",
+        include_str!("../../go-sidecar/polint-go-symbols/go.mod"),
+    ),
+    (
+        "go.sum",
+        include_str!("../../go-sidecar/polint-go-symbols/go.sum"),
+    ),
+    (
+        "main.go",
+        include_str!("../../go-sidecar/polint-go-symbols/main.go"),
+    ),
+    (
+        "internal/symbols/emit.go",
+        include_str!("../../go-sidecar/polint-go-symbols/internal/symbols/emit.go"),
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GoSymbolConfig {
@@ -30,6 +50,12 @@ enum GoSidecarFailure {
     CommandFailed(String),
     InvalidJson(String),
     InvalidPath(String),
+}
+
+#[derive(Debug, Clone)]
+enum GoSidecarCommand {
+    Binary(PathBuf),
+    SourceDir(PathBuf),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,7 +195,7 @@ fn derive_go_symbols_with_runner(
     let mut output = LanguageSymbolOutput::default();
     output
         .capability_support
-        .extend(supported_language_support(plan));
+        .extend(supported_language_support(plan, &files));
     convert_sidecar_output(builder, db, &sidecar);
     output
         .diagnostics
@@ -242,11 +268,25 @@ fn split_comma(value: &str) -> Vec<String> {
 }
 
 fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSidecarFailure> {
-    let sidecar_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/polint-go-symbols");
-    let sidecar_workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../go.work");
-    let output = Command::new("go")
-        .arg("run")
-        .arg(sidecar_dir.as_os_str())
+    let sidecar = resolve_go_sidecar()?;
+    let mut command = match sidecar {
+        GoSidecarCommand::Binary(path) => {
+            let mut command = Command::new(path);
+            command.current_dir(root);
+            command
+        }
+        GoSidecarCommand::SourceDir(path) => {
+            let mut command = Command::new("go");
+            command
+                .arg("run")
+                .arg(".")
+                .current_dir(path)
+                .env("GOWORK", "off");
+            command
+        }
+    };
+
+    let output = command
         .arg("symbols")
         .arg("--root")
         .arg(root.as_os_str())
@@ -257,8 +297,6 @@ fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSid
         .arg("--build-tags")
         .arg(config.build_tags.join(","))
         .arg("--json")
-        .current_dir(root)
-        .env("GOWORK", sidecar_workspace.as_os_str())
         .env_remove("GOFLAGS")
         .output()
         .map_err(|error| {
@@ -280,6 +318,170 @@ fn run_go_sidecar(root: &Path, config: &GoSymbolConfig) -> Result<Vec<u8>, GoSid
     }
 
     Ok(output.stdout)
+}
+
+fn resolve_go_sidecar() -> Result<GoSidecarCommand, GoSidecarFailure> {
+    if let Ok(path) = std::env::var(GO_SYMBOL_SIDECAR_ENV)
+        && !path.trim().is_empty()
+    {
+        return sidecar_command_for_path(PathBuf::from(path));
+    }
+
+    if let Some(path) = installed_sidecar_binary()? {
+        return Ok(GoSidecarCommand::Binary(path));
+    }
+
+    materialize_embedded_go_sidecar().map(GoSidecarCommand::SourceDir)
+}
+
+fn sidecar_command_for_path(path: PathBuf) -> Result<GoSidecarCommand, GoSidecarFailure> {
+    if path.is_file() {
+        return Ok(GoSidecarCommand::Binary(path));
+    }
+    if path.join("go.mod").is_file() {
+        return Ok(GoSidecarCommand::SourceDir(path));
+    }
+    Err(GoSidecarFailure::CommandFailed(format!(
+        "{GO_SYMBOL_SIDECAR_ENV} must point to a polint-go-symbols binary or source directory."
+    )))
+}
+
+fn installed_sidecar_binary() -> Result<Option<PathBuf>, GoSidecarFailure> {
+    let executable = std::env::current_exe().map_err(|error| {
+        GoSidecarFailure::CommandFailed(format!("failed to resolve current executable: {error}"))
+    })?;
+    let Some(directory) = executable.parent() else {
+        return Ok(None);
+    };
+    let candidate = directory.join(sidecar_binary_name());
+    Ok(candidate.is_file().then_some(candidate))
+}
+
+fn sidecar_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "polint-go-symbols.exe"
+    } else {
+        "polint-go-symbols"
+    }
+}
+
+fn materialize_embedded_go_sidecar() -> Result<PathBuf, GoSidecarFailure> {
+    let hash = embedded_go_sidecar_hash();
+    let parent = std::env::temp_dir()
+        .join("polint-go-symbols")
+        .join(env!("CARGO_PKG_VERSION"));
+    let directory = parent.join(&hash);
+    let marker = directory.join(".complete");
+    if marker.is_file() {
+        return Ok(directory);
+    }
+    if directory.exists() && embedded_go_sidecar_files_match(&directory) {
+        fs::write(&marker, "").map_err(|error| {
+            GoSidecarFailure::CommandFailed(format!(
+                "failed to mark embedded Go sidecar directory `{}` complete: {error}",
+                directory.display()
+            ))
+        })?;
+        return Ok(directory);
+    }
+    if directory.exists() {
+        fs::remove_dir_all(&directory).map_err(|error| {
+            GoSidecarFailure::CommandFailed(format!(
+                "failed to replace incomplete embedded Go sidecar directory `{}`: {error}",
+                directory.display()
+            ))
+        })?;
+    }
+
+    fs::create_dir_all(&parent).map_err(|error| {
+        GoSidecarFailure::CommandFailed(format!(
+            "failed to create embedded Go sidecar cache `{}`: {error}",
+            parent.display()
+        ))
+    })?;
+    let staging = parent.join(format!(
+        ".{hash}-{}-{}",
+        std::process::id(),
+        unique_materialization_suffix()
+    ));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|error| {
+            GoSidecarFailure::CommandFailed(format!(
+                "failed to clear stale embedded Go sidecar staging directory `{}`: {error}",
+                staging.display()
+            ))
+        })?;
+    }
+
+    write_embedded_go_sidecar_files(&staging)?;
+    fs::write(staging.join(".complete"), "").map_err(|error| {
+        GoSidecarFailure::CommandFailed(format!(
+            "failed to write embedded Go sidecar completion marker `{}`: {error}",
+            staging.display()
+        ))
+    })?;
+    match fs::rename(&staging, &directory) {
+        Ok(()) => Ok(directory),
+        Err(_) if marker.is_file() => {
+            let _ = fs::remove_dir_all(&staging);
+            Ok(directory)
+        }
+        Err(error) => Err(GoSidecarFailure::CommandFailed(format!(
+            "failed to publish embedded Go sidecar directory `{}`: {error}",
+            directory.display()
+        ))),
+    }
+}
+
+fn embedded_go_sidecar_files_match(directory: &Path) -> bool {
+    EMBEDDED_GO_SIDECAR_FILES
+        .iter()
+        .all(|(relative_path, contents)| {
+            fs::read_to_string(directory.join(relative_path))
+                .as_deref()
+                .is_ok_and(|existing| existing == *contents)
+        })
+}
+
+fn write_embedded_go_sidecar_files(directory: &Path) -> Result<(), GoSidecarFailure> {
+    for (relative_path, contents) in EMBEDDED_GO_SIDECAR_FILES {
+        let path = directory.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                GoSidecarFailure::CommandFailed(format!(
+                    "failed to create embedded Go sidecar directory `{}`: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::write(&path, contents).map_err(|error| {
+            GoSidecarFailure::CommandFailed(format!(
+                "failed to write embedded Go sidecar file `{}`: {error}",
+                path.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn unique_materialization_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn embedded_go_sidecar_hash() -> String {
+    let mut parts = Vec::new();
+    parts.push(GO_SYMBOL_SIDECAR_SCHEMA.to_string());
+    for (relative_path, contents) in EMBEDDED_GO_SIDECAR_FILES {
+        parts.push(format!(
+            "{relative_path}:{}",
+            crate::cache::stable_hash(&[*contents])
+        ));
+    }
+    let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::cache::stable_hash(&part_refs)
 }
 
 fn parse_sidecar_output(stdout: &[u8]) -> Result<GoSidecarOutput, GoSidecarFailure> {
@@ -380,7 +582,10 @@ fn setup_missing_output(
     reason: &str,
     hint: &str,
 ) -> LanguageSymbolOutput {
-    if plan.requests_capability("references") {
+    if !plan
+        .rules_for_capability_matching_files("references", files)
+        .is_empty()
+    {
         for file in files {
             builder.add_setup_missing_reference(
                 file.language,
@@ -394,7 +599,7 @@ fn setup_missing_output(
     let mut output = LanguageSymbolOutput::default();
     output
         .capability_support
-        .extend(setup_support(plan, reason, hint));
+        .extend(setup_support(plan, files, reason, hint));
     output.capability_support.sort_by(|left, right| {
         (
             left.capability.as_str(),
@@ -412,21 +617,25 @@ fn setup_missing_output(
     output
 }
 
-fn setup_support(plan: &AnalysisPlan, reason: &str, hint: &str) -> Vec<CapabilitySupport> {
+fn setup_support(
+    plan: &AnalysisPlan,
+    files: &[&SourceFile],
+    reason: &str,
+    hint: &str,
+) -> Vec<CapabilitySupport> {
     GO_SYMBOL_GRAPH_CAPABILITIES
         .iter()
         .filter(|capability| plan.requests_capability(capability))
         .filter_map(|capability| {
-            let base = plan
-                .support_view()
-                .entries()
-                .iter()
-                .find(|entry| entry.capability == *capability)?;
+            let rules = plan.rules_for_capability_matching_files(capability, files);
+            if rules.is_empty() {
+                return None;
+            }
             Some(CapabilitySupport {
                 capability: (*capability).to_string(),
                 language: Some(Language::Go),
                 status: CapabilitySupportStatus::SetupMissing,
-                rules: base.rules.clone(),
+                rules,
                 reason: Some(reason.to_string()),
                 hint: Some(hint.to_string()),
                 docs_path: Some(SYMBOL_FACTS_DOCS_PATH.to_string()),
@@ -435,21 +644,23 @@ fn setup_support(plan: &AnalysisPlan, reason: &str, hint: &str) -> Vec<Capabilit
         .collect()
 }
 
-fn supported_language_support(plan: &AnalysisPlan) -> Vec<CapabilitySupport> {
+fn supported_language_support(
+    plan: &AnalysisPlan,
+    files: &[&SourceFile],
+) -> Vec<CapabilitySupport> {
     GO_SYMBOL_GRAPH_CAPABILITIES
         .iter()
         .filter(|capability| plan.requests_capability(capability))
         .filter_map(|capability| {
-            let base = plan
-                .support_view()
-                .entries()
-                .iter()
-                .find(|entry| entry.capability == *capability)?;
+            let rules = plan.rules_for_capability_matching_files(capability, files);
+            if rules.is_empty() {
+                return None;
+            }
             Some(CapabilitySupport {
                 capability: (*capability).to_string(),
                 language: Some(Language::Go),
                 status: CapabilitySupportStatus::Supported,
-                rules: base.rules.clone(),
+                rules,
                 reason: None,
                 hint: None,
                 docs_path: Some(SYMBOL_FACTS_DOCS_PATH.to_string()),
@@ -715,14 +926,23 @@ fn package_error_diagnostics(errors: &[GoSidecarPackageError]) -> Vec<Diagnostic
 #[cfg(test)]
 mod symbol_graph_go_setup {
     use super::*;
-    use crate::core::{CapabilitySupportStatus, SymbolPrecision, SymbolResolutionStatus};
+    use crate::core::{
+        Capabilities, CapabilitySupportStatus, Rule, RuleMeta, RuleOptions, SymbolPrecision,
+        SymbolResolutionStatus,
+    };
+    use crate::diagnostics::Severity;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
-    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
         let path = root.join(relative_path);
         std::fs::create_dir_all(path.parent().expect("fixture has parent")).expect("mkdirs");
-        std::fs::write(&path, source).expect("write Go fixture");
+        std::fs::write(&path, source).expect("write fixture");
         db.add_file(path, relative_path.to_string(), source.to_string());
+    }
+
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
+        add_file(db, root, relative_path, source);
     }
 
     fn loaded_config_for(root: &Path) -> LoadedConfig {
@@ -731,6 +951,41 @@ mod symbol_graph_go_setup {
 
     fn requested_plan() -> AnalysisPlan {
         AnalysisPlan::from_capability_names_for_test(&["symbols", "references"])
+    }
+
+    fn requested_plan_with_files(files: &[&str]) -> AnalysisPlan {
+        let rule = Rule::from_parts(
+            || RuleMeta {
+                id: "local/needs-symbols".to_string(),
+                description: "Needs symbols".to_string(),
+                severity: Severity::Warn,
+            },
+            || Capabilities::new().references(),
+            |_db, _ctx| Ok(()),
+        );
+        let mut options = BTreeMap::new();
+        options.insert(
+            "local/needs-symbols".to_string(),
+            RuleOptions {
+                files: files.iter().map(|file| (*file).to_string()).collect(),
+                ..RuleOptions::default()
+            },
+        );
+        AnalysisPlan::from_rules(&[rule], None, &options)
+    }
+
+    #[test]
+    fn embedded_go_sidecar_sources_match_workspace_sources() {
+        let workspace_sidecar =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/polint-go-symbols");
+        for (relative_path, embedded) in EMBEDDED_GO_SIDECAR_FILES {
+            let workspace = std::fs::read_to_string(workspace_sidecar.join(relative_path))
+                .unwrap_or_else(|error| panic!("read workspace sidecar {relative_path}: {error}"));
+            assert_eq!(
+                workspace, *embedded,
+                "embedded sidecar drifted at {relative_path}"
+            );
+        }
     }
 
     #[test]
@@ -789,6 +1044,39 @@ include_tests = false
             reference.status == SymbolResolutionStatus::SetupMissing
                 && reference.precision == SymbolPrecision::SetupMissing
         }));
+    }
+
+    #[test]
+    fn missing_go_mod_does_not_block_ts_only_symbol_rules() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package main\n");
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "export function run() { return 1; }\n",
+        );
+        let mut builder = SymbolGraphBuilder::new();
+
+        let output = derive_go_symbols(
+            &mut builder,
+            &db,
+            &loaded_config_for(temp.path()),
+            &requested_plan_with_files(&["src/**/*.ts"]),
+        );
+        let graph = builder.finish();
+
+        assert!(
+            output.capability_support.is_empty(),
+            "{:#?}",
+            output.capability_support
+        );
+        assert!(
+            graph.references.is_empty(),
+            "TS-only rules should not receive Go setup-missing reference placeholders: {:#?}",
+            graph.references
+        );
     }
 
     #[test]
@@ -1013,6 +1301,7 @@ func Use() int {
         assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
         let build = symbol(&graph.symbols, "Build", SymbolKind::Function);
         assert_eq!(build.precision, SymbolPrecision::ExactSemantic);
+        assert!(build.file.is_some());
         let definition = primary_definition(&graph.definitions, build.id);
         assert_eq!(definition.kind, DefinitionKind::Declaration);
         let reference = resolved_reference(&graph.references, build.id, ReferenceKind::Call);
@@ -1048,6 +1337,29 @@ func Use(w Widget) string {
             resolved_reference(&graph.references, field.id, ReferenceKind::MemberAccess);
         assert_eq!(method_reference.precision, SymbolPrecision::ExactSemantic);
         assert_eq!(field_reference.precision, SymbolPrecision::ExactSemantic);
+    }
+
+    #[test]
+    fn go_package_qualified_external_call_is_resolved_call_reference() {
+        let (graph, output) = derive_go_fixture(&[(
+            "main.go",
+            r#"package app
+
+import "fmt"
+
+func Use() {
+	fmt.Println("ok")
+}
+"#,
+        )]);
+
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let println = symbol(&graph.symbols, "Println", SymbolKind::Function);
+        assert_eq!(println.qualified_name, "fmt.Println");
+        assert_eq!(println.file, None);
+        let reference = resolved_reference(&graph.references, println.id, ReferenceKind::Call);
+        assert_eq!(reference.name, "Println");
+        assert_eq!(reference.precision, SymbolPrecision::ExactSemantic);
     }
 
     #[test]
