@@ -662,3 +662,215 @@ include_tests = false
         );
     }
 }
+
+#[cfg(test)]
+mod symbol_graph_go {
+    use super::*;
+    use crate::core::{
+        DefinitionFact, DefinitionKind, ReferenceFact, ReferenceKind, SymbolFact, SymbolId,
+        SymbolKind, SymbolPrecision, SymbolResolutionStatus,
+    };
+    use crate::symbol_graph::model::SymbolGraphOutput;
+    use std::path::Path;
+
+    fn derive_go_fixture(files: &[(&str, &str)]) -> (SymbolGraphOutput, LanguageSymbolOutput) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.25.0\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        for (relative_path, source) in files {
+            add_go_file(&mut db, temp.path(), relative_path, source);
+        }
+        let mut builder = SymbolGraphBuilder::new();
+        let output = derive_go_symbols(
+            &mut builder,
+            &db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]),
+        );
+        (builder.finish(), output)
+    }
+
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("fixture has parent")).expect("mkdirs");
+        std::fs::write(&path, source).expect("write Go fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string());
+    }
+
+    fn loaded_config_for(root: &Path) -> LoadedConfig {
+        crate::config::load_config(root).expect("config loads")
+    }
+
+    fn symbol<'a>(
+        symbols: &'a [SymbolFact],
+        name: &str,
+        kind: SymbolKind,
+    ) -> &'a SymbolFact {
+        symbols
+            .iter()
+            .find(|symbol| symbol.name == name && symbol.kind == kind)
+            .unwrap_or_else(|| panic!("missing {kind:?} symbol {name}; symbols = {symbols:#?}"))
+    }
+
+    fn primary_definition<'a>(
+        definitions: &'a [DefinitionFact],
+        symbol_id: SymbolId,
+    ) -> &'a DefinitionFact {
+        definitions
+            .iter()
+            .find(|definition| definition.symbol == symbol_id && definition.is_primary)
+            .unwrap_or_else(|| panic!("missing definition for {symbol_id:?}; definitions = {definitions:#?}"))
+    }
+
+    fn resolved_reference<'a>(
+        references: &'a [ReferenceFact],
+        target: SymbolId,
+        kind: ReferenceKind,
+    ) -> &'a ReferenceFact {
+        references
+            .iter()
+            .find(|reference| {
+                reference.target == Some(target)
+                    && reference.kind == kind
+                    && reference.status == SymbolResolutionStatus::Resolved
+            })
+            .unwrap_or_else(|| panic!("missing {kind:?} reference to {target:?}; references = {references:#?}"))
+    }
+
+    #[test]
+    fn go_function_definition_and_call_reference_are_exact_semantic() {
+        let (graph, output) = derive_go_fixture(&[(
+            "main.go",
+            r#"package app
+
+func Build() int {
+	return 41
+}
+
+func Use() int {
+	return Build() + 1
+}
+"#,
+        )]);
+
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let build = symbol(&graph.symbols, "Build", SymbolKind::Function);
+        assert_eq!(build.precision, SymbolPrecision::ExactSemantic);
+        let definition = primary_definition(&graph.definitions, build.id);
+        assert_eq!(definition.kind, DefinitionKind::Declaration);
+        let reference = resolved_reference(&graph.references, build.id, ReferenceKind::Call);
+        assert_eq!(reference.precision, SymbolPrecision::ExactSemantic);
+    }
+
+    #[test]
+    fn go_method_and_field_selector_references_are_exact_semantic() {
+        let (graph, output) = derive_go_fixture(&[(
+            "widget.go",
+            r#"package app
+
+type Widget struct {
+	Name string
+}
+
+func (w Widget) Label() string {
+	return w.Name
+}
+
+func Use(w Widget) string {
+	return w.Label()
+}
+"#,
+        )]);
+
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let method = symbol(&graph.symbols, "Label", SymbolKind::Method);
+        let field = symbol(&graph.symbols, "Name", SymbolKind::Field);
+        let method_reference = resolved_reference(&graph.references, method.id, ReferenceKind::Call);
+        let field_reference =
+            resolved_reference(&graph.references, field.id, ReferenceKind::MemberAccess);
+        assert_eq!(method_reference.precision, SymbolPrecision::ExactSemantic);
+        assert_eq!(field_reference.precision, SymbolPrecision::ExactSemantic);
+    }
+
+    #[test]
+    fn go_package_objectpath_symbol_id_survives_unrelated_file_move() {
+        let (first, _) = derive_go_fixture(&[
+            (
+                "main.go",
+                r#"package app
+
+func Build() int {
+	return 1
+}
+"#,
+            ),
+            ("unused/a.go", "package app\n\nconst Unused = 1\n"),
+        ]);
+        let (second, _) = derive_go_fixture(&[
+            (
+                "main.go",
+                r#"package app
+
+func Build() int {
+	return 1
+}
+"#,
+            ),
+            ("other/a.go", "package app\n\nconst Unused = 1\n"),
+        ]);
+
+        assert_eq!(
+            symbol(&first.symbols, "Build", SymbolKind::Function).id,
+            symbol(&second.symbols, "Build", SymbolKind::Function).id
+        );
+    }
+
+    #[test]
+    fn go_local_variable_id_is_stable_for_same_file_and_owner_chain() {
+        let source = r#"package app
+
+func Use() int {
+	local := 41
+	return local + 1
+}
+"#;
+        let (first, _) = derive_go_fixture(&[("main.go", source)]);
+        let (second, _) = derive_go_fixture(&[("main.go", source)]);
+
+        assert_eq!(
+            symbol(&first.symbols, "local", SymbolKind::Variable).id,
+            symbol(&second.symbols, "local", SymbolKind::Variable).id
+        );
+    }
+
+    #[test]
+    fn go_setup_missing_derivation_emits_capability_diagnostics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package main\n");
+
+        let derivation = crate::symbol_graph::derive_requested_symbols(
+            &mut db,
+            &loaded_config_for(temp.path()),
+            &AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]),
+        );
+
+        assert!(
+            derivation.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic
+                        .evidence
+                        .iter()
+                        .any(|evidence| {
+                            evidence.label == "status" && evidence.value == "setup_missing"
+                        })
+            }),
+            "{:#?}",
+            derivation.diagnostics
+        );
+    }
+}
