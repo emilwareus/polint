@@ -1577,6 +1577,10 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("FileMetrics<'_>"));
     assert!(contents.contains("ResolvedImports<'_>"));
     assert!(contents.contains("ModuleGraphFacts<'_>"));
+    assert!(contents.contains("Symbols<'_>"));
+    assert!(contents.contains("References<'_>"));
+    assert!(contents.contains("symbols.by_name"));
+    assert!(contents.contains("references.unresolved()"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
