@@ -1,13 +1,15 @@
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, Language, SourceFile,
-    Span, SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
-    span_from_byte_range,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, Language,
+    ReferenceKind, SourceFile, Span, SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace,
+    SymbolPrecision, span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::LanguageSymbolOutput;
-use crate::symbol_graph::model::{DefinitionDraft, SymbolDraft, SymbolGraphBuilder};
+use crate::symbol_graph::model::{
+    DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
+};
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -15,7 +17,10 @@ use oxc_ast::ast::{
     Program, Statement,
 };
 use oxc_parser::Parser;
-use oxc_semantic::{AstNodes, Scoping, SemanticBuilder, SymbolFlags, SymbolId as OxcSymbolId};
+use oxc_semantic::{
+    AstNodes, Reference, ReferenceFlags, ReferenceId as OxcReferenceId, Scoping, SemanticBuilder,
+    SymbolFlags, SymbolId as OxcSymbolId,
+};
 use oxc_span::{GetSpan, SourceType};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -52,7 +57,7 @@ pub(crate) fn derive_ts_symbols(
     }
 
     for file in files {
-        derive_ts_file_symbols(builder, &mut output, file);
+        derive_ts_file_symbols(builder, &mut output, file, requests_references);
     }
 
     output
@@ -95,6 +100,7 @@ fn derive_ts_file_symbols(
     builder: &mut SymbolGraphBuilder,
     output: &mut LanguageSymbolOutput,
     file: &SourceFile,
+    requests_references: bool,
 ) {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
@@ -188,6 +194,158 @@ fn derive_ts_file_symbols(
             namespace,
             is_exported,
         );
+    }
+
+    if requests_references {
+        add_ts_references(builder, file, source, scoping, nodes, &symbol_ids);
+    }
+}
+
+fn add_ts_references(
+    builder: &mut SymbolGraphBuilder,
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    symbol_ids: &BTreeMap<OxcSymbolId, PolintSymbolId>,
+) {
+    let mut resolved = symbol_ids
+        .iter()
+        .flat_map(|(oxc_symbol, target)| {
+            scoping
+                .get_resolved_reference_ids(*oxc_symbol)
+                .iter()
+                .map(|reference| (*reference, *target))
+        })
+        .collect::<Vec<_>>();
+    resolved.sort_by(|left, right| {
+        reference_order_key(scoping, nodes, left.0)
+            .cmp(&reference_order_key(scoping, nodes, right.0))
+    });
+
+    for (reference_id, target) in resolved {
+        let reference = scoping.get_reference(reference_id);
+        let draft = reference_draft(
+            file,
+            source,
+            nodes,
+            reference,
+            reference_name(nodes, reference),
+            SymbolPrecision::ExactLocal,
+        );
+        builder.add_reference(target, draft);
+    }
+
+    let mut unresolved = scoping
+        .root_unresolved_references_ids()
+        .flat_map(|references| references.collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    unresolved.sort_by(|left, right| {
+        reference_order_key(scoping, nodes, *left).cmp(&reference_order_key(scoping, nodes, *right))
+    });
+    unresolved.dedup();
+
+    for reference_id in unresolved {
+        let reference = scoping.get_reference(reference_id);
+        let draft = reference_draft(
+            file,
+            source,
+            nodes,
+            reference,
+            reference_name(nodes, reference),
+            SymbolPrecision::Unresolved,
+        );
+        builder.add_unresolved_reference(draft);
+    }
+}
+
+fn reference_order_key(
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    reference_id: OxcReferenceId,
+) -> (u32, u32, String) {
+    let reference = scoping.get_reference(reference_id);
+    let span = nodes.kind(reference.node_id()).span();
+    (span.start, span.end, reference_name(nodes, reference))
+}
+
+fn reference_draft(
+    file: &SourceFile,
+    source: &str,
+    nodes: &AstNodes<'_>,
+    reference: &Reference,
+    name: String,
+    precision: SymbolPrecision,
+) -> ReferenceDraft {
+    let flags = reference.flags();
+    ReferenceDraft {
+        language: file.language,
+        name: name.clone(),
+        qualified_name: format!("{}::{name}", file.relative_path),
+        kind: reference_kind(flags, nodes, reference),
+        namespace: reference_namespace(flags),
+        file: Some(file.id),
+        package: None,
+        module: None,
+        owner: None,
+        file_key: file.relative_path.clone(),
+        primary_span: Some(span_from_oxc(
+            file.id,
+            source,
+            nodes.kind(reference.node_id()).span(),
+        )),
+        precision,
+    }
+}
+
+fn reference_name(nodes: &AstNodes<'_>, reference: &Reference) -> String {
+    match nodes.kind(reference.node_id()) {
+        AstKind::IdentifierReference(identifier) => identifier.name.to_string(),
+        AstKind::BindingIdentifier(identifier) => identifier.name.to_string(),
+        AstKind::IdentifierName(identifier) => identifier.name.to_string(),
+        kind => {
+            let span = kind.span();
+            format!("<reference:{}-{}>", span.start, span.end)
+        }
+    }
+}
+
+fn reference_kind(
+    flags: ReferenceFlags,
+    nodes: &AstNodes<'_>,
+    reference: &Reference,
+) -> ReferenceKind {
+    if flags.is_type() || flags.is_value_as_type() {
+        ReferenceKind::TypeUse
+    } else if is_call_reference(nodes, reference.node_id()) {
+        ReferenceKind::Call
+    } else if flags.is_read_write() {
+        ReferenceKind::ReadWrite
+    } else if flags.is_write() {
+        ReferenceKind::Write
+    } else if flags.is_read() {
+        ReferenceKind::Read
+    } else {
+        ReferenceKind::Unknown
+    }
+}
+
+fn is_call_reference(nodes: &AstNodes<'_>, node_id: oxc_semantic::NodeId) -> bool {
+    matches!(
+        nodes.parent_kind(node_id),
+        AstKind::CallExpression(_) | AstKind::NewExpression(_)
+    )
+}
+
+fn reference_namespace(flags: ReferenceFlags) -> SymbolNamespace {
+    if flags.is_namespace() {
+        SymbolNamespace::Namespace
+    } else if flags.is_type() || flags.is_value_as_type() {
+        SymbolNamespace::Type
+    } else if flags.is_value() {
+        SymbolNamespace::Value
+    } else {
+        SymbolNamespace::Unknown
     }
 }
 
@@ -791,15 +949,21 @@ count = helper({ value: count });
                 && reference.status == SymbolResolutionStatus::Resolved
                 && reference.precision == SymbolPrecision::ExactLocal
         ));
-        assert!(references_to(&symbols, &references, "Model")
-            .iter()
-            .any(|reference| reference.kind == ReferenceKind::TypeUse));
-        assert!(references_to(&symbols, &references, "input")
-            .iter()
-            .any(|reference| reference.kind == ReferenceKind::Read));
-        assert!(references_to(&symbols, &references, "count")
-            .iter()
-            .any(|reference| reference.kind == ReferenceKind::Write));
+        assert!(
+            references_to(&symbols, &references, "Model")
+                .iter()
+                .any(|reference| reference.kind == ReferenceKind::TypeUse)
+        );
+        assert!(
+            references_to(&symbols, &references, "input")
+                .iter()
+                .any(|reference| reference.kind == ReferenceKind::Read)
+        );
+        assert!(
+            references_to(&symbols, &references, "count")
+                .iter()
+                .any(|reference| reference.kind == ReferenceKind::Write)
+        );
     }
 
     #[test]
