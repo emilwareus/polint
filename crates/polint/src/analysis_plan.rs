@@ -593,12 +593,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
         "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),
-        "symbols" | "references" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Symbol and reference facts are recognized but not provided yet.".to_string()),
-            Some("Provider support is promoted in a later Phase 13 plan.".to_string()),
-            Some("docs/facts/symbols-and-references.md".to_string()),
-        ),
+        "symbols" | "references" => (CapabilitySupportStatus::Supported, None, None, None),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),

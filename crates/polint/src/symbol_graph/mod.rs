@@ -85,6 +85,7 @@ fn merge_language_output(derivation: &mut SymbolGraphDerivation, output: Languag
 fn capability_diagnostics(support: &[CapabilitySupport]) -> Vec<Diagnostic> {
     support
         .iter()
+        .filter(|entry| entry.status != CapabilitySupportStatus::Supported)
         .flat_map(|entry| {
             entry
                 .rules
