@@ -997,11 +997,13 @@ mod symbol_graph_go_setup {
             .expect("embedded go.mod exists");
 
         assert!(
-            go_mod.contains("\ngo 1.24.0\n"),
+            go_mod.lines().any(|line| line == "go 1.24.0"),
             "embedded sidecar should keep Go 1.24 as its minimum supported toolchain: {go_mod:?}"
         );
         assert!(
-            go_mod.contains("golang.org/x/tools v0.42.0"),
+            go_mod
+                .lines()
+                .any(|line| line == "require golang.org/x/tools v0.42.0"),
             "embedded sidecar should stay on the Go 1.24-compatible x/tools line: {go_mod:?}"
         );
     }
