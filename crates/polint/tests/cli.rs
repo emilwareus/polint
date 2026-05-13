@@ -3271,6 +3271,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             expected_files: &["handler.go"],
         },
         ExampleCase {
+            name: "go-sensitive-writes",
+            rule_modules: &["no_sensitive_balance_writes.rs"],
+            expected_rules: &["local/no-sensitive-balance-writes"],
+            expected_files: &["ledger.go"],
+        },
+        ExampleCase {
             name: "go-test-quality",
             rule_modules: &["go_test_quality.rs"],
             expected_rules: &["local/go-test-quality"],
@@ -3287,6 +3293,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             rule_modules: &["no_raw_colors.rs"],
             expected_rules: &["local/no-raw-colors"],
             expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "ts-no-raw-api-calls",
+            rule_modules: &["no_raw_api_calls.rs"],
+            expected_rules: &["local/no-raw-api-calls"],
+            expected_files: &["src/user-page.ts"],
         },
     ];
 
@@ -3348,6 +3360,95 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             );
         }
     }
+}
+
+#[test]
+fn ts_no_raw_api_calls_example_reports_resolved_and_unresolved_calls() {
+    let example_dir = repo_root().join("examples/ts-no-raw-api-calls");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/no-raw-api-calls");
+    assert_eq!(diagnostics.len(), 2, "{json:#?}");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["file"] == "src/user-page.ts"
+                && diagnostic_has_evidence(diagnostic, "api", "rawRequest")
+                && diagnostic_has_evidence(diagnostic, "status", "Resolved")
+                && diagnostic_has_evidence(diagnostic, "precision", "ExactLocal")
+        }),
+        "expected resolved rawRequest call diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["file"] == "src/user-page.ts"
+                && diagnostic_has_evidence(diagnostic, "api", "fetch")
+                && diagnostic_has_evidence(diagnostic, "status", "Unresolved")
+                && diagnostic_has_evidence(diagnostic, "symbol_id", "unresolved")
+        }),
+        "expected unresolved fetch call diagnostic: {json:#?}"
+    );
+}
+
+#[test]
+fn go_sensitive_writes_example_reports_write_and_readwrite_references() {
+    let example_dir = repo_root().join("examples/go-sensitive-writes");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/no-sensitive-balance-writes");
+    assert_eq!(diagnostics.len(), 2, "{json:#?}");
+    assert!(
+        diagnostics.iter().all(|diagnostic| {
+            diagnostic["file"] == "ledger.go"
+                && diagnostic_has_evidence(diagnostic, "field", "Balance")
+                && diagnostic_has_evidence(diagnostic, "status", "Resolved")
+                && diagnostic_has_evidence(diagnostic, "precision", "ExactSemantic")
+        }),
+        "expected only exact semantic Balance write diagnostics in ledger.go: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "reference_kind",
+            "Write"
+        )),
+        "expected a direct write diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "reference_kind",
+            "ReadWrite"
+        )),
+        "expected a read-write diagnostic: {json:#?}"
+    );
 }
 
 #[test]

@@ -100,6 +100,7 @@ Last activity: 2026-05-13
 | 260512-yml | Replace unsound serde_yml dependency | 2026-05-12 | c2f678e | [260512-yml-replace-unsound-serde-yml-dependency](./quick/260512-yml-replace-unsound-serde-yml-dependency/) |
 | 260512-h4g | Fix publish script to be idempotent after partial crates.io publish | 2026-05-12 | 0729a6b | [260512-h4g-fix-publish-script-to-be-idempotent-afte](./quick/260512-h4g-fix-publish-script-to-be-idempotent-afte/) |
 | 260512-tga | Research lifecycle extensibility architecture for Phase 13 scan lifecycle and update research doc | 2026-05-12 | uncommitted | [260512-tga-research-lifecycle-extensibility-archite](./quick/260512-tga-research-lifecycle-extensibility-archite/) |
+| 260513-fga | Add customer-facing symbol/reference examples | 2026-05-13 | committed | [260513-fga-add-customer-facing-symbol-reference-exa](./quick/260513-fga-add-customer-facing-symbol-reference-exa/) |
 
 ## Phase Progress
 
