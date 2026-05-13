@@ -1,9 +1,9 @@
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, Language,
-    ReferenceKind, SourceFile, Span, SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace,
-    SymbolPrecision, span_from_byte_range,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
+    ModuleNodeId, ReferenceKind, ResolutionStatus, ResolvedImportFact, SourceFile, Span,
+    SymbolId as PolintSymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::LanguageSymbolOutput;
@@ -13,8 +13,8 @@ use crate::symbol_graph::model::{
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind, ModuleExportName,
-    Program, Statement,
+    BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind,
+    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{
@@ -27,6 +27,43 @@ use std::path::Path;
 
 const TS_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
+
+#[derive(Debug, Clone)]
+struct TsFileSymbolSummary {
+    file: FileId,
+    import_aliases: Vec<ImportAlias>,
+    exports: BTreeMap<String, Vec<PolintSymbolId>>,
+}
+
+impl TsFileSymbolSummary {
+    fn new(file: FileId) -> Self {
+        Self {
+            file,
+            import_aliases: Vec::new(),
+            exports: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImportAlias {
+    file: FileId,
+    language: Language,
+    file_key: String,
+    import_path: String,
+    import_source_span: Span,
+    local_name: String,
+    local_span: Span,
+    target: ImportAliasTarget,
+    namespace: SymbolNamespace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ImportAliasTarget {
+    Named(String),
+    Default,
+    Namespace,
+}
 
 pub(crate) fn derive_ts_symbols(
     builder: &mut SymbolGraphBuilder,
@@ -56,8 +93,17 @@ pub(crate) fn derive_ts_symbols(
         return output;
     }
 
+    let mut summaries = Vec::new();
     for file in files {
-        derive_ts_file_symbols(builder, &mut output, file, requests_references);
+        summaries.push(derive_ts_file_symbols(
+            builder,
+            &mut output,
+            file,
+            requests_references,
+        ));
+    }
+    if requests_references {
+        add_import_alias_references(builder, db, &summaries);
     }
 
     output
@@ -101,7 +147,7 @@ fn derive_ts_file_symbols(
     output: &mut LanguageSymbolOutput,
     file: &SourceFile,
     requests_references: bool,
-) {
+) -> TsFileSymbolSummary {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
@@ -116,9 +162,10 @@ fn derive_ts_file_symbols(
             TextRange::point(1, 1),
             "TS/JS parser reported a syntax error",
         ));
-        return;
+        return TsFileSymbolSummary::new(file.id);
     }
 
+    let import_aliases = collect_import_aliases(file, source, &parsed.program);
     let semantic_return = SemanticBuilder::new()
         .with_check_syntax_error(true)
         .build(&parsed.program);
@@ -133,6 +180,11 @@ fn derive_ts_file_symbols(
     let nodes = semantic.nodes();
     let export_names = collect_export_names(&parsed.program, scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
+    let mut summary = TsFileSymbolSummary {
+        file: file.id,
+        import_aliases,
+        exports: BTreeMap::new(),
+    };
     let mut symbol_ids = BTreeMap::<OxcSymbolId, PolintSymbolId>::new();
     let mut oxc_symbols = scoping.symbol_ids().collect::<Vec<_>>();
     oxc_symbols.sort_by(|left, right| {
@@ -181,6 +233,15 @@ fn derive_ts_file_symbols(
             precision: SymbolPrecision::ExactLocal,
         });
         symbol_ids.insert(oxc_symbol, symbol);
+        if let Some(names) = export_names.get(&oxc_symbol) {
+            for export_name in names {
+                summary
+                    .exports
+                    .entry(export_name.clone())
+                    .or_default()
+                    .push(symbol);
+            }
+        }
 
         add_symbol_definitions(
             builder,
@@ -199,6 +260,8 @@ fn derive_ts_file_symbols(
     if requests_references {
         add_ts_references(builder, file, source, scoping, nodes, &symbol_ids);
     }
+
+    summary
 }
 
 fn add_ts_references(
@@ -256,6 +319,146 @@ fn add_ts_references(
             SymbolPrecision::Unresolved,
         );
         builder.add_unresolved_reference(draft);
+    }
+}
+
+fn add_import_alias_references(
+    builder: &mut SymbolGraphBuilder,
+    db: &AnalysisDb,
+    summaries: &[TsFileSymbolSummary],
+) {
+    let exports_by_file = summaries
+        .iter()
+        .map(|summary| (summary.file, summary.exports.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let imports_by_key = db
+        .imports()
+        .iter()
+        .map(|import| {
+            (
+                (import.file, import.path.clone(), import.span.start_byte),
+                import,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let resolved_by_import = db
+        .resolved_imports()
+        .iter()
+        .map(|resolved| (resolved.import, resolved))
+        .collect::<BTreeMap<_, _>>();
+    let file_by_node = db
+        .module_nodes()
+        .iter()
+        .filter_map(|node| node.file.map(|file| (node.id, file)))
+        .collect::<BTreeMap<ModuleNodeId, FileId>>();
+
+    for alias in summaries
+        .iter()
+        .flat_map(|summary| summary.import_aliases.iter())
+    {
+        let key = (
+            alias.file,
+            alias.import_path.clone(),
+            alias.import_source_span.start_byte,
+        );
+        let Some(import) = imports_by_key.get(&key) else {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::SetupMissing);
+            builder.add_setup_missing_reference_draft(draft);
+            continue;
+        };
+        let Some(resolved) = resolved_by_import.get(&import.id) else {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::SetupMissing);
+            builder.add_setup_missing_reference_draft(draft);
+            continue;
+        };
+
+        add_import_alias_reference(builder, alias, resolved, &file_by_node, &exports_by_file);
+    }
+}
+
+fn add_import_alias_reference(
+    builder: &mut SymbolGraphBuilder,
+    alias: &ImportAlias,
+    resolved: &ResolvedImportFact,
+    file_by_node: &BTreeMap<ModuleNodeId, FileId>,
+    exports_by_file: &BTreeMap<FileId, BTreeMap<String, Vec<PolintSymbolId>>>,
+) {
+    match resolved.status {
+        ResolutionStatus::Resolved => {
+            let Some(target_file) = resolved
+                .target_node
+                .and_then(|target_node| file_by_node.get(&target_node).copied())
+            else {
+                let draft = import_alias_reference_draft(alias, SymbolPrecision::Unresolved);
+                builder.add_unresolved_reference(draft);
+                return;
+            };
+            let candidates = import_alias_candidates(alias, target_file, exports_by_file);
+            match candidates.as_slice() {
+                [target] => {
+                    let draft = import_alias_reference_draft(alias, SymbolPrecision::ModuleLinked);
+                    builder.add_reference(*target, draft);
+                }
+                [] => {
+                    let draft = import_alias_reference_draft(alias, SymbolPrecision::Unresolved);
+                    builder.add_unresolved_reference(draft);
+                }
+                _ => {
+                    let draft = import_alias_reference_draft(alias, SymbolPrecision::Ambiguous);
+                    builder.add_ambiguous_reference(candidates, draft);
+                }
+            }
+        }
+        ResolutionStatus::SetupMissing => {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::SetupMissing);
+            builder.add_setup_missing_reference_draft(draft);
+        }
+        ResolutionStatus::Unsupported => {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::Unsupported);
+            builder.add_unsupported_reference_draft(draft);
+        }
+        ResolutionStatus::External | ResolutionStatus::Unresolved | ResolutionStatus::Dynamic => {
+            let draft = import_alias_reference_draft(alias, SymbolPrecision::Unresolved);
+            builder.add_unresolved_reference(draft);
+        }
+    }
+}
+
+fn import_alias_candidates(
+    alias: &ImportAlias,
+    target_file: FileId,
+    exports_by_file: &BTreeMap<FileId, BTreeMap<String, Vec<PolintSymbolId>>>,
+) -> Vec<PolintSymbolId> {
+    let Some(exports) = exports_by_file.get(&target_file) else {
+        return Vec::new();
+    };
+    let mut candidates = match &alias.target {
+        ImportAliasTarget::Named(name) => exports.get(name).cloned().unwrap_or_default(),
+        ImportAliasTarget::Default => exports.get("default").cloned().unwrap_or_default(),
+        ImportAliasTarget::Namespace => exports
+            .values()
+            .flat_map(|symbols| symbols.iter().copied())
+            .collect::<Vec<_>>(),
+    };
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+fn import_alias_reference_draft(alias: &ImportAlias, precision: SymbolPrecision) -> ReferenceDraft {
+    ReferenceDraft {
+        language: alias.language,
+        name: alias.local_name.clone(),
+        qualified_name: format!("{}::{}", alias.file_key, alias.local_name),
+        kind: ReferenceKind::Import,
+        namespace: alias.namespace,
+        file: Some(alias.file),
+        package: None,
+        module: None,
+        owner: None,
+        file_key: alias.file_key.clone(),
+        primary_span: Some(alias.local_span.clone()),
+        precision,
     }
 }
 
@@ -549,6 +752,79 @@ fn qualified_name(file_key: &str, owner_chain: &[String], name: &str) -> String 
     } else {
         format!("{file_key}::{}::{name}", owner_chain.join("::"))
     }
+}
+
+fn collect_import_aliases(
+    file: &SourceFile,
+    source: &str,
+    program: &Program<'_>,
+) -> Vec<ImportAlias> {
+    let mut aliases = Vec::new();
+
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        let Some(specifiers) = &import.specifiers else {
+            continue;
+        };
+        let import_path = import.source.value.to_string();
+        let import_source_span = span_from_oxc(file.id, source, import.source.span);
+
+        for specifier in specifiers {
+            match specifier {
+                // default import alias
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                    aliases.push(ImportAlias {
+                        file: file.id,
+                        language: file.language,
+                        file_key: file.relative_path.clone(),
+                        import_path: import_path.clone(),
+                        import_source_span: import_source_span.clone(),
+                        local_name: default.local.name.to_string(),
+                        local_span: span_from_oxc(file.id, source, default.local.span),
+                        target: ImportAliasTarget::Default,
+                        namespace: SymbolNamespace::Value,
+                    });
+                }
+                // namespace import alias
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                    aliases.push(ImportAlias {
+                        file: file.id,
+                        language: file.language,
+                        file_key: file.relative_path.clone(),
+                        import_path: import_path.clone(),
+                        import_source_span: import_source_span.clone(),
+                        local_name: namespace.local.name.to_string(),
+                        local_span: span_from_oxc(file.id, source, namespace.local.span),
+                        target: ImportAliasTarget::Namespace,
+                        namespace: SymbolNamespace::Namespace,
+                    });
+                }
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    let is_type_import = matches!(import.import_kind, ImportOrExportKind::Type)
+                        || matches!(named.import_kind, ImportOrExportKind::Type);
+                    aliases.push(ImportAlias {
+                        file: file.id,
+                        language: file.language,
+                        file_key: file.relative_path.clone(),
+                        import_path: import_path.clone(),
+                        import_source_span: import_source_span.clone(),
+                        local_name: named.local.name.to_string(),
+                        local_span: span_from_oxc(file.id, source, named.local.span),
+                        target: ImportAliasTarget::Named(module_export_name_text(&named.imported)),
+                        namespace: if is_type_import {
+                            SymbolNamespace::Type
+                        } else {
+                            SymbolNamespace::Value
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    aliases
 }
 
 fn collect_export_names(
@@ -1082,7 +1358,10 @@ mod symbol_graph_ts_import_links {
         }
     }
 
-    fn derive_symbol_reference_facts(db: &AnalysisDb, root: &Path) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
+    fn derive_symbol_reference_facts(
+        db: &AnalysisDb,
+        root: &Path,
+    ) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
         let loaded = load_config(root).expect("default config loads");
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut builder = SymbolGraphBuilder::new();
@@ -1092,11 +1371,11 @@ mod symbol_graph_ts_import_links {
         (output.symbols, output.references)
     }
 
-    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
+    fn exported_symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
         symbols
             .iter()
-            .find(|symbol| symbol.name == name)
-            .unwrap_or_else(|| panic!("missing symbol `{name}` in {symbols:#?}"))
+            .find(|symbol| symbol.name == name && symbol.is_exported)
+            .unwrap_or_else(|| panic!("missing exported symbol `{name}` in {symbols:#?}"))
     }
 
     #[test]
@@ -1151,8 +1430,8 @@ export default function defaultThing() {
         );
 
         let (symbols, references) = derive_symbol_reference_facts(&db, temp.path());
-        let exported_value = symbol(&symbols, "exportedValue");
-        let default_thing = symbol(&symbols, "defaultThing");
+        let exported_value = exported_symbol(&symbols, "exportedValue");
+        let default_thing = exported_symbol(&symbols, "defaultThing");
 
         assert!(references.iter().any(|reference| {
             reference.name == "localValue"

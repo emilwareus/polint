@@ -203,6 +203,19 @@ impl SymbolGraphBuilder {
         )
     }
 
+    pub(crate) fn add_setup_missing_reference_draft(
+        &mut self,
+        mut draft: ReferenceDraft,
+    ) -> ReferenceId {
+        draft.precision = SymbolPrecision::SetupMissing;
+        self.add_reference_with_status(
+            None,
+            Vec::new(),
+            SymbolResolutionStatus::SetupMissing,
+            draft,
+        )
+    }
+
     pub(crate) fn add_unsupported_reference(
         &mut self,
         language: Language,
@@ -218,6 +231,14 @@ impl SymbolGraphBuilder {
             name,
             SymbolPrecision::Unsupported,
         );
+        self.add_reference_with_status(None, Vec::new(), SymbolResolutionStatus::Unsupported, draft)
+    }
+
+    pub(crate) fn add_unsupported_reference_draft(
+        &mut self,
+        mut draft: ReferenceDraft,
+    ) -> ReferenceId {
+        draft.precision = SymbolPrecision::Unsupported;
         self.add_reference_with_status(None, Vec::new(), SymbolResolutionStatus::Unsupported, draft)
     }
 
