@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
+    &["resolved_imports", "module_graph", "symbols", "references"];
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -44,7 +47,7 @@ pub(crate) fn derive_requested_module_graph(
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> ModuleGraphDerivation {
-    if !plan.requests_any_capability(&["resolved_imports", "module_graph"]) {
+    if !plan.requests_any_capability(MODULE_GRAPH_TRIGGER_CAPABILITIES) {
         return ModuleGraphDerivation::default();
     }
 
