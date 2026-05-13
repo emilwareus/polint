@@ -1022,3 +1022,195 @@ export function run() {
         assert_eq!(first, second);
     }
 }
+
+#[cfg(test)]
+mod symbol_graph_ts_import_links {
+    use super::derive_ts_symbols;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ReferenceFact, ReferenceKind, ResolutionPrecision, ResolutionStatus,
+        ResolvedImportFact, SymbolFact, SymbolPrecision, SymbolResolutionStatus, UnresolvedReason,
+        span_from_byte_range,
+    };
+    use crate::symbol_graph::model::SymbolGraphBuilder;
+    use std::fs;
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("create fixture");
+        fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn span_for(file: FileId, source: &str, needle: &str, occurrence: usize) -> crate::core::Span {
+        let start = source
+            .match_indices(needle)
+            .nth(occurrence)
+            .map(|(index, _)| index)
+            .unwrap_or_else(|| panic!("missing occurrence {occurrence} of {needle:?}"));
+        span_from_byte_range(file, source, start, start + needle.len())
+    }
+
+    fn push_import(
+        db: &mut AnalysisDb,
+        file: FileId,
+        source: &str,
+        path: &str,
+        occurrence: usize,
+    ) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(0),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span_for(file, source, &format!("{path:?}"), occurrence),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn file_node(id: ModuleNodeId, label: &str, file: FileId) -> ModuleNode {
+        ModuleNode {
+            id,
+            kind: ModuleNodeKind::File,
+            label: label.to_string(),
+            file: Some(file),
+            package: None,
+            language: Some(Language::TypeScript),
+        }
+    }
+
+    fn derive_symbol_reference_facts(db: &AnalysisDb, root: &Path) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
+        let loaded = load_config(root).expect("default config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut builder = SymbolGraphBuilder::new();
+
+        derive_ts_symbols(&mut builder, db, &loaded, &plan);
+        let output = builder.finish();
+        (output.symbols, output.references)
+    }
+
+    fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
+        symbols
+            .iter()
+            .find(|symbol| symbol.name == name)
+            .unwrap_or_else(|| panic!("missing symbol `{name}` in {symbols:#?}"))
+    }
+
+    #[test]
+    fn links_named_default_and_namespace_imports_through_module_graph_targets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let source = r#"
+import defaultThing, { exportedValue as localValue } from "./target";
+import * as targetModule from "./target";
+
+export const used = localValue + defaultThing() + targetModule.exportedValue;
+"#;
+        let target = r#"
+export const exportedValue = 1;
+
+export default function defaultThing() {
+    return exportedValue;
+}
+"#;
+        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
+        let target_file = add_file(&mut db, temp.path(), "src/target.ts", target);
+        let first_import = push_import(&mut db, source_file, source, "./target", 0);
+        let second_import = push_import(&mut db, source_file, source, "./target", 1);
+        let source_node = ModuleNodeId(0);
+        let target_node = ModuleNodeId(1);
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(0),
+                    import: first_import,
+                    from_file: source_file,
+                    target_node: Some(target_node),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(0),
+                    import: second_import,
+                    from_file: source_file,
+                    target_node: Some(target_node),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                file_node(source_node, "src/source.ts", source_file),
+                file_node(target_node, "src/target.ts", target_file),
+            ],
+            vec![],
+        );
+
+        let (symbols, references) = derive_symbol_reference_facts(&db, temp.path());
+        let exported_value = symbol(&symbols, "exportedValue");
+        let default_thing = symbol(&symbols, "defaultThing");
+
+        assert!(references.iter().any(|reference| {
+            reference.name == "localValue"
+                && reference.kind == ReferenceKind::Import
+                && reference.target == Some(exported_value.id)
+                && reference.status == SymbolResolutionStatus::Resolved
+                && reference.precision == SymbolPrecision::ModuleLinked
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.name == "defaultThing"
+                && reference.kind == ReferenceKind::Import
+                && reference.target == Some(default_thing.id)
+                && reference.status == SymbolResolutionStatus::Resolved
+                && reference.precision == SymbolPrecision::ModuleLinked
+        }));
+        assert!(references.iter().any(|reference| {
+            reference.name == "targetModule"
+                && reference.kind == ReferenceKind::Import
+                && reference.status == SymbolResolutionStatus::Ambiguous
+                && reference.candidates.contains(&exported_value.id)
+                && reference.candidates.contains(&default_thing.id)
+        }));
+    }
+
+    #[test]
+    fn emits_visible_unresolved_import_alias_references() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let source = r#"
+import { missing } from "./missing";
+
+export const used = missing;
+"#;
+        let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
+        let import = push_import(&mut db, source_file, source, "./missing", 0);
+        let source_node = ModuleNodeId(0);
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: crate::core::ResolvedImportId(0),
+                import,
+                from_file: source_file,
+                target_node: None,
+                status: ResolutionStatus::Unresolved,
+                precision: ResolutionPrecision::None,
+                reason: Some(UnresolvedReason::NotFound),
+            }],
+            vec![file_node(source_node, "src/source.ts", source_file)],
+            vec![],
+        );
+
+        let (_symbols, references) = derive_symbol_reference_facts(&db, temp.path());
+
+        assert!(references.iter().any(|reference| {
+            reference.name == "missing"
+                && reference.kind == ReferenceKind::Import
+                && reference.target.is_none()
+                && reference.status == SymbolResolutionStatus::Unresolved
+                && reference.precision == SymbolPrecision::Unresolved
+        }));
+    }
+}
