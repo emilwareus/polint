@@ -165,9 +165,9 @@ configuration in the single `.polint.toml` file.
   the nearest `go.mod`, and should also honor explicit `[languages.go]`
   `module_roots = [...]` when users want deterministic lifecycle control.
 - If Go module roots live below the repository root, or multiple roots are
-  analyzed, and the repository does not provide a root `go.work`, use an internal
-  temporary workspace for package loading rather than writing generated lifecycle
-  files into the repository.
+  analyzed, use a checked-in root `go.work` only when it covers every selected
+  module root. Otherwise, use an internal temporary workspace for package loading
+  rather than writing generated lifecycle files into the repository.
 - `package_patterns`, `build_tags`, and `include_tests` are analysis lifecycle
   inputs and must remain in `[languages.go]`; they must participate in cache or
   deterministic analysis digests when the affected analyzer is cached.

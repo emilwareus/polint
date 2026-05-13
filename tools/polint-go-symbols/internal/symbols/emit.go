@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/types/objectpath"
 )
@@ -267,7 +268,7 @@ func rootedPackagePattern(root string, pattern string) string {
 
 func goPackageEnv(root string, moduleRoots []string) ([]string, func(), error) {
 	env := os.Environ()
-	if path := filepath.Join(root, "go.work"); fileExists(path) {
+	if path := filepath.Join(root, "go.work"); fileExists(path) && goWorkCoversModuleRoots(path, root, moduleRoots) {
 		env = append(env, "GOWORK="+path)
 		return env, func() {}, nil
 	}
@@ -288,6 +289,49 @@ func needsSyntheticWorkspace(root string, moduleRoots []string) bool {
 		return true
 	}
 	return !fileExists(filepath.Join(root, "go.mod"))
+}
+
+func goWorkCoversModuleRoots(workPath string, root string, moduleRoots []string) bool {
+	contents, err := os.ReadFile(workPath)
+	if err != nil {
+		return false
+	}
+	workFile, err := modfile.ParseWork(workPath, contents, nil)
+	if err != nil {
+		return false
+	}
+	usedRoots := make(map[string]bool)
+	for _, use := range workFile.Use {
+		usedRoot, ok := goWorkUseRoot(root, use.Path)
+		if ok {
+			usedRoots[usedRoot] = true
+		}
+	}
+	for _, moduleRoot := range moduleRoots {
+		if !usedRoots[moduleRoot] {
+			return false
+		}
+	}
+	return true
+}
+
+func goWorkUseRoot(root string, usePath string) (string, bool) {
+	path := filepath.FromSlash(usePath)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	clean := filepath.ToSlash(filepath.Clean(relative))
+	if clean == "." {
+		return ".", true
+	}
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
 }
 
 func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), error) {

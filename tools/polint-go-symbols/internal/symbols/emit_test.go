@@ -238,6 +238,48 @@ func Build() string {
 	}
 }
 
+func TestEmitUsesSyntheticWorkspaceWhenRootGoWorkMissesConfiguredRoots(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.work":               "go 1.24.0\n\nuse ./tools/only\n",
+		"tools/only/go.mod":     "module example.com/tools\n\ngo 1.24.0\n",
+		"tools/only/tool.go":    "package tool\n",
+		"libs/shared/go.mod":    "module example.com/shared\n\ngo 1.24.0\n",
+		"libs/shared/shared.go": "package shared\n\nfunc Build() string { return \"ok\" }\n",
+		"services/app/go.mod": `module example.com/app
+
+go 1.24.0
+
+require example.com/shared v0.0.0
+`,
+		"services/app/main.go": `package app
+
+import "example.com/shared"
+
+func Use() string {
+	return shared.Build()
+}
+`,
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		ModuleRoots:  []string{"services/app", "libs/shared"},
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	build := symbolByName(out.Symbols, "Build")
+	if build == nil {
+		t.Fatalf("Build symbol missing from %#v", out.Symbols)
+	}
+	if !hasReference(out.References, build.Key, "call") {
+		t.Fatalf("Build call reference missing from %#v", out.References)
+	}
+}
+
 func writeModule(t *testing.T, files map[string]string) string {
 	t.Helper()
 

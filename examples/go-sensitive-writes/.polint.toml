@@ -11,4 +11,3 @@ severity = "error"
 files = ["*.go"]
 allow_files = ["admin.go"]
 deny = ["Balance"]
-

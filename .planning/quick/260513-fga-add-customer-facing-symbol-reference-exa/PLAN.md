@@ -15,4 +15,3 @@ Add customer-facing runnable examples that show why symbol/reference facts are u
 - Register example rule crates in the workspace.
 - Add the examples to existing checked-in example CLI coverage.
 - Verify formatting and the focused example test.
-

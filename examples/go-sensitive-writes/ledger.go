@@ -7,4 +7,3 @@ func Credit(account *Account, amount int) {
 func ReplaceBalance(account *Account, next int) {
 	account.Balance = next
 }
-

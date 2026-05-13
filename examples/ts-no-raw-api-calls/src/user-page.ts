@@ -14,4 +14,3 @@ export async function loadUserWithRawHelper(id: string) {
 export async function loadUserWithGlobalFetch(id: string) {
   return fetch(`/api/users/${id}`);
 }
-

@@ -3,4 +3,3 @@ export class UsersSdk {
     return { id };
   }
 }
-

@@ -36,10 +36,10 @@ include_tests = true
 ```
 
 `package_patterns` are interpreted inside each configured module root. If the
-repository has a root `go.work`, polint uses it. Otherwise, when package loading
-needs workspace mode for module roots below the repository root, polint creates a
-temporary internal `go.work`; it does not write another setup file into the
-repository.
+repository has a root `go.work` that covers every selected module root, polint
+uses it. Otherwise, when package loading needs workspace mode for module roots
+below the repository root, polint creates a temporary internal `go.work`; it does
+not write another setup file into the repository.
 
 ## Environment variables
 

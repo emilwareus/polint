@@ -100,7 +100,7 @@ pub(crate) fn workspace_env(
     module_roots: &[String],
 ) -> Result<GoWorkspaceEnv, GoLifecycleError> {
     let checked_in = root.join("go.work");
-    if checked_in.is_file() {
+    if checked_in.is_file() && go_work_covers_module_roots(root, &checked_in, module_roots) {
         return Ok(GoWorkspaceEnv {
             value: checked_in.to_string_lossy().to_string(),
             cleanup_path: None,
@@ -321,6 +321,118 @@ fn needs_synthetic_workspace(root: &Path, module_roots: &[String]) -> bool {
     !root.join("go.mod").is_file()
 }
 
+fn go_work_covers_module_roots(root: &Path, go_work: &Path, module_roots: &[String]) -> bool {
+    let Ok(contents) = fs::read_to_string(go_work) else {
+        return false;
+    };
+    let roots = parse_go_work_use_roots(root, &contents);
+    module_roots
+        .iter()
+        .all(|module_root| roots.contains(module_root))
+}
+
+fn parse_go_work_use_roots(root: &Path, contents: &str) -> BTreeSet<String> {
+    let mut roots = BTreeSet::new();
+    let mut in_use_block = false;
+    for raw_line in contents.lines() {
+        let line = strip_go_line_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if in_use_block {
+            let (entry, block_done) = split_go_work_block_line(line);
+            if let Some(module_root) = go_work_module_root(root, entry) {
+                roots.insert(module_root);
+            }
+            if block_done {
+                in_use_block = false;
+            }
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("use") else {
+            continue;
+        };
+        if !rest
+            .chars()
+            .next()
+            .is_none_or(|ch| ch.is_ascii_whitespace() || ch == '(')
+        {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if let Some(block_rest) = rest.strip_prefix('(') {
+            let (entry, block_done) = split_go_work_block_line(block_rest);
+            if let Some(module_root) = go_work_module_root(root, entry) {
+                roots.insert(module_root);
+            }
+            in_use_block = !block_done;
+        } else if let Some(module_root) = go_work_module_root(root, rest) {
+            roots.insert(module_root);
+        }
+    }
+    roots
+}
+
+fn strip_go_line_comment(line: &str) -> &str {
+    line.split_once("//")
+        .map(|(before, _)| before)
+        .unwrap_or(line)
+}
+
+fn split_go_work_block_line(line: &str) -> (&str, bool) {
+    if let Some((before, _)) = line.split_once(')') {
+        (before.trim(), true)
+    } else {
+        (line, false)
+    }
+}
+
+fn go_work_module_root(root: &Path, value: &str) -> Option<String> {
+    let token = first_go_work_path_token(value)?;
+    let module_path = parse_go_work_path_token(token)?;
+    let path = Path::new(&module_path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    module_root_relative_path(root, &absolute)
+}
+
+fn first_go_work_path_token(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.starts_with('"') {
+        let mut escaped = false;
+        for (index, ch) in value.char_indices().skip(1) {
+            if ch == '"' && !escaped {
+                return Some(&value[..=index]);
+            }
+            escaped = ch == '\\' && !escaped;
+            if ch != '\\' {
+                escaped = false;
+            }
+        }
+        return None;
+    }
+    if let Some(rest) = value.strip_prefix('`') {
+        return rest.find('`').map(|index| &value[..=index + 1]);
+    }
+    value.split_whitespace().next()
+}
+
+fn parse_go_work_path_token(token: &str) -> Option<String> {
+    if token.starts_with('"') {
+        serde_json::from_str::<String>(token).ok()
+    } else if token.starts_with('`') && token.ends_with('`') {
+        Some(token[1..token.len() - 1].to_string())
+    } else {
+        Some(token.to_string())
+    }
+}
+
 fn write_synthetic_go_work(
     root: &Path,
     module_roots: &[String],
@@ -467,5 +579,45 @@ mod tests {
             ),
             "1.25"
         );
+    }
+
+    #[test]
+    fn workspace_env_uses_checked_in_go_work_when_it_covers_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.work"),
+            "go 1.24\n\nuse ./services/app\n",
+        )
+        .expect("write go.work");
+
+        let workspace =
+            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
+
+        assert_eq!(
+            workspace.value(),
+            temp.path().join("go.work").to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn workspace_env_uses_synthetic_go_work_when_checked_in_go_work_misses_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
+        std::fs::write(temp.path().join("go.work"), "go 1.24\n\nuse ./tools/only\n")
+            .expect("write go.work");
+
+        let checked_in = temp.path().join("go.work").to_string_lossy().to_string();
+        let workspace =
+            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
+        let generated_path = workspace.value().to_string();
+        let generated = std::fs::read_to_string(&generated_path).expect("read generated go.work");
+
+        assert_ne!(generated_path, checked_in);
+        assert!(generated.contains("services/app"), "{generated}");
     }
 }

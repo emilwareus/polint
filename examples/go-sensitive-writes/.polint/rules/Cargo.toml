@@ -9,4 +9,3 @@ polint = { workspace = true }
 
 [lints]
 workspace = true
-

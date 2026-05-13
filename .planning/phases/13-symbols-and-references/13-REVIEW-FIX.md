@@ -39,4 +39,3 @@ Fixed all three warnings from `13-REVIEW.md`.
 - `go test ./tools/polint-go-symbols/...`
 - `cargo test -p polint --lib stable_ids_do_not_include_transient_file_ids --locked`
 - `cargo test -p polint --lib unknown_go_reference_precision_is_unsupported --locked`
-

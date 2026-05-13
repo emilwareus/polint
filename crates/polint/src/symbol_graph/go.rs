@@ -987,7 +987,8 @@ mod symbol_graph_go_setup {
         assert!(
             go_mod
                 .lines()
-                .any(|line| line == "require golang.org/x/tools v0.42.0"),
+                .map(str::trim)
+                .any(|line| line == "golang.org/x/tools v0.42.0"),
             "embedded sidecar should stay on the Go 1.24-compatible x/tools line: {go_mod:?}"
         );
     }
