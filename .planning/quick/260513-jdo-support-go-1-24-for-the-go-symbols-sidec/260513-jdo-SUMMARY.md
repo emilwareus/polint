@@ -28,7 +28,9 @@
 - `PATH=/Users/emilwareus/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/bin:$PATH cargo test --workspace --all-features --locked`
 - `cargo fmt --all`
 - `git diff --check`
+- `cargo test -p polint embedded_go_sidecar_keeps_go_1_24_minimum -- --nocapture`
 
 ## Source Commit
 
 - `f77450f` - `fix: support Go 1.24 for symbol sidecar`
+- `a92a11c` - `fix: make Go sidecar version test line-ending agnostic`
