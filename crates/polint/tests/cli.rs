@@ -493,7 +493,7 @@ fn report_symbol(
             ctx.rule_id(),
             diagnostic_file(ctx, symbol.file),
             DiagnosticRange::point(1, 1),
-            "public symbol SDK evidence",
+            format!("public symbol SDK evidence: {case}"),
         )
         .with_evidence("case", case)
         .with_evidence("symbol_name", symbol.name.clone())
@@ -530,7 +530,7 @@ fn report_reference(
             ctx.rule_id(),
             diagnostic_file(ctx, file),
             DiagnosticRange::point(1, 1),
-            "public reference SDK evidence",
+            format!("public reference SDK evidence: {case}"),
         )
         .with_evidence("case", case)
         .with_evidence("symbol_name", symbol_name)
@@ -633,18 +633,17 @@ fn main() -> ExitCode {
         &root.join("src/component.ts"),
         r#"import { token as importedToken } from "./tokens";
 
-interface MergeMe {
+export interface MergeMe {
   first: string;
 }
 
-interface MergeMe {
+export interface MergeMe {
   second: string;
 }
 
 export function answer(input: number) {
-  const localValue = importedToken;
-  missingGlobal(localValue);
-  return input + localValue.length;
+  let localValue = importedToken;
+  return missingGlobal + localValue.length;
 }
 
 export const value = answer(41);
@@ -682,7 +681,7 @@ fn report_reference(
             ctx.rule_id(),
             diagnostic_file(ctx, reference.file.or(symbol.file)),
             DiagnosticRange::point(1, 1),
-            "public Go reference SDK evidence",
+            format!("public Go reference SDK evidence: {case}"),
         )
         .with_evidence("case", case)
         .with_evidence("symbol_name", symbol.name.clone())
@@ -775,7 +774,7 @@ go 1.24
     );
     write_file(
         &root.join("src/main.go"),
-        r#"package main
+        r#"package app
 
 type Widget struct {
 	Name string
@@ -790,10 +789,10 @@ func (w Widget) Label() string {
 	return w.Name
 }
 
-func main() {
+func Use() string {
 	w := Widget{Name: "ok"}
-	_ = Build(w.Label())
-	_ = w.Name
+	local := Build(w.Label())
+	return local + w.Name
 }
 "#,
     );
@@ -4094,16 +4093,18 @@ mod capability_planning {
 
         let diagnostics =
             report_diagnostics_for_rule(&report, "local/ts-symbol-reference-public-sdk");
+        let mut cases = diagnostic_cases(&diagnostics);
+        cases.sort();
         assert_eq!(
-            diagnostic_cases(&diagnostics),
+            cases,
             [
-                "ts-symbol:function",
                 "ts-reference:function-call",
-                "ts-symbol:local-variable",
                 "ts-reference:local-variable",
-                "ts-symbol:declaration-merge",
                 "ts-reference:module-import",
                 "ts-reference:unresolved-global",
+                "ts-symbol:declaration-merge",
+                "ts-symbol:function",
+                "ts-symbol:local-variable",
             ],
             "{report:#?}"
         );
@@ -4160,13 +4161,15 @@ mod capability_planning {
 
         let diagnostics =
             report_diagnostics_for_rule(&report, "local/go-symbol-reference-public-sdk");
+        let mut cases = diagnostic_cases(&diagnostics);
+        cases.sort();
         assert_eq!(
-            diagnostic_cases(&diagnostics),
+            cases,
             [
-                "go-reference:function-call",
-                "go-reference:method-call",
                 "go-reference:field-selector",
+                "go-reference:function-call",
                 "go-reference:local-variable",
+                "go-reference:method-call",
             ],
             "{report:#?}"
         );
