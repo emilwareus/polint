@@ -10,7 +10,7 @@ import (
 
 func TestEmitLoadsTypedSymbolsDefinitionsAndReferences(t *testing.T) {
 	root := writeModule(t, map[string]string{
-		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
 		"widget.go": `package app
 
 type Widget struct {
@@ -69,7 +69,7 @@ func Use() string {
 
 func TestEmitClassifiesAssignmentReferences(t *testing.T) {
 	root := writeModule(t, map[string]string{
-		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
 		"widget.go": `package app
 
 type Widget struct {
@@ -122,7 +122,7 @@ func Use(w Widget) int {
 
 func TestEmitClassifiesPackageQualifiedCallsAsExternalCalls(t *testing.T) {
 	root := writeModule(t, map[string]string{
-		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
 		"main.go": `package app
 
 import "fmt"
@@ -165,7 +165,7 @@ func Use() {
 
 func TestEmitLocalSymbolKeysIncludePackageFileOwnerNameAndPosition(t *testing.T) {
 	root := writeModule(t, map[string]string{
-		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
 		"widget.go": `package app
 
 func Use() int {
@@ -208,7 +208,7 @@ func Use() int {
 
 func TestEmitJSONDoesNotContainRawSourceText(t *testing.T) {
 	root := writeModule(t, map[string]string{
-		"go.mod": "module example.com/app\n\ngo 1.25.0\n",
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
 		"widget.go": `package app
 
 func Build() string {

@@ -990,6 +990,23 @@ mod symbol_graph_go_setup {
     }
 
     #[test]
+    fn embedded_go_sidecar_keeps_go_1_24_minimum() {
+        let go_mod = EMBEDDED_GO_SIDECAR_FILES
+            .iter()
+            .find_map(|(relative_path, contents)| (*relative_path == "go.mod").then_some(*contents))
+            .expect("embedded go.mod exists");
+
+        assert!(
+            go_mod.contains("\ngo 1.24.0\n"),
+            "embedded sidecar should keep Go 1.24 as its minimum supported toolchain: {go_mod:?}"
+        );
+        assert!(
+            go_mod.contains("golang.org/x/tools v0.42.0"),
+            "embedded sidecar should stay on the Go 1.24-compatible x/tools line: {go_mod:?}"
+        );
+    }
+
+    #[test]
     fn go_symbol_config_parses_string_and_array_settings() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -1085,7 +1102,7 @@ include_tests = false
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             temp.path().join("go.mod"),
-            "module example.com/app\n\ngo 1.25.0\n",
+            "module example.com/app\n\ngo 1.24.0\n",
         )
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
@@ -1122,7 +1139,7 @@ include_tests = false
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             temp.path().join("go.mod"),
-            "module example.com/app\n\ngo 1.25.0\n",
+            "module example.com/app\n\ngo 1.24.0\n",
         )
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
@@ -1155,7 +1172,7 @@ include_tests = false
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             temp.path().join("go.mod"),
-            "module example.com/app\n\ngo 1.25.0\n",
+            "module example.com/app\n\ngo 1.24.0\n",
         )
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
@@ -1224,7 +1241,7 @@ mod symbol_graph_go {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             temp.path().join("go.mod"),
-            "module example.com/app\n\ngo 1.25.0\n",
+            "module example.com/app\n\ngo 1.24.0\n",
         )
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
