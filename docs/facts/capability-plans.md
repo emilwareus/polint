@@ -19,10 +19,16 @@ Current rule-author fact views include:
 - `FunctionMetrics<'_>`
 - `ComplexityMetrics<'_>`
 - `Packages<'_>`
+- `Symbols<'_>`
+- `References<'_>`
 - `StringLiterals<'_>`
 - `JsxAttributes<'_>`
 - `TsClasses<'_>`
 - `TsComponents<'_>`
+
+`References<'_>` implies symbol identity internally, so rules that request only
+references still cause polint to derive the `symbols` capability needed to bind
+resolved `ReferenceFact::target` values.
 
 Reserved future capabilities such as `cfg`, `call_graph`, `dataflow`,
 `coverage_facts`, and `test_suite_metrics` must stay unsupported until a rule

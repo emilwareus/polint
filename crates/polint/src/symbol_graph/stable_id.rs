@@ -33,6 +33,10 @@ pub(crate) struct StableReferenceKey {
 }
 
 impl StableSymbolKey {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "stable symbol keys are constructed from the normalized identity tuple"
+    )]
     pub(crate) fn new(
         language: Language,
         module_key: Option<String>,
@@ -162,14 +166,17 @@ pub(crate) fn default_stable_key_hash(stable_key: &str) -> String {
     stable_hash(&[stable_key])
 }
 
+#[cfg(test)]
 pub(crate) fn symbol_id_from_key(key: &StableSymbolKey) -> SymbolId {
     symbol_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
+#[cfg(test)]
 pub(crate) fn definition_id_from_key(key: &StableDefinitionKey) -> DefinitionId {
     definition_id_from_key_with_hash(key, default_stable_key_hash)
 }
 
+#[cfg(test)]
 pub(crate) fn reference_id_from_key(key: &StableReferenceKey) -> ReferenceId {
     reference_id_from_key_with_hash(key, default_stable_key_hash)
 }

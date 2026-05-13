@@ -199,6 +199,11 @@ mod symbol_graph_derivation {
     };
     use std::path::Path;
 
+    type SymbolRows = Vec<(Language, String, SymbolPrecision)>;
+    type ReferenceRows = Vec<(Language, String, SymbolResolutionStatus, SymbolPrecision)>;
+    type SupportRows = Vec<(String, Option<Language>, CapabilitySupportStatus)>;
+    type DeriveSnapshot = (SymbolRows, ReferenceRows, SupportRows, Vec<String>);
+
     fn loaded_config_for(root: &Path) -> crate::config::LoadedConfig {
         load_config(root).expect("default config loads")
     }
@@ -359,11 +364,7 @@ mod symbol_graph_derivation {
 
     #[test]
     fn requested_symbol_derivation_replaces_facts_deterministically() {
-        fn derive_once() -> (
-            Vec<(Language, String, SymbolResolutionStatus, SymbolPrecision)>,
-            Vec<(String, Option<Language>, CapabilitySupportStatus)>,
-            Vec<String>,
-        ) {
+        fn derive_once() -> DeriveSnapshot {
             let temp = tempfile::tempdir().expect("tempdir");
             let mut db = AnalysisDb::new();
             let app = add_file(
@@ -386,6 +387,10 @@ mod symbol_graph_derivation {
             );
 
             (
+                db.symbols()
+                    .iter()
+                    .map(|symbol| (symbol.language, symbol.name.clone(), symbol.precision))
+                    .collect(),
                 db.references()
                     .iter()
                     .map(|reference| {
@@ -420,10 +425,8 @@ mod symbol_graph_derivation {
         let second = derive_once();
 
         assert_eq!(first, second);
-        assert!(first.0.iter().all(|(_, name, status, precision)| {
-            name == "<unsupported>"
-                && *status == SymbolResolutionStatus::Unsupported
-                && *precision == SymbolPrecision::Unsupported
-        }));
+        assert!(first.0.iter().any(|(_, name, _)| name == "value"));
+        assert!(first.0.iter().all(|(_, name, _)| name != "stale"));
+        assert!(first.1.iter().all(|(_, name, _, _)| name != "stale"));
     }
 }

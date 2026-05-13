@@ -216,6 +216,7 @@ impl SymbolGraphBuilder {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn add_unsupported_reference(
         &mut self,
         language: Language,

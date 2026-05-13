@@ -968,10 +968,7 @@ mod symbol_graph_go {
             .unwrap_or_else(|| panic!("missing {kind:?} symbol {name}; symbols = {symbols:#?}"))
     }
 
-    fn primary_definition<'a>(
-        definitions: &'a [DefinitionFact],
-        symbol_id: SymbolId,
-    ) -> &'a DefinitionFact {
+    fn primary_definition(definitions: &[DefinitionFact], symbol_id: SymbolId) -> &DefinitionFact {
         definitions
             .iter()
             .find(|definition| definition.symbol == symbol_id && definition.is_primary)
@@ -980,11 +977,11 @@ mod symbol_graph_go {
             })
     }
 
-    fn resolved_reference<'a>(
-        references: &'a [ReferenceFact],
+    fn resolved_reference(
+        references: &[ReferenceFact],
         target: SymbolId,
         kind: ReferenceKind,
-    ) -> &'a ReferenceFact {
+    ) -> &ReferenceFact {
         references
             .iter()
             .find(|reference| {

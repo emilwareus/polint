@@ -9,8 +9,9 @@ use crate::core::{
     FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId,
     JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ReferenceFact,
     ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
-    SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
+    TestFact, TsClassFact, TsComponentFact,
 };
+use crate::symbol_graph::query;
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
 #[derive(Clone, Copy)]
@@ -375,17 +376,17 @@ impl<'a> Symbols<'a> {
 
     /// Returns a symbol fact for a stable symbol ID.
     pub fn get(self, symbol: SymbolId) -> Option<&'a SymbolFact> {
-        self.db.symbol_by_id(symbol)
+        query::symbol_by_id(self.db, symbol)
     }
 
     /// Returns symbol facts for one source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a SymbolFact> {
-        self.db.symbols_for_file(file)
+        query::symbols_for_file(self.db, file)
     }
 
     /// Returns symbol facts with the exact public name.
     pub fn by_name(self, name: &str) -> impl Iterator<Item = &'a SymbolFact> {
-        self.db.symbols_by_name(name)
+        query::symbols_by_name(self.db, name)
     }
 
     /// Returns the primary definition for a symbol, if one is known.
@@ -395,7 +396,7 @@ impl<'a> Symbols<'a> {
 
     /// Returns all definitions for a symbol, including declaration-merged definitions.
     pub fn definitions(self, symbol: SymbolId) -> impl Iterator<Item = &'a DefinitionFact> {
-        self.db.definitions_for_symbol(symbol)
+        query::definitions_for_symbol(self.db, symbol)
     }
 
     /// Returns exported symbols without cloning facts.
@@ -423,28 +424,22 @@ impl<'a> References<'a> {
 
     /// Returns resolved references to a symbol without cloning facts.
     pub fn to(self, symbol: SymbolId) -> impl Iterator<Item = &'a ReferenceFact> {
-        self.db.references_to_symbol(symbol)
+        query::references_to_symbol(self.db, symbol)
     }
 
     /// Returns references in one source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ReferenceFact> {
-        self.db.references_for_file(file)
+        query::references_for_file(self.db, file)
     }
 
     /// Returns references explicitly marked unresolved.
     pub fn unresolved(self) -> impl Iterator<Item = &'a ReferenceFact> {
-        self.db
-            .references()
-            .iter()
-            .filter(|reference| reference.status == SymbolResolutionStatus::Unresolved)
+        query::unresolved_references(self.db)
     }
 
     /// Returns references explicitly marked ambiguous.
     pub fn ambiguous(self) -> impl Iterator<Item = &'a ReferenceFact> {
-        self.db
-            .references()
-            .iter()
-            .filter(|reference| reference.status == SymbolResolutionStatus::Ambiguous)
+        query::ambiguous_references(self.db)
     }
 }
 

@@ -552,6 +552,10 @@ fn reference_namespace(flags: ReferenceFlags) -> SymbolNamespace {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "definition rows need the Oxc symbol context and normalized polint identity"
+)]
 fn add_symbol_definitions(
     builder: &mut SymbolGraphBuilder,
     file: &SourceFile,
@@ -601,6 +605,10 @@ fn add_symbol_definitions(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "definition drafts mirror the public fact identity and span fields"
+)]
 fn definition_draft(
     file: &SourceFile,
     name: String,
@@ -1098,8 +1106,8 @@ export interface MergeMe {
         let merged_definitions = definitions
             .iter()
             .filter(|definition| definition.symbol == merged.id)
-            .collect::<Vec<_>>();
-        assert_eq!(merged_definitions.len(), 2);
+            .count();
+        assert_eq!(merged_definitions, 2);
     }
 
     #[test]
@@ -1278,7 +1286,7 @@ export function run() {
                     reference.name.as_str(),
                     reference.id,
                     reference.target,
-                    reference.status.clone(),
+                    reference.status,
                     reference.stable_key.as_str(),
                 )
             })
@@ -1290,7 +1298,7 @@ export function run() {
                     reference.name.as_str(),
                     reference.id,
                     reference.target,
-                    reference.status.clone(),
+                    reference.status,
                     reference.stable_key.as_str(),
                 )
             })

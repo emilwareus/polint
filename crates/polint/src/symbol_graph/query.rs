@@ -12,7 +12,7 @@ pub(crate) fn symbols_for_file(db: &AnalysisDb, file: FileId) -> impl Iterator<I
 
 pub(crate) fn symbols_by_name<'a>(
     db: &'a AnalysisDb,
-    name: &'a str,
+    name: &str,
 ) -> impl Iterator<Item = &'a SymbolFact> {
     db.symbols_by_name(name)
 }

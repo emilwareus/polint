@@ -3900,7 +3900,7 @@ mod capability_planning {
         assert!(
             diagnostics_for_rule(&json, "local/needs-references")
                 .iter()
-                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reference_count", "1")),
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reference_count", "2")),
             "supported symbol providers should allow the requesting rule to run: {json:#?}"
         );
         assert!(
@@ -4030,7 +4030,7 @@ mod capability_planning {
 
         let first = run_symbol_reference_cache_check(temp.path());
         assert!(
-            cache_json_file_names(temp.path()).len() > 0,
+            !cache_json_file_names(temp.path()).is_empty(),
             "first run should write cache entries"
         );
         let second = run_symbol_reference_cache_check(temp.path());
