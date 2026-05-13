@@ -133,6 +133,91 @@ export const value = token;
     write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
 }
 
+fn write_symbol_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/needs-references",
+    description = "Needs reference facts.",
+    severity = "warn"
+)]
+fn needs_references(ctx: &mut RuleCtx<'_>, references: References<'_>) -> RuleResult {
+    let _reference_count = references.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this rule should be blocked while symbol providers are unsupported",
+    ));
+    Ok(())
+}
+
+#[polint::rule(
+    id = "local/supported-imports",
+    description = "Reports after supported import facts.",
+    severity = "warn"
+)]
+fn supported_imports(ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
+    let _import_count = imports.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "supported rule ran after provider diagnostics",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![needs_references(), supported_imports()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"import { token } from "./token";
+
+export const value = token;
+"#,
+    );
+    write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
+}
+
 fn write_cache_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -3212,6 +3297,44 @@ mod capability_planning {
             "status",
             "setup_missing"
         ));
+    }
+
+    #[test]
+    fn symbol_provider_diagnostics_block_requesting_rule_before_supported_rules() {
+        let temp = tempfile::tempdir().unwrap();
+        write_symbol_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/needs-references").is_empty(),
+            "unsupported symbol capabilities must block the requesting rule: {json:#?}"
+        );
+        let diagnostics = diagnostics(&json);
+        let provider_index = diagnostics
+            .iter()
+            .position(|diagnostic| {
+                diagnostic["rule_id"] == "polint/capability"
+                    && diagnostic_has_evidence(diagnostic, "language", "TypeScript")
+                    && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+            })
+            .unwrap_or_else(|| panic!("expected TypeScript symbol provider diagnostic: {json:#?}"));
+        let supported_index = diagnostics
+            .iter()
+            .position(|diagnostic| diagnostic["rule_id"] == "local/supported-imports")
+            .unwrap_or_else(|| panic!("expected supported rule diagnostic: {json:#?}"));
+
+        assert!(
+            provider_index < supported_index,
+            "provider diagnostics should be emitted before rule diagnostics: {json:#?}"
+        );
     }
 
     #[test]
