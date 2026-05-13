@@ -10,6 +10,7 @@
 - Lowered `go.work` to Go 1.24 so direct root-level Go commands also work with the supported minimum.
 - Updated Go and Rust test fixtures from `go 1.25.0` to `go 1.24.0`.
 - Added a Rust regression test that checks the embedded sidecar stays on the Go 1.24-compatible dependency line.
+- Installed Go `1.24.x` in the CI Rust matrix so symbol/reference integration tests run against the supported minimum on Linux, macOS, and Windows.
 
 ## Verification
 
@@ -29,8 +30,10 @@
 - `cargo fmt --all`
 - `git diff --check`
 - `cargo test -p polint embedded_go_sidecar_keeps_go_1_24_minimum -- --nocapture`
+- GitHub Actions PR checks after `a92a11c`: macOS exposed missing Go setup in the Rust matrix (`go executable was not found`), which is now fixed by installing Go `1.24.x` in CI.
 
 ## Source Commit
 
 - `f77450f` - `fix: support Go 1.24 for symbol sidecar`
 - `a92a11c` - `fix: make Go sidecar version test line-ending agnostic`
+- `af6742f` - `ci: test Go symbol sidecar with Go 1.24`
