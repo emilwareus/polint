@@ -97,33 +97,22 @@ type Span struct {
 }
 
 type emitter struct {
-	root         string
-	fset         *token.FileSet
-	out          Output
-	symbols      map[types.Object]string
-	symbolRows   map[string]SymbolRow
-	defRows      map[string]DefinitionRow
-	refRows      map[string]ReferenceRow
-	kindByPos    map[token.Pos]string
-	parents      map[ast.Node]ast.Node
-	ownerRanges  []ownerRange
-	selectorRefs map[*ast.SelectorExpr]bool
+	root        string
+	fset        *token.FileSet
+	out         Output
+	symbols     map[types.Object]string
+	symbolRows  map[string]SymbolRow
+	defRows     map[string]DefinitionRow
+	refRows     map[string]ReferenceRow
+	kindByPos   map[token.Pos]string
+	parents     map[ast.Node]ast.Node
+	ownerRanges []ownerRange
 }
 
 type ownerRange struct {
 	start token.Pos
 	end   token.Pos
 	name  string
-}
-
-type objectInput struct {
-	pkg       *packages.Package
-	ident     *ast.Ident
-	obj       types.Object
-	span      Span
-	file      string
-	kind      string
-	namespace string
 }
 
 func Emit(config Config) (Output, error) {
@@ -170,13 +159,12 @@ func Emit(config Config) (Output, error) {
 			Schema:    SchemaVersion,
 			GoVersion: runtime.Version(),
 		},
-		symbols:      make(map[types.Object]string),
-		symbolRows:   make(map[string]SymbolRow),
-		defRows:      make(map[string]DefinitionRow),
-		refRows:      make(map[string]ReferenceRow),
-		kindByPos:    make(map[token.Pos]string),
-		parents:      make(map[ast.Node]ast.Node),
-		selectorRefs: make(map[*ast.SelectorExpr]bool),
+		symbols:    make(map[types.Object]string),
+		symbolRows: make(map[string]SymbolRow),
+		defRows:    make(map[string]DefinitionRow),
+		refRows:    make(map[string]ReferenceRow),
+		kindByPos:  make(map[token.Pos]string),
+		parents:    make(map[ast.Node]ast.Node),
 	}
 
 	for _, pkg := range pkgs {
@@ -388,7 +376,7 @@ func (e *emitter) emitUses(pkg *packages.Package) {
 			}
 		}
 		targetKey := e.ensureSymbol(pkg, item.ident, item.obj)
-		kind := e.referenceKind(pkg, item.ident, item.obj)
+		kind := e.referenceKind(item.ident, item.obj)
 		e.addReference(pkg.ID, e.fileForPos(item.ident.Pos()), item.ident.Name, targetKey, kind, e.identSpan(item.ident))
 	}
 }
@@ -569,7 +557,7 @@ func isPackageLevel(obj types.Object, pkg *packages.Package) bool {
 	return obj.Parent() != nil && pkg.Types != nil && obj.Parent() == pkg.Types.Scope()
 }
 
-func (e *emitter) referenceKind(pkg *packages.Package, ident *ast.Ident, obj types.Object) string {
+func (e *emitter) referenceKind(ident *ast.Ident, obj types.Object) string {
 	if _, ok := obj.(*types.PkgName); ok {
 		return "package"
 	}
