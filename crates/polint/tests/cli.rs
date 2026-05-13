@@ -177,13 +177,18 @@ use polint::sdk::prelude::*;
     severity = "warn"
 )]
 fn needs_references(ctx: &mut RuleCtx<'_>, references: References<'_>) -> RuleResult {
-    let _reference_count = references.iter().count();
-    ctx.report(Diagnostic::warning(
-        ctx.rule_id(),
-        "<workspace>",
-        DiagnosticRange::point(1, 1),
-        "this rule should be blocked while symbol providers are unsupported",
-    ));
+    let reference_count = references.iter().count();
+    if reference_count > 0 {
+        ctx.report(
+            Diagnostic::warning(
+                ctx.rule_id(),
+                "<workspace>",
+                DiagnosticRange::point(1, 1),
+                "symbol reference rule ran with provider facts",
+            )
+            .with_evidence("reference_count", reference_count.to_string()),
+        );
+    }
     Ok(())
 }
 
@@ -216,6 +221,183 @@ export const value = token;
 "#,
     );
     write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
+}
+
+fn write_symbol_reference_cache_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/stable-symbol-reference",
+    description = "Reports stable symbol and reference IDs.",
+    severity = "warn"
+)]
+fn stable_symbol_reference(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let Some(symbol) = symbols.by_name("answer").next() else {
+        return Ok(());
+    };
+    let Some(reference) = references.to(symbol.id).next() else {
+        return Ok(());
+    };
+    let Some(file) = reference.file else {
+        return Ok(());
+    };
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            ctx.file_path(file),
+            DiagnosticRange::point(1, 1),
+            "stable symbol/reference evidence",
+        )
+        .with_evidence("symbol_name", symbol.name.clone())
+        .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
+        .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
+        .with_evidence("symbol_id", symbol.id.0.to_string())
+        .with_evidence("reference_id", reference.id.0.to_string())
+        .with_evidence(
+            "reference_target",
+            reference
+                .target
+                .map(|target| target.0.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        )
+        .with_evidence("reference_status", format!("{:?}", reference.status))
+        .with_evidence("reference_precision", format!("{:?}", reference.precision)),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![stable_symbol_reference()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"export function answer(input: number) {
+  return input + 1;
+}
+
+export const value = answer(41);
+"#,
+    );
+}
+
+fn write_go_symbol_setup_missing_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/go-symbols",
+    description = "Reads Go symbols and references.",
+    severity = "warn"
+)]
+fn go_symbols(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let _fact_count = symbols.iter().count() + references.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this rule should be blocked by Go setup-missing support",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![go_symbols()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/main.go"),
+        r#"package main
+
+func Build() string {
+	return "ok"
+}
+
+func main() {
+	_ = Build()
+}
+"#,
+    );
 }
 
 fn write_cache_capability_rule_repo(root: &Path) {
@@ -3300,7 +3482,7 @@ mod capability_planning {
     }
 
     #[test]
-    fn symbol_provider_diagnostics_block_requesting_rule_before_supported_rules() {
+    fn symbol_provider_support_allows_requesting_rule_before_supported_rules() {
         let temp = tempfile::tempdir().unwrap();
         write_symbol_capability_rule_repo(temp.path());
 
@@ -3314,26 +3496,121 @@ mod capability_planning {
         );
 
         assert!(
-            diagnostics_for_rule(&json, "local/needs-references").is_empty(),
-            "unsupported symbol capabilities must block the requesting rule: {json:#?}"
+            diagnostics_for_rule(&json, "local/needs-references")
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reference_count", "1")),
+            "supported symbol providers should allow the requesting rule to run: {json:#?}"
         );
-        let diagnostics = diagnostics(&json);
-        let provider_index = diagnostics
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "supported TS symbol/reference providers should not emit capability diagnostics: {json:#?}"
+        );
+    }
+
+    fn symbol_reference_id_evidence(
+        report: &polint::sdk::prelude::PolintReport,
+    ) -> Vec<(String, String, String, String, String)> {
+        report
+            .diagnostics
             .iter()
-            .position(|diagnostic| {
-                diagnostic["rule_id"] == "polint/capability"
-                    && diagnostic_has_evidence(diagnostic, "language", "TypeScript")
-                    && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+            .filter(|diagnostic| diagnostic.rule_id == "local/stable-symbol-reference")
+            .map(|diagnostic| {
+                (
+                    evidence_value(diagnostic, "symbol_id"),
+                    evidence_value(diagnostic, "reference_id"),
+                    evidence_value(diagnostic, "reference_target"),
+                    evidence_value(diagnostic, "reference_status"),
+                    evidence_value(diagnostic, "reference_precision"),
+                )
             })
-            .unwrap_or_else(|| panic!("expected TypeScript symbol provider diagnostic: {json:#?}"));
-        let supported_index = diagnostics
+            .collect()
+    }
+
+    fn evidence_value(diagnostic: &polint::sdk::prelude::Diagnostic, label: &str) -> String {
+        diagnostic
+            .evidence
             .iter()
-            .position(|diagnostic| diagnostic["rule_id"] == "local/supported-imports")
-            .unwrap_or_else(|| panic!("expected supported rule diagnostic: {json:#?}"));
+            .find(|evidence| evidence.label == label)
+            .unwrap_or_else(|| panic!("missing evidence `{label}` in {diagnostic:#?}"))
+            .value
+            .clone()
+    }
+
+    fn run_symbol_reference_cache_check(root: &Path) -> polint::sdk::prelude::PolintReport {
+        let raw = stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(root)
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("stdout was not a PolintReport: {error}\n{raw}"))
+    }
+
+    #[test]
+    fn symbol_reference_cache_and_setup_keeps_stable_ids_across_cached_runs() {
+        let temp = tempfile::tempdir().unwrap();
+        write_symbol_reference_cache_rule_repo(temp.path());
+
+        let first = run_symbol_reference_cache_check(temp.path());
+        assert!(
+            cache_json_file_names(temp.path()).len() > 0,
+            "first run should write cache entries"
+        );
+        let second = run_symbol_reference_cache_check(temp.path());
+
+        let first_ids = symbol_reference_id_evidence(&first);
+        let second_ids = symbol_reference_id_evidence(&second);
+        assert!(
+            !first_ids.is_empty(),
+            "expected rule-reported symbol/reference ID evidence: {first:#?}"
+        );
+        assert_eq!(first_ids, second_ids);
+        assert!(first_ids.iter().all(
+            |(_symbol_id, _reference_id, reference_target, status, precision)| {
+                reference_target != "none" && status == "Resolved" && precision == "ExactLocal"
+            }
+        ));
+    }
+
+    #[test]
+    fn symbol_reference_cache_and_setup_reports_go_setup_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_symbol_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
 
         assert!(
-            provider_index < supported_index,
-            "provider diagnostics should be emitted before rule diagnostics: {json:#?}"
+            diagnostics_for_rule(&json, "local/go-symbols").is_empty(),
+            "setup-missing Go symbol support must block the requesting rule: {json:#?}"
+        );
+        let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
+        assert!(
+            capability_diagnostics.iter().any(|diagnostic| {
+                diagnostic_has_evidence(diagnostic, "capability", "symbols")
+                    && diagnostic_has_evidence(diagnostic, "language", "Go")
+                    && diagnostic_has_evidence(diagnostic, "status", "setup_missing")
+            }),
+            "expected setup-missing symbols diagnostic: {json:#?}"
+        );
+        assert!(
+            capability_diagnostics.iter().any(|diagnostic| {
+                diagnostic_has_evidence(diagnostic, "capability", "references")
+                    && diagnostic_has_evidence(diagnostic, "language", "Go")
+                    && diagnostic_has_evidence(diagnostic, "status", "setup_missing")
+            }),
+            "expected setup-missing references diagnostic: {json:#?}"
         );
     }
 

@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_plan_recognizes_symbol_capabilities() {
+    fn analysis_plan_supports_symbol_capabilities() {
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let capabilities = plan.capabilities();
 
@@ -1038,34 +1038,29 @@ mod tests {
         for capability in capabilities {
             assert_eq!(
                 capability.status,
-                crate::core::CapabilitySupportStatus::Unsupported
+                crate::core::CapabilitySupportStatus::Supported
             );
-            assert!(
-                capability
-                    .reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.contains("not provided yet"))
-            );
-            assert_eq!(
-                capability.docs_path.as_deref(),
-                Some("docs/facts/symbols-and-references.md")
-            );
+            assert_eq!(capability.reason, None);
+            assert_eq!(capability.hint, None);
+            assert_eq!(capability.docs_path, None);
         }
 
         assert_eq!(
             plan.support_view().status_for("symbols"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
         assert_eq!(
             plan.support_view().status_for("references"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
-        assert_eq!(plan.diagnostics().len(), 2);
-        assert!(plan.diagnostics().iter().all(|diagnostic| {
-            diagnostic
-                .help
-                .as_deref()
-                .is_some_and(|help| help.contains("docs/facts/symbols-and-references.md"))
+        assert!(plan.diagnostics().is_empty());
+
+        let report = plan.explain_report();
+        assert!(report.capabilities.iter().any(|capability| {
+            capability.name == "symbols" && capability.status == "supported"
+        }));
+        assert!(report.capabilities.iter().any(|capability| {
+            capability.name == "references" && capability.status == "supported"
         }));
     }
 
@@ -1097,9 +1092,25 @@ mod tests {
                 .map(|capability| (capability.capability.as_str(), capability.status.clone()))
                 .collect::<Vec<_>>(),
             vec![
-                ("references", CapabilitySupportStatus::Unsupported),
-                ("symbols", CapabilitySupportStatus::Unsupported),
+                ("references", CapabilitySupportStatus::Supported),
+                ("symbols", CapabilitySupportStatus::Supported),
             ]
+        );
+
+        let symbols_only = AnalysisPlan::from_rules(
+            &[rule(
+                "local/needs-references",
+                "Needs references",
+                Severity::Warn,
+                Capabilities::new().symbols(),
+            )],
+            None,
+            &BTreeMap::new(),
+        );
+        assert_ne!(
+            plan.digest(),
+            symbols_only.digest(),
+            "references must add symbol identity plus reference facts to the plan digest"
         );
     }
 
