@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
 status: executing
-stopped_at: Completed 13-03-PLAN.md
-last_updated: "2026-05-13T05:37:52.248Z"
+stopped_at: Completed 13-04-PLAN.md
+last_updated: "2026-05-13T06:07:08.893Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 14
-  completed_plans: 11
-  percent: 79
+  completed_plans: 12
+  percent: 86
 ---
 
 # State: polint
@@ -65,7 +65,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 Milestone: v1.1 Capability Fulfillment
 Status: Ready to execute
 Phase: 13 (symbols-and-references) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Last activity: 2026-05-13
 
 ## Quick Tasks Completed
@@ -208,6 +208,9 @@ Last activity: 2026-05-13
 - [Phase 13-symbols-and-references]: Symbol/reference requests trigger module graph derivation so rules do not need to request module graph views for relationship context.
 - [Phase 13-symbols-and-references]: TS/JS and Go symbol provider contracts are crate-private and emit Unsupported support/fact rows until semantic extraction plans promote real support.
 - [Phase 13-symbols-and-references]: Capability diagnostics sort before normal rule diagnostics at the same report location to preserve provider-before-rules visibility.
+- [Phase 13-symbols-and-references]: TS/JS Oxc lexical symbols and references are marked ExactLocal, not ExactSemantic.
+- [Phase 13-symbols-and-references]: Cross-file import alias links use ModuleLinked precision and visible Ambiguous/Unresolved/SetupMissing/Unsupported statuses.
+- [Phase 13-symbols-and-references]: Import aliases are linked after all TS files emit exported symbols so source/target ordering is deterministic.
 
 ## Performance Metrics
 
@@ -250,11 +253,12 @@ Last activity: 2026-05-13
 | Phase 13-symbols-and-references P01 | 17min | 3 tasks | 8 files |
 | Phase 13-symbols-and-references P02 | 8h 46m | 3 tasks | 6 files |
 | Phase 13-symbols-and-references P03 | 19m | 3 tasks | 9 files |
+| Phase 13-symbols-and-references P04 | 1530 | 3 tasks | 2 files |
 
 ## Session
 
-**Last Date:** 2026-05-13T05:37:52.244Z
-**Stopped At:** Completed 13-03-PLAN.md
+**Last Date:** 2026-05-13T06:07:08.890Z
+**Stopped At:** Completed 13-04-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution
