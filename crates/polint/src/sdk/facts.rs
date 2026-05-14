@@ -5,11 +5,13 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, FileId, FileMetricFact,
-    FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language,
-    ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ResolutionStatus, ResolvedImportFact,
-    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileId,
+    FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId,
+    JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ReferenceFact,
+    ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
+    TestFact, TsClassFact, TsComponentFact,
 };
+use crate::symbol_graph::query;
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
 #[derive(Clone, Copy)]
@@ -355,6 +357,92 @@ impl<'a> ModuleGraphFacts<'a> {
     }
 }
 
+/// Symbol and definition fact view. Requesting this view maps to the `symbols` capability.
+#[derive(Clone, Copy)]
+pub struct Symbols<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> Symbols<'a> {
+    /// Returns all symbol facts in deterministic database order.
+    pub fn all(self) -> &'a [SymbolFact] {
+        self.db.symbols()
+    }
+
+    /// Iterates all symbol facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, SymbolFact> {
+        self.db.symbols().iter()
+    }
+
+    /// Returns a symbol fact for a stable symbol ID.
+    pub fn get(self, symbol: SymbolId) -> Option<&'a SymbolFact> {
+        query::symbol_by_id(self.db, symbol)
+    }
+
+    /// Returns symbol facts for one source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a SymbolFact> {
+        query::symbols_for_file(self.db, file)
+    }
+
+    /// Returns symbol facts with the exact public name.
+    pub fn by_name(self, name: &str) -> impl Iterator<Item = &'a SymbolFact> {
+        query::symbols_by_name(self.db, name)
+    }
+
+    /// Returns the primary definition for a symbol, if one is known.
+    pub fn definition(self, symbol: SymbolId) -> Option<&'a DefinitionFact> {
+        self.db.definition_for_symbol(symbol)
+    }
+
+    /// Returns all definitions for a symbol, including declaration-merged definitions.
+    pub fn definitions(self, symbol: SymbolId) -> impl Iterator<Item = &'a DefinitionFact> {
+        query::definitions_for_symbol(self.db, symbol)
+    }
+
+    /// Returns exported symbols without cloning facts.
+    pub fn exported(self) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db.symbols().iter().filter(|symbol| symbol.is_exported)
+    }
+}
+
+/// Reference fact view. Requesting this view maps to the `references` capability.
+#[derive(Clone, Copy)]
+pub struct References<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> References<'a> {
+    /// Returns all reference facts in deterministic database order.
+    pub fn all(self) -> &'a [ReferenceFact] {
+        self.db.references()
+    }
+
+    /// Iterates all reference facts in deterministic database order.
+    pub fn iter(self) -> std::slice::Iter<'a, ReferenceFact> {
+        self.db.references().iter()
+    }
+
+    /// Returns resolved references to a symbol without cloning facts.
+    pub fn to(self, symbol: SymbolId) -> impl Iterator<Item = &'a ReferenceFact> {
+        query::references_to_symbol(self.db, symbol)
+    }
+
+    /// Returns references in one source file without cloning facts.
+    pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a ReferenceFact> {
+        query::references_for_file(self.db, file)
+    }
+
+    /// Returns references explicitly marked unresolved.
+    pub fn unresolved(self) -> impl Iterator<Item = &'a ReferenceFact> {
+        query::unresolved_references(self.db)
+    }
+
+    /// Returns references explicitly marked ambiguous.
+    pub fn ambiguous(self) -> impl Iterator<Item = &'a ReferenceFact> {
+        query::ambiguous_references(self.db)
+    }
+}
+
 /// Branch obligation fact view. Requesting this view maps to the `branch_obligations` capability.
 #[derive(Clone, Copy)]
 pub struct BranchObligations<'a> {
@@ -634,6 +722,8 @@ impl_fact_view!(ComplexityMetrics);
 impl_fact_view!(Imports);
 impl_fact_view!(ResolvedImports);
 impl_fact_view!(ModuleGraphFacts);
+impl_fact_view!(Symbols);
+impl_fact_view!(References);
 impl_fact_view!(BranchObligations);
 impl_fact_view!(GoTests);
 impl_fact_view!(TsComponents);
@@ -650,10 +740,12 @@ impl_fact_view!(TestSuiteMetrics, _db);
 mod tests {
     use super::*;
     use crate::core::{
-        AnalysisDb, ComplexityMetricFact, FileMetricFact, FunctionId, FunctionMetricFact,
-        ImportFact, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Span, UnresolvedReason,
+        AnalysisDb, ComplexityMetricFact, DefinitionFact, DefinitionId, DefinitionKind,
+        FileMetricFact, FunctionId, FunctionMetricFact, ImportFact, ModuleEdge, ModuleEdgeId,
+        ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact, ReferenceId,
+        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
+        Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        SymbolResolutionStatus, UnresolvedReason,
     };
     use std::path::PathBuf;
 
@@ -1058,6 +1150,216 @@ mod tests {
         assert_eq!(
             graph.reachable_from(ModuleNodeId(0)),
             vec![ModuleNodeId(1), ModuleNodeId(3), ModuleNodeId(2)]
+        );
+    }
+
+    #[test]
+    fn symbol_sdk_views_query_borrowed_facts_deterministically() {
+        let mut db = AnalysisDb::new();
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function Button() { return theme; }\n".to_string(),
+        );
+        let theme_file = db.add_file(
+            PathBuf::from("src/theme.ts"),
+            "src/theme.ts".to_string(),
+            "export const theme = {};\n".to_string(),
+        );
+        let button = SymbolId(10);
+        let theme = SymbolId(20);
+
+        db.replace_symbol_graph_facts(
+            vec![
+                SymbolFact {
+                    id: button,
+                    language: Language::TypeScript,
+                    name: "Button".to_string(),
+                    qualified_name: "src/app.ts::Button".to_string(),
+                    kind: SymbolKind::Function,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: None,
+                    primary_span: Some(Span::point(app_file, 1, 1)),
+                    is_exported: true,
+                    stable_key: "ts|src/app.ts|Button".to_string(),
+                    precision: SymbolPrecision::ExactLocal,
+                },
+                SymbolFact {
+                    id: theme,
+                    language: Language::TypeScript,
+                    name: "theme".to_string(),
+                    qualified_name: "src/theme.ts::theme".to_string(),
+                    kind: SymbolKind::Constant,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(theme_file),
+                    package: None,
+                    module: Some(ModuleNodeId(1)),
+                    owner: None,
+                    primary_span: Some(Span::point(theme_file, 1, 1)),
+                    is_exported: true,
+                    stable_key: "ts|src/theme.ts|theme".to_string(),
+                    precision: SymbolPrecision::ModuleLinked,
+                },
+            ],
+            vec![DefinitionFact {
+                id: DefinitionId(30),
+                symbol: button,
+                language: Language::TypeScript,
+                name: "Button".to_string(),
+                qualified_name: "src/app.ts::Button".to_string(),
+                kind: DefinitionKind::Declaration,
+                namespace: SymbolNamespace::Value,
+                file: Some(app_file),
+                package: None,
+                module: Some(ModuleNodeId(0)),
+                owner: None,
+                primary_span: Some(Span::point(app_file, 1, 1)),
+                is_primary: true,
+                is_exported: true,
+                stable_key: "ts|src/app.ts|definition|Button".to_string(),
+                precision: SymbolPrecision::ExactLocal,
+            }],
+            vec![
+                ReferenceFact {
+                    id: ReferenceId(40),
+                    language: Language::TypeScript,
+                    name: "theme".to_string(),
+                    qualified_name: "src/theme.ts::theme".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 28)),
+                    target: Some(theme),
+                    candidates: Vec::new(),
+                    stable_key: "ts|src/app.ts|reference|theme".to_string(),
+                    status: SymbolResolutionStatus::Resolved,
+                    precision: SymbolPrecision::ModuleLinked,
+                },
+                ReferenceFact {
+                    id: ReferenceId(50),
+                    language: Language::TypeScript,
+                    name: "missing".to_string(),
+                    qualified_name: "missing".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 35)),
+                    target: None,
+                    candidates: Vec::new(),
+                    stable_key: "ts|src/app.ts|reference|missing".to_string(),
+                    status: SymbolResolutionStatus::Unresolved,
+                    precision: SymbolPrecision::Unresolved,
+                },
+                ReferenceFact {
+                    id: ReferenceId(60),
+                    language: Language::TypeScript,
+                    name: "ambiguous".to_string(),
+                    qualified_name: "ambiguous".to_string(),
+                    kind: ReferenceKind::Read,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(app_file),
+                    package: None,
+                    module: Some(ModuleNodeId(0)),
+                    owner: Some(button),
+                    primary_span: Some(Span::point(app_file, 1, 44)),
+                    target: None,
+                    candidates: vec![button, theme],
+                    stable_key: "ts|src/app.ts|reference|ambiguous".to_string(),
+                    status: SymbolResolutionStatus::Ambiguous,
+                    precision: SymbolPrecision::Ambiguous,
+                },
+            ],
+        );
+
+        let symbols = Symbols::build(&db);
+        let references = References::build(&db);
+
+        assert_eq!(symbols.all().len(), 2);
+        assert_eq!(
+            symbols.iter().map(|symbol| symbol.id).collect::<Vec<_>>(),
+            vec![button, theme]
+        );
+        assert!(std::ptr::eq(
+            symbols.get(button).unwrap(),
+            &symbols.all()[0]
+        ));
+        assert_eq!(
+            symbols
+                .for_file(app_file)
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![button]
+        );
+        assert_eq!(
+            symbols
+                .by_name("theme")
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![theme]
+        );
+        assert_eq!(
+            symbols.definition(button).map(|definition| definition.id),
+            Some(DefinitionId(30))
+        );
+        assert_eq!(
+            symbols
+                .definitions(button)
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>(),
+            vec![DefinitionId(30)]
+        );
+        assert_eq!(
+            symbols
+                .exported()
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![button, theme]
+        );
+
+        assert_eq!(references.all().len(), 3);
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+        );
+        assert_eq!(
+            references
+                .to(theme)
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40)]
+        );
+        assert_eq!(
+            references
+                .for_file(app_file)
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40), ReferenceId(50), ReferenceId(60)]
+        );
+        assert_eq!(
+            references
+                .unresolved()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(50)]
+        );
+        assert_eq!(
+            references
+                .ambiguous()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(60)]
         );
     }
 }

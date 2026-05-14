@@ -325,6 +325,7 @@ pub(crate) fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
             a.file.as_str(),
             a.range.start_line,
             a.range.start_col,
+            diagnostic_sort_priority(a),
             a.rule_id.as_str(),
             a.message.as_str(),
             a.stable_fingerprint.as_str(),
@@ -333,11 +334,20 @@ pub(crate) fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
                 b.file.as_str(),
                 b.range.start_line,
                 b.range.start_col,
+                diagnostic_sort_priority(b),
                 b.rule_id.as_str(),
                 b.message.as_str(),
                 b.stable_fingerprint.as_str(),
             ))
     });
+}
+
+fn diagnostic_sort_priority(diagnostic: &Diagnostic) -> u8 {
+    if diagnostic.rule_id == "polint/capability" {
+        0
+    } else {
+        1
+    }
 }
 
 pub(crate) fn dedupe_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {

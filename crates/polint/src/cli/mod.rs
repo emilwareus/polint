@@ -1012,6 +1012,8 @@ fn analyze_and_run(
     diagnostics.extend(ts_diagnostics);
     let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
     diagnostics.extend(module_graph.diagnostics);
+    let symbol_graph = crate::symbol_graph::derive_requested_symbols(&mut db, &loaded, &plan);
+    diagnostics.extend(symbol_graph.diagnostics);
 
     diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
     Ok((diagnostics, db, loaded))

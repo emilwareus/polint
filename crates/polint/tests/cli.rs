@@ -133,6 +133,671 @@ export const value = token;
     write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
 }
 
+fn write_symbol_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/needs-references",
+    description = "Needs reference facts.",
+    severity = "warn"
+)]
+fn needs_references(ctx: &mut RuleCtx<'_>, references: References<'_>) -> RuleResult {
+    let reference_count = references.iter().count();
+    if reference_count > 0 {
+        ctx.report(
+            Diagnostic::warning(
+                ctx.rule_id(),
+                "<workspace>",
+                DiagnosticRange::point(1, 1),
+                "symbol reference rule ran with provider facts",
+            )
+            .with_evidence("reference_count", reference_count.to_string()),
+        );
+    }
+    Ok(())
+}
+
+#[polint::rule(
+    id = "local/supported-imports",
+    description = "Reports after supported import facts.",
+    severity = "warn"
+)]
+fn supported_imports(ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
+    let _import_count = imports.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "supported rule ran after provider diagnostics",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![needs_references(), supported_imports()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"import { token } from "./token";
+
+export const value = token;
+"#,
+    );
+    write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
+}
+
+fn write_symbol_reference_cache_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/stable-symbol-reference",
+    description = "Reports stable symbol and reference IDs.",
+    severity = "warn"
+)]
+fn stable_symbol_reference(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let Some(symbol) = symbols.by_name("answer").next() else {
+        return Ok(());
+    };
+    let Some(reference) = references.to(symbol.id).next() else {
+        return Ok(());
+    };
+    let Some(file) = reference.file else {
+        return Ok(());
+    };
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            ctx.file_path(file),
+            DiagnosticRange::point(1, 1),
+            "stable symbol/reference evidence",
+        )
+        .with_evidence("symbol_name", symbol.name.clone())
+        .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
+        .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
+        .with_evidence("symbol_id", symbol.id.0.to_string())
+        .with_evidence("reference_id", reference.id.0.to_string())
+        .with_evidence(
+            "reference_target",
+            reference
+                .target
+                .map(|target| target.0.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        )
+        .with_evidence("reference_status", format!("{:?}", reference.status))
+        .with_evidence("reference_precision", format!("{:?}", reference.precision)),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![stable_symbol_reference()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"export function answer(input: number) {
+  return input + 1;
+}
+
+export const value = answer(41);
+"#,
+    );
+}
+
+fn write_go_symbol_setup_missing_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/go-symbols",
+    description = "Reads Go symbols and references.",
+    severity = "warn"
+)]
+fn go_symbols(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let _fact_count = symbols.iter().count() + references.iter().count();
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this rule should be blocked by Go setup-missing support",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![go_symbols()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/main.go"),
+        r#"package main
+
+func Build() string {
+	return "ok"
+}
+
+func main() {
+	_ = Build()
+}
+"#,
+    );
+}
+
+fn assert_public_symbol_rule_source(source: &str) {
+    assert!(
+        source.contains("use polint::sdk::prelude::*;"),
+        "external rule must import the public SDK prelude only:\n{source}"
+    );
+    assert!(
+        source.contains("Symbols<'_>") || source.contains("References<'_>"),
+        "external rule must request typed symbol/reference facts through its signature:\n{source}"
+    );
+    for forbidden in [
+        concat!("polint::", "core"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        concat!("oxc", "_"),
+        concat!("Go", "Symbol"),
+        concat!("Go", "Sidecar"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{source}"
+        );
+    }
+}
+
+fn write_external_symbol_rule_repo(root: &Path, rule_source: &str) {
+    assert_public_symbol_rule_source(rule_source);
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(&root.join(".polint/rules/src/main.rs"), rule_source);
+}
+
+fn write_external_ts_symbol_reference_rule_repo(root: &Path) {
+    write_external_symbol_rule_repo(
+        root,
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+fn diagnostic_file(ctx: &RuleCtx<'_>, file: Option<FileId>) -> String {
+    file.map(|file| ctx.file_path(file))
+        .unwrap_or_else(|| "<workspace>".to_string())
+}
+
+fn reference_target(reference: &ReferenceFact) -> String {
+    reference
+        .target
+        .map(|target| target.0.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn report_symbol(
+    ctx: &mut RuleCtx<'_>,
+    case: &str,
+    symbol: &SymbolFact,
+    extra_label: &str,
+    extra_value: String,
+) {
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            diagnostic_file(ctx, symbol.file),
+            DiagnosticRange::point(1, 1),
+            format!("public symbol SDK evidence: {case}"),
+        )
+        .with_evidence("case", case)
+        .with_evidence("symbol_name", symbol.name.clone())
+        .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
+        .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
+        .with_evidence("symbol_id", symbol.id.0.to_string())
+        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence(extra_label, extra_value),
+    );
+}
+
+fn report_reference(
+    ctx: &mut RuleCtx<'_>,
+    case: &str,
+    symbol: Option<&SymbolFact>,
+    reference: &ReferenceFact,
+) {
+    let file = reference.file.or_else(|| symbol.and_then(|symbol| symbol.file));
+    let symbol_name = symbol
+        .map(|symbol| symbol.name.clone())
+        .unwrap_or_else(|| "none".to_string());
+    let symbol_kind = symbol
+        .map(|symbol| format!("{:?}", symbol.kind))
+        .unwrap_or_else(|| "none".to_string());
+    let symbol_precision = symbol
+        .map(|symbol| format!("{:?}", symbol.precision))
+        .unwrap_or_else(|| "none".to_string());
+    let symbol_id = symbol
+        .map(|symbol| symbol.id.0.to_string())
+        .unwrap_or_else(|| "none".to_string());
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            diagnostic_file(ctx, file),
+            DiagnosticRange::point(1, 1),
+            format!("public reference SDK evidence: {case}"),
+        )
+        .with_evidence("case", case)
+        .with_evidence("symbol_name", symbol_name)
+        .with_evidence("symbol_kind", symbol_kind)
+        .with_evidence("symbol_precision", symbol_precision)
+        .with_evidence("symbol_id", symbol_id)
+        .with_evidence("reference_name", reference.name.clone())
+        .with_evidence("reference_kind", format!("{:?}", reference.kind))
+        .with_evidence("reference_precision", format!("{:?}", reference.precision))
+        .with_evidence("reference_status", format!("{:?}", reference.status))
+        .with_evidence("reference_id", reference.id.0.to_string())
+        .with_evidence("reference_target", reference_target(reference))
+        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+    );
+}
+
+#[polint::rule(
+    id = "local/ts-symbol-reference-public-sdk",
+    description = "Reads TypeScript symbol and reference facts through public SDK views.",
+    severity = "warn"
+)]
+fn ts_symbol_reference_public_sdk(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    if let Some(symbol) = symbols
+        .by_name("answer")
+        .find(|symbol| symbol.kind == SymbolKind::Function)
+    {
+        report_symbol(ctx, "ts-symbol:function", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::Call)
+        {
+            report_reference(ctx, "ts-reference:function-call", Some(symbol), reference);
+        }
+    }
+
+    if let Some(symbol) = symbols
+        .by_name("localValue")
+        .find(|symbol| symbol.kind == SymbolKind::Variable)
+    {
+        report_symbol(ctx, "ts-symbol:local-variable", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::Read)
+        {
+            report_reference(ctx, "ts-reference:local-variable", Some(symbol), reference);
+        }
+    }
+
+    let merge_symbols = symbols.by_name("MergeMe").collect::<Vec<_>>();
+    if let Some(symbol) = merge_symbols.first().copied() {
+        let declaration_count = merge_symbols
+            .iter()
+            .map(|symbol| symbols.definitions(symbol.id).count())
+            .sum::<usize>();
+        if declaration_count >= 2 || merge_symbols.len() >= 2 {
+            report_symbol(
+                ctx,
+                "ts-symbol:declaration-merge",
+                symbol,
+                "declaration_count",
+                declaration_count.max(merge_symbols.len()).to_string(),
+            );
+        }
+    }
+
+    if let Some(reference) = references.iter().find(|reference| {
+        reference.name == "importedToken"
+            && reference.kind == ReferenceKind::Import
+            && reference.precision == SymbolPrecision::ModuleLinked
+    }) {
+        let symbol = reference.target.and_then(|target| symbols.get(target));
+        report_reference(ctx, "ts-reference:module-import", symbol, reference);
+    }
+
+    if let Some(reference) = references
+        .unresolved()
+        .find(|reference| reference.name == "missingGlobal")
+    {
+        report_reference(ctx, "ts-reference:unresolved-global", None, reference);
+    }
+
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![ts_symbol_reference_public_sdk()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/tokens.ts"),
+        r#"export const token = "ok";
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"import { token as importedToken } from "./tokens";
+
+export interface MergeMe {
+  first: string;
+}
+
+export interface MergeMe {
+  second: string;
+}
+
+export function answer(input: number) {
+  let localValue = importedToken;
+  return missingGlobal + localValue.length;
+}
+
+export const value = answer(41);
+"#,
+    );
+}
+
+fn write_external_go_symbol_reference_rule_repo(root: &Path) {
+    write_external_symbol_rule_repo(
+        root,
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+fn diagnostic_file(ctx: &RuleCtx<'_>, file: Option<FileId>) -> String {
+    file.map(|file| ctx.file_path(file))
+        .unwrap_or_else(|| "<workspace>".to_string())
+}
+
+fn reference_target(reference: &ReferenceFact) -> String {
+    reference
+        .target
+        .map(|target| target.0.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn report_reference(
+    ctx: &mut RuleCtx<'_>,
+    case: &str,
+    symbol: &SymbolFact,
+    reference: &ReferenceFact,
+) {
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            diagnostic_file(ctx, reference.file.or(symbol.file)),
+            DiagnosticRange::point(1, 1),
+            format!("public Go reference SDK evidence: {case}"),
+        )
+        .with_evidence("case", case)
+        .with_evidence("symbol_name", symbol.name.clone())
+        .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
+        .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
+        .with_evidence("symbol_id", symbol.id.0.to_string())
+        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("reference_name", reference.name.clone())
+        .with_evidence("reference_kind", format!("{:?}", reference.kind))
+        .with_evidence("reference_precision", format!("{:?}", reference.precision))
+        .with_evidence("reference_status", format!("{:?}", reference.status))
+        .with_evidence("reference_id", reference.id.0.to_string())
+        .with_evidence("reference_target", reference_target(reference))
+        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+    );
+}
+
+#[polint::rule(
+    id = "local/go-symbol-reference-public-sdk",
+    description = "Reads Go symbol and reference facts through public SDK views.",
+    severity = "warn"
+)]
+fn go_symbol_reference_public_sdk(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    if let Some(symbol) = symbols
+        .by_name("Build")
+        .find(|symbol| symbol.kind == SymbolKind::Function)
+    {
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::Call)
+        {
+            report_reference(ctx, "go-reference:function-call", symbol, reference);
+        }
+    }
+
+    if let Some(symbol) = symbols
+        .by_name("Label")
+        .find(|symbol| symbol.kind == SymbolKind::Method)
+    {
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::Call)
+        {
+            report_reference(ctx, "go-reference:method-call", symbol, reference);
+        }
+    }
+
+    if let Some(symbol) = symbols
+        .by_name("Name")
+        .find(|symbol| symbol.kind == SymbolKind::Field)
+    {
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::MemberAccess)
+        {
+            report_reference(ctx, "go-reference:field-selector", symbol, reference);
+        }
+    }
+
+    if let Some(symbol) = symbols
+        .by_name("local")
+        .find(|symbol| symbol.kind == SymbolKind::Variable)
+    {
+        if let Some(reference) = references
+            .to(symbol.id)
+            .find(|reference| reference.kind == ReferenceKind::Read)
+        {
+            report_reference(ctx, "go-reference:local-variable", symbol, reference);
+        }
+    }
+
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![go_symbol_reference_public_sdk()])
+}
+"#,
+    );
+    write_file(
+        &root.join("go.mod"),
+        r#"module example.com/polint-symbols
+
+go 1.24
+"#,
+    );
+    write_file(
+        &root.join("src/main.go"),
+        r#"package app
+
+type Widget struct {
+	Name string
+}
+
+func Build(input string) string {
+	local := input
+	return local
+}
+
+func (w Widget) Label() string {
+	return w.Name
+}
+
+func Use() string {
+	w := Widget{Name: "ok"}
+	local := Build(w.Label())
+	return local + w.Name
+}
+"#,
+    );
+}
+
 fn write_cache_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -912,6 +1577,10 @@ fn add_skill_installs_claude_skill_non_interactively() {
     assert!(contents.contains("FileMetrics<'_>"));
     assert!(contents.contains("ResolvedImports<'_>"));
     assert!(contents.contains("ModuleGraphFacts<'_>"));
+    assert!(contents.contains("Symbols<'_>"));
+    assert!(contents.contains("References<'_>"));
+    assert!(contents.contains("symbols.by_name"));
+    assert!(contents.contains("references.unresolved()"));
     assert!(contents.contains("Do not implement `Rule` manually"));
 }
 
@@ -2602,6 +3271,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             expected_files: &["handler.go"],
         },
         ExampleCase {
+            name: "go-sensitive-writes",
+            rule_modules: &["no_sensitive_balance_writes.rs"],
+            expected_rules: &["local/no-sensitive-balance-writes"],
+            expected_files: &["ledger.go"],
+        },
+        ExampleCase {
             name: "go-test-quality",
             rule_modules: &["go_test_quality.rs"],
             expected_rules: &["local/go-test-quality"],
@@ -2618,6 +3293,12 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             rule_modules: &["no_raw_colors.rs"],
             expected_rules: &["local/no-raw-colors"],
             expected_files: &["Button.tsx"],
+        },
+        ExampleCase {
+            name: "ts-no-raw-api-calls",
+            rule_modules: &["no_raw_api_calls.rs"],
+            expected_rules: &["local/no-raw-api-calls"],
+            expected_files: &["src/user-page.ts"],
         },
     ];
 
@@ -2679,6 +3360,95 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
             );
         }
     }
+}
+
+#[test]
+fn ts_no_raw_api_calls_example_reports_resolved_and_unresolved_calls() {
+    let example_dir = repo_root().join("examples/ts-no-raw-api-calls");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/no-raw-api-calls");
+    assert_eq!(diagnostics.len(), 2, "{json:#?}");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["file"] == "src/user-page.ts"
+                && diagnostic_has_evidence(diagnostic, "api", "rawRequest")
+                && diagnostic_has_evidence(diagnostic, "status", "Resolved")
+                && diagnostic_has_evidence(diagnostic, "precision", "ExactLocal")
+        }),
+        "expected resolved rawRequest call diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["file"] == "src/user-page.ts"
+                && diagnostic_has_evidence(diagnostic, "api", "fetch")
+                && diagnostic_has_evidence(diagnostic, "status", "Unresolved")
+                && diagnostic_has_evidence(diagnostic, "symbol_id", "unresolved")
+        }),
+        "expected unresolved fetch call diagnostic: {json:#?}"
+    );
+}
+
+#[test]
+fn go_sensitive_writes_example_reports_write_and_readwrite_references() {
+    let example_dir = repo_root().join("examples/go-sensitive-writes");
+    let json = stdout_json(
+        Command::cargo_bin("polint")
+            .unwrap()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "json",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/no-sensitive-balance-writes");
+    assert_eq!(diagnostics.len(), 2, "{json:#?}");
+    assert!(
+        diagnostics.iter().all(|diagnostic| {
+            diagnostic["file"] == "ledger.go"
+                && diagnostic_has_evidence(diagnostic, "field", "Balance")
+                && diagnostic_has_evidence(diagnostic, "status", "Resolved")
+                && diagnostic_has_evidence(diagnostic, "precision", "ExactSemantic")
+        }),
+        "expected only exact semantic Balance write diagnostics in ledger.go: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "reference_kind",
+            "Write"
+        )),
+        "expected a direct write diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic_has_evidence(
+            diagnostic,
+            "reference_kind",
+            "ReadWrite"
+        )),
+        "expected a read-write diagnostic: {json:#?}"
+    );
 }
 
 #[test]
@@ -3212,6 +3982,464 @@ mod capability_planning {
             "status",
             "setup_missing"
         ));
+    }
+
+    #[test]
+    fn symbol_provider_support_allows_requesting_rule_before_supported_rules() {
+        let temp = tempfile::tempdir().unwrap();
+        write_symbol_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/needs-references")
+                .iter()
+                .any(|diagnostic| diagnostic_has_evidence(diagnostic, "reference_count", "2")),
+            "supported symbol providers should allow the requesting rule to run: {json:#?}"
+        );
+        assert!(
+            diagnostics(&json)
+                .iter()
+                .all(|diagnostic| diagnostic["rule_id"] != "polint/capability"),
+            "supported TS symbol/reference providers should not emit capability diagnostics: {json:#?}"
+        );
+    }
+
+    fn symbol_reference_id_evidence(
+        report: &polint::sdk::prelude::PolintReport,
+    ) -> Vec<(String, String, String, String, String)> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == "local/stable-symbol-reference")
+            .map(|diagnostic| {
+                (
+                    evidence_value(diagnostic, "symbol_id"),
+                    evidence_value(diagnostic, "reference_id"),
+                    evidence_value(diagnostic, "reference_target"),
+                    evidence_value(diagnostic, "reference_status"),
+                    evidence_value(diagnostic, "reference_precision"),
+                )
+            })
+            .collect()
+    }
+
+    fn evidence_value(diagnostic: &polint::sdk::prelude::Diagnostic, label: &str) -> String {
+        diagnostic
+            .evidence
+            .iter()
+            .find(|evidence| evidence.label == label)
+            .unwrap_or_else(|| panic!("missing evidence `{label}` in {diagnostic:#?}"))
+            .value
+            .clone()
+    }
+
+    fn run_symbol_reference_cache_check(root: &Path) -> polint::sdk::prelude::PolintReport {
+        let raw = stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(root)
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("stdout was not a PolintReport: {error}\n{raw}"))
+    }
+
+    fn run_external_symbol_reference_check(root: &Path) -> polint::sdk::prelude::PolintReport {
+        let raw = stdout_string(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(root)
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("stdout was not a PolintReport: {error}\n{raw}"))
+    }
+
+    fn assert_written_external_symbol_rule_is_public(root: &Path) {
+        let source = fs::read_to_string(root.join(".polint/rules/src/main.rs")).unwrap();
+        assert_public_symbol_rule_source(&source);
+    }
+
+    fn report_diagnostics_for_rule<'a>(
+        report: &'a polint::sdk::prelude::PolintReport,
+        rule_id: &str,
+    ) -> Vec<&'a polint::sdk::prelude::Diagnostic> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == rule_id)
+            .collect()
+    }
+
+    fn assert_no_capability_diagnostics(report: &polint::sdk::prelude::PolintReport) {
+        assert!(
+            report_diagnostics_for_rule(report, "polint/capability").is_empty(),
+            "public symbol/reference facts should not emit capability diagnostics: {report:#?}"
+        );
+    }
+
+    fn diagnostic_cases(diagnostics: &[&polint::sdk::prelude::Diagnostic]) -> Vec<String> {
+        diagnostics
+            .iter()
+            .map(|diagnostic| evidence_value(diagnostic, "case"))
+            .collect()
+    }
+
+    fn diagnostic_for_case<'a>(
+        diagnostics: &'a [&polint::sdk::prelude::Diagnostic],
+        case: &str,
+    ) -> &'a polint::sdk::prelude::Diagnostic {
+        diagnostics
+            .iter()
+            .copied()
+            .find(|diagnostic| evidence_value(diagnostic, "case") == case)
+            .unwrap_or_else(|| panic!("missing diagnostic case `{case}` in {diagnostics:#?}"))
+    }
+
+    fn evidence_snapshot(
+        report: &polint::sdk::prelude::PolintReport,
+        rule_id: &str,
+    ) -> Vec<Vec<(String, String)>> {
+        report_diagnostics_for_rule(report, rule_id)
+            .iter()
+            .map(|diagnostic| {
+                diagnostic
+                    .evidence
+                    .iter()
+                    .map(|evidence| (evidence.label.clone(), evidence.value.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn symbol_reference_cache_and_setup_keeps_stable_ids_across_cached_runs() {
+        let temp = tempfile::tempdir().unwrap();
+        write_symbol_reference_cache_rule_repo(temp.path());
+
+        let first = run_symbol_reference_cache_check(temp.path());
+        assert!(
+            !cache_json_file_names(temp.path()).is_empty(),
+            "first run should write cache entries"
+        );
+        let second = run_symbol_reference_cache_check(temp.path());
+
+        let first_ids = symbol_reference_id_evidence(&first);
+        let second_ids = symbol_reference_id_evidence(&second);
+        assert!(
+            !first_ids.is_empty(),
+            "expected rule-reported symbol/reference ID evidence: {first:#?}"
+        );
+        assert_eq!(first_ids, second_ids);
+        assert!(first_ids.iter().all(
+            |(_symbol_id, _reference_id, reference_target, status, precision)| {
+                reference_target != "none" && status == "Resolved" && precision == "ExactLocal"
+            }
+        ));
+    }
+
+    #[test]
+    fn symbol_reference_cache_and_setup_reports_go_setup_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        write_go_symbol_setup_missing_rule_repo(temp.path());
+
+        let json = stdout_json(
+            Command::cargo_bin("polint")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/go-symbols").is_empty(),
+            "setup-missing Go symbol support must block the requesting rule: {json:#?}"
+        );
+        let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
+        assert!(
+            capability_diagnostics.iter().any(|diagnostic| {
+                diagnostic_has_evidence(diagnostic, "capability", "symbols")
+                    && diagnostic_has_evidence(diagnostic, "language", "Go")
+                    && diagnostic_has_evidence(diagnostic, "status", "setup_missing")
+            }),
+            "expected setup-missing symbols diagnostic: {json:#?}"
+        );
+        assert!(
+            capability_diagnostics.iter().any(|diagnostic| {
+                diagnostic_has_evidence(diagnostic, "capability", "references")
+                    && diagnostic_has_evidence(diagnostic, "language", "Go")
+                    && diagnostic_has_evidence(diagnostic, "status", "setup_missing")
+            }),
+            "expected setup-missing references diagnostic: {json:#?}"
+        );
+    }
+
+    #[test]
+    fn external_rule_consumes_ts_symbols_and_references_through_public_sdk() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_ts_symbol_reference_rule_repo(temp.path());
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let report = run_external_symbol_reference_check(temp.path());
+        assert_no_capability_diagnostics(&report);
+
+        let diagnostics =
+            report_diagnostics_for_rule(&report, "local/ts-symbol-reference-public-sdk");
+        let mut cases = diagnostic_cases(&diagnostics);
+        cases.sort();
+        assert_eq!(
+            cases,
+            [
+                "ts-reference:function-call",
+                "ts-reference:local-variable",
+                "ts-reference:module-import",
+                "ts-reference:unresolved-global",
+                "ts-symbol:declaration-merge",
+                "ts-symbol:function",
+                "ts-symbol:local-variable",
+            ],
+            "{report:#?}"
+        );
+
+        let function = diagnostic_for_case(&diagnostics, "ts-symbol:function");
+        assert_eq!(evidence_value(function, "symbol_name"), "answer");
+        assert_eq!(evidence_value(function, "symbol_kind"), "Function");
+        assert_eq!(evidence_value(function, "symbol_precision"), "ExactLocal");
+        assert!(!evidence_value(function, "symbol_stable_key").is_empty());
+
+        let merge = diagnostic_for_case(&diagnostics, "ts-symbol:declaration-merge");
+        assert_eq!(evidence_value(merge, "symbol_name"), "MergeMe");
+        assert_eq!(evidence_value(merge, "symbol_kind"), "Interface");
+        assert_eq!(evidence_value(merge, "declaration_count"), "2");
+
+        let call = diagnostic_for_case(&diagnostics, "ts-reference:function-call");
+        assert_eq!(evidence_value(call, "reference_name"), "answer");
+        assert_eq!(evidence_value(call, "reference_kind"), "Call");
+        assert_eq!(evidence_value(call, "reference_status"), "Resolved");
+        assert_eq!(evidence_value(call, "reference_precision"), "ExactLocal");
+        assert_ne!(evidence_value(call, "reference_target"), "none");
+
+        let import = diagnostic_for_case(&diagnostics, "ts-reference:module-import");
+        assert_eq!(evidence_value(import, "reference_name"), "importedToken");
+        assert_eq!(evidence_value(import, "reference_kind"), "Import");
+        assert_eq!(evidence_value(import, "reference_status"), "Resolved");
+        assert_eq!(
+            evidence_value(import, "reference_precision"),
+            "ModuleLinked"
+        );
+        assert_ne!(evidence_value(import, "reference_target"), "none");
+
+        let unresolved = diagnostic_for_case(&diagnostics, "ts-reference:unresolved-global");
+        assert_eq!(
+            evidence_value(unresolved, "reference_name"),
+            "missingGlobal"
+        );
+        assert_eq!(evidence_value(unresolved, "reference_status"), "Unresolved");
+        assert_eq!(
+            evidence_value(unresolved, "reference_precision"),
+            "Unresolved"
+        );
+        assert_eq!(evidence_value(unresolved, "reference_target"), "none");
+    }
+
+    #[test]
+    fn external_rule_consumes_go_symbols_and_references_through_public_sdk() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_go_symbol_reference_rule_repo(temp.path());
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let report = run_external_symbol_reference_check(temp.path());
+        assert_no_capability_diagnostics(&report);
+
+        assert_go_symbol_reference_cases(&report);
+    }
+
+    #[test]
+    fn external_rule_consumes_go_symbols_from_monorepo_submodule_without_repo_go_mod() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_go_symbol_reference_rule_repo(temp.path());
+        write_file(
+            &temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["services/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+        );
+        fs::create_dir_all(temp.path().join("services/app/src")).unwrap();
+        fs::rename(
+            temp.path().join("go.mod"),
+            temp.path().join("services/app/go.mod"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path().join("src/main.go"),
+            temp.path().join("services/app/src/main.go"),
+        )
+        .unwrap();
+        fs::remove_dir(temp.path().join("src")).unwrap();
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let report = run_external_symbol_reference_check(temp.path());
+        assert_no_capability_diagnostics(&report);
+
+        assert_go_symbol_reference_cases(&report);
+    }
+
+    #[test]
+    fn external_rule_consumes_go_symbols_from_multiple_monorepo_modules_with_one_polint_setup() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_go_symbol_reference_rule_repo(temp.path());
+        write_file(
+            &temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["services/**", "libs/**"]
+exclude = []
+
+[languages.go]
+module_roots = ["services/app", "libs/shared"]
+package_patterns = ["./..."]
+
+[rules]
+paths = [".polint/rules"]
+"#,
+        );
+        write_file(
+            &temp.path().join("go.work"),
+            r#"go 1.24
+
+use ./tools/only
+"#,
+        );
+        write_file(
+            &temp.path().join("tools/only/go.mod"),
+            r#"module example.com/tools
+
+go 1.24
+"#,
+        );
+        write_file(&temp.path().join("tools/only/tool.go"), "package tool\n");
+        write_file(
+            &temp.path().join("libs/shared/go.mod"),
+            r#"module example.com/shared
+
+go 1.24
+"#,
+        );
+        write_file(
+            &temp.path().join("libs/shared/shared.go"),
+            "package shared\n\nfunc Shared() string { return \"ok\" }\n",
+        );
+        fs::create_dir_all(temp.path().join("services/app/src")).unwrap();
+        fs::rename(
+            temp.path().join("go.mod"),
+            temp.path().join("services/app/go.mod"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path().join("src/main.go"),
+            temp.path().join("services/app/src/main.go"),
+        )
+        .unwrap();
+        fs::remove_dir(temp.path().join("src")).unwrap();
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let report = run_external_symbol_reference_check(temp.path());
+        assert_no_capability_diagnostics(&report);
+
+        assert_go_symbol_reference_cases(&report);
+    }
+
+    fn assert_go_symbol_reference_cases(report: &polint::sdk::prelude::PolintReport) {
+        let diagnostics =
+            report_diagnostics_for_rule(report, "local/go-symbol-reference-public-sdk");
+        let mut cases = diagnostic_cases(&diagnostics);
+        cases.sort();
+        assert_eq!(
+            cases,
+            [
+                "go-reference:field-selector",
+                "go-reference:function-call",
+                "go-reference:local-variable",
+                "go-reference:method-call",
+            ],
+            "{report:#?}"
+        );
+
+        let function = diagnostic_for_case(&diagnostics, "go-reference:function-call");
+        assert_eq!(evidence_value(function, "symbol_name"), "Build");
+        assert_eq!(evidence_value(function, "symbol_kind"), "Function");
+        assert_eq!(
+            evidence_value(function, "symbol_precision"),
+            "ExactSemantic"
+        );
+        assert_eq!(evidence_value(function, "reference_kind"), "Call");
+        assert_eq!(evidence_value(function, "reference_status"), "Resolved");
+        assert_eq!(
+            evidence_value(function, "reference_precision"),
+            "ExactSemantic"
+        );
+        assert_ne!(evidence_value(function, "reference_target"), "none");
+
+        let method = diagnostic_for_case(&diagnostics, "go-reference:method-call");
+        assert_eq!(evidence_value(method, "symbol_name"), "Label");
+        assert_eq!(evidence_value(method, "symbol_kind"), "Method");
+        assert_eq!(evidence_value(method, "reference_kind"), "Call");
+        assert_eq!(evidence_value(method, "reference_status"), "Resolved");
+
+        let field = diagnostic_for_case(&diagnostics, "go-reference:field-selector");
+        assert_eq!(evidence_value(field, "symbol_name"), "Name");
+        assert_eq!(evidence_value(field, "symbol_kind"), "Field");
+        assert_eq!(evidence_value(field, "reference_kind"), "MemberAccess");
+        assert_eq!(evidence_value(field, "reference_status"), "Resolved");
+
+        let local = diagnostic_for_case(&diagnostics, "go-reference:local-variable");
+        assert_eq!(evidence_value(local, "symbol_name"), "local");
+        assert_eq!(evidence_value(local, "symbol_kind"), "Variable");
+        assert_eq!(evidence_value(local, "reference_kind"), "Read");
+        assert_eq!(evidence_value(local, "reference_status"), "Resolved");
+    }
+
+    #[test]
+    fn symbol_reference_macro_mapping_and_determinism() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_ts_symbol_reference_rule_repo(temp.path());
+        assert_written_external_symbol_rule_is_public(temp.path());
+
+        let first = run_external_symbol_reference_check(temp.path());
+        let second = run_external_symbol_reference_check(temp.path());
+        let third = run_external_symbol_reference_check(temp.path());
+
+        assert_no_capability_diagnostics(&first);
+        assert_eq!(
+            evidence_snapshot(&first, "local/ts-symbol-reference-public-sdk"),
+            evidence_snapshot(&second, "local/ts-symbol-reference-public-sdk")
+        );
+        assert_eq!(
+            evidence_snapshot(&second, "local/ts-symbol-reference-public-sdk"),
+            evidence_snapshot(&third, "local/ts-symbol-reference-public-sdk")
+        );
+        assert!(
+            !report_diagnostics_for_rule(&first, "local/ts-symbol-reference-public-sdk").is_empty(),
+            "typed macro-derived symbol/reference rule should execute: {first:#?}"
+        );
     }
 
     #[test]

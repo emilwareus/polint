@@ -1,0 +1,13 @@
+[workspace]
+include = ["*.go"]
+exclude = []
+
+[profiles.fast]
+rules = ["local/no-sensitive-balance-writes"]
+
+[[rules.config]]
+id = "local/no-sensitive-balance-writes"
+severity = "error"
+files = ["*.go"]
+allow_files = ["admin.go"]
+deny = ["Balance"]

@@ -378,6 +378,58 @@ mod tests {
     }
 
     #[test]
+    fn config_hash_differs_when_go_symbol_settings_change() {
+        let mut baseline = sample_loaded(false);
+        baseline.config.languages.go.insert(
+            "package_patterns".to_string(),
+            toml::Value::String("./...".to_string()),
+        );
+        baseline.config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/app".to_string())]),
+        );
+        baseline.config.languages.go.insert(
+            "build_tags".to_string(),
+            toml::Value::String("enterprise".to_string()),
+        );
+        baseline
+            .config
+            .languages
+            .go
+            .insert("include_tests".to_string(), toml::Value::Boolean(true));
+
+        let mut changed_patterns = baseline.clone();
+        changed_patterns.config.languages.go.insert(
+            "package_patterns".to_string(),
+            toml::Value::Array(vec![toml::Value::String("./cmd/...".to_string())]),
+        );
+
+        let mut changed_roots = baseline.clone();
+        changed_roots.config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/worker".to_string())]),
+        );
+
+        let mut changed_tags = baseline.clone();
+        changed_tags.config.languages.go.insert(
+            "build_tags".to_string(),
+            toml::Value::String("enterprise,polint".to_string()),
+        );
+
+        let mut changed_tests = baseline.clone();
+        changed_tests
+            .config
+            .languages
+            .go
+            .insert("include_tests".to_string(), toml::Value::Boolean(false));
+
+        assert_ne!(config_hash(&baseline), config_hash(&changed_patterns));
+        assert_ne!(config_hash(&baseline), config_hash(&changed_roots));
+        assert_ne!(config_hash(&baseline), config_hash(&changed_tags));
+        assert_ne!(config_hash(&baseline), config_hash(&changed_tests));
+    }
+
+    #[test]
     fn deterministic_rule_options_includes_custom_settings() {
         let baseline = RuleOptions::default();
         let mut modified = RuleOptions::default();

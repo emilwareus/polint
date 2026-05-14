@@ -12,10 +12,12 @@ members = [
     "examples/go-branch-obligations/.polint/rules",
     "examples/go-complexity/.polint/rules",
     "examples/go-import-boundaries/.polint/rules",
+    "examples/go-sensitive-writes/.polint/rules",
     "examples/go-test-quality/.polint/rules",
     "examples/multiple-rules/.polint/rules",
     "examples/ts-complexity/.polint/rules",
     "examples/ts-design-tokens/.polint/rules",
+    "examples/ts-no-raw-api-calls/.polint/rules",
 ]
 resolver = "3"
 

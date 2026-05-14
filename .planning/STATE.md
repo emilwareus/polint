@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Capability Fulfillment
-status: planning
-stopped_at: Completed quick task 260512-h4g
-last_updated: "2026-05-12T12:23:44+02:00"
-last_activity: 2026-05-12
+status: executing
+stopped_at: Completed 13-05-PLAN.md
+last_updated: "2026-05-13T10:45:00.000Z"
+last_activity: 2026-05-13
 progress:
   total_phases: 9
-  completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  completed_phases: 3
+  total_plans: 14
+  completed_plans: 14
   percent: 100
 ---
 
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 13 — Symbols and References
+**Current focus:** Phase 13 — symbols-and-references
 
 ## Current Status
 
@@ -63,10 +63,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-08)
 ## Current Position
 
 Milestone: v1.1 Capability Fulfillment
-Status: Ready to plan
-Phase: 13 - Symbols and References
+Status: Ready to execute
+Phase: 14
 Plan: Not started
-Last activity: 2026-05-12 - Completed quick task 260512-h4g: Fix publish script to be idempotent after partial crates.io publish
+Last activity: 2026-05-13 - Completed quick task 260513-jdo: Support Go 1.24 for the Go symbols sidecar by pinning compatible dependencies and validating CI
 
 ## Quick Tasks Completed
 
@@ -99,6 +99,13 @@ Last activity: 2026-05-12 - Completed quick task 260512-h4g: Fix publish script 
 | 260512-aop | Fix review findings for baseline and module relationships | 2026-05-12 | 30098c6 | [260512-aop-fix-review-findings-for-baseline-and-mod](./quick/260512-aop-fix-review-findings-for-baseline-and-mod/) |
 | 260512-yml | Replace unsound serde_yml dependency | 2026-05-12 | c2f678e | [260512-yml-replace-unsound-serde-yml-dependency](./quick/260512-yml-replace-unsound-serde-yml-dependency/) |
 | 260512-h4g | Fix publish script to be idempotent after partial crates.io publish | 2026-05-12 | 0729a6b | [260512-h4g-fix-publish-script-to-be-idempotent-afte](./quick/260512-h4g-fix-publish-script-to-be-idempotent-afte/) |
+| 260512-tga | Research lifecycle extensibility architecture for Phase 13 scan lifecycle and update research doc | 2026-05-12 | uncommitted | [260512-tga-research-lifecycle-extensibility-archite](./quick/260512-tga-research-lifecycle-extensibility-archite/) |
+| 260513-fga | Add customer-facing symbol/reference examples | 2026-05-13 | committed | [260513-fga-add-customer-facing-symbol-reference-exa](./quick/260513-fga-add-customer-facing-symbol-reference-exa/) |
+| 260513-gld | Fix symbol reference PR review findings and rerun deep review | 2026-05-13 | committed | [260513-gld-fix-symbol-reference-pr-review-findings-](./quick/260513-gld-fix-symbol-reference-pr-review-findings-/) |
+| 260513-hkw | Fix macOS CI Go symbol sidecar test failure | 2026-05-13 | committed | [260513-hkw-fix-macos-ci-go-symbol-sidecar-test-fail](./quick/260513-hkw-fix-macos-ci-go-symbol-sidecar-test-fail/) |
+| 260513-jdo | Support Go 1.24 for the Go symbols sidecar by pinning compatible dependencies and validating CI | 2026-05-13 | af6742f | [260513-jdo-support-go-1-24-for-the-go-symbols-sidec](./quick/260513-jdo-support-go-1-24-for-the-go-symbols-sidec/) |
+| 260513-v1j | Fix final monorepo lifecycle review issues for symbols and references | 2026-05-13 | committed | [260513-v1j-fix-final-pr-review-issues-for-monorepo-](./quick/260513-v1j-fix-final-pr-review-issues-for-monorepo-/) |
+| 260514-ci-fix | Fix Windows CI sidecar null JSON handling | 2026-05-14 | committed | [260514-ci-fix-windows-sidecar-null-json](./quick/260514-ci-fix-windows-sidecar-null-json/) |
 
 ## Phase Progress
 
@@ -198,6 +205,21 @@ Last activity: 2026-05-12 - Completed quick task 260512-h4g: Fix publish script 
 - [Phase 12-resolved-imports-and-module-relationships]: TS/JS external package imports remain module-level DependsOn edges so project dependency relationships stay compact.
 - [Phase 12-resolved-imports-and-module-relationships]: Resolved import docs treat SetupMissing, Dynamic, Unsupported, and Unresolved as public data, not hidden failures.
 - [Phase 12-resolved-imports-and-module-relationships]: Test-only Go graph helper methods are cfg(test) rather than suppressed with lint allowances.
+- [Phase 13-symbols-and-references]: References capability internally enables symbols so reference consumers always get symbol identity.
+- [Phase 13-symbols-and-references]: Symbol/reference provider names are recognized but remain Unsupported until provider plans promote support.
+- [Phase 13-symbols-and-references]: Definitions are queried through the Symbols view rather than a separate Definitions view.
+- [Phase 13-symbols-and-references]: Stable symbol/reference IDs are derived from length-prefixed semantic stable keys using cache::stable_hash, never storage position or randomized hashing.
+- [Phase 13-symbols-and-references]: SymbolGraphBuilder stages facts in BTree-backed maps and emits deterministic polint/internal diagnostics for ID collisions or incompatible duplicate stable keys.
+- [Phase 13-symbols-and-references]: Internal query helpers remain crate-private and delegate to AnalysisDb/SDK-compatible semantics instead of widening the public API.
+- [Phase 13-symbols-and-references]: Symbol/reference requests trigger module graph derivation so rules do not need to request module graph views for relationship context.
+- [Phase 13-symbols-and-references]: TS/JS and Go symbol provider contracts are crate-private and emit Unsupported support/fact rows until semantic extraction plans promote real support.
+- [Phase 13-symbols-and-references]: Capability diagnostics sort before normal rule diagnostics at the same report location to preserve provider-before-rules visibility.
+- [Phase 13-symbols-and-references]: TS/JS Oxc lexical symbols and references are marked ExactLocal, not ExactSemantic.
+- [Phase 13-symbols-and-references]: Cross-file import alias links use ModuleLinked precision and visible Ambiguous/Unresolved/SetupMissing/Unsupported statuses.
+- [Phase 13-symbols-and-references]: Import aliases are linked after all TS files emit exported symbols so source/target ordering is deterministic.
+- [Phase 13-symbols-and-references]: Go sidecar JSON is versioned as polint-go-symbols-v1 and contains normalized metadata only, never source text or raw Go tool object identities.
+- [Phase 13-symbols-and-references]: Rust compiles the repo-local sidecar with a fixed GOWORK path, while the sidecar loads the target repository with root go.work when present or GOWORK=off otherwise.
+- [Phase 13-symbols-and-references]: Go package load errors produce capability diagnostics but retain exact facts that go/types returned.
 
 ## Performance Metrics
 
@@ -237,11 +259,16 @@ Last activity: 2026-05-12 - Completed quick task 260512-h4g: Fix publish script 
 | Phase 12-resolved-imports-and-module-relationships P03 | 17 min | 3 tasks | 9 files |
 | Phase 12-resolved-imports-and-module-relationships P04 | 16m 9s | 3 tasks | 3 files |
 | Phase 12-resolved-imports-and-module-relationships P05 | 30 min | 3 tasks | 8 files |
+| Phase 13-symbols-and-references P01 | 17min | 3 tasks | 8 files |
+| Phase 13-symbols-and-references P02 | 8h 46m | 3 tasks | 6 files |
+| Phase 13-symbols-and-references P03 | 19m | 3 tasks | 9 files |
+| Phase 13-symbols-and-references P04 | 1530 | 3 tasks | 2 files |
+| Phase 13-symbols-and-references P05 | 19m11s | 3 tasks | 11 files |
 
 ## Session
 
-**Last Date:** 2026-05-11T16:53:45.126Z
-**Stopped At:** Completed 12-resolved-imports-and-module-relationships-05-PLAN.md
+**Last Date:** 2026-05-13T06:29:45.554Z
+**Stopped At:** Completed 13-05-PLAN.md
 **Resume File:** None
 
 ## Important Context For Execution

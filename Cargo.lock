@@ -1205,6 +1205,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-go-sensitive-writes-rule"
+version = "0.1.11"
+dependencies = [
+ "polint",
+]
+
+[[package]]
 name = "polint-example-go-test-quality-rule"
 version = "0.1.11"
 dependencies = [
@@ -1227,6 +1234,13 @@ dependencies = [
 
 [[package]]
 name = "polint-example-ts-design-tokens-rule"
+version = "0.1.11"
+dependencies = [
+ "polint",
+]
+
+[[package]]
+name = "polint-example-ts-no-raw-api-calls-rule"
 version = "0.1.11"
 dependencies = [
  "polint",

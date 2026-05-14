@@ -1,0 +1,12 @@
+[workspace]
+include = ["src/**/*.ts"]
+exclude = []
+
+[profiles.fast]
+rules = ["local/no-raw-api-calls"]
+
+[[rules.config]]
+id = "local/no-raw-api-calls"
+severity = "error"
+files = ["src/**/*.ts"]
+deny = ["rawRequest", "fetch"]

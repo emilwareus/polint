@@ -173,8 +173,11 @@ fn analyze_and_run(
         analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
     diagnostics.extend(ts_diagnostics);
     let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
-    let capability_support = module_graph.support_view(plan.support_view());
+    let module_support = module_graph.support_view(plan.support_view());
     diagnostics.extend(module_graph.diagnostics);
+    let symbol_graph = crate::symbol_graph::derive_requested_symbols(&mut db, &loaded, &plan);
+    let capability_support = symbol_graph.support_view(&module_support);
+    diagnostics.extend(symbol_graph.diagnostics);
     crate::metrics::derive_requested_metrics(&mut db, &plan);
     diagnostics.extend(run_rules_with_capability_support(
         &db,

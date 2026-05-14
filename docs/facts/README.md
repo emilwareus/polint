@@ -1,7 +1,8 @@
 # Rule Fact Reference
 
-These pages describe the fact families exposed through
-`polint::sdk::prelude::*` and `RuleCtx`.
+These pages describe the fact families exposed through typed views exported by
+`polint::sdk::prelude::*`, plus the `RuleCtx` helpers rules use to report
+diagnostics.
 
 Rule authors should treat these facts as the supported building blocks for
 repo-local policies. The examples are only consumers of these facts, not special
@@ -11,6 +12,7 @@ internal entry points.
 - [Metrics](metrics.md)
 - [Imports](imports.md)
 - [Resolved imports and module graph](resolved-imports.md)
+- [Symbols and references](symbols-and-references.md)
 - [Branches](branches.md)
 - [Go tests](go-tests.md)
 - [Capability support](capability-plans.md)

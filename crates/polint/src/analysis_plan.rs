@@ -3,7 +3,7 @@ use crate::cache::stable_hash;
 use crate::config::{LoadedConfig, RuleConfig};
 use crate::core::{
     Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, Language,
-    Rule, RuleMeta, RuleOptions, rule_id_matches,
+    Rule, RuleMeta, RuleOptions, SourceFile, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
 #[cfg(test)]
@@ -40,6 +40,8 @@ pub(crate) struct PlannedRule {
     pub(crate) description: String,
     pub(crate) severity: Severity,
     pub(crate) requested_capabilities: Vec<String>,
+    pub(crate) files: Vec<String>,
+    pub(crate) allow_files: Vec<String>,
     pub(crate) options_digest: String,
 }
 
@@ -137,6 +139,8 @@ impl AnalysisPlan {
                     description: input.meta.description.clone(),
                     severity: rule_options.severity.unwrap_or(input.meta.severity),
                     requested_capabilities: capabilities,
+                    files: rule_options.files.clone(),
+                    allow_files: rule_options.allow_files.clone(),
                     options_digest,
                 }
             })
@@ -183,6 +187,23 @@ impl AnalysisPlan {
         capabilities
             .iter()
             .any(|capability| self.requests_capability(capability))
+    }
+
+    pub(crate) fn rules_for_capability_matching_files(
+        &self,
+        capability: &str,
+        files: &[&SourceFile],
+    ) -> Vec<String> {
+        self.rules
+            .iter()
+            .filter(|rule| {
+                rule.requested_capabilities
+                    .iter()
+                    .any(|requested| requested == capability)
+            })
+            .filter(|rule| rule_matches_any_file(rule, files))
+            .map(|rule| rule.id.clone())
+            .collect()
     }
 
     #[allow(dead_code)]
@@ -254,6 +275,8 @@ impl AnalysisPlan {
             description: "Test rule".to_string(),
             severity: Severity::Warn,
             requested_capabilities: names.iter().map(|name| (*name).to_string()).collect(),
+            files: Vec::new(),
+            allow_files: Vec::new(),
             options_digest: deterministic_rule_options(&RuleOptions::default()),
         }];
         let capabilities = plan_capabilities(&rules);
@@ -541,6 +564,17 @@ fn rule_options_from_config(config: Option<&RuleConfig>) -> RuleOptions {
     }
 }
 
+fn rule_matches_any_file(rule: &PlannedRule, files: &[&SourceFile]) -> bool {
+    let options = RuleOptions {
+        files: rule.files.clone(),
+        allow_files: rule.allow_files.clone(),
+        ..RuleOptions::default()
+    };
+    files
+        .iter()
+        .any(|file| crate::sdk::scope::file_matches_globs(&options, &file.relative_path))
+}
+
 fn parse_severity(value: &str) -> Option<Severity> {
     match value {
         "info" => Some(Severity::Info),
@@ -593,6 +627,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
         "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),
+        "symbols" | "references" => (CapabilitySupportStatus::Supported, None, None, None),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
@@ -1017,6 +1052,98 @@ mod tests {
     }
 
     #[test]
+    fn analysis_plan_supports_symbol_capabilities() {
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let capabilities = plan.capabilities();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|capability| capability.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["references", "symbols"]
+        );
+
+        for capability in capabilities {
+            assert_eq!(
+                capability.status,
+                crate::core::CapabilitySupportStatus::Supported
+            );
+            assert_eq!(capability.reason, None);
+            assert_eq!(capability.hint, None);
+            assert_eq!(capability.docs_path, None);
+        }
+
+        assert_eq!(
+            plan.support_view().status_for("symbols"),
+            Some(crate::core::CapabilitySupportStatus::Supported)
+        );
+        assert_eq!(
+            plan.support_view().status_for("references"),
+            Some(crate::core::CapabilitySupportStatus::Supported)
+        );
+        assert!(plan.diagnostics().is_empty());
+
+        let report = plan.explain_report();
+        assert!(report.capabilities.iter().any(|capability| {
+            capability.name == "symbols" && capability.status == "supported"
+        }));
+        assert!(report.capabilities.iter().any(|capability| {
+            capability.name == "references" && capability.status == "supported"
+        }));
+    }
+
+    #[test]
+    fn references_capability_requires_symbol_identity() {
+        let capabilities = Capabilities::new().references();
+        assert!(capabilities.references);
+        assert!(capabilities.symbols);
+        assert_eq!(
+            capabilities.requested_names().collect::<Vec<_>>(),
+            vec!["symbols", "references"]
+        );
+
+        let rules = vec![rule(
+            "local/needs-references",
+            "Needs references",
+            Severity::Warn,
+            capabilities,
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+
+        assert_eq!(
+            plan.rules()[0].requested_capabilities,
+            vec!["symbols".to_string(), "references".to_string()]
+        );
+        assert_eq!(
+            plan.capabilities()
+                .iter()
+                .map(|capability| (capability.capability.as_str(), capability.status.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("references", CapabilitySupportStatus::Supported),
+                ("symbols", CapabilitySupportStatus::Supported),
+            ]
+        );
+
+        let symbols_only = AnalysisPlan::from_rules(
+            &[rule(
+                "local/needs-references",
+                "Needs references",
+                Severity::Warn,
+                Capabilities::new().symbols(),
+            )],
+            None,
+            &BTreeMap::new(),
+        );
+        assert_ne!(
+            plan.digest(),
+            symbols_only.digest(),
+            "references must add symbol identity plus reference facts to the plan digest"
+        );
+    }
+
+    #[test]
     fn analysis_plan_reports_setup_missing_capabilities_as_diagnostics() {
         let plan = AnalysisPlan::finish(
             vec![PlannedRule {
@@ -1024,6 +1151,8 @@ mod tests {
                 description: "Needs coverage".to_string(),
                 severity: Severity::Warn,
                 requested_capabilities: vec!["coverage_facts".to_string()],
+                files: Vec::new(),
+                allow_files: Vec::new(),
                 options_digest: "options".to_string(),
             }],
             vec![PlannedCapability {

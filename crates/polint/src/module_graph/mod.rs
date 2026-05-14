@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
+    &["resolved_imports", "module_graph", "symbols", "references"];
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -44,7 +47,7 @@ pub(crate) fn derive_requested_module_graph(
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> ModuleGraphDerivation {
-    if !plan.requests_any_capability(&["resolved_imports", "module_graph"]) {
+    if !plan.requests_any_capability(MODULE_GRAPH_TRIGGER_CAPABILITIES) {
         return ModuleGraphDerivation::default();
     }
 
@@ -69,7 +72,7 @@ pub(crate) fn derive_requested_module_graph(
             .iter()
             .any(|import| import.language == crate::core::Language::Go);
     let go_metadata = if has_go_inputs {
-        go::GoPackageIndex::load(loaded.root.as_path(), db)
+        go::GoPackageIndex::load(loaded, db)
     } else {
         go::GoPackageIndex::default()
     };
@@ -464,6 +467,40 @@ mod tests {
         assert!(db.resolved_imports().is_empty());
         assert!(db.module_nodes().is_empty());
         assert!(db.module_edges().is_empty());
+    }
+
+    #[test]
+    fn module_graph_derives_for_symbol_capabilities() {
+        for capability in ["symbols", "references"] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut db = AnalysisDb::new();
+            let app = add_file(
+                &mut db,
+                temp.path(),
+                "src/app.ts",
+                "import tokens from './tokens';\n",
+            );
+            add_file(
+                &mut db,
+                temp.path(),
+                "src/tokens.ts",
+                "export const tokens = {};\n",
+            );
+            push_ts_import(&mut db, app, "./tokens", 0);
+
+            derive_requested_module_graph(
+                &mut db,
+                &loaded_config_for(temp.path()),
+                &AnalysisPlan::from_capability_names_for_test(&[capability]),
+            );
+
+            assert_eq!(
+                db.resolved_imports().len(),
+                1,
+                "{capability} should trigger module graph derivation"
+            );
+            assert_eq!(db.resolved_imports()[0].status, ResolutionStatus::Resolved);
+        }
     }
 
     #[test]
