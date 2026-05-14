@@ -22,7 +22,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "enum": ["analysis", "rules-target", "derived", "legacy-analysis"]
+            "enum": ["analysis", "rules-target", "derived"]
           },
           "path": {
             "type": "string"

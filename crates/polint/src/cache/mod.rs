@@ -100,6 +100,7 @@ impl Cache {
         &self.root
     }
 
+    #[cfg(test)]
     pub(crate) fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
     where
         T: for<'de> Deserialize<'de>,
@@ -120,7 +121,21 @@ impl Cache {
     where
         T: for<'de> Deserialize<'de>,
     {
-        self.read_json(key).ok().flatten()
+        if !self.enabled {
+            return None;
+        }
+        let path = self.path_for(key);
+        if !path.exists() {
+            return None;
+        }
+        let raw = fs::read_to_string(&path).ok()?;
+        match serde_json::from_str(&raw) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                None
+            }
+        }
     }
 
     pub(crate) fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
@@ -186,7 +201,6 @@ impl CacheLayout {
             self.status_for("analysis", self.analysis_dir())?,
             self.status_for("rules-target", self.rules_target_dir())?,
             self.status_for("derived", self.derived_dir())?,
-            self.status_for("legacy-analysis", self.root.clone())?,
         ];
         let total_bytes = categories.iter().map(|category| category.bytes).sum();
         let total_files = categories.iter().map(|category| category.files).sum();
@@ -199,11 +213,7 @@ impl CacheLayout {
     }
 
     fn status_for(&self, name: &'static str, path: PathBuf) -> Result<CacheCategoryStatus> {
-        let stats = if name == "legacy-analysis" {
-            legacy_json_stats(&path)?
-        } else {
-            directory_stats(&path)?
-        };
+        let stats = directory_stats(&path)?;
         Ok(CacheCategoryStatus {
             name,
             path: path.display().to_string(),
@@ -238,22 +248,6 @@ impl CacheLayout {
                 path: path.display().to_string(),
                 removed_bytes: before.bytes,
                 removed_files: before.files,
-            });
-        }
-
-        if matches!(
-            selection,
-            CacheCleanSelection::All
-                | CacheCleanSelection::Category(CacheManagedCategory::Analysis)
-        ) {
-            let legacy = clean_legacy_json_files(&self.root)?;
-            report.removed_bytes += legacy.removed_bytes;
-            report.removed_files += legacy.removed_files;
-            report.categories.push(CacheCleanCategoryReport {
-                name: "legacy-analysis",
-                path: self.root.display().to_string(),
-                removed_bytes: legacy.removed_bytes,
-                removed_files: legacy.removed_files,
             });
         }
 
@@ -477,12 +471,6 @@ struct CacheFile {
     modified: SystemTime,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct RemovedStats {
-    removed_bytes: u64,
-    removed_files: u64,
-}
-
 fn directory_stats(path: &Path) -> Result<CacheDirStats> {
     let mut stats = CacheDirStats {
         exists: true,
@@ -512,50 +500,6 @@ fn add_directory_stats(path: &Path, stats: &mut CacheDirStats) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn legacy_json_stats(path: &Path) -> Result<CacheDirStats> {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return Ok(CacheDirStats::default());
-    };
-    let mut stats = CacheDirStats {
-        exists: true,
-        ..CacheDirStats::default()
-    };
-    if !metadata.is_dir() {
-        return Ok(stats);
-    }
-    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
-        let entry = entry?;
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.is_file() && entry.path().extension().is_some_and(|ext| ext == "json") {
-            stats.files += 1;
-            stats.bytes += metadata.len();
-        }
-    }
-    Ok(stats)
-}
-
-fn clean_legacy_json_files(path: &Path) -> Result<RemovedStats> {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return Ok(RemovedStats::default());
-    };
-    if !metadata.is_dir() {
-        return Ok(RemovedStats::default());
-    }
-    let mut stats = RemovedStats::default();
-    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
-        let entry = entry?;
-        let metadata = fs::symlink_metadata(entry.path())?;
-        let path = entry.path();
-        if metadata.is_file() && path.extension().is_some_and(|ext| ext == "json") {
-            stats.removed_bytes += metadata.len();
-            stats.removed_files += 1;
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove cache file {}", path.display()))?;
-        }
-    }
-    Ok(stats)
 }
 
 fn collect_cache_files(path: &Path, files: &mut Vec<CacheFile>) -> Result<()> {
@@ -799,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_json_can_be_treated_as_miss() {
+    fn invalid_json_cache_entry_is_deleted_on_miss() {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), true);
         let key = CacheKey::for_file(
@@ -816,6 +760,7 @@ mod tests {
         let restored: Option<serde_json::Value> = cache.read_json_or_miss(&key);
 
         assert!(restored.is_none());
+        assert!(!cache.path_for(&key).exists());
     }
 
     #[test]
@@ -824,6 +769,7 @@ mod tests {
         let layout = CacheLayout::from_root(temp.path().join("cache"));
         fs::create_dir_all(layout.analysis_dir()).unwrap();
         fs::write(layout.analysis_dir().join("a.json"), "{}").unwrap();
+        fs::write(layout.root().join("incompatible.json"), "{}").unwrap();
         fs::create_dir_all(layout.rules_target_dir().join("debug")).unwrap();
         fs::write(layout.rules_target_dir().join("debug/rules"), "binary").unwrap();
 
@@ -834,12 +780,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_clean_analysis_removes_legacy_flat_json() {
+    fn cache_clean_analysis_removes_only_analysis_directory() {
         let temp = tempfile::tempdir().unwrap();
         let layout = CacheLayout::from_root(temp.path().join("cache"));
         fs::create_dir_all(layout.analysis_dir()).unwrap();
         fs::write(layout.analysis_dir().join("a.json"), "{}").unwrap();
-        fs::write(layout.root().join("legacy.json"), "{}").unwrap();
+        fs::write(layout.root().join("unmanaged.json"), "{}").unwrap();
 
         let report = layout
             .clean(CacheCleanSelection::Category(
@@ -847,9 +793,9 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(report.removed_files, 2);
+        assert_eq!(report.removed_files, 1);
         assert!(!layout.analysis_dir().exists());
-        assert!(!layout.root().join("legacy.json").exists());
+        assert!(layout.root().join("unmanaged.json").exists());
     }
 
     proptest! {

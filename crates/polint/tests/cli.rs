@@ -4909,6 +4909,11 @@ fn cache_status_reports_structured_cache_layout() {
         "unexpected cache root: {json:#?}"
     );
     let categories = json["categories"].as_array().unwrap();
+    assert_eq!(
+        categories.len(),
+        3,
+        "unexpected cache categories: {json:#?}"
+    );
     assert!(categories.iter().any(|category| {
         category["name"] == "analysis"
             && category["files"] == 1
@@ -4924,10 +4929,10 @@ fn cache_status_reports_structured_cache_layout() {
 }
 
 #[test]
-fn cache_clean_analysis_removes_analysis_and_legacy_entries() {
+fn cache_clean_analysis_removes_only_analysis_directory() {
     let temp = tempfile::tempdir().unwrap();
     write_file(&temp.path().join(".polint/cache/analysis/a.json"), "{}");
-    write_file(&temp.path().join(".polint/cache/legacy.json"), "{}");
+    write_file(&temp.path().join(".polint/cache/unmanaged.json"), "{}");
     write_file(
         &temp.path().join(".polint/cache/rules-target/debug/rules"),
         "bin",
@@ -4941,7 +4946,7 @@ fn cache_clean_analysis_removes_analysis_and_legacy_entries() {
         .stdout(predicate::str::contains("Removed"));
 
     assert!(!temp.path().join(".polint/cache/analysis").exists());
-    assert!(!temp.path().join(".polint/cache/legacy.json").exists());
+    assert!(temp.path().join(".polint/cache/unmanaged.json").exists());
     assert!(temp.path().join(".polint/cache/rules-target").exists());
 }
 

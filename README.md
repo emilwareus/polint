@@ -140,6 +140,8 @@ not disable the `rules-target` Cargo cache, because rebuilding the local rule
 host on every run is usually wasted work.
 Analysis cache keys include the source path and content, rule/options digest,
 loaded config, requested capability plan, cache format, and polint version.
+If a cache artifact cannot be decoded, polint treats it as a miss and removes
+that artifact.
 
 Useful commands:
 

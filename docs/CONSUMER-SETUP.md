@@ -66,6 +66,8 @@ is set:
 Analysis cache keys include source path and content, loaded config, rule/options
 digest, requested capability plan, cache format, and polint version. Changing
 those inputs produces fresh cache entries instead of reusing stale facts.
+If an individual cache artifact cannot be decoded, polint treats it as a miss
+and removes that artifact.
 
 Use `polint cache status` to inspect size and file counts. The JSON form is
 stable enough for scripts and follows
