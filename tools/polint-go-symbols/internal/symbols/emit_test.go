@@ -267,6 +267,18 @@ func TestEmitJSONUsesArraysForEmptyCollections(t *testing.T) {
 	}
 }
 
+func TestGoWorkUsePathPrefersPathRelativeToWorkspaceFile(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	moduleRoot := filepath.Join(root, "services", "app")
+
+	got := goWorkUsePath(parent, moduleRoot)
+	want := filepath.ToSlash(filepath.Join("repo", "services", "app"))
+	if got != want {
+		t.Fatalf("goWorkUsePath() = %q, want %q", got, want)
+	}
+}
+
 func TestEmitUsesSyntheticWorkspaceWhenRootGoWorkMissesConfiguredRoots(t *testing.T) {
 	root := writeModule(t, map[string]string{
 		"go.work":               "go 1.24.0\n\nuse ./tools/only\n",

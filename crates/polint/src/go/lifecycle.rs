@@ -437,11 +437,13 @@ fn write_synthetic_go_work(
     root: &Path,
     module_roots: &[String],
 ) -> Result<PathBuf, GoLifecycleError> {
-    let path = std::env::temp_dir().join(format!(
+    let directory = root.parent().unwrap_or_else(|| Path::new("."));
+    let path = directory.join(format!(
         "polint-go-work-{}-{}.work",
         std::process::id(),
         unique_suffix()
     ));
+    let work_dir = path.parent().unwrap_or(directory);
     let mut contents = format!(
         "go {}\n\nuse (\n",
         synthetic_go_work_version(root, module_roots)
@@ -453,7 +455,7 @@ fn write_synthetic_go_work(
             root.join(module_root)
         };
         contents.push('\t');
-        contents.push_str(&quote_go_work_path(&path));
+        contents.push_str(&quote_go_work_path(&go_work_use_path(work_dir, &path)));
         contents.push('\n');
     }
     contents.push_str(")\n");
@@ -464,6 +466,14 @@ fn write_synthetic_go_work(
         ))
     })?;
     Ok(path)
+}
+
+fn go_work_use_path(work_dir: &Path, module_path: &Path) -> String {
+    module_path
+        .strip_prefix(work_dir)
+        .unwrap_or(module_path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn synthetic_go_work_version(root: &Path, module_roots: &[String]) -> String {
@@ -509,8 +519,8 @@ fn go_version_is_greater(left: &str, right: &str) -> bool {
     }
 }
 
-fn quote_go_work_path(path: &Path) -> String {
-    format!("{:?}", path.to_string_lossy().replace('\\', "/"))
+fn quote_go_work_path(path: &str) -> String {
+    format!("{path:?}")
 }
 
 fn unique_suffix() -> u128 {
@@ -618,6 +628,10 @@ mod tests {
         let generated = std::fs::read_to_string(&generated_path).expect("read generated go.work");
 
         assert_ne!(generated_path, checked_in);
+        assert!(
+            !generated.contains(&temp.path().to_string_lossy().to_string()),
+            "{generated}"
+        );
         assert!(generated.contains("services/app"), "{generated}");
     }
 }

@@ -340,11 +340,12 @@ func goWorkUseRoot(root string, usePath string) (string, bool) {
 }
 
 func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), error) {
-	file, err := os.CreateTemp("", "polint-go-symbols-*.work")
+	file, err := os.CreateTemp(filepath.Dir(root), "polint-go-symbols-*.work")
 	if err != nil {
 		return "", nil, fmt.Errorf("create synthetic go.work: %w", err)
 	}
 	path := file.Name()
+	workDir := filepath.Dir(path)
 	cleanup := func() {
 		_ = os.Remove(path)
 	}
@@ -358,7 +359,7 @@ func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), er
 			path = filepath.Join(root, filepath.FromSlash(moduleRoot))
 		}
 		builder.WriteString("\t")
-		builder.WriteString(strconv.Quote(filepath.ToSlash(path)))
+		builder.WriteString(strconv.Quote(goWorkUsePath(workDir, path)))
 		builder.WriteString("\n")
 	}
 	builder.WriteString(")\n")
@@ -372,6 +373,14 @@ func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), er
 		return "", nil, fmt.Errorf("close synthetic go.work: %w", err)
 	}
 	return path, cleanup, nil
+}
+
+func goWorkUsePath(workDir string, modulePath string) string {
+	relative, err := filepath.Rel(workDir, modulePath)
+	if err == nil {
+		return filepath.ToSlash(relative)
+	}
+	return filepath.ToSlash(modulePath)
 }
 
 func workspaceGoVersion() string {
