@@ -29,6 +29,10 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
     uniquify_rule_pack_manifest(&manifest_path);
 }
 
+fn path_str_ends_with(path: &str, suffix: &str) -> bool {
+    path.replace('\\', "/").ends_with(suffix)
+}
+
 #[test]
 fn top_level_help_only_lists_supported_public_commands() {
     let help = stdout_string(polint_cmd().arg("--help").assert().success());
@@ -4901,7 +4905,7 @@ fn cache_status_reports_structured_cache_layout() {
         "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json"
     );
     assert!(
-        json["root"].as_str().unwrap().ends_with(".polint/cache"),
+        path_str_ends_with(json["root"].as_str().unwrap(), ".polint/cache"),
         "unexpected cache root: {json:#?}"
     );
     let categories = json["categories"].as_array().unwrap();
@@ -4910,7 +4914,7 @@ fn cache_status_reports_structured_cache_layout() {
             && category["files"] == 1
             && category["path"]
                 .as_str()
-                .is_some_and(|path| path.ends_with(".polint/cache/analysis"))
+                .is_some_and(|path| path_str_ends_with(path, ".polint/cache/analysis"))
     }));
     assert!(
         categories
