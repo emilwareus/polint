@@ -1,6 +1,5 @@
 mod common;
 
-use assert_cmd::Command;
 use common::*;
 use predicates::prelude::*;
 use std::collections::BTreeSet;
@@ -27,17 +26,12 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&manifest_path, format!("{rewritten}\n")).unwrap();
+    uniquify_rule_pack_manifest(&manifest_path);
 }
 
 #[test]
 fn top_level_help_only_lists_supported_public_commands() {
-    let help = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
-            .arg("--help")
-            .assert()
-            .success(),
-    );
+    let help = stdout_string(polint_cmd().arg("--help").assert().success());
 
     for command in [
         "init",
@@ -1386,8 +1380,7 @@ fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
 #[test]
 fn init_creates_config() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -1414,8 +1407,7 @@ fn init_does_not_overwrite_existing_rust_toolchain() {
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -1433,8 +1425,7 @@ fn init_does_not_overwrite_existing_config() {
     let config = temp.path().join(".polint.toml");
     fs::write(&config, "# sentinel\n[workspace]\ninclude = [\"src/**\"]\n").unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -1459,8 +1450,7 @@ fn init_appends_cache_to_existing_polint_gitignore() {
     fs::create_dir_all(&polint_dir).unwrap();
     fs::write(polint_dir.join(".gitignore"), "# keep\nother/\n").unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -1475,8 +1465,7 @@ fn init_appends_cache_to_existing_polint_gitignore() {
 #[test]
 fn new_rule_creates_skeleton() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "go", "branch-error-paths"])
         .assert()
@@ -1499,8 +1488,7 @@ fn new_rule_rejects_unsafe_rule_names_without_writing_outside_rules_dir() {
     for rule_name in ["../..", "nested/rule", "", "branch_error_paths"] {
         let temp = tempfile::tempdir().unwrap();
 
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["new-rule", "go", rule_name])
             .assert()
@@ -1541,8 +1529,7 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
     let sentinel = "// sentinel module\n";
     fs::write(rules.join("src/demo.rs"), sentinel).unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "go", "demo"])
         .assert()
@@ -1558,8 +1545,7 @@ fn new_rule_rejects_existing_rule_without_overwriting_files() {
 #[test]
 fn add_skill_installs_claude_skill_non_interactively() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
         .assert()
@@ -1587,8 +1573,7 @@ fn add_skill_installs_claude_skill_non_interactively() {
 #[test]
 fn add_skill_installs_codex_skill_to_agents_skills_by_default() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "codex"])
         .assert()
@@ -1604,8 +1589,7 @@ fn add_skill_uses_existing_codex_skills_folder_when_present() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".codex/skills")).unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "codex"])
         .assert()
@@ -1619,8 +1603,7 @@ fn add_skill_uses_existing_codex_skills_folder_when_present() {
 #[test]
 fn add_skill_all_installs_claude_and_codex() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--all"])
         .assert()
@@ -1635,7 +1618,7 @@ fn add_skill_all_installs_claude_and_codex() {
 #[test]
 fn add_skill_prompts_when_agent_is_not_provided() {
     let temp = tempfile::tempdir().unwrap();
-    let mut command = Command::cargo_bin("polint").unwrap();
+    let mut command = polint_cmd();
     command
         .current_dir(temp.path())
         .arg("add-skill")
@@ -1652,8 +1635,7 @@ fn add_skill_prompts_when_agent_is_not_provided() {
 #[test]
 fn add_skill_prompts_before_overwriting_existing_skill() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
         .assert()
@@ -1662,8 +1644,7 @@ fn add_skill_prompts_before_overwriting_existing_skill() {
     let skill = temp.path().join(".claude/skills/polint/SKILL.md");
     fs::write(&skill, "sentinel").unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
         .write_stdin("n\n")
@@ -1673,8 +1654,7 @@ fn add_skill_prompts_before_overwriting_existing_skill() {
         .stdout(predicate::str::contains("Kept existing Claude Code skill"));
     assert_eq!(fs::read_to_string(&skill).unwrap(), "sentinel");
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
         .write_stdin("y\n")
@@ -1685,8 +1665,7 @@ fn add_skill_prompts_before_overwriting_existing_skill() {
     assert!(fs::read_to_string(&skill).unwrap().contains("name: polint"));
 
     fs::write(&skill, "sentinel").unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude", "--force"])
         .assert()
@@ -1701,8 +1680,7 @@ fn add_skill_all_continues_when_existing_skill_is_kept() {
     let claude_skill = temp.path().join(".claude/skills/polint/SKILL.md");
     write_file(&claude_skill, "sentinel");
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--all"])
         .write_stdin("n\n")
@@ -1723,8 +1701,7 @@ fn add_skill_rejects_symlinked_agent_folder() {
     let outside = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(outside.path(), temp.path().join(".claude")).unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["add-skill", "--agent", "claude"])
         .assert()
@@ -1739,8 +1716,7 @@ fn add_skill_rejects_symlinked_agent_folder() {
 #[test]
 fn new_rule_go_creates_sdk_oriented_skeleton() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "go", "branch-error-paths"])
         .assert()
@@ -1771,8 +1747,7 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
 #[test]
 fn new_rule_ts_creates_sdk_oriented_skeleton() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "ts", "no-raw-brand-colors"])
         .assert()
@@ -1800,8 +1775,7 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
 #[test]
 fn new_rule_generic_uses_sdk_query_helpers() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "generic", "domain-names"])
         .assert()
@@ -1872,7 +1846,7 @@ fn main() -> ExitCode {
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -1928,7 +1902,7 @@ fn main() -> ExitCode {
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -1984,7 +1958,7 @@ fn main() -> ExitCode {
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -2047,7 +2021,7 @@ fn main() -> ExitCode {
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -2092,7 +2066,7 @@ fn main() {}
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -2134,7 +2108,7 @@ fn main() {
 "#,
     );
 
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()))
+    cargo_cmd()
         .current_dir(temp.path())
         .args(["check", "--quiet"])
         .assert()
@@ -2147,14 +2121,12 @@ fn main() {
 #[test]
 fn external_generated_rule_uses_sdk_facts_settings_and_reports_diagnostic() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
         .success();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "ts", "no-todo-literals"])
         .assert()
@@ -2236,8 +2208,7 @@ pub(crate) fn no_todo_literals(
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2268,8 +2239,7 @@ fn external_rule_consumes_derived_metric_signals_through_public_sdk() {
     write_metric_signal_rule_repo(temp.path());
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2324,8 +2294,7 @@ export const reported = "TODO";
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2336,8 +2305,7 @@ export const reported = "TODO";
     assert_eq!(diagnostics[0]["range"]["start_line"], 3);
 
     let report = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["ignores", "--format", "json", "--filter", "local/*"])
             .assert()
@@ -2352,8 +2320,7 @@ export const reported = "TODO";
     );
 
     let shortstat = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["ignores", "--shortstat"])
             .assert()
@@ -2374,8 +2341,7 @@ export const skipped = "TODO";
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2390,8 +2356,7 @@ export const skipped = "TODO";
     assert_eq!(missing[0]["file"], "src/component.ts");
 
     let report = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["ignores", "--format", "json"])
             .assert()
@@ -2416,8 +2381,7 @@ export const also_ok = "DONE";
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2445,8 +2409,7 @@ fn baseline_create_writes_compact_yaml_entries() {
 "#,
     );
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create"])
         .assert()
@@ -2476,8 +2439,7 @@ export const second = "TODO";
 "#,
     );
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create"])
         .assert()
@@ -2487,8 +2449,7 @@ export const second = "TODO";
     assert_eq!(baseline.matches("local/no-todo-literals").count(), 2);
 
     let existing_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2515,16 +2476,14 @@ fn check_baseline_new_only_passes_existing_and_fails_new_diagnostics() {
 "#,
     );
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create"])
         .assert()
         .success();
 
     let existing_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2546,8 +2505,7 @@ fn check_baseline_new_only_passes_existing_and_fails_new_diagnostics() {
 "#,
     );
     let new_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2576,8 +2534,7 @@ fn check_baseline_central_ignore_suppresses_matching_diagnostic() {
 "#,
     );
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2598,8 +2555,7 @@ ignore:
     );
 
     let ignored_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2630,8 +2586,7 @@ fn baseline_update_removes_fixed_entries() {
         r#"export const fix = "TODO";
 "#,
     );
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create"])
         .assert()
@@ -2643,8 +2598,7 @@ fn baseline_update_removes_fixed_entries() {
 "#,
     );
     let stdout = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["baseline", "update"])
             .assert()
@@ -2666,8 +2620,7 @@ fn baseline_update_refreshes_unambiguous_moved_default_diagnostic_paths() {
         r#"export const old_marker = "TODO";
 "#,
     );
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create"])
         .assert()
@@ -2679,16 +2632,14 @@ fn baseline_update_refreshes_unambiguous_moved_default_diagnostic_paths() {
         r#"export const new_marker = "TODO";
 "#,
     );
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--baseline", "--new-only", "--fail-on", "warn"])
         .assert()
         .success();
 
     let stdout = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["baseline", "update"])
             .assert()
@@ -2719,8 +2670,7 @@ baseline:
 "#,
     );
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--baseline"])
         .assert()
@@ -2733,24 +2683,21 @@ fn baseline_commands_reject_custom_baseline_paths() {
     let temp = tempfile::tempdir().unwrap();
     write_no_todo_rule_repo(temp.path(), false);
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "create", "--output", ".polint-baseline.yaml"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unexpected argument"));
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["baseline", "update", "--baseline", ".polint-baseline.yaml"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unexpected argument"));
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--baseline=.polint-baseline.yaml"])
         .assert()
@@ -2762,8 +2709,7 @@ fn baseline_commands_reject_custom_baseline_paths() {
 fn check_new_only_requires_baseline() {
     let temp = tempfile::tempdir().unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--new-only"])
         .assert()
@@ -2774,8 +2720,7 @@ fn check_new_only_requires_baseline() {
 #[test]
 fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -2787,8 +2732,7 @@ fn check_with_no_bundled_rules_reports_no_policy_diagnostics() {
     .unwrap();
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -2813,8 +2757,7 @@ rules = []
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2863,8 +2806,7 @@ rules = []
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -2995,8 +2937,7 @@ rules = []
     write_file(&temp.path().join("broken.ts"), "export function Broken( {");
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -3041,8 +2982,7 @@ rules = []
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -3177,8 +3117,7 @@ rules = []
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -3323,8 +3262,7 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
         );
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(&example_dir)
                 .args([
                     "check",
@@ -3366,8 +3304,7 @@ fn checked_in_examples_are_runnable_cli_fixtures() {
 fn ts_no_raw_api_calls_example_reports_resolved_and_unresolved_calls() {
     let example_dir = repo_root().join("examples/ts-no-raw-api-calls");
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3407,8 +3344,7 @@ fn ts_no_raw_api_calls_example_reports_resolved_and_unresolved_calls() {
 fn go_sensitive_writes_example_reports_write_and_readwrite_references() {
     let example_dir = repo_root().join("examples/go-sensitive-writes");
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3456,8 +3392,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     let example_dir = repo_root().join("examples/comment-ignores");
 
     let check_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3479,8 +3414,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     );
 
     let ignores_json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "ignores",
@@ -3506,8 +3440,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     );
 
     let stat = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args(["ignores", "--stat", "--no-cache"])
             .assert()
@@ -3517,8 +3450,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     assert!(stat.contains("By rule"), "{stat}");
 
     let check_shortstat = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args(["check", "--shortstat", "--no-cache", "--fail-on", "none"])
             .assert()
@@ -3531,8 +3463,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     );
 
     let check_stat = stdout_string(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args(["check", "--stat", "--no-cache", "--fail-on", "none"])
             .assert()
@@ -3543,8 +3474,7 @@ fn comment_ignores_example_reports_one_visible_and_one_ignored_diagnostic() {
     assert!(check_stat.contains("Ignores"), "{check_stat}");
 
     let check_json_with_stats = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3571,8 +3501,7 @@ fn check_with_local_rule_host_respects_positional_paths() {
     let example_dir = repo_root().join("examples/config-denied-literal");
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3592,8 +3521,7 @@ fn check_with_local_rule_host_respects_positional_paths() {
     );
 
     let empty = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3645,8 +3573,7 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
     );
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&example_dir)
             .args([
                 "check",
@@ -3683,8 +3610,7 @@ fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
 fn check_with_unknown_profile_is_an_error() {
     let example_dir = repo_root().join("examples/config-denied-literal");
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(&example_dir)
         .args(["check", "--profile", "missing", "--fail-on", "none"])
         .assert()
@@ -3696,8 +3622,7 @@ fn check_with_unknown_profile_is_an_error() {
 
 #[test]
 fn check_rejects_unknown_config_flag() {
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .args(["check", "--config"])
         .assert()
         .failure()
@@ -3765,8 +3690,7 @@ fn check_json_without_config_is_parseable() {
     )
     .unwrap();
 
-    let assert = Command::cargo_bin("polint")
-        .unwrap()
+    let assert = polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--format", "json", "--fail-on", "none"])
         .assert()
@@ -3786,8 +3710,7 @@ fn check_human_without_config_suggests_init() {
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--fail-on", "none"])
         .assert()
@@ -3851,8 +3774,7 @@ mod capability_planning {
         write_plan_capability_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -3888,8 +3810,7 @@ mod capability_planning {
         write_plan_capability_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args([
                     "check",
@@ -3925,8 +3846,7 @@ mod capability_planning {
         write_relationship_capability_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -3953,8 +3873,7 @@ mod capability_planning {
         write_go_relationship_setup_missing_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -3990,8 +3909,7 @@ mod capability_planning {
         write_symbol_capability_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4043,8 +3961,7 @@ mod capability_planning {
 
     fn run_symbol_reference_cache_check(root: &Path) -> polint::sdk::prelude::PolintReport {
         let raw = stdout_string(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(root)
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4056,8 +3973,7 @@ mod capability_planning {
 
     fn run_external_symbol_reference_check(root: &Path) -> polint::sdk::prelude::PolintReport {
         let raw = stdout_string(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(root)
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4156,8 +4072,7 @@ mod capability_planning {
         write_go_symbol_setup_missing_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4448,8 +4363,7 @@ go 1.24
         write_module_relationship_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4495,8 +4409,7 @@ go 1.24
         write_go_relationship_setup_missing_rule_repo(temp.path());
 
         let json = stdout_json(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(["check", "--format", "json", "--fail-on", "none"])
                 .assert()
@@ -4518,8 +4431,7 @@ go 1.24
         write_module_relationship_rule_repo(deterministic.path());
         let run = || {
             stdout_json(
-                Command::cargo_bin("polint")
-                    .unwrap()
+                polint_cmd()
                     .current_dir(deterministic.path())
                     .args(["check", "--format", "json", "--fail-on", "none"])
                     .assert()
@@ -4543,8 +4455,7 @@ go 1.24
         let temp = tempfile::tempdir().unwrap();
         write_cache_capability_rule_repo(temp.path());
 
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -4562,8 +4473,7 @@ go 1.24
         )
         .unwrap();
 
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
@@ -4581,8 +4491,7 @@ go 1.24
 fn check_max_diagnostics_truncates_sorted_json_in_example_repo() {
     let root = repo_root().join("examples/ts-design-tokens");
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&root)
             .args([
                 "check",
@@ -4602,8 +4511,7 @@ fn check_max_diagnostics_truncates_sorted_json_in_example_repo() {
 #[test]
 fn check_max_diagnostics_does_not_hide_failing_diagnostics() {
     let root = repo_root().join("examples/ts-design-tokens");
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(&root)
         .args([
             "check",
@@ -4622,8 +4530,7 @@ fn check_max_diagnostics_does_not_hide_failing_diagnostics() {
 fn check_only_rule_filters_out_diagnostics_when_pattern_matches_nothing() {
     let root = repo_root().join("examples/ts-design-tokens");
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(&root)
             .args([
                 "check",
@@ -4643,21 +4550,18 @@ fn check_only_rule_filters_out_diagnostics_when_pattern_matches_nothing() {
 #[test]
 fn init_new_rule_and_check_json_smoke() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
         .success();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["new-rule", "generic", "agent-smoke"])
         .assert()
         .success();
     point_generated_rule_pack_at_local_polint(temp.path());
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args(["check", "--format", "json", "--fail-on", "none"])
         .assert()
@@ -4678,8 +4582,7 @@ fn rules_json_stdout_should_be_parseable_json() {
     write_phase8_raw_color_fixture(temp.path(), "error");
 
     let json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -4751,8 +4654,7 @@ fn fatal_config_parse_error_exits_two() {
     let temp = tempfile::tempdir().unwrap();
     write_file(&temp.path().join(".polint.toml"), "[profiles.phase8\n");
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("check")
         .assert()
@@ -4885,8 +4787,7 @@ rules = ["local/no-raw-colors"]
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -4921,8 +4822,7 @@ rules = ["local/no-raw-colors"]
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .args([
             "check",
@@ -4983,8 +4883,7 @@ fn check_cache_writes_fact_metadata() {
     write_phase7_cache_fixture(temp.path());
 
     let _json = stdout_json(
-        Command::cargo_bin("polint")
-            .unwrap()
+        polint_cmd()
             .current_dir(temp.path())
             .args([
                 "check",
@@ -5019,8 +4918,7 @@ fn check_cached_output_is_deterministic_across_repeated_runs() {
     write_phase7_cache_fixture(temp.path());
     let run = || {
         stdout_string(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args([
                     "check",
@@ -5051,8 +4949,7 @@ fn check_parallel_cached_output_is_deterministic_across_repeated_runs() {
     write_phase7_cache_fixture(temp.path());
     let run = || {
         stdout_string(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args([
                     "check",
@@ -5095,8 +4992,7 @@ fn check_no_cache_bypasses_cache_reads_and_writes() {
             args.push("--no-cache");
         }
         stdout_string(
-            Command::cargo_bin("polint")
-                .unwrap()
+            polint_cmd()
                 .current_dir(temp.path())
                 .args(args)
                 .assert()
@@ -5303,8 +5199,7 @@ rules = ["local/no-raw-colors"]
 #[test]
 fn check_clean_repo_succeeds() {
     let temp = tempfile::tempdir().unwrap();
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("init")
         .assert()
@@ -5315,8 +5210,7 @@ fn check_clean_repo_succeeds() {
     )
     .unwrap();
 
-    Command::cargo_bin("polint")
-        .unwrap()
+    polint_cmd()
         .current_dir(temp.path())
         .arg("check")
         .assert()

@@ -1,6 +1,7 @@
 //! Shared helpers for integration tests (`tests/*.rs`).
 
 use assert_cmd::Command;
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,8 +10,62 @@ pub(crate) fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent)
             .unwrap_or_else(|e| panic!("create parent dir for {}: {e}", path.display()));
     }
-    fs::write(path, contents)
+    let contents = unique_rule_pack_manifest_contents(path, contents);
+    fs::write(path, contents.as_ref())
         .unwrap_or_else(|e| panic!("write fixture file {}: {e}", path.display()));
+}
+
+pub(crate) fn uniquify_rule_pack_manifest(path: &Path) {
+    let contents = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("read fixture manifest {}: {e}", path.display()));
+    let rewritten = unique_rule_pack_manifest_contents(path, &contents);
+    fs::write(path, rewritten.as_ref())
+        .unwrap_or_else(|e| panic!("rewrite fixture manifest {}: {e}", path.display()));
+}
+
+fn unique_rule_pack_manifest_contents<'a>(path: &Path, contents: &'a str) -> Cow<'a, str> {
+    if !is_rule_pack_manifest(path) {
+        return Cow::Borrowed(contents);
+    }
+
+    let suffix = path_hash_suffix(path);
+    let mut changed = false;
+    let rewritten = contents
+        .lines()
+        .map(|line| {
+            for prefix in [r#"name = "polint-local-rules"#, r#"name = "polint-rules"#] {
+                if let Some(rest) = line.strip_prefix(prefix)
+                    && let Some(rest) = rest.strip_prefix('"')
+                {
+                    changed = true;
+                    return format!("{prefix}-{suffix}\"{rest}");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if changed {
+        Cow::Owned(format!("{rewritten}\n"))
+    } else {
+        Cow::Borrowed(contents)
+    }
+}
+
+fn is_rule_pack_manifest(path: &Path) -> bool {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("/.polint/rules/Cargo.toml")
+}
+
+fn path_hash_suffix(path: &Path) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 pub(crate) fn stdout_json(assert: assert_cmd::assert::Assert) -> serde_json::Value {
@@ -96,6 +151,22 @@ pub(crate) fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn shared_cargo_target_dir() -> PathBuf {
+    repo_root().join("target/polint-cli-test-cargo")
+}
+
+pub(crate) fn cargo_cmd() -> Command {
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
+    command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command
+}
+
+pub(crate) fn polint_cmd() -> Command {
+    let mut command = Command::cargo_bin("polint").unwrap();
+    command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command
+}
+
 pub(crate) fn example_rule_cmd(example: &str) -> Command {
     let manifest = repo_root()
         .join("examples")
@@ -105,7 +176,7 @@ pub(crate) fn example_rule_cmd(example: &str) -> Command {
         .to_str()
         .unwrap_or_else(|| panic!("manifest path is not valid UTF-8: {}", manifest.display()))
         .to_string();
-    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
+    let mut command = cargo_cmd();
     command.args(["run", "--quiet", "--manifest-path", &manifest_str, "--"]);
     command
 }
