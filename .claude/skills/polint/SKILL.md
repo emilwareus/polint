@@ -24,9 +24,9 @@ is a versioned report object with a `diagnostics` array (not a bare array at the
 root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
 Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
 for plain text. Use `polint check --format sarif` for CI upload paths. Use
-`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
---shortstat` or `polint check --stat` for human scan summaries; these flags do
-not add prose to JSON or SARIF output.
+	`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
+	--shortstat` or `polint check --stat` for human scan summaries; these flags do
+	not add prose to JSON or SARIF output.
 
 Use a compact YAML baseline at `.polint/baseline.yaml` when existing findings
 should not block new work:
@@ -143,6 +143,35 @@ rules. `FileMetrics<'_>` exposes file line/byte/function counts,
 exposes per-function syntax-level cyclomatic complexity. A composite rule can
 request several of these typed views in one `#[polint::rule]` signature.
 
+## Module Relationship Facts
+
+For architecture policies, request `ResolvedImports<'_>` to inspect resolution
+status and unresolved reasons, and request `ModuleGraphFacts<'_>` to inspect
+file, package, module, and dependency edges. Both views are exported by
+`polint::sdk::prelude::*`; keep rules on the typed fact-view path. When
+relationship rules run, `Unresolved`, `Dynamic`, and `Unsupported` statuses are
+inspectable fact data. `SetupMissing` is reported as a `polint/capability`
+diagnostic and blocks requesting rules until resolver setup exists.
+
+## Symbol And Reference Facts
+
+For identity-aware policies, request `Symbols<'_>` and `References<'_>` as typed
+fact-view parameters. Use `symbols.by_name("name")` to find candidate symbols,
+`symbols.definitions(symbol.id)` to inspect declarations, `references.to(symbol.id)`
+to inspect resolved uses of one symbol, and `references.unresolved()` to review
+names that could not be bound. Check `SymbolPrecision` and
+`SymbolResolutionStatus` before treating a reference as exact.
+
+TS/JS symbol facts use Oxc for exact local lexical facts and module-linked import
+aliases where module resolution succeeds. They do not claim TypeScript
+type-checker, cross-file member/property, or declaration-file precision. Go
+symbol facts use typed package information when the sidecar can run, normally via
+Go 1.24+ on `PATH`, and analyzed Go files belong to module roots. Monorepos are
+configured in the single `.polint.toml` file with `[languages.go].module_roots`,
+or inferred from nearest `go.mod` files. Setup gaps are reported as
+`polint/capability` diagnostics. Symbol/reference facts are not call graph, CFG,
+dataflow, coverage, or Go SSA facts.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs
@@ -173,6 +202,8 @@ allow_files = ["src/theme/**"]
 - Prefer parser facts and SDK helpers over ad hoc text scanning.
 - Request typed fact views in the `#[polint::rule]` signature; examples are consumers of the SDK, not special internal entry points.
 - Compose `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` for higher-level quality rules instead of making rules depend on other rules.
+- For architecture rules, compose `ResolvedImports<'_>` and `ModuleGraphFacts<'_>` instead of parsing import strings yourself.
+- For identity rules, compose `Symbols<'_>` and `References<'_>` and inspect precision/status fields before assuming a reference is exact.
 - Do not implement `Rule` manually or write handwritten capability declarations.
 - For custom config, prefer explicit fields in `[[rules.config]]` and read them through `ctx.options().settings`.
 - Add the smallest real fixture that demonstrates the policy violation.
