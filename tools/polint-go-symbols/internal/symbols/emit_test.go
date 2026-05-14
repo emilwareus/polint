@@ -238,6 +238,35 @@ func Build() string {
 	}
 }
 
+func TestEmitJSONUsesArraysForEmptyCollections(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal output: %v", err)
+	}
+	text := string(encoded)
+	for _, expected := range []string{`"packages":[]`, `"symbols":[]`, `"definitions":[]`, `"references":[]`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("sidecar JSON missing empty array %s in %s", expected, text)
+		}
+	}
+	if strings.Contains(text, ":null") {
+		t.Fatalf("sidecar JSON should not contain null sequence fields: %s", text)
+	}
+}
+
 func TestEmitUsesSyntheticWorkspaceWhenRootGoWorkMissesConfiguredRoots(t *testing.T) {
 	root := writeModule(t, map[string]string{
 		"go.work":               "go 1.24.0\n\nuse ./tools/only\n",

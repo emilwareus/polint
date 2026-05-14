@@ -10,7 +10,7 @@ use crate::go::lifecycle::{self, GoAnalysisConfig};
 use crate::symbol_graph::model::SymbolGraphBuilder;
 use crate::symbol_graph::model::{DefinitionDraft, ReferenceDraft, SymbolDraft};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -55,20 +55,21 @@ enum GoSidecarCommand {
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarOutput {
     schema: String,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     packages: Vec<GoSidecarPackage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     symbols: Vec<GoSidecarSymbol>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     definitions: Vec<GoSidecarDefinition>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     references: Vec<GoSidecarReference>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     errors: Vec<GoSidecarPackageError>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarPackage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     files: Vec<String>,
 }
 
@@ -78,7 +79,7 @@ struct GoSidecarSymbol {
     package_path: String,
     #[serde(default)]
     file: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default_vec")]
     owner_chain: Vec<String>,
     name: String,
     qualified_name: String,
@@ -87,6 +88,14 @@ struct GoSidecarSymbol {
     span: GoSidecarSpan,
     #[serde(default)]
     exported: bool,
+}
+
+fn null_as_default_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1233,6 +1242,29 @@ module_roots = ["services/payments"]
             "{:#?}",
             output.capability_support
         );
+    }
+
+    #[test]
+    fn sidecar_null_sequence_fields_parse_as_empty_vectors() {
+        let output = parse_sidecar_output(
+            br#"{
+  "schema":"polint-go-symbols-v1",
+  "go_version":"go1.24.13",
+  "packages":[{"files":null}],
+  "symbols":null,
+  "definitions":null,
+  "references":null,
+  "errors":null
+}"#,
+        )
+        .expect("sidecar output parses");
+
+        assert_eq!(output.packages.len(), 1);
+        assert!(output.packages[0].files.is_empty());
+        assert!(output.symbols.is_empty());
+        assert!(output.definitions.is_empty());
+        assert!(output.references.is_empty());
+        assert!(output.errors.is_empty());
     }
 
     #[test]
