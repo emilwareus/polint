@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json",
+  "title": "polint cache status report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "root", "categories", "total_bytes", "total_files"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json"
+    },
+    "root": {
+      "type": "string"
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "exists", "bytes", "files"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["analysis", "rules-target", "derived", "legacy-analysis"]
+          },
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "files": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "total_files": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

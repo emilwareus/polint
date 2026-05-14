@@ -46,9 +46,60 @@ not write another setup file into the repository.
 | Variable | Effect |
 |----------|--------|
 | `POLINT_CARGO` | Executable used to spawn repo-local rule hosts (default: `cargo` or `CARGO`). |
+| `POLINT_CACHE_DIR` | Optional cache root. Defaults to `.polint/cache` relative to the checked repository. |
 | `POLINT_GO_SYMBOLS` | Optional path to a `polint-go-symbols` binary or sidecar source directory. A binary can avoid requiring Go on `PATH`; a source directory still needs Go. |
+| `POLINT_RULES_TARGET_DIR` | Optional Cargo target directory for repo-local rule hosts. Defaults to `$POLINT_CACHE_DIR/rules-target`. |
 | `POLINT_RULES_TOOLCHAIN` | When set to a non-empty value, forwarded as `RUSTUP_TOOLCHAIN` for the rules-host `cargo run` subprocess (parent `polint check` only). |
 | `NO_COLOR` | Disables ANSI colors when `--color auto`. |
+
+## Cache management
+
+polint stores local cache data under `.polint/cache` unless `POLINT_CACHE_DIR`
+is set:
+
+| Path | Contents |
+|------|----------|
+| `.polint/cache/analysis` | Compact JSON parser/fact artifacts. |
+| `.polint/cache/rules-target` | Cargo target directory used when `polint check` builds `.polint/rules`. |
+| `.polint/cache/derived` | Reserved for future project-level derived facts. |
+
+Analysis cache keys include source path and content, loaded config, rule/options
+digest, requested capability plan, cache format, and polint version. Changing
+those inputs produces fresh cache entries instead of reusing stale facts.
+
+Use `polint cache status` to inspect size and file counts. The JSON form is
+stable enough for scripts and follows
+[`polint-cache-status-v1.json`](schemas/polint-cache-status-v1.json):
+
+```bash
+polint cache status --format json
+```
+
+Use explicit cleanup when the cache grows too large:
+
+```bash
+polint cache prune --max-size-mb 512
+polint cache prune --max-age-days 14 --dry-run
+polint cache clean --category analysis
+polint cache clean --category rules-target
+polint cache clean
+```
+
+`--no-cache` on `polint check`, `polint baseline`, and `polint ignores` disables
+analysis/fact cache reads and writes for that run. It does not disable the
+repo-local rule-host Cargo target cache; use `polint cache clean --category
+rules-target` when you need a fresh rule-host build.
+
+In CI, cache `.polint/cache` when repo-local rules are enabled:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: .polint/cache
+    key: polint-${{ runner.os }}-${{ hashFiles('.polint.toml', '.polint/rules/Cargo.lock', '.polint/rules/**/*.rs') }}
+    restore-keys: |
+      polint-${{ runner.os }}-
+```
 
 ## Rules host failures
 

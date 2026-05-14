@@ -41,7 +41,7 @@ struct CheckArgs {
     /// ANSI colors for human output (no effect on JSON/SARIF).
     #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
     color: ColorArg,
-    /// Disable .polint/cache reads and writes.
+    /// Disable analysis/fact cache reads and writes.
     #[arg(long)]
     no_cache: bool,
     /// Diagnostic level that fails the process.

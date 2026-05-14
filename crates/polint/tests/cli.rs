@@ -4,7 +4,7 @@ use common::*;
 use predicates::prelude::*;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn point_generated_rule_pack_at_local_polint(root: &Path) {
     let manifest_path = root.join(".polint/rules/Cargo.toml");
@@ -38,6 +38,7 @@ fn top_level_help_only_lists_supported_public_commands() {
         "add-skill",
         "new-rule",
         "baseline",
+        "cache",
         "check",
         "ignores",
     ] {
@@ -1362,19 +1363,51 @@ func route(path string) string {
 }
 
 fn cache_json_file_names(root: &Path) -> BTreeSet<String> {
-    fs::read_dir(root.join(".polint/cache"))
-        .unwrap_or_else(|error| panic!("read cache dir: {error}"))
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            (path.extension().is_some_and(|ext| ext == "json")).then(|| {
-                path.file_name()
-                    .unwrap_or_else(|| panic!("cache path has no file name: {}", path.display()))
-                    .to_string_lossy()
-                    .to_string()
-            })
-        })
-        .collect()
+    let cache_dir = root.join(".polint/cache");
+    let mut names = BTreeSet::new();
+    collect_cache_json_file_names(&cache_dir, &cache_dir, &mut names);
+    names
+}
+
+fn cache_json_paths(root: &Path) -> Vec<PathBuf> {
+    let cache_dir = root.join(".polint/cache");
+    let mut paths = Vec::new();
+    collect_cache_json_paths(&cache_dir, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn collect_cache_json_paths(current: &Path, paths: &mut Vec<PathBuf>) {
+    if !current.exists() {
+        return;
+    }
+    for entry in fs::read_dir(current).unwrap_or_else(|error| panic!("read cache dir: {error}")) {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            collect_cache_json_paths(&path, paths);
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            paths.push(path);
+        }
+    }
+}
+
+fn collect_cache_json_file_names(root: &Path, current: &Path, names: &mut BTreeSet<String>) {
+    if !current.exists() {
+        return;
+    }
+    for entry in fs::read_dir(current).unwrap_or_else(|error| panic!("read cache dir: {error}")) {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            collect_cache_json_file_names(root, &path, names);
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or_else(|_| panic!("cache path outside root: {}", path.display()));
+            names.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
 }
 
 #[test]
@@ -4460,6 +4493,10 @@ go 1.24
             .args(["check", "--format", "json", "--fail-on", "none"])
             .assert()
             .success();
+        assert!(
+            repo_root().join("target/polint-cli-test-rules").exists(),
+            "repo-local rule host should use POLINT_RULES_TARGET_DIR when provided"
+        );
         let first = cache_json_file_names(temp.path());
         assert!(!first.is_empty(), "first check should write cache files");
 
@@ -4840,6 +4877,107 @@ rules = ["local/no-raw-colors"]
     assert_eq!(cache_json_count(temp.path()), 0);
 }
 
+#[test]
+fn cache_status_reports_structured_cache_layout() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(&temp.path().join(".polint/cache/analysis/a.json"), "{}");
+    write_file(
+        &temp.path().join(".polint/cache/rules-target/debug/rules"),
+        "bin",
+    );
+
+    let mut command = polint_cmd();
+    command.env_remove("POLINT_RULES_TARGET_DIR");
+    let json = stdout_json(
+        command
+            .current_dir(temp.path())
+            .args(["cache", "status", "--format", "json"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(
+        json["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json"
+    );
+    assert!(
+        json["root"].as_str().unwrap().ends_with(".polint/cache"),
+        "unexpected cache root: {json:#?}"
+    );
+    let categories = json["categories"].as_array().unwrap();
+    assert!(categories.iter().any(|category| {
+        category["name"] == "analysis"
+            && category["files"] == 1
+            && category["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(".polint/cache/analysis"))
+    }));
+    assert!(
+        categories
+            .iter()
+            .any(|category| { category["name"] == "rules-target" && category["files"] == 1 })
+    );
+}
+
+#[test]
+fn cache_clean_analysis_removes_analysis_and_legacy_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(&temp.path().join(".polint/cache/analysis/a.json"), "{}");
+    write_file(&temp.path().join(".polint/cache/legacy.json"), "{}");
+    write_file(
+        &temp.path().join(".polint/cache/rules-target/debug/rules"),
+        "bin",
+    );
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["cache", "clean", "--category", "analysis"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    assert!(!temp.path().join(".polint/cache/analysis").exists());
+    assert!(!temp.path().join(".polint/cache/legacy.json").exists());
+    assert!(temp.path().join(".polint/cache/rules-target").exists());
+}
+
+#[test]
+fn cache_prune_size_supports_dry_run_and_actual_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(&temp.path().join(".polint/cache/derived/a.bin"), "abcdef");
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args([
+            "cache",
+            "prune",
+            "--category",
+            "derived",
+            "--max-size-mb",
+            "0",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would remove"));
+    assert!(temp.path().join(".polint/cache/derived/a.bin").exists());
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args([
+            "cache",
+            "prune",
+            "--category",
+            "derived",
+            "--max-size-mb",
+            "0",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+    assert!(!temp.path().join(".polint/cache/derived/a.bin").exists());
+}
+
 fn write_phase7_cache_fixture(root: &Path) {
     fs::write(
         root.join(".polint.toml"),
@@ -4899,15 +5037,8 @@ fn check_cache_writes_fact_metadata() {
     );
 
     assert!(cache_json_count(temp.path()) >= 2);
-    let cache_entry = fs::read_to_string(
-        fs::read_dir(temp.path().join(".polint/cache"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path(),
-    )
-    .unwrap();
+    let cache_entry =
+        fs::read_to_string(cache_json_paths(temp.path()).into_iter().next().unwrap()).unwrap();
     assert!(!cache_entry.contains("export function Button"));
     assert!(!cache_entry.contains("package payment"));
 }
