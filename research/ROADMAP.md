@@ -9,7 +9,7 @@ Date: 2026-05-15
 - [x] Data-flow research completed: see `research/data-flow/`.
 - [x] Agent extension surface research completed: see `research/agent-extension-surface/`.
 - [x] Analysis kernel research completed: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation. See `research/analysis-kernel/`.
-- [ ] Research the evaluation harness: default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, and regression gates.
+- [x] Evaluation harness research completed: external-benchmark-first strategy, default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, regression gates, and benchmark adapters. See `research/evaluation-harness/`.
 - [ ] Research framework, lifecycle, and entrypoint modeling: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, and generated dispatch.
 - [ ] Deepen semantic index research: scopes, aliases, generated symbols, type-aware resolution, unresolved references, and extension-provided resolution facts.
 - [ ] Research module, package, dependency, and repo topology graphs.
@@ -161,6 +161,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R1. Data Flow | Done, deepen during implementation | `research/data-flow/` | Data-flow fact model, local/sparse/summarized/global flow strategy, IFDS/IDE timing, source/sink/sanitizer/summary model layer, call-graph dependency, agent-era domain lessons, default-vs-extended evaluation. |
 | R2. Agent Extension Surface | Done, implement first vertical slice | `research/agent-extension-surface/` | Recommended Rust-code extension lifecycle for agent-authored engine improvements: process-isolated extension crates, typed sinks, provenance, validation, extension-aware capability planning, default-vs-extended deltas. |
 | R3. Analysis Kernel | Done, implement before call graph/data flow | `research/analysis-kernel/` | Hybrid internal kernel recommendation: deterministic provider DAG, typed fact layers, sidecar provenance, validation/merge gates, layer-specific cache keys, relation/fixpoint sub-engine for recursive analyses, explicit unknowns, and extension-aware capability support. |
+| R4. Evaluation Harness | Done, implement before call graph/data flow | `research/evaluation-harness/` | External-benchmark-first evaluation strategy, suite adapters, canonical expected/observed schema, default-vs-extension deltas, graph/path/fact/diagnostic metrics, performance/cache baselines, and native fixtures for engine invariants. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -216,7 +217,9 @@ Core decision: use a hybrid internal kernel. Start with a deterministic provider
 
 **Folder:** `research/evaluation-harness/`
 
-This should be researched before or in parallel with the first implementation. If the goal is "most capable," every architecture choice must be measurable. The harness should measure both default analysis and agent-extended analysis.
+Status: researched in `research/evaluation-harness/`.
+
+This must be implemented before or in parallel with the first serious call graph/data-flow implementation. If the goal is "most capable," every architecture choice must be measurable. The harness should measure both default analysis and agent-extended analysis.
 
 Research questions:
 
@@ -228,7 +231,7 @@ Research questions:
 - How should evaluation represent default mode versus extension-enabled mode?
 - How should benchmark results stay reproducible in CI and useful to agents?
 
-Deliverables:
+Deliverables completed:
 
 - Standard benchmark schema.
 - Fixture taxonomy by language and analysis family.
@@ -237,6 +240,11 @@ Deliverables:
 - Ground-truth strategy for call edges, entrypoints, data-flow paths, and effects.
 - Regression harness recommendation.
 - Acceptance thresholds for introducing new fact families or public SDK views.
+- Repository index for benchmark/code repositories inspected.
+- Paper/source index for external benchmark and harness research.
+- Pseudo-code for diagnostic/fact/graph/path scoring, tier scheduling, baselines, determinism, cache invalidation, and extension safety gates.
+
+Core decision: use an external-benchmark-first harness, not an external-only harness. OWASP, SecBench.js, RealVuln, gosec, CodeQL tests, Pyre/Pysa, DroidBench, SecuriBench Micro, CryptoAPI-Bench, Juliet/SARD, Jelly, CrossCommitVuln-Bench, and SecCodeBench should supply independent outcome evidence where they fit. Native polint fixtures are still required for provenance, provider scheduling, cache invalidation, extension validation/merge behavior, stable fact keys, unknown facts, and typed SDK invariants.
 
 ### 3. Semantic Index: Symbols, References, Scopes, Imports
 
