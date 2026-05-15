@@ -11,7 +11,7 @@ Date: 2026-05-15
 - [x] Analysis kernel research completed: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation. See `research/analysis-kernel/`.
 - [x] Evaluation harness research completed: external-benchmark-first strategy, default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, regression gates, and benchmark adapters. See `research/evaluation-harness/`.
 - [x] Framework, lifecycle, and entrypoint modeling research completed: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, generated dispatch, native Rust provider path, and validation strategy. See `research/framework-entrypoints/`.
-- [ ] Deepen semantic index research: scopes, aliases, generated symbols, type-aware resolution, unresolved references, and extension-provided resolution facts.
+- [x] Semantic index deep research completed: scopes, aliases, generated symbols, type-aware resolution, unresolved references, extension-provided resolution facts, and export identity. See `research/semantic-index/`.
 - [ ] Research module, package, dependency, and repo topology graphs.
 - [ ] Research CFG and control dependence.
 - [ ] Research type, value, points-to, and alias analysis.
@@ -156,7 +156,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 
 | Track | Status | Folder | What It Gives Us |
 |---|---|---|---|
-| R-1. Semantic Index Baseline | Implemented, deepen later | `docs/facts/symbols-and-references.md`, `crates/polint/src/sdk/facts.rs` | Stable symbol, definition, and reference facts through `Symbols<'_>` and `References<'_>`. This is enough to build the first extension lifecycle, but future research should deepen scopes, aliases, generated symbols, and type-aware resolution. |
+| R-1. Semantic Index | Deep research complete, implement vertical slice next | `docs/facts/symbols-and-references.md`, `crates/polint/src/sdk/facts.rs`, `research/semantic-index/` | Stable symbol/reference baseline exists today. Research now recommends deepening it into `ScopeFact`, `ImportFact`, `AliasFact`, `ResolutionFact`, stable keys, xref indexes, explicit unknowns, and validated extension-provided semantic facts. |
 | R0. Call Graphs | Done, deepen during implementation | `research/call-graphs/` | Call-site/call-edge fact model, algorithm tiers, unresolved-call model, repo-local call model layer, default-vs-extended evaluation, cost/accuracy tradeoffs across Go, TS/JS, Java, Python. |
 | R1. Data Flow | Done, deepen during implementation | `research/data-flow/` | Data-flow fact model, local/sparse/summarized/global flow strategy, IFDS/IDE timing, source/sink/sanitizer/summary model layer, call-graph dependency, agent-era domain lessons, default-vs-extended evaluation. |
 | R2. Agent Extension Surface | Done, implement first vertical slice | `research/agent-extension-surface/` | Recommended Rust-code extension lifecycle for agent-authored engine improvements: process-isolated extension crates, typed sinks, provenance, validation, extension-aware capability planning, default-vs-extended deltas. |
@@ -251,22 +251,26 @@ Core decision: use an external-benchmark-first harness, not an external-only har
 
 **Folder:** `research/semantic-index/`
 
-The baseline symbol/reference layer has already been implemented. This is now the next deepening track because framework entrypoint recovery, module graph, call graphs, data flow, type inference, effects, and AI-authored extensions all depend on improving scopes, aliases, generated symbols, type-aware resolution, and explicit unresolved-resolution facts over time.
+Status: researched in `research/semantic-index/`.
+
+The baseline symbol/reference layer has already been implemented. This deepening track is now complete enough to guide the next implementation slice because framework entrypoint recovery, module graph, call graphs, data flow, type inference, effects, and AI-authored extensions all depend on improving scopes, aliases, generated symbols, type-aware resolution, and explicit unresolved-resolution facts over time.
 
 Research questions:
 
 - How should polint model declarations, symbols, references, lexical scopes, imports, exports, aliases, fields, methods, packages, modules, and generated symbols?
 - What precision tiers are needed for Go, TS/JS, Java, and Python?
-- How do CodeQL, Rust Analyzer, TypeScript, Go `x/tools`, Pyright/Pyre, Jedi, WALA, SootUp, and tree-sitter-based systems store and query symbol/reference facts?
+- How do CodeQL, rust-analyzer, TypeScript, Go `x/tools`/gopls, Pyright, Ty, Pyrefly, JDT, Soot/SootUp/WALA, Semgrep, SCIP, LSIF, and Kythe store, query, and export symbol/reference facts?
 - How should unresolved or ambiguous references be represented?
 
-Deliverables:
+Deliverables completed:
 
 - `SymbolFact`, `ReferenceFact`, `ScopeFact`, `ImportFact`, and `ResolutionFact` proposal.
 - Language-specific resolution ladders.
 - Accuracy/cost report for syntactic, binder, type-aware, and package-aware resolution.
 - SDK shape for `Symbols<'_>`, `References<'_>`, `Scopes<'_>`, `Imports<'_>`.
 - Extension-hook proposal for agent-supplied aliases, generated symbols, framework-specific references, and resolution overrides with provenance.
+
+Core decision: implement semantic indexing as language-owned native Rust providers that emit normalized typed facts with stable identities, provenance, precision, explicit resolution status, and validated extension merges. Use compiler/LSP systems as semantic truth references, CodeQL-like fixpoints for recursive derived relations, and SCIP/Kythe-like identities for export only.
 
 ### 4. Agent Extension Surface And Model Lifecycle
 
@@ -314,8 +318,6 @@ Research questions:
 - What should the agent extension format look like for a repo's actual routes, handlers, jobs, queues, tool definitions, tests, and generated dispatch?
 - How do CodeQL model packs, Semgrep framework rules, FlowDroid lifecycle modeling, Pysa models, MCP-BiFlow, Spring analyzers, Go HTTP analyzers, and JS router analyzers approach this?
 - How can AI agents author or refine framework models without making unsound claims?
-
-Deliverables:
 
 Deliverables completed:
 
@@ -577,18 +579,10 @@ That means research should prefer architectures with clear typed extension point
 Start with:
 
 ```text
-research/semantic-index/
-```
-
-Reason: the next implementation slice will depend on stronger symbol, reference, scope, import, alias, generated-symbol, and type-aware resolution facts. Framework entrypoint recovery, module graph, call graph, and data flow all get more accurate if the semantic index has explicit resolution status and extension-provided resolution facts.
-
-Immediately after that, research:
-
-```text
 research/module-graph/
 ```
 
-Reason: framework/lifecycle modeling and semantic resolution both depend on package roots, module boundaries, workspace topology, generated-code zones, import semantics, test/prod splits, and dependency direction. This also unlocks high-value repo-local architecture rules.
+Reason: semantic-index research is now complete enough to show that import resolution, stable symbol keys, external symbols, generated-code zones, package roots, workspace topology, and lifecycle config all depend on module/package/repo topology. This is the next blocking research topic before serious call graph/data-flow implementation.
 
 Then revisit:
 
@@ -597,3 +591,11 @@ research/call-graphs/
 ```
 
 Reason: call graph implementation should now consume the kernel, evaluation harness, semantic index, module graph, and framework dispatch overlay decisions rather than inventing its own lifecycle.
+
+Then revisit:
+
+```text
+research/data-flow/
+```
+
+Reason: data flow should consume CFG, call graph, semantic index, module graph, and extension-model decisions so source/sink/sanitizer/summary facts are accurate and explainable.
