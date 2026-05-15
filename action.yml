@@ -1,0 +1,190 @@
+name: polint
+description: Run polint with GitHub Actions annotations and built-in cache restore/save.
+author: emilwareus
+
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  version:
+    description: polint release version to install. Use latest, vX.Y.Z, or X.Y.Z.
+    required: false
+    default: latest
+  args:
+    description: Arguments passed to polint.
+    required: false
+    default: check --format github
+  cache:
+    description: Restore and save .polint/cache.
+    required: false
+    default: "true"
+  cache-key-prefix:
+    description: Prefix for GitHub Actions cache keys.
+    required: false
+    default: polint
+  working-directory:
+    description: Repository directory where polint should run.
+    required: false
+    default: .
+  fail-on:
+    description: Optional value for polint --fail-on. Leave empty when args already set it.
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: Installed polint version.
+    value: ${{ steps.install.outputs.version }}
+  cache-hit:
+    description: Whether the primary polint cache key was restored.
+    value: ${{ steps.cache-restore.outputs.cache-hit }}
+  exit-code:
+    description: polint process exit code.
+    value: ${{ steps.run-polint.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install polint
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        requested="${{ inputs.version }}"
+        if [[ -z "${requested}" || "${requested}" == "latest" ]]; then
+          release_path="latest/download"
+          display_version="latest"
+          cargo_version_args=()
+        else
+          case "${requested}" in
+            v*) tag="${requested}" ;;
+            *) tag="v${requested}" ;;
+          esac
+          release_path="download/${tag}"
+          display_version="${tag}"
+          cargo_version_args=(--version "${tag#v}")
+        fi
+
+        case "${RUNNER_OS}" in
+          Linux)
+            asset_os="linux"
+            binary="polint"
+            ;;
+          macOS)
+            asset_os="macos"
+            binary="polint"
+            ;;
+          Windows)
+            asset_os="windows"
+            binary="polint.exe"
+            ;;
+          *)
+            echo "::error::unsupported runner OS: ${RUNNER_OS}"
+            exit 1
+            ;;
+        esac
+
+        case "${RUNNER_ARCH}" in
+          X64) asset_arch="x86_64" ;;
+          ARM64) asset_arch="aarch64" ;;
+          *)
+            echo "::error::unsupported runner architecture: ${RUNNER_ARCH}"
+            exit 1
+            ;;
+        esac
+
+        asset="polint-${asset_os}-${asset_arch}.tar.gz"
+        base_url="https://github.com/emilwareus/polint/releases/${release_path}"
+        tmp_dir="$(mktemp -d)"
+        install_dir="${RUNNER_TEMP}/polint/bin"
+        mkdir -p "${install_dir}"
+        trap 'rm -rf "${tmp_dir}"' EXIT
+
+        if command -v curl >/dev/null 2>&1; then
+          fetch() { curl -fsSL "$1" -o "$2"; }
+        elif command -v wget >/dev/null 2>&1; then
+          fetch() { wget -q "$1" -O "$2"; }
+        else
+          echo "::error::curl or wget is required to download polint release assets"
+          exit 1
+        fi
+
+        echo "Installing polint ${display_version} from ${asset}..."
+        if fetch "${base_url}/${asset}" "${tmp_dir}/${asset}" && fetch "${base_url}/${asset}.sha256" "${tmp_dir}/${asset}.sha256"; then
+          (
+            cd "${tmp_dir}"
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 -c "${asset}.sha256"
+            elif command -v sha256sum >/dev/null 2>&1; then
+              sha256sum -c "${asset}.sha256"
+            else
+              echo "::error::shasum or sha256sum is required to verify ${asset}"
+              exit 1
+            fi
+            tar -xzf "${asset}"
+          )
+          cp "${tmp_dir}/${binary}" "${install_dir}/${binary}"
+          chmod +x "${install_dir}/${binary}"
+        else
+          echo "::warning::release asset ${asset} was not available; falling back to cargo install polint ${requested}"
+          cargo install polint --locked "${cargo_version_args[@]}"
+          install_dir="${HOME}/.cargo/bin"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            binary="polint.exe"
+          else
+            binary="polint"
+          fi
+        fi
+
+        echo "${install_dir}" >> "${GITHUB_PATH}"
+        installed="$("${install_dir}/${binary}" --version)"
+        echo "${installed}"
+        echo "version=${installed#polint }" >> "${GITHUB_OUTPUT}"
+
+    - name: Prepare polint cache directory
+      if: ${{ inputs.cache == 'true' }}
+      shell: bash
+      run: mkdir -p "${{ inputs.working-directory }}/.polint/cache"
+
+    - name: Restore polint cache
+      id: cache-restore
+      if: ${{ inputs.cache == 'true' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.working-directory }}/.polint/cache
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ hashFiles(format('{0}/.polint.toml', inputs.working-directory), format('{0}/Cargo.lock', inputs.working-directory), format('{0}/rust-toolchain.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.lock', inputs.working-directory), format('{0}/.polint/rules/src/**/*.rs', inputs.working-directory)) }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-
+          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-
+
+    - name: Run polint
+      id: run-polint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        POLINT_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set +e
+        extra_args=()
+        if [[ -n "${POLINT_FAIL_ON}" ]]; then
+          extra_args+=(--fail-on "${POLINT_FAIL_ON}")
+        fi
+        polint ${{ inputs.args }} "${extra_args[@]}"
+        status=$?
+        set -e
+        echo "exit-code=${status}" >> "${GITHUB_OUTPUT}"
+        exit 0
+
+    - name: Save polint cache
+      if: ${{ always() && inputs.cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.working-directory }}/.polint/cache
+        key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+
+    - name: Fail on polint findings
+      if: ${{ always() && steps.run-polint.outputs.exit-code != '0' }}
+      shell: bash
+      run: exit "${{ steps.run-polint.outputs.exit-code }}"

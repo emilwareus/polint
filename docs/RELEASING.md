@@ -7,7 +7,18 @@ polint ships from a single workflow on `main`.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `ci.yml` | Push/PR to `main` | `rustfmt`, then `clippy -D warnings` + `cargo test --workspace` on Ubuntu, Windows, and macOS. Includes an ignored `cargo install` smoke test that mirrors the crates.io install path. |
-| `release.yml` | Manual (`workflow_dispatch` on `main`) | Patch-bump via `scripts/bump-workspace-version.py`, push the bump commit to `main`, create the annotated tag `vX.Y.Z`, then optionally publish all crates to crates.io and attach CLI archives to the matching GitHub Release. |
+| `release.yml` | Manual (`workflow_dispatch` on `main`) | Patch-bump via `scripts/bump-workspace-version.py`, push the bump commit to `main`, create the annotated tag `vX.Y.Z`, then optionally publish all crates to crates.io, attach CLI archives to the matching GitHub Release, and move the stable `v1` action tag. |
+
+## GitHub Action versioning
+
+The checked-in `action.yml` is published as `emilwareus/polint@v1`. Release tags
+like `v0.1.12` identify the CLI release assets that the action installs; the
+action's major tag identifies the workflow contract and input/output
+compatibility.
+
+The release workflow moves the lightweight `v1` tag to the reviewed release
+commit when **Publish action** is enabled. Breaking action input or output
+changes require a new major tag.
 
 ## Secrets
 
@@ -21,13 +32,14 @@ polint ships from a single workflow on `main`.
 ## Ship a version
 
 1. Open **Actions → Release → Run workflow** on `main`.
-2. Leave **Publish crates** and **Build CLI** on (defaults) for a full release; turn either off for a partial release.
+2. Leave **Publish crates**, **Build CLI**, and **Publish action** on (defaults) for a full release; turn any off for a partial release.
 3. The workflow:
    - bumps the workspace patch version,
    - commits and pushes to `main`,
    - creates and pushes the annotated tag `vX.Y.Z`,
    - publishes the `polint` crate to crates.io (when enabled),
    - builds the cross-platform CLI matrix and uploads archives to the GitHub Release for that tag (when enabled).
+   - moves the stable `v1` GitHub Action tag to the release commit (when enabled).
 
 ## Smoke-test crates publish locally
 

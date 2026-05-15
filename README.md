@@ -273,15 +273,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: emilwareus/polint@v1
         with:
-          path: .polint/cache
-          key: polint-${{ runner.os }}-${{ hashFiles('.polint.toml', '.polint/rules/Cargo.lock', '.polint/rules/**/*.rs') }}
-          restore-keys: |
-            polint-${{ runner.os }}-
-      - run: cargo install polint --locked
-      - run: polint check --format sarif > polint.sarif
+          version: latest
+          args: check --format github
 ```
 
 Rules that request Go symbol/reference facts use the embedded Go sidecar by
@@ -297,11 +292,19 @@ facts:
           go-version: "1.24.x"
 ```
 
+The action caches `.polint/cache` by default, including the repo-local
+rule-host Cargo target directory at `.polint/cache/rules-target`. A fully cold
+first run can still pay install, build, and analysis costs; repeat runs with the
+same relevant inputs should restore those caches. See the
+[GitHub Action guide](docs/GITHUB-ACTION.md) for inputs, cache keys, and
+pinning options.
+
 ## More
 
 - [Examples](examples/)
 - [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
 - [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
+- [GitHub Action](docs/GITHUB-ACTION.md)
 - [Comment ignores](docs/IGNORE-COMMENTS.md)
 - [Metric facts](docs/facts/metrics.md)
 - [Go test facts](docs/facts/go-tests.md)

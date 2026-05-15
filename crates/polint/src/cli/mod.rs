@@ -288,6 +288,7 @@ enum ColorArg {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum FormatArg {
     Human,
+    Github,
     Json,
     Sarif,
 }
@@ -885,6 +886,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
     };
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
+        FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };
@@ -1346,6 +1348,7 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     };
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
+        FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };

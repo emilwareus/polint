@@ -244,6 +244,7 @@ impl Diagnostic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Human,
+    Github,
     Json,
     Sarif,
 }
@@ -419,9 +420,59 @@ pub(crate) fn render_with_sarif_help(
 ) -> String {
     match format {
         OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
+        OutputFormat::Github => render_github(diagnostics),
         OutputFormat::Json => render_json(diagnostics, opts.json),
         OutputFormat::Sarif => render_sarif(diagnostics, sarif_rule_help_uri),
     }
+}
+
+fn render_github(diagnostics: &[Diagnostic]) -> String {
+    let mut output = String::new();
+    for diagnostic in diagnostics {
+        output.push_str("::");
+        output.push_str(github_command(diagnostic.severity));
+        output.push_str(" file=");
+        output.push_str(&escape_github_property(&diagnostic.file));
+        output.push_str(",line=");
+        output.push_str(&github_line(diagnostic.range.start_line).to_string());
+        output.push_str(",col=");
+        output.push_str(&github_line(diagnostic.range.start_col).to_string());
+        output.push_str(",endLine=");
+        output.push_str(&github_line(diagnostic.range.end_line).to_string());
+        output.push_str(",endColumn=");
+        output.push_str(&github_line(diagnostic.range.end_col).to_string());
+        output.push_str(",title=");
+        output.push_str(&escape_github_property(&diagnostic.rule_id));
+        output.push_str("::");
+        output.push_str(&escape_github_message(&diagnostic.message));
+        output.push('\n');
+    }
+    output
+}
+
+fn github_command(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warning",
+        Severity::Info => "notice",
+    }
+}
+
+fn github_line(value: u32) -> u32 {
+    value.max(1)
+}
+
+fn escape_github_property(value: &str) -> String {
+    escape_github_message(value)
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
+fn escape_github_message(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
 }
 
 fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> String {
@@ -1318,6 +1369,27 @@ mod tests {
           ]
         }
         "###);
+    }
+
+    #[test]
+    fn render_github_uses_workflow_annotations() {
+        let diagnostic = Diagnostic::warning(
+            "project/rule,one",
+            "src/lib,one.rs",
+            TextRange {
+                start_line: 10,
+                start_col: 4,
+                end_line: 10,
+                end_col: 12,
+            },
+            "policy % failed\nuse safe_api",
+        );
+
+        insta::assert_snapshot!(
+            render(OutputFormat::Github, &[diagnostic], test_opts()),
+            @"::warning file=src/lib%2Cone.rs,line=10,col=4,endLine=10,endColumn=12,title=project/rule%2Cone::policy %25 failed%0Ause safe_api
+        "
+        );
     }
 
     #[test]
