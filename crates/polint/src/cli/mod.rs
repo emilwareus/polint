@@ -3,6 +3,10 @@ use crate::baseline::{
     BaselineConfig, BaselineSummary, DEFAULT_BASELINE_PATH, classify_diagnostics, load_baseline,
     render_baseline_summary, write_baseline,
 };
+use crate::cache::{
+    CacheCleanReport, CacheCleanSelection, CacheLayout, CacheManagedCategory, CachePruneOptions,
+    CachePruneReport, CacheStatus, POLINT_CACHE_DIR_ENV,
+};
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{AnalysisDb, Language, Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
@@ -14,15 +18,19 @@ use crate::fs::load_analysis_files;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
+use std::time::Duration;
 
 mod rules_host_error;
 mod skill;
+
+const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json";
 
 fn json_report_meta() -> JsonReportMeta<'static> {
     JsonReportMeta {
@@ -97,6 +105,8 @@ enum Command {
     NewRule(NewRuleArgs),
     /// Create or update a compact YAML diagnostic baseline.
     Baseline(BaselineArgs),
+    /// Inspect, prune, or clean polint caches.
+    Cache(CacheArgs),
     /// Run enabled rules.
     Check(CheckArgs),
     /// Inspect polint comment-ignore directives and suppression statistics.
@@ -117,6 +127,52 @@ struct BaselineArgs {
     command: BaselineCommand,
 }
 
+#[derive(Debug, Args, Clone)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+enum CacheCommand {
+    /// Show cache paths, size, and file counts.
+    Status(CacheStatusArgs),
+    /// Remove cache files by size or age while preserving newer entries.
+    Prune(CachePruneArgs),
+    /// Remove a whole cache category.
+    Clean(CacheCleanArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct CacheStatusArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = CacheStatusFormatArg::Human)]
+    format: CacheStatusFormatArg,
+}
+
+#[derive(Debug, Args, Clone)]
+struct CachePruneArgs {
+    /// Cache category to prune. Defaults to all managed categories.
+    #[arg(long, value_enum)]
+    category: Option<CacheCategoryArg>,
+    /// Remove files older than this many days.
+    #[arg(long, value_name = "DAYS")]
+    max_age_days: Option<u64>,
+    /// Keep selected categories at or below this many MiB.
+    #[arg(long, value_name = "MIB")]
+    max_size_mb: Option<u64>,
+    /// Print what would be removed without deleting files.
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+struct CacheCleanArgs {
+    /// Cache category to clean. Defaults to all.
+    #[arg(long, value_enum, default_value_t = CacheCategoryArg::All)]
+    category: CacheCategoryArg,
+}
+
 #[derive(Debug, Subcommand, Clone)]
 enum BaselineCommand {
     /// Write current diagnostics to .polint/baseline.yaml.
@@ -133,7 +189,7 @@ struct BaselineCreateArgs {
     /// Named profile from .polint.toml. When omitted, all discovered rules run.
     #[arg(long)]
     profile: Option<String>,
-    /// Disable .polint/cache reads and writes while creating the baseline.
+    /// Disable analysis/fact cache reads and writes while creating the baseline.
     #[arg(long)]
     no_cache: bool,
     /// Files or directories to baseline. Defaults to the workspace include config.
@@ -146,7 +202,7 @@ struct BaselineUpdateArgs {
     /// Named profile from .polint.toml. When omitted, all discovered rules run.
     #[arg(long)]
     profile: Option<String>,
-    /// Disable .polint/cache reads and writes while updating the baseline.
+    /// Disable analysis/fact cache reads and writes while updating the baseline.
     #[arg(long)]
     no_cache: bool,
     /// Files or directories to check. Defaults to the workspace include config.
@@ -168,7 +224,7 @@ struct CheckArgs {
     /// ANSI colors for human output (no effect on JSON/SARIF). `auto` uses color only for a tty and when `NO_COLOR` is unset.
     #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
     color: ColorArg,
-    /// Disable .polint/cache reads and writes.
+    /// Disable analysis/fact cache reads and writes. Does not disable the repo-local rule-host Cargo target cache.
     #[arg(long)]
     no_cache: bool,
     /// Diagnostic level that fails the process.
@@ -205,7 +261,7 @@ struct IgnoresArgs {
     /// Named profile from .polint.toml. When omitted, all discovered rules run.
     #[arg(long)]
     profile: Option<String>,
-    /// Disable .polint/cache reads and writes while collecting diagnostics.
+    /// Disable analysis/fact cache reads and writes while collecting diagnostics.
     #[arg(long)]
     no_cache: bool,
     /// Comma-separated rule selectors to show, e.g. `local/no-todo,local/*`.
@@ -243,6 +299,20 @@ enum IgnoresFormatArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum CacheStatusFormatArg {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CacheCategoryArg {
+    All,
+    Analysis,
+    RulesTarget,
+    Derived,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum FailOn {
     Warn,
     Error,
@@ -271,6 +341,7 @@ pub(crate) fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Baseline(args) => baseline(std::env::current_dir()?, &args),
+        Command::Cache(args) => cache_command(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
     }
@@ -618,6 +689,178 @@ fn update_baseline(root: PathBuf, args: &BaselineUpdateArgs) -> Result<u8> {
     );
     print!("{}", render_baseline_summary(&classification.summary));
     Ok(0)
+}
+
+fn cache_command(root: PathBuf, args: &CacheArgs) -> Result<u8> {
+    let layout = CacheLayout::for_repo(&root);
+    match &args.command {
+        CacheCommand::Status(status_args) => cache_status(&layout, status_args),
+        CacheCommand::Prune(prune_args) => cache_prune(&layout, prune_args),
+        CacheCommand::Clean(clean_args) => cache_clean(&layout, clean_args),
+    }
+}
+
+fn cache_status(layout: &CacheLayout, args: &CacheStatusArgs) -> Result<u8> {
+    let status = layout.status()?;
+    match args.format {
+        CacheStatusFormatArg::Human => {
+            print!("{}", render_cache_status_human(&status));
+        }
+        CacheStatusFormatArg::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&CacheStatusWire {
+                    schema: POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL,
+                    status: &status,
+                })?
+            );
+        }
+    }
+    Ok(0)
+}
+
+fn cache_prune(layout: &CacheLayout, args: &CachePruneArgs) -> Result<u8> {
+    let options = CachePruneOptions {
+        categories: category_arg_to_prune_categories(args.category),
+        max_age: args
+            .max_age_days
+            .map(|days| Duration::from_secs(days.saturating_mul(24 * 60 * 60))),
+        max_bytes: args.max_size_mb.map(mib_to_bytes),
+        dry_run: args.dry_run,
+    };
+    if options.max_age.is_none() && options.max_bytes.is_none() {
+        anyhow::bail!("cache prune requires --max-age-days or --max-size-mb");
+    }
+    let report = layout.prune(&options)?;
+    print!("{}", render_cache_prune_human(&report));
+    Ok(0)
+}
+
+fn cache_clean(layout: &CacheLayout, args: &CacheCleanArgs) -> Result<u8> {
+    let selection = category_arg_to_clean_selection(args.category);
+    let report = layout.clean(selection)?;
+    print!("{}", render_cache_clean_human(&report));
+    Ok(0)
+}
+
+#[derive(Serialize)]
+struct CacheStatusWire<'a> {
+    #[serde(rename = "schema")]
+    schema: &'static str,
+    #[serde(flatten)]
+    status: &'a CacheStatus,
+}
+
+fn category_arg_to_prune_categories(
+    category: Option<CacheCategoryArg>,
+) -> Vec<CacheManagedCategory> {
+    match category {
+        Some(CacheCategoryArg::All) | None => Vec::new(),
+        Some(CacheCategoryArg::Analysis) => vec![CacheManagedCategory::Analysis],
+        Some(CacheCategoryArg::RulesTarget) => vec![CacheManagedCategory::RulesTarget],
+        Some(CacheCategoryArg::Derived) => vec![CacheManagedCategory::Derived],
+    }
+}
+
+fn category_arg_to_clean_selection(category: CacheCategoryArg) -> CacheCleanSelection {
+    match category {
+        CacheCategoryArg::All => CacheCleanSelection::All,
+        CacheCategoryArg::Analysis => CacheCleanSelection::Category(CacheManagedCategory::Analysis),
+        CacheCategoryArg::RulesTarget => {
+            CacheCleanSelection::Category(CacheManagedCategory::RulesTarget)
+        }
+        CacheCategoryArg::Derived => CacheCleanSelection::Category(CacheManagedCategory::Derived),
+    }
+}
+
+fn mib_to_bytes(value: u64) -> u64 {
+    value.saturating_mul(1024 * 1024)
+}
+
+fn render_cache_status_human(status: &CacheStatus) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Cache root: {}\n", status.root));
+    out.push_str(&format!(
+        "Total: {} across {} files\n",
+        human_bytes(status.total_bytes),
+        status.total_files
+    ));
+    for category in &status.categories {
+        out.push_str(&format!(
+            "- {}: {} files, {} ({})\n  {}\n",
+            category.name,
+            category.files,
+            human_bytes(category.bytes),
+            if category.exists {
+                "present"
+            } else {
+                "missing"
+            },
+            category.path
+        ));
+    }
+    out
+}
+
+fn render_cache_clean_human(report: &CacheCleanReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Removed {} across {} files\n",
+        human_bytes(report.removed_bytes),
+        report.removed_files
+    ));
+    for category in &report.categories {
+        out.push_str(&format!(
+            "- {}: removed {} files, {} from {}\n",
+            category.name,
+            category.removed_files,
+            human_bytes(category.removed_bytes),
+            category.path
+        ));
+    }
+    out
+}
+
+fn render_cache_prune_human(report: &CachePruneReport) -> String {
+    let action = if report.dry_run {
+        "Would remove"
+    } else {
+        "Removed"
+    };
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{action} {} across {} files\n",
+        human_bytes(report.removed_bytes),
+        report.removed_files
+    ));
+    for category in &report.categories {
+        out.push_str(&format!(
+            "- {}: {} files, {} before; {} files, {} selected from {}\n",
+            category.name,
+            category.before_files,
+            human_bytes(category.before_bytes),
+            category.removed_files,
+            human_bytes(category.removed_bytes),
+            category.path
+        ));
+    }
+    out
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
@@ -1142,6 +1385,7 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
     let cargo = std::env::var("POLINT_CARGO")
         .or_else(|_| std::env::var("CARGO"))
         .unwrap_or_else(|_| "cargo".to_string());
+    let cache_layout = CacheLayout::for_repo(root);
     let mut command = ProcessCommand::new(&cargo);
     command.current_dir(root).args([
         "run",
@@ -1159,6 +1403,9 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
         "--ignore-comments",
         "false",
     ]);
+    command
+        .env(POLINT_CACHE_DIR_ENV, cache_layout.root())
+        .env("CARGO_TARGET_DIR", cache_layout.rules_target_dir());
     if let Some(profile) = &args.profile {
         command.args(["--profile", profile]);
     }

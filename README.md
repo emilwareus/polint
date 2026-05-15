@@ -124,6 +124,40 @@ Profiles are explicit:
 - Unknown profiles are errors.
 - Profile names are arbitrary. There is no default profile.
 
+## Cache
+
+polint keeps local, untracked cache data under `.polint/cache` by default:
+
+```text
+.polint/cache/
+  analysis/       compact parser/fact JSON artifacts
+  rules-target/   Cargo target dir for repo-local rule hosts
+  derived/        reserved for future project-level derived facts
+```
+
+`--no-cache` disables analysis/fact cache reads and writes for that run. It does
+not disable the `rules-target` Cargo cache, because rebuilding the local rule
+host on every run is usually wasted work.
+Analysis cache keys include the source path and content, rule/options digest,
+loaded config, requested capability plan, cache format, and polint version.
+If a cache artifact cannot be decoded, polint treats it as a miss and removes
+that artifact.
+
+Useful commands:
+
+```bash
+polint cache status
+polint cache status --format json
+polint cache prune --max-size-mb 512
+polint cache prune --max-age-days 14 --dry-run
+polint cache clean --category analysis
+polint cache clean
+```
+
+Set `POLINT_CACHE_DIR` to move the whole cache root, or
+`POLINT_RULES_TARGET_DIR` to move only the repo-local rule-host Cargo target
+directory.
+
 ## Comment Ignores
 
 Use comment ignores for intentional, local suppressions:
@@ -240,6 +274,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: .polint/cache
+          key: polint-${{ runner.os }}-${{ hashFiles('.polint.toml', '.polint/rules/Cargo.lock', '.polint/rules/**/*.rs') }}
+          restore-keys: |
+            polint-${{ runner.os }}-
       - run: cargo install polint --locked
       - run: polint check --format sarif > polint.sarif
 ```

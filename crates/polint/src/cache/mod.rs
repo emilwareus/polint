@@ -2,10 +2,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 pub(crate) mod keys;
 
-pub(crate) const CACHE_VERSION: &str = "polint-cache-v1";
+pub(crate) const CACHE_VERSION: &str = concat!("polint-cache-v1:", env!("CARGO_PKG_VERSION"));
+pub(crate) const POLINT_CACHE_DIR_ENV: &str = "POLINT_CACHE_DIR";
+pub(crate) const POLINT_RULES_TARGET_DIR_ENV: &str = "POLINT_RULES_TARGET_DIR";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CacheKey {
@@ -84,7 +87,7 @@ impl Cache {
     /// Used by `polint-bench` (`feature = "bench"`) and in-crate callers.
     #[allow(unreachable_pub)]
     pub fn default_for_repo(repo: impl AsRef<Path>, enabled: bool) -> Self {
-        Self::new(repo.as_ref().join(".polint/cache"), enabled)
+        Self::new(CacheLayout::for_repo(repo).analysis_dir(), enabled)
     }
 
     #[cfg(test)]
@@ -97,6 +100,7 @@ impl Cache {
         &self.root
     }
 
+    #[cfg(test)]
     pub(crate) fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
     where
         T: for<'de> Deserialize<'de>,
@@ -117,7 +121,21 @@ impl Cache {
     where
         T: for<'de> Deserialize<'de>,
     {
-        self.read_json(key).ok().flatten()
+        if !self.enabled {
+            return None;
+        }
+        let path = self.path_for(key);
+        if !path.exists() {
+            return None;
+        }
+        let raw = fs::read_to_string(&path).ok()?;
+        match serde_json::from_str(&raw) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                None
+            }
+        }
     }
 
     pub(crate) fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
@@ -129,7 +147,7 @@ impl Cache {
         }
         fs::create_dir_all(&self.root)?;
         let path = self.path_for(key);
-        fs::write(&path, serde_json::to_vec_pretty(value)?)
+        fs::write(&path, serde_json::to_vec(value)?)
             .with_context(|| format!("failed to write cache {}", path.display()))?;
         Ok(())
     }
@@ -137,6 +155,411 @@ impl Cache {
     fn path_for(&self, key: &CacheKey) -> PathBuf {
         self.root.join(format!("{}.json", key.stable_id()))
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CacheLayout {
+    root: PathBuf,
+}
+
+impl CacheLayout {
+    pub(crate) fn for_repo(repo: impl AsRef<Path>) -> Self {
+        Self {
+            root: env_path_or_repo_default(repo.as_ref(), POLINT_CACHE_DIR_ENV, ".polint/cache"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_root(root: impl AsRef<Path>) -> Self {
+        Self {
+            root: root.as_ref().to_path_buf(),
+        }
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn analysis_dir(&self) -> PathBuf {
+        self.root.join("analysis")
+    }
+
+    pub(crate) fn rules_target_dir(&self) -> PathBuf {
+        env_path_or_cache_default(
+            &self.root,
+            POLINT_RULES_TARGET_DIR_ENV,
+            Path::new("rules-target"),
+        )
+    }
+
+    pub(crate) fn derived_dir(&self) -> PathBuf {
+        self.root.join("derived")
+    }
+
+    pub(crate) fn status(&self) -> Result<CacheStatus> {
+        let categories = vec![
+            self.status_for("analysis", self.analysis_dir())?,
+            self.status_for("rules-target", self.rules_target_dir())?,
+            self.status_for("derived", self.derived_dir())?,
+        ];
+        let total_bytes = categories.iter().map(|category| category.bytes).sum();
+        let total_files = categories.iter().map(|category| category.files).sum();
+        Ok(CacheStatus {
+            root: self.root.display().to_string(),
+            categories,
+            total_bytes,
+            total_files,
+        })
+    }
+
+    fn status_for(&self, name: &'static str, path: PathBuf) -> Result<CacheCategoryStatus> {
+        let stats = directory_stats(&path)?;
+        Ok(CacheCategoryStatus {
+            name,
+            path: path.display().to_string(),
+            exists: stats.exists,
+            bytes: stats.bytes,
+            files: stats.files,
+        })
+    }
+
+    pub(crate) fn clean(&self, selection: CacheCleanSelection) -> Result<CacheCleanReport> {
+        let mut report = CacheCleanReport::default();
+        let categories = match selection {
+            CacheCleanSelection::All => vec![
+                CacheManagedCategory::Analysis,
+                CacheManagedCategory::RulesTarget,
+                CacheManagedCategory::Derived,
+            ],
+            CacheCleanSelection::Category(category) => vec![category],
+        };
+
+        for category in categories {
+            let path = self.category_path(category);
+            let before = directory_stats(&path)?;
+            if fs::symlink_metadata(&path).is_ok() {
+                remove_cache_path(&path)
+                    .with_context(|| format!("failed to remove cache {}", path.display()))?;
+            }
+            report.removed_bytes += before.bytes;
+            report.removed_files += before.files;
+            report.categories.push(CacheCleanCategoryReport {
+                name: category.name(),
+                path: path.display().to_string(),
+                removed_bytes: before.bytes,
+                removed_files: before.files,
+            });
+        }
+
+        Ok(report)
+    }
+
+    pub(crate) fn prune(&self, options: &CachePruneOptions) -> Result<CachePruneReport> {
+        let categories = if options.categories.is_empty() {
+            vec![
+                CacheManagedCategory::Analysis,
+                CacheManagedCategory::RulesTarget,
+                CacheManagedCategory::Derived,
+            ]
+        } else {
+            options.categories.clone()
+        };
+
+        let mut report = CachePruneReport {
+            dry_run: options.dry_run,
+            ..CachePruneReport::default()
+        };
+        for category in categories {
+            let category_report = self.prune_category(category, options)?;
+            report.removed_bytes += category_report.removed_bytes;
+            report.removed_files += category_report.removed_files;
+            report.categories.push(category_report);
+        }
+        Ok(report)
+    }
+
+    fn prune_category(
+        &self,
+        category: CacheManagedCategory,
+        options: &CachePruneOptions,
+    ) -> Result<CachePruneCategoryReport> {
+        let path = self.category_path(category);
+        let before = directory_stats(&path)?;
+        let mut candidates = Vec::new();
+        collect_cache_files(&path, &mut candidates)?;
+        candidates.sort_by(|left, right| {
+            left.modified
+                .cmp(&right.modified)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+
+        let now = SystemTime::now();
+        let mut selected = std::collections::BTreeSet::new();
+        if let Some(max_age) = options.max_age {
+            for file in &candidates {
+                if now.duration_since(file.modified).unwrap_or(Duration::ZERO) > max_age {
+                    selected.insert(file.path.clone());
+                }
+            }
+        }
+
+        if let Some(max_bytes) = options.max_bytes
+            && before.bytes > max_bytes
+        {
+            let mut projected = before.bytes;
+            for file in &candidates {
+                if projected <= max_bytes {
+                    break;
+                }
+                if selected.insert(file.path.clone()) {
+                    projected = projected.saturating_sub(file.bytes);
+                }
+            }
+        }
+
+        let mut removed_bytes = 0;
+        let mut removed_files = 0;
+        for file in candidates
+            .iter()
+            .filter(|file| selected.contains(&file.path))
+        {
+            removed_bytes += file.bytes;
+            removed_files += 1;
+            if !options.dry_run && file.path.is_file() {
+                fs::remove_file(&file.path).with_context(|| {
+                    format!("failed to remove cache file {}", file.path.display())
+                })?;
+            }
+        }
+        if !options.dry_run {
+            remove_empty_dirs(&path)?;
+        }
+
+        Ok(CachePruneCategoryReport {
+            name: category.name(),
+            path: path.display().to_string(),
+            before_bytes: before.bytes,
+            before_files: before.files,
+            removed_bytes,
+            removed_files,
+        })
+    }
+
+    fn category_path(&self, category: CacheManagedCategory) -> PathBuf {
+        match category {
+            CacheManagedCategory::Analysis => self.analysis_dir(),
+            CacheManagedCategory::RulesTarget => self.rules_target_dir(),
+            CacheManagedCategory::Derived => self.derived_dir(),
+        }
+    }
+}
+
+fn env_path_or_repo_default(repo: &Path, env_key: &str, default: &str) -> PathBuf {
+    match std::env::var_os(env_key).filter(|value| !value.is_empty()) {
+        Some(path) => absolutize_env_path(repo, PathBuf::from(path)),
+        None => repo.join(default),
+    }
+}
+
+fn env_path_or_cache_default(cache_root: &Path, env_key: &str, default: &Path) -> PathBuf {
+    match std::env::var_os(env_key).filter(|value| !value.is_empty()) {
+        Some(path) => absolutize_env_path(cache_root, PathBuf::from(path)),
+        None => cache_root.join(default),
+    }
+}
+
+fn absolutize_env_path(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheManagedCategory {
+    Analysis,
+    RulesTarget,
+    Derived,
+}
+
+impl CacheManagedCategory {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Analysis => "analysis",
+            Self::RulesTarget => "rules-target",
+            Self::Derived => "derived",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CacheCleanSelection {
+    All,
+    Category(CacheManagedCategory),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CachePruneOptions {
+    pub(crate) categories: Vec<CacheManagedCategory>,
+    pub(crate) max_age: Option<Duration>,
+    pub(crate) max_bytes: Option<u64>,
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CacheStatus {
+    pub(crate) root: String,
+    pub(crate) categories: Vec<CacheCategoryStatus>,
+    pub(crate) total_bytes: u64,
+    pub(crate) total_files: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CacheCategoryStatus {
+    pub(crate) name: &'static str,
+    pub(crate) path: String,
+    pub(crate) exists: bool,
+    pub(crate) bytes: u64,
+    pub(crate) files: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CacheCleanReport {
+    pub(crate) removed_bytes: u64,
+    pub(crate) removed_files: u64,
+    pub(crate) categories: Vec<CacheCleanCategoryReport>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CacheCleanCategoryReport {
+    pub(crate) name: &'static str,
+    pub(crate) path: String,
+    pub(crate) removed_bytes: u64,
+    pub(crate) removed_files: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CachePruneReport {
+    pub(crate) dry_run: bool,
+    pub(crate) removed_bytes: u64,
+    pub(crate) removed_files: u64,
+    pub(crate) categories: Vec<CachePruneCategoryReport>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CachePruneCategoryReport {
+    pub(crate) name: &'static str,
+    pub(crate) path: String,
+    pub(crate) before_bytes: u64,
+    pub(crate) before_files: u64,
+    pub(crate) removed_bytes: u64,
+    pub(crate) removed_files: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CacheDirStats {
+    exists: bool,
+    bytes: u64,
+    files: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CacheFile {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+}
+
+fn directory_stats(path: &Path) -> Result<CacheDirStats> {
+    let mut stats = CacheDirStats {
+        exists: true,
+        ..CacheDirStats::default()
+    };
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(CacheDirStats::default());
+    };
+    if metadata.is_dir() {
+        add_directory_stats(path, &mut stats)?;
+    } else if metadata.is_file() {
+        stats.files = 1;
+        stats.bytes = metadata.len();
+    }
+    Ok(stats)
+}
+
+fn add_directory_stats(path: &Path, stats: &mut CacheDirStats) -> Result<()> {
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.is_dir() {
+            add_directory_stats(&entry.path(), stats)?;
+        } else if metadata.is_file() {
+            stats.files += 1;
+            stats.bytes += metadata.len();
+        }
+    }
+    Ok(())
+}
+
+fn collect_cache_files(path: &Path, files: &mut Vec<CacheFile>) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        let path = entry.path();
+        if metadata.is_dir() {
+            collect_cache_files(&path, files)?;
+        } else if metadata.is_file() {
+            files.push(CacheFile {
+                path,
+                bytes: metadata.len(),
+                modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn remove_cache_path(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn remove_empty_dirs(path: &Path) -> Result<bool> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+    let mut is_empty = true;
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if !remove_empty_dirs(&entry_path)? {
+                is_empty = false;
+            }
+        } else {
+            is_empty = false;
+        }
+    }
+    if is_empty {
+        fs::remove_dir(path)
+            .with_context(|| format!("failed to remove empty cache dir {}", path.display()))?;
+    }
+    Ok(is_empty)
 }
 
 /// Deterministic cache key component hash (also used by `polint-bench` via `_bench::cache`).
@@ -295,10 +718,32 @@ mod tests {
 
         assert_eq!(restored, value);
         assert!(cache.root().exists());
+        assert_eq!(cache.root(), temp.path().join(".polint/cache/analysis"));
     }
 
     #[test]
-    fn invalid_json_can_be_treated_as_miss() {
+    fn cache_json_is_written_compactly() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Cache::default_for_repo(temp.path(), true);
+        let key = CacheKey::for_file(
+            "src/main.go",
+            "content",
+            "config",
+            "rule",
+            "plan",
+            "go-facts-v1",
+        );
+
+        cache
+            .write_json(&key, &json!({ "schema": "go-facts-v1", "items": [1, 2] }))
+            .unwrap();
+
+        let raw = fs::read_to_string(cache.path_for(&key)).unwrap();
+        assert_eq!(raw, r#"{"schema":"go-facts-v1","items":[1,2]}"#);
+    }
+
+    #[test]
+    fn invalid_json_cache_entry_is_deleted_on_miss() {
         let temp = tempfile::tempdir().unwrap();
         let cache = Cache::default_for_repo(temp.path(), true);
         let key = CacheKey::for_file(
@@ -315,6 +760,42 @@ mod tests {
         let restored: Option<serde_json::Value> = cache.read_json_or_miss(&key);
 
         assert!(restored.is_none());
+        assert!(!cache.path_for(&key).exists());
+    }
+
+    #[test]
+    fn cache_status_counts_managed_categories() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = CacheLayout::from_root(temp.path().join("cache"));
+        fs::create_dir_all(layout.analysis_dir()).unwrap();
+        fs::write(layout.analysis_dir().join("a.json"), "{}").unwrap();
+        fs::write(layout.root().join("incompatible.json"), "{}").unwrap();
+        fs::create_dir_all(layout.rules_target_dir().join("debug")).unwrap();
+        fs::write(layout.rules_target_dir().join("debug/rules"), "binary").unwrap();
+
+        let status = layout.status().unwrap();
+
+        assert_eq!(status.total_files, 2);
+        assert_eq!(status.total_bytes, 8);
+    }
+
+    #[test]
+    fn cache_clean_analysis_removes_only_analysis_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = CacheLayout::from_root(temp.path().join("cache"));
+        fs::create_dir_all(layout.analysis_dir()).unwrap();
+        fs::write(layout.analysis_dir().join("a.json"), "{}").unwrap();
+        fs::write(layout.root().join("unmanaged.json"), "{}").unwrap();
+
+        let report = layout
+            .clean(CacheCleanSelection::Category(
+                CacheManagedCategory::Analysis,
+            ))
+            .unwrap();
+
+        assert_eq!(report.removed_files, 1);
+        assert!(!layout.analysis_dir().exists());
+        assert!(layout.root().join("unmanaged.json").exists());
     }
 
     proptest! {

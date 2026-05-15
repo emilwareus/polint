@@ -85,16 +85,24 @@ pub(crate) fn cache_json_count(root: &Path) -> usize {
     if !cache_dir.exists() {
         return 0;
     }
-    fs::read_dir(&cache_dir)
-        .unwrap_or_else(|e| panic!("read cache dir {}: {e}", cache_dir.display()))
-        .filter(|entry| {
-            entry
-                .as_ref()
-                .ok()
-                .and_then(|entry| entry.path().extension().map(|ext| ext == "json"))
-                .unwrap_or(false)
+    cache_json_count_in(&cache_dir)
+}
+
+fn cache_json_count_in(path: &Path) -> usize {
+    fs::read_dir(path)
+        .unwrap_or_else(|e| panic!("read cache dir {}: {e}", path.display()))
+        .map(|entry| {
+            let entry = entry.unwrap_or_else(|e| panic!("read cache entry: {e}"));
+            let path = entry.path();
+            if path.is_dir() {
+                cache_json_count_in(&path)
+            } else if path.extension().is_some_and(|ext| ext == "json") {
+                1
+            } else {
+                0
+            }
         })
-        .count()
+        .sum()
 }
 
 pub(crate) fn diagnostic_files(value: &serde_json::Value, rule_id: &str) -> Vec<String> {
@@ -155,15 +163,21 @@ fn shared_cargo_target_dir() -> PathBuf {
     repo_root().join("target/polint-cli-test-cargo")
 }
 
+fn shared_rules_target_dir() -> PathBuf {
+    repo_root().join("target/polint-cli-test-rules")
+}
+
 pub(crate) fn cargo_cmd() -> Command {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command
 }
 
 pub(crate) fn polint_cmd() -> Command {
     let mut command = Command::cargo_bin("polint").unwrap();
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command
 }
 
