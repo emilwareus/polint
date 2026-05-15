@@ -8,7 +8,7 @@ Date: 2026-05-15
 - [x] Call graph research completed: see `research/call-graphs/`.
 - [x] Data-flow research completed: see `research/data-flow/`.
 - [x] Agent extension surface research completed: see `research/agent-extension-surface/`.
-- [ ] Research the analysis kernel: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation.
+- [x] Analysis kernel research completed: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation. See `research/analysis-kernel/`.
 - [ ] Research the evaluation harness: default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, and regression gates.
 - [ ] Research framework, lifecycle, and entrypoint modeling: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, and generated dispatch.
 - [ ] Deepen semantic index research: scopes, aliases, generated symbols, type-aware resolution, unresolved references, and extension-provided resolution facts.
@@ -160,6 +160,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R0. Call Graphs | Done, deepen during implementation | `research/call-graphs/` | Call-site/call-edge fact model, algorithm tiers, unresolved-call model, repo-local call model layer, default-vs-extended evaluation, cost/accuracy tradeoffs across Go, TS/JS, Java, Python. |
 | R1. Data Flow | Done, deepen during implementation | `research/data-flow/` | Data-flow fact model, local/sparse/summarized/global flow strategy, IFDS/IDE timing, source/sink/sanitizer/summary model layer, call-graph dependency, agent-era domain lessons, default-vs-extended evaluation. |
 | R2. Agent Extension Surface | Done, implement first vertical slice | `research/agent-extension-surface/` | Recommended Rust-code extension lifecycle for agent-authored engine improvements: process-isolated extension crates, typed sinks, provenance, validation, extension-aware capability planning, default-vs-extended deltas. |
+| R3. Analysis Kernel | Done, implement before call graph/data flow | `research/analysis-kernel/` | Hybrid internal kernel recommendation: deterministic provider DAG, typed fact layers, sidecar provenance, validation/merge gates, layer-specific cache keys, relation/fixpoint sub-engine for recursive analyses, explicit unknowns, and extension-aware capability support. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -169,7 +170,9 @@ These tracks are not implementation endpoints. They are inputs to the next resea
 
 **Folder:** `research/analysis-kernel/`
 
-This is the highest-priority next research topic before implementation. If polint is going to become the most capable static-analysis engine we can build, it must not grow as disconnected feature slices. Entrypoints, CFG, call graphs, data flow, effects, and rules should all plug into one shared analysis kernel.
+Status: researched in `research/analysis-kernel/`.
+
+This was the highest-priority research topic before implementation. If polint is going to become the most capable static-analysis engine we can build, it must not grow as disconnected feature slices. Entrypoints, CFG, call graphs, data flow, effects, and rules should all plug into one shared analysis kernel.
 
 The kernel is the substrate:
 
@@ -196,7 +199,7 @@ Research questions:
 - What graph/storage shape supports cross-language facts without leaking AST/parser internals?
 - How should unknowns, low-confidence facts, and unsupported behavior be represented as first-class facts?
 
-Deliverables:
+Deliverables completed:
 
 - Analysis kernel architecture recommendation.
 - Fact layer model: native, derived, extension, synthetic, heuristic, validated.
@@ -206,6 +209,8 @@ Deliverables:
 - Extension merge/conflict policy.
 - Minimal internal APIs needed for the first implementation without freezing a too-small public API.
 - Decision on whether to research/use Salsa, Datalog/Souffle-like relations, petgraph-backed relations, or a custom query scheduler.
+
+Core decision: use a hybrid internal kernel. Start with a deterministic provider DAG and typed fact layers, add sidecar provenance/validation/merge gates, split cache keys by layer, and add an internal relation/fixpoint sub-engine for recursive analyses. Copy Salsa/rust-analyzer invalidation concepts and Souffle/CodeQL relation concepts without adopting either as the first public or storage architecture.
 
 ### 2. Evaluation Harness And Ground Truth
 
