@@ -12,7 +12,7 @@ Date: 2026-05-15
 - [x] Evaluation harness research completed: external-benchmark-first strategy, default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, regression gates, and benchmark adapters. See `research/evaluation-harness/`.
 - [x] Framework, lifecycle, and entrypoint modeling research completed: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, generated dispatch, native Rust provider path, and validation strategy. See `research/framework-entrypoints/`.
 - [x] Semantic index deep research completed: scopes, aliases, generated symbols, type-aware resolution, unresolved references, extension-provided resolution facts, and export identity. See `research/semantic-index/`.
-- [ ] Research module, package, dependency, and repo topology graphs.
+- [x] Module/package/dependency/repo topology graph research completed: package managers, lockfiles, workspaces, import-to-package resolution, source sets, build targets, repo topology overlays, and extension facts. See `research/module-graph/`.
 - [ ] Research CFG and control dependence.
 - [ ] Research type, value, points-to, and alias analysis.
 - [ ] Revisit call graph implementation details against the analysis kernel and evaluation harness.
@@ -163,6 +163,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R3. Analysis Kernel | Done, implement before call graph/data flow | `research/analysis-kernel/` | Hybrid internal kernel recommendation: deterministic provider DAG, typed fact layers, sidecar provenance, validation/merge gates, layer-specific cache keys, relation/fixpoint sub-engine for recursive analyses, explicit unknowns, and extension-aware capability support. |
 | R4. Evaluation Harness | Done, implement before call graph/data flow | `research/evaluation-harness/` | External-benchmark-first evaluation strategy, suite adapters, canonical expected/observed schema, default-vs-extension deltas, graph/path/fact/diagnostic metrics, performance/cache baselines, and native fixtures for engine invariants. |
 | R5. Framework, Lifecycle, And Entrypoint Modeling | Done, implement first fact-family vertical slice | `research/framework-entrypoints/` | Native framework boundary layer recommendation: `Entrypoints<'_>`, trust-boundary facts, framework dispatch overlays, explicit unknowns, Go and TS/JS first recognizers, MCP as a first-class boundary, repo-local Rust providers, validation fixtures, and default-vs-extension metrics. |
+| R6. Module, Package, Dependency, And Repo Topology Graph | Done, implement before serious call graph/data-flow integration | `research/module-graph/` | Layered native topology model: workspace roots, packages/projects/source sets, declared requirements, lockfile/native/tool-reported resolved edges, import-to-package facts, build target overlays, repo topology, package-manager coverage, precision labels, cache keys, and extension merge rules. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -334,6 +335,8 @@ Core decision: implement a native framework boundary layer before full call grap
 
 **Folder:** `research/module-graph/`
 
+Status: researched in `research/module-graph/`.
+
 This should follow semantic indexing because imports and package roots are part of name resolution, but it deserves its own research track because repo-local policies often target architecture boundaries.
 
 Research questions:
@@ -342,12 +345,17 @@ Research questions:
 - How do we model dependency direction, layer boundaries, public/private APIs, test-only imports, generated code, vendored code, and external dependencies?
 - How should lifecycle inputs participate in cache digests?
 
-Deliverables:
+Deliverables completed:
 
-- `ModuleGraph<'_>` and `Dependencies<'_>` fact model.
-- Repository topology model for monorepos.
-- Boundary-rule examples: forbidden imports, layer violations, test-to-prod leaks, package ownership.
-- Agent-authored boundary model format for product-specific layers, ownership areas, generated-code zones, and deploy/runtime packages.
+- Layered fact model for `WorkspaceRootFact`, `PackageFact`, `SourceSetFact`, `DependencyRequirementFact`, `ResolvedDependencyFact`, `ImportToPackageFact`, and `RepoTopologyFact`.
+- Language reports for Go, TS/JS, Python, Java/JVM, and Cargo.
+- Package manager coverage matrix for Go modules, npm, pnpm, Yarn, Bun, pip, uv, Poetry, PDM, conda, Maven, Gradle, Bazel, Pants, and Cargo.
+- OSS repository index with local source evidence from Go, gopls, TypeScript, Oxc resolver, npm Arborist, pnpm, Yarn Berry, Bun, uv, pip/resolvelib, Poetry, PDM, conda, Maven Resolver, Gradle, Bazel, Pants, Nx, Turborepo, and Cargo.
+- Research paper/source index covering dependency solving, package-calculus models, lockfile design, and build-system theory.
+- Native Rust implementation path with parsers, providers, validation, cache keys, extension merge rules, and SDK promotion timing.
+- Benchmark and validation plan for roots, packages, declared edges, resolved edges, import ownership, source sets, unknowns, and extension deltas.
+
+Core decision: build layered topology facts, not one universal dependency graph. Parse manifests and lockfiles natively first, implement Go MVS as the first full native resolver, support TS/JS/Python/JVM common managers through exact static facts and lockfile readers, and represent Gradle/Bazel/Pants dynamic build logic as conservative or tool-reported/extension-provided facts until exact native modeling exists.
 
 ### 7. CFG: Control Flow Graphs And Control Dependence
 
@@ -579,10 +587,10 @@ That means research should prefer architectures with clear typed extension point
 Start with:
 
 ```text
-research/module-graph/
+research/cfg-control-flow/
 ```
 
-Reason: semantic-index research is now complete enough to show that import resolution, stable symbol keys, external symbols, generated-code zones, package roots, workspace topology, and lifecycle config all depend on module/package/repo topology. This is the next blocking research topic before serious call graph/data-flow implementation.
+Reason: module graph research is now complete enough to define packages, source sets, imports, generated zones, and lifecycle roots. CFG/control-dependence is the next missing substrate before serious local data-flow, interprocedural summaries, path explanation, and language-specific call/data-flow precision.
 
 Then revisit:
 
