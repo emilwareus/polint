@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python</title>
+<meta name="generator" content="Jekyll v3.10.0" />
+<meta property="og:title" content="JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python" />
+<meta property="og:locale" content="en_US" />
+<link rel="canonical" href="https://pythonjarvis.github.io/" />
+<meta property="og:url" content="https://pythonjarvis.github.io/" />
+<meta property="og:site_name" content="JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","headline":"JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python","name":"JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python","url":"https://pythonjarvis.github.io/"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="stylesheet" href="/assets/css/style.css?v=8871b86494a1aec0095686ffa543994a7361af88">
+    <script src="https://code.jquery.com/jquery-3.3.0.min.js" integrity="sha256-RTQy8VOmNlT6b2PIRur37p6JEBZUE7o8wPgMvu18MC4=" crossorigin="anonymous"></script>
+    <script src="/assets/js/main.js"></script>
+    <!--[if lt IE 9]>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv.min.js" integrity="sha256-3Jy/GbSLrg0o9y5Z5n1uw0qxZECH7C6OQpVBgNFYa0g=" crossorigin="anonymous"></script>
+    <![endif]-->
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup Google Analytics -->
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+  </head>
+  <body>
+
+      <header>
+        <!-- <h1>JARVIS: Scalable and Precise Application-Centered Call Graph Generation for Python</h1> -->
+        <h1 style="font-size:40px;">JARVIS:Scalable Demand-driven Call Graph Generation for Python</h1>
+        <p></p>
+      </header>
+
+      <div id="banner">
+        <span id="logo"></span>
+
+        <a href="https://github.com/pythonJaRvis/pythonJaRvis.github.io" class="button fork"><strong>View On GitHub</strong></a>
+        
+      </div><!-- end banner -->
+
+    <div class="wrapper">
+      <nav>
+        <ul></ul>
+      </nav>
+      <section>
+        <head>
+  	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <script type="text/x-mathjax-config">
+        MathJax.Hub.Config({
+            tex2jax: {
+            skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+            inlineMath: [['$','$']]
+            }
+        });
+    </script>
+</head>
+
+<h2 id="abstract">ABSTRACT</h2>
+
+<p>Call graph construction is the foundation of inter-procedural static analysis. However, constructing precise call graphs for Python
+programs while maintaining high efficiency remains a significant challenge. For instance, the state-of-the-art approach, PyCG, fails to
+scale to large programs. In our preliminary experiments, it ran out of memory or exceeded the time limit for programs exceeding
+2,000 lines of code. This limitation stems from the costly global fixed-point iterations required during analysis. In addition, PyCG is
+flow-insensitive and does not fully support Python’s dynamic features, which further limits its accuracy.</p>
+
+<p>To overcome these drawbacks, we propose a scalable and precise approach for constructing application-centered call graphs for
+Python programs, and implement it as a prototype Jarvis. Jarvis maintains a type graph (i.e., type relations of program identifiers) for
+each function in a program to allow type inference.x Taking one function as an input, Jarvis generates the call graph on-the-fly,
+where flowsensitive intraprocedural analysis and interprocedural analysis are conducted in turn and strong updates are conducted.
+Unlike traditional whole-program analyses (eg., PyCG) that rely on costly global fixed-point iterations, Jarvis constructs call graphs
+on-the-fly using function-scoped type graphs. By propagating type and call information in a single pass and reusing function-level type
+relations, Jarvis achieves precise, flow-sensitive call graph construction without repeated whole-program iterations. Our evaluation
+on a micro-benchmark of 135 small Python programs and a macro-benchmark of 6 real-world Python applications has demonstrated
+that Jarvis can significantly improve PyCG by at least 67% faster in time, 84% higher in precision, and at least 20% higher in recall</p>
+
+<p>The paper has been submitted to TOSEM. The Jarvis artifact is provided <a href="Jarvis.zip">here</a>.</p>
+
+<h2 id="transfer-rules">Transfer rules</h2>
+
+\[\begin{align*}
+&amp;{Import:}~from~m~^\prime~import~x, import~m^\prime \\
+&amp;\frac{\begin{matrix}
+t_1=new\_type(m,~x), t_2=new\_type(m^\prime,~x), t_3=t_m, t_4=new\_type(m^\prime)
+\end{matrix}
+}{ \Delta_{e} \leftarrow \langle t_1, t_2, e\rangle, \Delta_{e} \leftarrow \langle t_3, t_4, e\rangle}\\
+&amp;{Assign:}~x=y \\
+&amp;\frac{t_1=new\_type(x), t_2=new\_type(y)} { \Delta_{e} \leftarrow \langle t_1, t_2, e\rangle} \\
+&amp;{Store:}~x.field~=~y\\
+&amp;\frac{t_i \in points(x), t_2 = new\_type(y)}{\Delta_{e} \leftarrow \langle t_i.field, t_2, e\rangle}\\
+&amp;{Load:}~y~=~x.field\\
+&amp;\frac{t_1 \in new\_type(y), t_j \in points(x)}{\Delta_{e} \leftarrow \langle t_1, t_j.field,~e \rangle} \\
+&amp;{New:}~y~=~x(...) \\
+&amp;\frac{t_1=new\_type(y), t_2=new\_type(x)}{
+\begin{matrix}
+\Delta_{e}~\leftarrow~{inter\_analysis}(f,~e,FTG^f_{e.p}), \Delta_{e}~\leftarrow~\langle~t_1,~t_2,~e~\rangle\\
+\end{matrix}
+} \\
+&amp;{Call:}~a=x.m(...) \\
+&amp;\frac{
+\begin{matrix}
+t_1=new\_type(x), t_2=new\_type(t_1.m), t_3=new\_type(a)
+\end{matrix}
+}
+{\begin{matrix}
+\Delta_{call}~\leftarrow~{inter\_analysis}(f,~e,FTG^f_{e.p}), \Delta_{call}~\leftarrow~\langle~t_3,~t_2.\textit{ret},~e\rangle
+\end{matrix}
+}\\
+&amp;{Func:}~def~m^\prime(args...) ...\\
+&amp;\frac{d=new\_type(m^\prime),t_{1...n}=new\_type(args_{1...n})}{\Delta_{e} \leftarrow \langle d, \varnothing, e \rangle,F \leftarrow \langle d,args_{1...n} \rangle}\\
+&amp;{Class:}~class~cls(base...) ...\\
+&amp;\frac{d=new\_type(cls),base_{1...n}=new\_type(base_{1...n})}{\Delta_{e} \leftarrow \langle d, \varnothing, e \rangle,C \leftarrow \langle d,base_{1...n} \rangle}\\
+&amp;{Return:}~def~m^\prime ...~return~x\\
+&amp;\frac{t_1=new\_type(m^\prime), t_2=new\_type(x)}{\Delta_{e} \leftarrow \langle t_1.\textit{ret}, t_2, e \rangle}\\
+&amp;{With:}~with~cls()~as~f\\
+&amp;\frac{
+\begin{matrix}
+t_1=new\_type(cls), t_2=new\_type(cls.\_\_enter\_\_), t_3=new\_type(f)
+\end{matrix}
+}
+{\begin{matrix}
+\Delta_{call}~\leftarrow~{inter\_analysis}(f,~e,FTG^f_{e.p}), \Delta_{call}~\leftarrow~\langle~t_3,~t_2.\textit{ret},~e\rangle
+\end{matrix}
+}\\
+&amp;{For:}~for~x~in~cls()\\
+&amp;\frac{
+\begin{matrix}
+t_1=new\_type(cls), t_2=new\_type(cls.\_\_iter\_\_), t_3=new\_type(f)
+\end{matrix}
+}
+{\begin{matrix}
+\Delta_{call}~\leftarrow~{inter\_analysis}(f,~e,FTG^f_{e.p}), \Delta_{call}~\leftarrow~\langle~t_3,~t_2.\textit{ret},~e\rangle
+\end{matrix}
+}\\
+&amp;{If:}~if ...\\
+&amp;
+\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {if}, {\varnothing}\rangle
+\end{matrix}}
+\\
+&amp;{If-Else:}~if ...~else~ ...\\
+&amp;
+\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {&lt;if,else&gt;}, {\varnothing}\rangle
+\end{matrix}}
+\\
+&amp;{Elif:}~elif~...\\
+&amp;
+\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {else}, {\varnothing}\rangle,  \langle {Expr}, {Ctrl}, {if}, {\varnothing}\rangle
+\end{matrix}}
+\\
+&amp;{While:}~while ...\\
+&amp;
+\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {while}, {\varnothing}\rangle
+\end{matrix}}
+\\
+&amp;{While-Else:}~while ...~else~ ...\\
+&amp;
+\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {&lt;while,else&gt;}, {\varnothing}\rangle
+\end{matrix}}
+\\
+&amp;{Exception:}~try ...~catch~ ...\\
+&amp;\frac{}{\begin{matrix}
+ CFG \leftarrow \langle {Expr}, {Ctrl}, {&lt;try,catch&gt;}, {\varnothing}\rangle
+\end{matrix}}
+\\
+\end{align*}\]
+
+<h2 id="dataset-and-ground-truth">Dataset and Ground truth</h2>
+
+<p>The micro-benchmark and macro-benchmark are provided in <code class="language-plaintext highlighter-rouge">dataset</code> and <code class="language-plaintext highlighter-rouge">grount_truth</code> directory.</p>
+
+<h2 id="getting-jarvis-to-run">Getting Jarvis to run</h2>
+
+<p>Prerequisites:</p>
+<ul>
+  <li>Python = 3.8</li>
+  <li>PyCG: tool/PyCG</li>
+  <li>Jarvis: tool/Jarvis</li>
+</ul>
+
+<p>run <code class="language-plaintext highlighter-rouge">jarvis_cli.py</code>.</p>
+
+<p>Jarvis usage:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>python3 tool/Jarvis/jarvis_cli.py <span class="o">[</span>module_path1 module_path2 module_path3...] <span class="o">[</span><span class="nt">--package</span><span class="o">]</span> <span class="o">[</span><span class="nt">--decy</span><span class="o">]</span> <span class="o">[</span><span class="nt">-o</span> output_path]
+</code></pre></div></div>
+
+<p>Jarvis help:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>python3 tool/Jarvis/jarvis_cli.py <span class="nt">-h</span>
+  usage: jarvis_cli.py <span class="o">[</span><span class="nt">-h</span><span class="o">]</span> <span class="o">[</span><span class="nt">--package</span> PACKAGE] <span class="o">[</span><span class="nt">--decy</span><span class="o">]</span> <span class="o">[</span><span class="nt">--precision</span><span class="o">]</span>
+                       <span class="o">[</span><span class="nt">--moduleEntry</span> <span class="o">[</span>MODULEENTRY ...]]
+                       <span class="o">[</span><span class="nt">--operation</span> <span class="o">{</span>call-graph,key-error<span class="o">}]</span> <span class="o">[</span><span class="nt">-o</span> OUTPUT]
+                       <span class="o">[</span>module ...]
+
+  positional arguments:
+    module                modules to be processed, which are also application entries <span class="k">in </span>A.W. mode 
+
+  options:
+    <span class="nt">-h</span>, <span class="nt">--help</span>            show this <span class="nb">help </span>message and <span class="nb">exit</span>
+    <span class="nt">--package</span> PACKAGE     Package containing the code to be analyzed
+    <span class="nt">--decy</span>                whether analyze the dependencies
+    <span class="nt">--precision</span>           whether flow-sensitive
+    <span class="nt">--entry-point</span> <span class="o">[</span>MODULEENTRY ...]
+                          Entry functions to be processed
+    <span class="nt">-o</span> OUTPUT, <span class="nt">--output</span> OUTPUT
+                          Output call graph path
+</code></pre></div></div>
+
+<p><em>Example 1:</em> analyze bpytop.py in E.A. mode.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>python3 tool/Jarvis/jarvis_cli.py dataset/macro_benchmark/pj/bpytop/bpytop.py <span class="nt">--package</span> dataset/macro_benchmark/pj/bpytop <span class="nt">-o</span> jarvis.json
+</code></pre></div></div>
+
+<p><em>Example 2:</em> analyze bpytop.py in A.W. mode. Note we should prepare all the dependencies in the virtual environment.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># create virtualenv environment</span>
+<span class="nv">$ </span>virtualenv venv <span class="nv">python</span><span class="o">=</span>python3.8
+<span class="c"># install Dependencies in virtualenv environment</span>
+<span class="nv">$ </span>python3 <span class="nt">-m</span> pip <span class="nb">install </span>psutil
+<span class="c"># run jarvis</span>
+<span class="nv">$ </span>python3 tool/Jarvis/jarvis_cli.py dataset/macro_benchmark/pj/bpytop/bpytop.py <span class="nt">--package</span> dataset/macro_benchmark/pj/bpytop <span class="nt">--decy</span> <span class="nt">-o</span> jarvis.json
+</code></pre></div></div>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<h3 id="rq1-and-rq2-setup">RQ1 and RQ2 Setup</h3>
+
+<p>cd to the root directory of the unzipped files.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># 1. run micro_benchmark</span>
+<span class="nv">$ </span>./reproducing_RQ12_setup/micro_benchmark/test_All.sh
+<span class="c"># 2. run macro_benchmark</span>
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/pycg_EA.sh
+<span class="c">#     PyCG iterates once</span>
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/pycg_EW.sh 1
+<span class="c">#     PyCG iterates twice</span>
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/pycg_EW.sh 2
+<span class="c">#     PyCG iterates to convergence </span>
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/pycg_EW.sh
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/jarvis_AA.sh
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/jarvis_EA.sh
+<span class="nv">$ </span>./reproducing_RQ12_setup/macro_benchmark/jarvis_AW.sh
+</code></pre></div></div>
+
+<h3 id="rq1-scalability-evaluation">RQ1. Scalability Evaluation</h3>
+
+<h4 id="scalability-results">Scalability results</h4>
+<p>Run</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>python3 ./reproducing_RQ1/gen_table.py
+</code></pre></div></div>
+
+<p>The results are shown below:</p>
+
+<p><img src="/Jarvis/reproducing_RQ1/scalability.png" alt="scalability" /></p>
+
+<h4 id="ags-and-ftgs">AGs and FTGs</h4>
+
+<p>Run</p>
+
+<div class="language-shell highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>pip3 <span class="nb">install </span>matplotlib
+<span class="nv">$ </span>pip3 <span class="nb">install </span>numpy
+<span class="nv">$ </span>python3 ./reproducing_RQ1/FTG/plot.py
+</code></pre></div></div>
+
+<p>The generated graphs are <code class="language-plaintext highlighter-rouge">pycg-ag.pdf</code>, <code class="language-plaintext highlighter-rouge">pycg-change-ag.pdf</code> and <code class="language-plaintext highlighter-rouge">jarvis-ftg.pdf</code>, where they represents Fig. 9a, Fig. 9b and Fig 10, correspondingly.</p>
+
+<h3 id="rq2-accuracy-evaluation">RQ2. Accuracy Evaluation</h3>
+
+<h4 id="accuracy-results">Accuracy results</h4>
+
+<p>Run</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nv">$ </span>python3 ./reproducing_RQ2/gen_table.py     
+</code></pre></div></div>
+
+<p>The generated results:</p>
+
+<p><img src="/Jarvis/reproducing_RQ2/accuracy.png" alt="accuracy" /></p>
+
+<h3 id="comparing-to-code2flow">Comparing to Code2Flow</h3>
+
+<p>Scalability results (RQ1), AE denotes AssertionError:</p>
+
+<p><img src="/Jarvis/reproducing_RQ1/scalability_code2flow.png" alt="scalability" /></p>
+
+<p>Accuracy results (RQ2):</p>
+
+<p><img src="/Jarvis/reproducing_RQ2/accuracy_code2flow.png" alt="accuracy" /></p>
+
+<h3 id="case-study-fine-grained-tracking-of-vulnerable-dependencies">Case Study: Fine-grained Tracking of Vulnerable Dependencies</h3>
+
+<p>The 43 python projects out of the top 200 Highly-starred projects are listed in <a href="/Jarvis/reproducing_RQ12_setup/projects_case_study.txt">file</a></p>
+
+<h4 id="1-target-projects">1. Target projects</h4>
+
+<p><a href="https://github.com/tiangolo/fastapi">Fastapi</a>,  <a href="https://github.com/httpie/httpie">Httpie</a>, <a href="https://github.com/scrapy/scrapy">Scrapy</a>, <a href="github.com/Lightning-AI/lightning">Lightning</a>, <a href="https://github.com/apache/airflow">Airflow</a>,<a href="https://github.com/sherlock-project/sherlock">sherlock</a>,<a href="https://github.com/wagtail/wagtail">wagtail</a></p>
+
+<h4 id="2-vulnerable-libraries-in-top-10-dependencies">2. Vulnerable libraries in Top 10 dependencies</h4>
+
+<ul>
+  <li><del><strong>Html</strong>: CVE-2018-17142</del> (Golang)</li>
+  <li><strong>cryptography</strong>: <a href="https://github.com/pyca/cryptography/commit/b924696b2e8731f39696584d12cceeb3aeb2d874">CVE-2016-9243</a>, <a href="https://github.com/pyca/cryptography/compare/3.3.1...3.3.2">CVE-2020-36242</a>, <a href="https://github.com/pyca/cryptography/pull/4342/commits/688e0f673bfbf43fa898994326c6877f00ab19ef">CVE-2018-10903</a></li>
+  <li><strong>urllib3</strong>: <a href="https://github.com/urllib3/urllib3/commit/2d4a3fee6de2fa45eb82169361918f759269b4ec">CVE-2021-33503</a>, <a href="https://github.com/urllib3/urllib3/compare/a6ec68a...1efadf4">CVE-2019-11324</a>, <a href="https://github.com/urllib3/urllib3/issues/1553">CVE-2019-11236</a>, <a href="https://github.com/urllib3/urllib3/commit/a74c9cfbaed9f811e7563cfc3dce894928e0221a">CVE-2020-7212</a></li>
+  <li><strong>requests</strong>: <a href="https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=733108">CVE-2014-1830</a>, <a href="https://github.com/kennethreitz/requests/commit/3bd8afbff29e50b38f889b2f688785a669b9aafc">CVE-2015-2296</a>, <a href="https://github.com/psf/requests/commit/c45d7c49ea75133e52ab22a8e9e13173938e36ff">CVE-2018-18074</a></li>
+  <li><del><strong>psutil</strong>: CVE-2019-18874</del> (C)</li>
+  <li><del><strong>Numpy</strong>: CVE-2021-33430, CVE-2014-1858, CVE-2014-1859, CVE-2017-12852</del> (cpp)</li>
+  <li><del><strong>lxml</strong>: CVE-2021-28957, CVE-2018-19787, CVE-2020-27783, CVE-2014-3146</del> (js)</li>
+  <li><strong>jinja2</strong> : <a href="https://github.com/pallets/jinja/pull/1343/commits/ef658dc3b6389b091d608e710a810ce8b87995b3">CVE-2020-28493</a>, <a href="https://github.com/mitsuhiko/jinja2/commit/acb672b6a179567632e032f547582f30fa2f4aa7">CVE-2014-0012</a>, <a href="http://advisories.mageia.org/MGASA-2014-0028.html">CVE-2014-1402</a></li>
+  <li><strong>sqlalchemy</strong> : <a href="https://github.com/sqlalchemy/sqlalchemy/issues/4481">CVE-2019-7164</a>, <a href="https://github.com/sqlalchemy/sqlalchemy/issues/4481#issuecomment-461204518">CVE-2019-7548</a></li>
+  <li><strong>httpx</strong>: <a href="https://github.com/encode/httpx/pull/2214">CVE-2021-41945</a></li>
+</ul>
+
+<p>The CVEs of html , numpy , lxml,psutil don’t relate to  Python , we don’t care them.</p>
+
+<h4 id="3-vulnerable-projects-using-dependency-analysis">3. Vulnerable projects using dependency analysis</h4>
+
+<h5 id="sherlock">sherlock</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- sherlock.sherlock
+  - requests(v2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- sherlock.sites
+  - requests(v.2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+</code></pre></div></div>
+
+<h5 id="airflow">airflow</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- airflow.kubernetes.kube_client
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- airflow.providers.cncf.kubernetes.operators.pod
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- airflow.providers.cncf.kubernetes.utils.pot_manager
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- airflow.executors.kubernetes_executor
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+......
+</code></pre></div></div>
+
+<h5 id="wagtail">wagtail</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- wagtail.contrib.frontent_cache.backends
+  - requests(v2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+</code></pre></div></div>
+
+<h5 id="httpie">Httpie</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- httpie.client
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- httpie.ssl_
+  - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- httpie.models
+  - urllib3(1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+</code></pre></div></div>
+
+<h5 id="scrapy">Scrapy</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- scrapy.downloadermiddlewares.cookies
+  - tldextract(v3.4.4)
+    - requests(v2.28.0)
+      - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+</code></pre></div></div>
+
+<h5 id="lightning">Lightning</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- lightning.app.utilities.network
+  - requests(v2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- lightning.app.utilities.network
+  - requests(v2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+- lightning.app.utilities.network
+  - requests(v2.28.0)
+    - urllib3(v1.26.0) ---- [CVE-2021-33503,CVE-2019-11324,CVE-2019-11236,CVE-2020-7212]
+...
+</code></pre></div></div>
+
+<h4 id="4-vulnerable-projects-using-method-level-invocation-analysis">4. Vulnerable projects using method-level invocation analysis</h4>
+
+<h5 id="fastapi">Fastapi</h5>
+
+<p>According to the <a href="https://github.com/urllib3/urllib3/commit/2d4a3fee6de2fa45eb82169361918f759269b4ec">patch commit</a>, the vulnerable method of CVE-2021-33503 in urllib3 is <code class="language-plaintext highlighter-rouge">urllib3.util.url</code>.</p>
+
+<p>Below is the method-level invocation path:</p>
+
+<h5 id="httpie-1">Httpie</h5>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- httpie.apapters.&lt;main&gt;
+  - requests.adapters.&lt;main&gt;
+    - urllib3.contrib.socks.&lt;main&gt;
+      - Urllib3.util.url.&lt;main&gt; ---- CVE-2021-33503
+</code></pre></div></div>
+
+<h5 id="scrapy-1">Scrapy</h5>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- scrapy.downloadermiddlewares.cookies.&lt;main&gt;
+  - tldextract.__init__.&lt;main&gt;
+    - tldextract.tldextract.&lt;main&gt;
+      - tldextract.suffix_list.&lt;main&gt;
+        - requests_file.&lt;main&gt;
+          - requests.adapters.&lt;main&gt;
+            - Urllib3.util.url.&lt;main&gt; ---- CVE-2021-33503
+</code></pre></div></div>
+<h5 id="lighting">Lighting</h5>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- lightning.app.utilities.network.&lt;main&gt;
+  - requests.adapters.&lt;main&gt;
+    - urllib3.contrib.socks.&lt;main&gt;
+      - Urllib3.util.url.&lt;main&gt; ---- CVE-2021-33503
+</code></pre></div></div>
+<h5 id="airflow-1">Airflow</h5>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>- airflow.providers.amazon.aws.hooks.base_aws.BaseSessionFactory._get_idp_response
+  - requests.adapters.&lt;main&gt;
+    - urllib3.contrib.sock.&lt;main&gt;
+      - urllib3.util.url.&lt;main&gt; ---- CVE-2021-33503
+</code></pre></div></div>
+
+<p><strong>PS:</strong> &lt;main&gt;  represents body code block of python file.(Because python doesn’t need entry function)</p>
+
+<h3 id="acknowledgements">Acknowledgements</h3>
+
+<p>Our artifact has reused part of the functionalities from third party libraries. i.e., <a href="https://github.com/vitsalis/PyCG">PyCG</a>.</p>
+
+<p>Vitalis Salis et al. PyCG: Practical Call Graph Generation in Python. In 43rd International Conference on Software Engineering (ICSE), 25–28 May 2021.</p>
+
+
+
+      </section>
+      <footer>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://twitter.com/mattgraham">mattgraham</a></small></p>
+      </footer>
+    </div>
+  </body>
+</html>

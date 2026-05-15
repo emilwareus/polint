@@ -1,0 +1,83 @@
+<!doctype html><html lang=en-us dir=ltr><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="The code property graph is a data structure designed to mine large codebases for instances of programming patterns. These patterns are formulated in a domain-specific language (DSL) based on Scala. It serves as a single intermediate program representation across all languages supported by Joern and its commercial brother Ocular.
+Property graphs are a generic abstraction supported by many contemporary graph databases such as Neo4j, OrientDB, and JanusGraph. In fact, older versions of Joern made use of general purpose graph databases as a storage backend and the graph query language Gremlin."><meta name=theme-color content="#FFFFFF"><meta name=color-scheme content="light dark"><meta property="og:title" content="Code Property Graph"><meta property="og:description" content="The code property graph is a data structure designed to mine large codebases for instances of programming patterns. These patterns are formulated in a domain-specific language (DSL) based on Scala. It serves as a single intermediate program representation across all languages supported by Joern and its commercial brother Ocular.
+Property graphs are a generic abstraction supported by many contemporary graph databases such as Neo4j, OrientDB, and JanusGraph. In fact, older versions of Joern made use of general purpose graph databases as a storage backend and the graph query language Gremlin."><meta property="og:type" content="article"><meta property="og:url" content="https://docs.joern.io/code-property-graph/"><meta property="article:section" content><title>Code Property Graph | Joern Documentation</title><link rel=manifest href=/manifest.json><link rel=icon href=/favicon.png type=image/x-icon><link rel=stylesheet href=/book.min.af4c3e115ebef9b6ff0869e999327c435aeac798b74f4afc4fc76bad23fe898a.css integrity="sha256-r0w+EV6++bb/CGnpmTJ8Q1rqx5i3T0r8T8drrSP+iYo=" crossorigin=anonymous><script defer src=/flexsearch.min.js></script>
+<script defer src=/en.search.min.efeabd55b0edf95ee6e6bf49b1884b9cdf99432fb61db05b9a27669482fbf5aa.js integrity="sha256-7+q9VbDt+V7m5r9JsYhLnN+ZQy+2HbBbmidmlIL79ao=" crossorigin=anonymous></script></head><body dir=ltr><input type=checkbox class="hidden toggle" id=menu-control>
+<input type=checkbox class="hidden toggle" id=toc-control><main class="container flex"><aside class=book-menu><div class=book-menu-content><nav><h2 class=book-brand><a class="flex align-center" href=/><span>Joern Documentation</span></a></h2><div class=book-search><input type=text id=book-search-input placeholder=Search aria-label=Search maxlength=64 data-hotkeys=s/><div class="book-search-spinner hidden"></div><ul id=book-search-results></ul></div><ul><li><a href=/installation/>Installation</a></li><li><a href=/quickstart/>Quickstart</a></li><li><a href=/code-property-graph/ class=active>Code Property Graph</a></li><li><a href=/traversal-basics/>Traversal Basics</a></li><li><a href=/c-syntaxtree/>Syntax-Tree Queries</a></li><li><a href=/organizing-projects/>Workspace</a></li><li><a href=/shell/>Interactive Shell</a></li><li><a href=/interpreter/>Interpreter</a></li><li><a href=/export/>Exporting Graphs</a></li><li><a href=/scan/>Joern Scan</a></li><li><a href=/cpg-slicing/>CPG Slicing</a></li><li><a href=/server/>Server</a></li><li><a href=/extensions/>Developing Plugins</a></li><li><a href=/common-issues/>Common Issues</a></li><li><a href=/glossary/>Glossary</a></li><li><input type=checkbox id=section-4b0096b4b89599cd8c65d97df00c7d2d class=toggle>
+<label for=section-4b0096b4b89599cd8c65d97df00c7d2d class="flex justify-between"><a href=/frontends/>Frontends</a></label><ul><li><a href=/frontends/x2cpg/>X2CPG</a></li><li><a href=/frontends/java/>Java</a></li><li><a href=/frontends/javascript/>JavaScript</a></li><li><a href=/frontends/python/>Python</a></li></ul></li><li><input type=checkbox id=section-3b7c116654cf94799951c54e650c2532 class=toggle>
+<label for=section-3b7c116654cf94799951c54e650c2532 class="flex justify-between"><a role=button>CPGQL Reference</a></label><ul><li><a href=/cpgql/augmentation-directives/>Augmentation Directives</a></li><li><a href=/cpgql/calls/>Calls</a></li><li><a href=/cpgql/complex-steps/>Complex Steps</a></li><li><a href=/cpgql/control-flow-steps/>Control-Flow Steps</a></li><li><a href=/cpgql/core-steps/>Core Steps</a></li><li><a href=/cpgql/custom-defined-steps/>Custom Defined Steps</a></li><li><a href=/cpgql/data-flow-steps/>Data-Flow Steps</a></li><li><a href=/cpgql/execution-directives/>Execution Directives</a></li><li><a href=/cpgql/filter-steps/>Filter Steps</a></li><li><a href=/cpgql/help-directive/>Help Directive</a></li><li><a href=/cpgql/node-type-steps/>Node-Type Steps</a></li><li><a href=/cpgql/reference-card/>Reference Card</a></li><li><a href=/cpgql/repeat-steps/>Repeat Steps</a></li></ul></li><li><a href=/dataflow-semantics/>Custom Data-Flow Semantics</a></li><li><a href=/upgrade-guides/>Upgrade Guide</a></li><li><input type=checkbox id=section-d80fa2d9f87304be9b3e494f008a662e class=toggle>
+<label for=section-d80fa2d9f87304be9b3e494f008a662e class="flex justify-between"><a role=button>Developer Guide</a></label><ul><li><a href=/developer-guide/contribution-guidelines/>Contributing to Joern</a></li><li><a href=/developer-guide/learning-scala/>Learning Scala</a></li><li><a href=/developer-guide/ide-setup/>Setting Up Your IDE</a></li><li><a href=/developer-guide/custom-tool/>Creating a Custom Static Analysis with Joern</a></li></ul></li></ul></nav><script>(function(){var e=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(){localStorage.setItem("menu.scrollTop",e.scrollTop)}),e.scrollTop=localStorage.getItem("menu.scrollTop")})()</script></div></aside><div class=book-page><header class=book-header><div class="flex align-center justify-between"><label for=menu-control><img src=/svg/menu.svg class=book-icon alt=Menu></label>
+<strong>Code Property Graph</strong>
+<label for=toc-control><img src=/svg/toc.svg class=book-icon alt="Table of Contents"></label></div><aside class="hidden clearfix"><nav id=TableOfContents><ul><li><a href=#building-blocks-of-code-property-graphs>Building Blocks of Code Property Graphs</a></li></ul></nav></aside></header><article class=markdown><p>The code property graph is a data structure designed to mine large
+codebases for instances of programming patterns. These patterns are
+formulated in a domain-specific language (DSL) based on
+<a href=https://www.scala-lang.org/>Scala</a>. It serves as a single
+intermediate program representation across all languages supported by
+Joern and its commercial brother <a href=https://qwiet.ai/>Ocular</a>.</p><p>Property graphs are a generic abstraction supported by many
+contemporary graph databases such as <a href=https://neo4j.com/>Neo4j</a>,
+<a href=https://orientdb.com/>OrientDB</a>, and
+<a href=https://janusgraph.org/>JanusGraph</a>. In fact, <a href=https://github.com/fabsx00/joern-old>older versions of
+Joern</a> made use of general
+purpose graph databases as a storage backend and the graph query
+language <a href=https://tinkerpop.apache.org/gremlin.html>Gremlin</a>. As the
+limitations of this approach became more apparent over the years, we
+replaced both the storage backend and query language with our own
+graph database
+<a href=https://github.com/ShiftLeftSecurity/overflowdb>OverflowDB</a>.</p><p>Qwiet AI (formerly ShiftLeft) has open-sourced the <a href=https://github.com/ShiftLeftSecurity/codepropertygraph>implementation of the code property
+graph</a> and its
+<a href=https://cpg.joern.io>specification</a>.</p><h2 id=building-blocks-of-code-property-graphs>Building Blocks of Code Property Graphs
+<a class=anchor href=#building-blocks-of-code-property-graphs>#</a></h2><p>Code property graphs are
+<a href=https://en.wikipedia.org/wiki/Graph_%28discrete_mathematics%29>graphs</a>,
+and more specifically <a href=https://arxiv.org/pdf/1004.1001.pdf>property
+graphs</a>. A property graph is
+composed of the following building blocks:</p><ul><li><p><strong>Nodes and their types.</strong> Nodes represent program
+constructs. This includes low-level language constructs such as
+methods, variables, and control structures, but also higher level
+constructs such as HTTP endpoints or findings. Each node has a
+type. The type indicates the type of program construct represented
+by the node, e.g., a node with the type <code>METHOD</code> represents a method
+while a node with type <code>LOCAL</code> represents the declaration of a local
+variable.</p></li><li><p><strong>Labeled directed edges.</strong>
+Relations between program constructs are represented via edges
+between their corresponding nodes. For example, to express that a
+method contains a local variable, we can create an edge with the
+label <code>CONTAINS</code> from the method&rsquo;s node to the local&rsquo;s node. By
+using labeled edges, we can represent multiple types of relations in
+the same graph. Moreover, edges are directed to express, e.g., that
+the method contains the local but not the other way around. Multiple
+edges may exist between the same two nodes.</p></li><li><p><strong>Key-Value Pairs.</strong>
+Nodes carry key-value pairs (attributes), where the valid
+keys depend on the node type. For example, a method has at
+least a name and a signature while a local declaration has at
+least the name and the type of the declared variable.</p></li></ul><p>In summary, code property graphs are directed, edge-labeled,
+attributed multigraphs, and we insist that each node carries at least
+one attribute that indicates its type.</p><blockquote class="book-hint info"><p>A Look into the Rear-View Mirror</p><p>The Code Property Graph was first introduced in the paper <a href=https://fabianyamaguchi.com/files/2014-ieeesp.pdf>Modeling
+and Discovering Vulnerabilities with Code Property
+Graphs</a> in the
+context of vulnerability discovery for C system code and the Linux
+kernel in particular. The core ideas outlined in this early work are
+the following:</p><ul><li><p>Different classic program representations are merged into a property
+graph into a single data structure that holds information about the
+program’s syntax, control- and intra-procedural data-flow.</p></li><li><p>The property graph is stored in a graph database and made accessible
+via a domain specific language (DSL) for the identification of
+programming patterns - based on a DSL for graph traversals.</p></li><li><p>The query language allows to seamlessly transition between the
+original code representations, making it possible to combine aspects
+of the code from different views these representations offer in a
+single query.</p></li></ul><p>From 2014-2016, research followed on (a) extending the concept for
+interprocedural analysis, (b) using the graph as a basis for learning
+typical data-flow patterns in a program, (c) the effects of
+introducing further classic program representations such as dominator
+trees, (d) and the applicability of the approach for dynamically-typed
+languages such as PHP.</p><p>From 2017 onwards, the code property graph served as the technological
+foundation for the static analysis solutions developed at ShiftLeft
+Inc. The representation has since undergone heavy extensions and
+transformations. At the statement and expression level, it has matured
+into a generic container format which allows for hosting of graphs
+generated by 8 different language frontends, to enable querying with
+the same query language across programming languages. Moreover, the
+concept of overlays was introduced to allow representing code
+on different levels of abstraction, enabling transitioning
+between these layers of abstraction using the query language in the
+same way as for the original three low-level code
+representations. Finally, programming models and APIs are now
+available for parallel graph processing at low memory footprint - a
+core ingredient for scaling the approach.</p></blockquote></article><footer class=book-footer><div class="flex flex-wrap justify-between"></div><script>(function(){function e(e){const t=window.getSelection(),n=document.createRange();n.selectNodeContents(e),t.removeAllRanges(),t.addRange(n)}document.querySelectorAll("pre code").forEach(t=>{t.addEventListener("click",function(){if(window.getSelection().toString())return;e(t.parentElement),navigator.clipboard&&navigator.clipboard.writeText(t.parentElement.textContent)})})})()</script></footer><div class=book-comments></div><label for=menu-control class="hidden book-menu-overlay"></label></div><aside class=book-toc><div class=book-toc-content><nav id=TableOfContents><ul><li><a href=#building-blocks-of-code-property-graphs>Building Blocks of Code Property Graphs</a></li></ul></nav></div></aside></main></body></html>
