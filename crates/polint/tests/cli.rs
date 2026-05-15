@@ -3576,6 +3576,35 @@ fn check_with_local_rule_host_respects_positional_paths() {
 }
 
 #[test]
+fn check_with_local_rule_host_can_emit_github_annotations() {
+    let example_dir = repo_root().join("examples/config-denied-literal");
+
+    let stdout = stdout_string(
+        polint_cmd()
+            .current_dir(&example_dir)
+            .args([
+                "check",
+                "--format",
+                "github",
+                "--no-cache",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        stdout.contains("::error file=query.ts,line="),
+        "expected GitHub annotation output: {stdout}"
+    );
+    assert!(
+        stdout.contains("title=local/no-denied-literals::Configured denied literal"),
+        "expected rule id and message in annotation: {stdout}"
+    );
+}
+
+#[test]
 fn checked_in_multiple_rules_example_uses_one_rule_pack_crate() {
     let example_dir = repo_root().join("examples/multiple-rules");
     assert!(

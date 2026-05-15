@@ -68,6 +68,7 @@ enum ColorArg {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum FormatArg {
     Human,
+    Github,
     Json,
     Sarif,
 }
@@ -110,6 +111,7 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
 
     let format = match args.format {
         FormatArg::Human => OutputFormat::Human,
+        FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
     };

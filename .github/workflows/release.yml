@@ -1,5 +1,6 @@
 # One-shot release: bump workspace patch version, push to main, create GitHub tag vX.Y.Z,
-# optionally publish to crates.io and attach CLI binaries to that tag's release.
+# optionally publish to crates.io, attach CLI binaries to that tag's release,
+# and move the stable action major tag.
 
 name: Release
 
@@ -12,6 +13,10 @@ on:
         default: true
       publish_cli:
         description: Build CLI and upload archives to the GitHub Release for this tag
+        type: boolean
+        default: true
+      publish_action:
+        description: Move the stable v1 GitHub Action tag to this release commit
         type: boolean
         default: true
 
@@ -210,3 +215,34 @@ jobs:
               --title "polint ${VERSION}" \
               --notes "Install: \`cargo install polint --locked\` at **${VERSION}**, or use a \`polint-*\` archive below. See [README](https://github.com/${REPO}#installation)."
           fi
+
+  publish-action:
+    name: Publish GitHub Action tag
+    needs: [bump-and-tag, github-release-cli]
+    if: >-
+      ${{
+        always()
+        && github.ref == 'refs/heads/main'
+        && inputs.publish_action
+        && needs.bump-and-tag.result == 'success'
+        && (needs.github-release-cli.result == 'success' || needs.github-release-cli.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.bump-and-tag.outputs.tag }}
+          fetch-depth: 0
+          token: ${{ secrets.WORKFLOW_PUSH_TOKEN != '' && secrets.WORKFLOW_PUSH_TOKEN || github.token }}
+
+      - name: Move v1 action tag
+        env:
+          RELEASE_TAG: ${{ needs.bump-and-tag.outputs.tag }}
+          ACTION_TAG: v1
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${ACTION_TAG}" "${RELEASE_TAG}"
+          git push --force origin "refs/tags/${ACTION_TAG}"
+          echo "Published GitHub Action ${ACTION_TAG} at ${RELEASE_TAG}."

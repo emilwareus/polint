@@ -92,7 +92,18 @@ analysis/fact cache reads and writes for that run. It does not disable the
 repo-local rule-host Cargo target cache; use `polint cache clean --category
 rules-target` when you need a fresh rule-host build.
 
-In CI, cache `.polint/cache` when repo-local rules are enabled:
+In GitHub Actions, prefer the official action, which installs polint and
+restores/saves `.polint/cache` by default:
+
+```yaml
+- uses: emilwareus/polint@v1
+  with:
+    version: latest
+    args: check --format github
+```
+
+If you wire the steps manually, cache `.polint/cache` when repo-local rules are
+enabled:
 
 ```yaml
 - uses: actions/cache@v4
@@ -102,6 +113,9 @@ In CI, cache `.polint/cache` when repo-local rules are enabled:
     restore-keys: |
       polint-${{ runner.os }}-
 ```
+
+The first run for a new cache key may still compile `.polint/rules` and
+populate analysis artifacts. The cache primarily improves repeat CI runs.
 
 ## Rules host failures
 
