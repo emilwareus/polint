@@ -13,7 +13,7 @@ Date: 2026-05-15
 - [x] Framework, lifecycle, and entrypoint modeling research completed: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, generated dispatch, native Rust provider path, and validation strategy. See `research/framework-entrypoints/`.
 - [x] Semantic index deep research completed: scopes, aliases, generated symbols, type-aware resolution, unresolved references, extension-provided resolution facts, and export identity. See `research/semantic-index/`.
 - [x] Module/package/dependency/repo topology graph research completed: package managers, lockfiles, workspaces, import-to-package resolution, source sets, build targets, repo topology overlays, and extension facts. See `research/module-graph/`.
-- [ ] Research CFG and control dependence.
+- [x] CFG and control dependence research completed: operation nodes, basic blocks, typed normal/abrupt/exceptional edges, dominance/postdominance, control dependence, path evidence, and extension overlays. See `research/cfg-control-flow/`.
 - [ ] Research type, value, points-to, and alias analysis.
 - [ ] Revisit call graph implementation details against the analysis kernel and evaluation harness.
 - [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, and evaluation harness.
@@ -164,6 +164,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R4. Evaluation Harness | Done, implement before call graph/data flow | `research/evaluation-harness/` | External-benchmark-first evaluation strategy, suite adapters, canonical expected/observed schema, default-vs-extension deltas, graph/path/fact/diagnostic metrics, performance/cache baselines, and native fixtures for engine invariants. |
 | R5. Framework, Lifecycle, And Entrypoint Modeling | Done, implement first fact-family vertical slice | `research/framework-entrypoints/` | Native framework boundary layer recommendation: `Entrypoints<'_>`, trust-boundary facts, framework dispatch overlays, explicit unknowns, Go and TS/JS first recognizers, MCP as a first-class boundary, repo-local Rust providers, validation fixtures, and default-vs-extension metrics. |
 | R6. Module, Package, Dependency, And Repo Topology Graph | Done, implement before serious call graph/data-flow integration | `research/module-graph/` | Layered native topology model: workspace roots, packages/projects/source sets, declared requirements, lockfile/native/tool-reported resolved edges, import-to-package facts, build target overlays, repo topology, package-manager coverage, precision labels, cache keys, and extension merge rules. |
+| R7. CFG And Control Dependence | Done, implement before type/value/alias and serious data-flow integration | `research/cfg-control-flow/` | Native CFG model: operation nodes, basic blocks, typed normal/abrupt/exceptional/cleanup edges, graph views, reachability, dominators, postdominators, control dependence, path evidence, extension overlays, Go/TS first implementation path, and differential validation plan. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -361,6 +362,8 @@ Core decision: build layered topology facts, not one universal dependency graph.
 
 **Folder:** `research/cfg-control-flow/`
 
+Status: researched in `research/cfg-control-flow/`.
+
 Data-flow precision depends on CFG quality. This must happen before serious abstract interpretation and before high-confidence interprocedural data flow.
 
 Research questions:
@@ -370,13 +373,18 @@ Research questions:
 - How do Oxc, TypeScript, Go SSA, Rust MIR, Checker Framework, Soot/Jimple, WALA, Pyre, and CodeQL represent control flow?
 - How should control dependence be exposed for diagnostics and rules?
 
-Deliverables:
+Deliverables completed:
 
 - `Cfg<'_>` SDK view proposal.
 - Local CFG algorithms in Python-ish pseudocode.
 - Precision limits per language.
 - Fixture plan for branches, loops, exceptions, async, defer/finally.
 - Extension points for framework-specific control transfers such as routers, schedulers, callbacks, generated handlers, and test harnesses.
+- OSS repository index covering Go SSA/cfg, Oxc, TypeScript, ESLint, CodeQL, Pyright, Pyre, CPython, mypy, Soot, SootUp, WALA, Checker Framework, OPAL, LLVM/MLIR, Joern, Semgrep, TAJS, and Jelly.
+- Research paper/source index covering control dependence, SSA/control-dependence construction, Java exception CFGs, Checker Framework dataflow, CodeQL/QL, TAJS, LLVM/MLIR, JLS/JVMS, and Python bytecode semantics.
+- Native Rust implementation path for internal fact schema, shared builder, Go/TS providers, derived dominance/postdominance/control-dependence, extension overlays, cache keys, and SDK promotion.
+
+Core decision: build layered native CFG facts, not one universal AST-walk graph. Represent operation nodes, basic blocks, typed normal/abrupt/exceptional/cleanup edges, and virtual exits. Compute reachability, dominators, postdominators, and control dependence as derived facts over explicit graph views. Keep call graph/framework dispatch separate from local CFG, and allow agent-authored extension overlays only through validated, provenance-labeled sinks.
 
 ### 8. Type, Value, Points-To, And Alias Analysis
 
