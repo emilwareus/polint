@@ -2,6 +2,28 @@
 
 Date: 2026-05-15
 
+## Research TODO
+
+- [x] Semantic index baseline implemented: `Symbols<'_>` and `References<'_>` are available through the SDK.
+- [x] Call graph research completed: see `research/call-graphs/`.
+- [x] Data-flow research completed: see `research/data-flow/`.
+- [x] Agent extension surface research completed: see `research/agent-extension-surface/`.
+- [ ] Research the analysis kernel: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation.
+- [ ] Research the evaluation harness: default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, and regression gates.
+- [ ] Research framework, lifecycle, and entrypoint modeling: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, and generated dispatch.
+- [ ] Deepen semantic index research: scopes, aliases, generated symbols, type-aware resolution, unresolved references, and extension-provided resolution facts.
+- [ ] Research module, package, dependency, and repo topology graphs.
+- [ ] Research CFG and control dependence.
+- [ ] Research type, value, points-to, and alias analysis.
+- [ ] Revisit call graph implementation details against the analysis kernel and evaluation harness.
+- [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, and evaluation harness.
+- [ ] Research function effects and summaries.
+- [ ] Research abstract interpretation domains.
+- [ ] Research program slicing, path explanation, and evidence.
+- [ ] Research incremental query engine and caching beyond the first kernel design.
+- [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
+- [ ] Start implementation only after the kernel/evaluation/entrypoint research gives a stable first vertical slice.
+
 This roadmap orders the remaining research needed to turn polint into a native, multi-language static-analysis engine that AI agents can write high-value repo-local rules and analysis extensions on top of.
 
 The order is dependency-driven. Later topics should consume the facts, precision labels, and implementation lessons from earlier topics instead of reinventing their own substrate.
