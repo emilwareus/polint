@@ -10,7 +10,7 @@ Date: 2026-05-15
 - [x] Agent extension surface research completed: see `research/agent-extension-surface/`.
 - [x] Analysis kernel research completed: fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation. See `research/analysis-kernel/`.
 - [x] Evaluation harness research completed: external-benchmark-first strategy, default-vs-agent-extended metrics, fixtures, ground truth, graph/path quality, runtime, memory, regression gates, and benchmark adapters. See `research/evaluation-harness/`.
-- [ ] Research framework, lifecycle, and entrypoint modeling: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, and generated dispatch.
+- [x] Framework, lifecycle, and entrypoint modeling research completed: routes, jobs, queues, CLIs, MCP tools, serverless handlers, callbacks, decorators, generated dispatch, native Rust provider path, and validation strategy. See `research/framework-entrypoints/`.
 - [ ] Deepen semantic index research: scopes, aliases, generated symbols, type-aware resolution, unresolved references, and extension-provided resolution facts.
 - [ ] Research module, package, dependency, and repo topology graphs.
 - [ ] Research CFG and control dependence.
@@ -162,6 +162,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R2. Agent Extension Surface | Done, implement first vertical slice | `research/agent-extension-surface/` | Recommended Rust-code extension lifecycle for agent-authored engine improvements: process-isolated extension crates, typed sinks, provenance, validation, extension-aware capability planning, default-vs-extended deltas. |
 | R3. Analysis Kernel | Done, implement before call graph/data flow | `research/analysis-kernel/` | Hybrid internal kernel recommendation: deterministic provider DAG, typed fact layers, sidecar provenance, validation/merge gates, layer-specific cache keys, relation/fixpoint sub-engine for recursive analyses, explicit unknowns, and extension-aware capability support. |
 | R4. Evaluation Harness | Done, implement before call graph/data flow | `research/evaluation-harness/` | External-benchmark-first evaluation strategy, suite adapters, canonical expected/observed schema, default-vs-extension deltas, graph/path/fact/diagnostic metrics, performance/cache baselines, and native fixtures for engine invariants. |
+| R5. Framework, Lifecycle, And Entrypoint Modeling | Done, implement first fact-family vertical slice | `research/framework-entrypoints/` | Native framework boundary layer recommendation: `Entrypoints<'_>`, trust-boundary facts, framework dispatch overlays, explicit unknowns, Go and TS/JS first recognizers, MCP as a first-class boundary, repo-local Rust providers, validation fixtures, and default-vs-extension metrics. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -250,7 +251,7 @@ Core decision: use an external-benchmark-first harness, not an external-only har
 
 **Folder:** `research/semantic-index/`
 
-The baseline symbol/reference layer has already been implemented. Keep this topic in the roadmap as a future deepening track, not the immediate next research item. Call graphs, data flow, type inference, module rules, effects, and AI-authored extensions still depend on improving scopes, aliases, generated symbols, and type-aware resolution over time.
+The baseline symbol/reference layer has already been implemented. This is now the next deepening track because framework entrypoint recovery, module graph, call graphs, data flow, type inference, effects, and AI-authored extensions all depend on improving scopes, aliases, generated symbols, type-aware resolution, and explicit unresolved-resolution facts over time.
 
 Research questions:
 
@@ -294,6 +295,8 @@ Deliverables:
 
 **Folder:** `research/framework-entrypoints/`
 
+Status: researched in `research/framework-entrypoints/`.
+
 This is the first domain-specific research track after the kernel/evaluation work. Call graphs and data flow are often wrong because entrypoints are wrong. This is especially important for web apps, tests, CLIs, background jobs, MCP tools, serverless functions, decorators, annotations, and framework routers.
 
 For polint, the target is not to auto-discover every framework pattern in the world. The target is:
@@ -314,10 +317,16 @@ Research questions:
 
 Deliverables:
 
-- `Entrypoints<'_>` and `FrameworkModel` proposal.
-- Model format for routes, handlers, callbacks, decorators, lifecycle methods, MCP tools.
-- Trust-boundary model that can feed data flow.
-- Agent workflow: inspect framework code -> generate model -> run validation fixture -> measure resolved-edge/data-flow delta.
+Deliverables completed:
+
+- `Entrypoints<'_>` and framework boundary fact proposal.
+- Model format for routes, handlers, callbacks, decorators, lifecycle methods, MCP tools/resources/prompts, CLIs, jobs, tests, and generated dispatch.
+- Trust-boundary model for HTTP, MCP, CLI/env/stdin, queues/jobs, request/response, and return-side agent-visible outputs.
+- Native Rust implementation path for built-in providers plus repo-local agent-authored providers.
+- Go and TS/JS first-scope recommendations, with Python and Java/JVM kept as future adapter research input.
+- Validation plan for fact precision/recall, unknown reduction, extension delta, cache determinism, and provider cost.
+
+Core decision: implement a native framework boundary layer before full call graph and data flow. Recover framework/protocol boundary facts with provenance; do not claim exact runtime behavior. Feed validated facts into call graph and data flow as optional synthetic dispatch and trust-boundary overlays.
 
 ### 6. Module, Package, Dependency, And Repo Topology Graph
 
@@ -568,23 +577,23 @@ That means research should prefer architectures with clear typed extension point
 Start with:
 
 ```text
-research/analysis-kernel/
+research/semantic-index/
 ```
 
-Reason: the ambition is not to add isolated analysis features. The next research must define the shared kernel for typed fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation. This prevents `Entrypoints`, call graphs, data flow, effects, and future SDK views from growing incompatible lifecycle rules.
+Reason: the next implementation slice will depend on stronger symbol, reference, scope, import, alias, generated-symbol, and type-aware resolution facts. Framework entrypoint recovery, module graph, call graph, and data flow all get more accurate if the semantic index has explicit resolution status and extension-provided resolution facts.
 
 Immediately after that, research:
 
 ```text
-research/evaluation-harness/
+research/module-graph/
 ```
 
-Reason: a world-class analyzer needs measurement from day one. The harness must compare default mode with agent-extended mode and track accuracy, unresolved facts, graph/path quality, runtime, memory, and validation failures.
+Reason: framework/lifecycle modeling and semantic resolution both depend on package roots, module boundaries, workspace topology, generated-code zones, import semantics, test/prod splits, and dependency direction. This also unlocks high-value repo-local architecture rules.
 
-Then research:
+Then revisit:
 
 ```text
-research/framework-entrypoints/
+research/call-graphs/
 ```
 
-Reason: the first implementation vertical slice should still prove the extension model with `Entrypoints<'_>`, but it should use the kernel and evaluation harness rather than define architecture ad hoc.
+Reason: call graph implementation should now consume the kernel, evaluation harness, semantic index, module graph, and framework dispatch overlay decisions rather than inventing its own lifecycle.
