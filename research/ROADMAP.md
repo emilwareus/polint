@@ -17,13 +17,13 @@ Date: 2026-05-16
 - [x] Type, value, points-to, and alias analysis research completed: native type/value/place facts, flow narrowing, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and extension hooks. See `research/type-alias-points-to/`.
 - [x] Function effects and summaries research completed: typed summary domains, SCC fixpoint, provenance, precision, cache keys, extension validation, and implementation path. See `research/effects-summaries/`.
 - [x] Abstract interpretation domains research completed: reduced-product domain kernel, lattice/transfer interfaces, widening/narrowing, domain priorities, validation, extension-safe domain products, and benchmark strategy. See `research/abstract-interpretation/`.
-- [ ] Write the implementation-ready bootstrap design: semantic MIR + place identity + direct call facts + P0 domains + direct summaries + minimal cache/invalidation + model-extension sinks.
+- [x] Implementation-ready Rust bootstrap design completed: semantic MIR, place identity, direct call facts, P0 domains, direct summaries, minimal cache/invalidation, model-extension sinks, and current code review. See `research/implementation-bootstrap/`.
 - [ ] Revise call graph implementation design against the analysis kernel, summaries, type/value/alias facts, framework models, abstract domains, and evaluation harness.
 - [ ] Revise data-flow implementation design against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness.
 - [ ] Research program slicing, path explanation, and evidence.
 - [ ] Research incremental query engine and caching beyond the first kernel design.
 - [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
-- [ ] Start implementation only after the kernel/evaluation/entrypoint research gives a stable first vertical slice.
+- [ ] Start implementation of the private semantic bootstrap only after the revised call graph/data-flow implementation notes confirm they consume the bootstrap rather than bypass it.
 
 This roadmap orders the remaining research needed to turn polint into a native, multi-language static-analysis engine that AI agents can write high-value repo-local rules and analysis extensions on top of.
 
@@ -169,6 +169,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R8. Type, Value, Points-To, And Alias Analysis | Done, implement type/value/place substrate before global call/data-flow precision | `research/type-alias-points-to/` | Native layered analysis plan: places/access paths, declared/inferred/narrowed type facts, abstract values/allocation tokens, local flow, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and agent-authored Rust extension sinks. |
 | R9. Function Effects And Summaries | Done, implement summary kernel before serious global call/data-flow/alias precision | `research/effects-summaries/` | Summary kernel recommendation: typed summary domains, `SummaryKey`, precision/status/provenance, local summaries, SCC fixpoint/widening, extension summary validation, memory/effect/product lattices, TITO summaries, external effects, and SDK view path. |
 | R10. Abstract Interpretation Domains | Done, implement P0 domain kernel before revisiting call/data-flow implementation details | `research/abstract-interpretation/` | Reduced-product abstract-domain kernel recommendation: deterministic solver, semantic operation layer, lattice/transfer traits, widening/narrowing policy, domain priority ladder, `Nilness<'_>`, `Constants<'_>`, `StringValues<'_>`, `Typestate<'_>` candidate views, extension validation, and benchmark gates. |
+| R11. Implementation Bootstrap Rust Design | Done, use as first coding plan | `research/implementation-bootstrap/` | Private Rust `analysis` module recommendation, semantic store boundaries, stable IDs and metadata, MIR/place/direct-call/P0-domain/direct-summary sequence, semantic cache keys, extension sinks, local code review, and public SDK promotion gates. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 

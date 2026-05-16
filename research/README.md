@@ -18,3 +18,4 @@ Existing research:
 - [analysis-kernel/](analysis-kernel/): fact layers, scheduling, provenance, precision, validation, extension merges, cache keys, and invalidation.
 - [evaluation-harness/](evaluation-harness/): external-benchmark-first evaluation, ground truth, fixture schema, metrics, and regression gates.
 - [framework-entrypoints/](framework-entrypoints/): framework/protocol boundaries, routes, jobs, callbacks, generated dispatch, MCP, and repo-local providers.
+- [implementation-bootstrap/](implementation-bootstrap/): implementation-ready Rust bootstrap design for semantic MIR, place identity, direct call facts, P0 domains, direct summaries, minimal cache/invalidation, and extension sinks.
