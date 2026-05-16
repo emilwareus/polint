@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-16T20:02:48.300Z"
+status: verifying
+last_updated: "2026-05-16T20:16:44.205Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 22
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # State: polint
@@ -38,8 +38,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 20 (Private Analysis Kernel Facade) — EXECUTING
+Status: Phase complete — ready for verification
+Phase: 20 (Private Analysis Kernel Facade) — COMPLETE
 Plan: 2 of 2
 Last activity: 2026-05-16
 
@@ -47,7 +47,7 @@ Last activity: 2026-05-16
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 20 | In Progress | 1/2 plans complete; private kernel facade/delegation done, provider manifests next |
+| 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Pending | Provenance, precision, and validation metadata; requirement SAE-FND-02 |
 | 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
@@ -82,28 +82,32 @@ Last activity: 2026-05-16
 - Every new fact family should carry stable IDs, precision/status/provenance, deterministic ordering, cache inputs, validation fixtures, and explicit unknown states.
 - Phase 20 Plan 01 added a crate-private `AnalysisKernel` facade that owns the existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics execution order.
 - Runner and parent CLI analysis paths delegate provider execution through `AnalysisKernel::run`; rule selection, rule options, ignores, report filtering/rendering, exit behavior, and rule execution remain outside the kernel.
+- Phase 20 Plan 02 added deterministic crate-private provider manifests for the six current providers and test-only provider order/report helpers.
+- Provider manifests are consumed by production kernel code only for metadata consistency; they do not drive scheduling, diagnostics, or cache identity.
 
 ## Decisions
 
 - Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
 - Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
 - Merge module graph support over the static plan support view, then symbol graph support over module support, before rules run.
+- [Phase 20-private-analysis-kernel-facade]: Keep provider manifests crate-private and consume them only for behavior-preserving metadata consistency in this phase.
+- [Phase 20-private-analysis-kernel-facade]: Keep provider execution order as explicit AnalysisKernel::run calls; manifest dependency data remains deterministic test metadata only.
+- [Phase 20-private-analysis-kernel-facade]: Expose provider order inspection only through #[cfg(test)] crate-private helpers, with no SDK, runner, or CLI contract.
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
+| 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
 
 ## Session
 
 - Last session: 2026-05-16
-- Stopped at: Completed 20-01-PLAN.md
+- Stopped at: Completed 20-02-PLAN.md
 
 ## Next Action
 
-Execute the next Phase 20 plan:
+Verify Phase 20, then plan or execute Phase 21:
 
-`/gsd-execute-phase 20`
-
-Next incomplete plan: `.planning/phases/20-private-analysis-kernel-facade/20-02-PLAN.md`
+`/gsd-verify-work 20`
