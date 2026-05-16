@@ -20,3 +20,4 @@ Existing research:
 - [framework-entrypoints/](framework-entrypoints/): framework/protocol boundaries, routes, jobs, callbacks, generated dispatch, MCP, and repo-local providers.
 - [implementation-bootstrap/](implementation-bootstrap/): implementation-ready Rust bootstrap design for semantic MIR, place identity, direct call facts, P0 domains, direct summaries, minimal cache/invalidation, and extension sinks.
 - [program-slicing-evidence/](program-slicing-evidence/): native slicing and evidence layer for diagnostics: PDG/SDG lessons, thin slices, chops, path ranking, JSON/SARIF evidence, provenance, unknowns, and extension merges.
+- [incremental-query-engine/](incremental-query-engine/): native incremental query engine and cache design: input snapshots, layer/query/summary/diagnostic keys, shape digests, dependency indexes, invalidation planning, extension-aware quarantine, and future red-green/relation backends.

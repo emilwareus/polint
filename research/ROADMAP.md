@@ -21,7 +21,7 @@ Date: 2026-05-16
 - [x] Call graph implementation design revised against the semantic bootstrap, analysis kernel, summaries, type/value/alias facts, framework models, abstract domains, and evaluation harness. See `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`.
 - [x] Data-flow implementation design revised against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness. See `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`.
 - [x] Program slicing, path explanation, and evidence research completed: PDG/SDG slicing, thin slices, chops, path ranking, SARIF/JSON evidence, provenance, extension merges, and native implementation path. See `research/program-slicing-evidence/`.
-- [ ] Research incremental query engine and caching beyond the first kernel design.
+- [x] Incremental query engine and caching research completed: native layered cache/query design, input snapshots, shape digests, dependency indexes, invalidation planning, summary SCC caching, extension quarantine, and future red-green/relation paths. See `research/incremental-query-engine/`.
 - [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
 - [ ] Start implementation of the private semantic bootstrap only after the revised call graph/data-flow implementation notes confirm they consume the bootstrap rather than bypass it.
 
@@ -171,6 +171,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R10. Abstract Interpretation Domains | Done, implement P0 domain kernel before revisiting call/data-flow implementation details | `research/abstract-interpretation/` | Reduced-product abstract-domain kernel recommendation: deterministic solver, semantic operation layer, lattice/transfer traits, widening/narrowing policy, domain priority ladder, `Nilness<'_>`, `Constants<'_>`, `StringValues<'_>`, `Typestate<'_>` candidate views, extension validation, and benchmark gates. |
 | R11. Implementation Bootstrap Rust Design | Done, use as first coding plan | `research/implementation-bootstrap/` | Private Rust `analysis` module recommendation, semantic store boundaries, stable IDs and metadata, MIR/place/direct-call/P0-domain/direct-summary sequence, semantic cache keys, extension sinks, local code review, and public SDK promotion gates. |
 | R12. Program Slicing, Path Explanation, And Evidence | Done, implement after semantic bootstrap, CFG/control dependence, def-use, direct calls, and summaries exist | `research/program-slicing-evidence/` | Native evidence/slicing recommendation: typed evidence nodes and edges, thin/full slices, chops, context-matched paths, summary expansion, JSON/SARIF rendering, provenance, uncertainty, extension merge validation, and diagnostic evidence bundles. |
+| R13. Incremental Query Engine And Caching | Done, implement minimal dependency-digest/layer-cache slice with semantic bootstrap, then full demand query engine before expensive global analyses | `research/incremental-query-engine/` | Native layered incrementality plan: input snapshots, layer/query/summary/diagnostic keys, shape digests, dependency indexes, invalidation planner, extension-aware cache validation/quarantine, summary SCC backdating, future watch/daemon red-green mode, and optional relation/differential backend. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -513,7 +514,12 @@ and do not treat LLM-generated slices as trusted facts without validation.
 
 **Folder:** `research/incremental-query-engine/`
 
-This should be researched before implementing expensive global analyses. Re-running full call/data-flow on every agent edit will not scale.
+Status: researched in `research/incremental-query-engine/`.
+
+This should be implemented before expensive global analyses. Re-running full
+call/data-flow on every agent edit will not scale, and stale caches are worse
+than slow caches because polint's product depends on agent-authored Rust
+extensions changing analysis facts safely.
 
 Research questions:
 
@@ -522,13 +528,34 @@ Research questions:
 - How do Salsa, rust-analyzer, FlowLog, Souffle, IncIDFA, CodeQL databases, TypeScript incremental compiler, and Pyre incremental checking work?
 - Which parts of polint should be demand-driven versus eagerly materialized?
 
-Deliverables:
+Deliverables completed:
 
-- Dependency graph for facts and summaries.
-- Cache key strategy for language lifecycle and rule options.
-- Query scheduling model.
-- Incremental benchmark plan.
-- Model digest and extension dependency strategy.
+- Dependency graph strategy for inputs, layers, queries, summaries, diagnostics,
+  extensions, official tool invocations, and model files.
+- Cache key strategy for source text, shape digests, lifecycle inputs, rule
+  options, provider/schema versions, extension code, validation status, and
+  official tool invocations.
+- Query scheduling model: eager cheap layers plus demand queries for expensive
+  CFG, call graph, alias, summary, data-flow, and evidence views.
+- Incremental benchmark plan for no-op warm runs, body edits, public API edits,
+  lifecycle edits, rule option edits, extension/model edits, and summary SCC
+  changes.
+- Extension digest, declared read-set, validation digest, precision ceiling, and
+  quarantine strategy.
+- OSS implementation index for Salsa, rust-analyzer, gopls, TypeScript,
+  Pyright, Pyrefly, Pyre/Pysa, Bazel Skyframe, Buck2 DICE, Souffle, and Ty.
+- Paper index for Incremental CodeQL, IncIDFA, FlowLog, Adapton, Demanded
+  Abstract Interpretation, incremental typing, Differential Dataflow, and
+  Naiad.
+
+Core decision: build a native layered incremental substrate first. Start with
+`InputSnapshot`, `LayerKey`, `LayerCacheManifest`, `DependencyIndex`,
+`ChangeSet`, `InvalidationPlan`, and cache stats. Add a demand query engine,
+summary SCC cache, diagnostic cache, extension-aware quarantine, daemon
+red-green mode, and relation/fixpoint backend only after the layer cache is
+correct and benchmarks justify more machinery. Copy Salsa, Skyframe, DICE,
+TypeScript, gopls, Pyright, Pyrefly, CodeQL, Souffle, and Differential Dataflow
+ideas without adopting any one of them as the first core dependency.
 
 ### 13. Rule SDK, Query Ergonomics, And AI-Agent Authoring
 
@@ -609,9 +636,14 @@ Analysis Kernel
   -> Refined Data Flow Implementation
   -> P1 Domains And Public SDK Views
   -> Slicing/Evidence
+  -> Full Incremental Query Engine
   -> Agent Rule SDK
 
-Full Incremental Query Engine deepens the Analysis Kernel once expensive global analyses begin, but a minimal dependency-digest/invalidation slice must happen before summary SCCs and interprocedural domains.
+Incremental Query Engine research is complete. The first implementation should
+include the minimal dependency-digest/layer-cache/invalidation slice with the
+semantic bootstrap. The full demand query engine should land before expensive
+global call graph, data-flow, alias, and evidence queries become normal rule
+dependencies.
 Evaluation Harness runs across all tracks and gates public precision claims.
 Framework/Entrypoint Modeling feeds Call Graphs, Data Flow, Effects, and Slicing.
 Agent-authored models and extensions feed every analysis family, but must bind to typed facts and validation results.
@@ -637,31 +669,42 @@ observes unresolved/low-confidence analysis facts
 
 That means research should prefer architectures with clear typed extension points over architectures that are theoretically elegant but closed to repo-specific augmentation.
 
-## Recommended Next Design Task
+## Recommended Next Research Task
 
-Start with:
-
-```text
-research/abstract-interpretation/implementation/BOOTSTRAP-SEQUENCE.md
-```
-
-Reason: the next step is not more broad research. It is an implementation-ready
-bootstrap design that ties together the existing research without circular
-dependencies: semantic MIR, place identity, direct call facts, P0 local domains,
-direct summaries, minimal cache/invalidation, and model-extension sinks.
-
-Then revise:
+Research:
 
 ```text
-research/call-graphs/
+research/agent-rule-authoring/
 ```
 
-Reason: call graph implementation should consume the kernel, evaluation harness, semantic index, module graph, framework dispatch overlays, CFG, type/value facts, points-to/value-token decisions, function summaries, and abstract-domain facts rather than inventing its own lifecycle. The original call graph research should be revised into an implementation-ready design with explicit provider tiers, precision labels, extension merge policy, and benchmark gates.
+Reason: most engine-side research is now deep enough to start implementation
+planning, but the public/product surface still needs one focused pass. polint's
+engine can be powerful and still fail if agents cannot decide whether to write a
+rule, model, summary, provider extension, or benchmark fixture. The rule SDK and
+agent-authoring research should define that authoring decision tree before
+public APIs harden.
 
-Then revisit:
+Then implement the private semantic bootstrap:
 
 ```text
-research/data-flow/
+research/implementation-bootstrap/
 ```
 
-Reason: data flow should consume CFG, call graph, semantic index, module graph, type/value/alias facts, summaries, and extension-model decisions so source/sink/sanitizer/summary facts are accurate and explainable.
+Reason: the bootstrap now has supporting research for semantic MIR, CFG,
+places, direct calls, P0 domains, summaries, minimal cache/invalidation,
+extension sinks, call graph integration, data-flow integration, slicing/evidence,
+and incremental query/caching. Keep the first implementation private and
+promotion-gated by the evaluation harness.
+
+Implementation should include the minimal incremental slice:
+
+```text
+InputSnapshot
+LayerKey
+LayerCacheManifest
+DependencyIndex
+InvalidationPlan
+```
+
+Reason: this prevents semantic bootstrap artifacts from growing as one-off
+uncacheable facts that later require a rewrite.
