@@ -18,35 +18,36 @@ Phase 11 of v1.1 completed on 2026-05-09. Declared rule capabilities now produce
 
 Phase 12 of v1.1 completed on 2026-05-11. Syntactic Go and TS/JS imports now flow into setup-aware resolved import facts and module/file/package/dependency graph facts exposed through typed SDK views for repo-local architecture rules.
 
+Phase 13 of v1.1 completed in May 2026. `Symbols<'_>` and `References<'_>` are available through the SDK, with Go and TS/JS symbol/reference facts, stable IDs, and precision tiers.
+
+Static-analysis engine research completed on 2026-05-16. `research/ROADMAP.md` now defines the next implementation sequence: 22 independently reviewable PR-sized steps that build the private analysis kernel, evaluation harness, cache substrate, semantic backbone, interprocedural engine foundations, extension surface, precision layers, benchmark gates, and final SDK/query promotion path.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
 - `.planning/milestones/v1.0-REQUIREMENTS.md`
 - `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
 
-## Current Milestone: v1.1 Capability Fulfillment
+## Current Milestone: v1.2 Static Analysis Engine Implementation
 
-**Goal:** Fulfill polint's capability promise by making declared rule
-capabilities drive planning, setup validation, fact harvesting, cache behavior,
-and public SDK access.
+**Goal:** Turn the completed static-analysis research roadmap into a private, validated, cache-aware, agent-extensible analysis engine while preserving public API discipline.
 
 **Target features:**
 
-- Capability-driven `AnalysisPlan` for enabled rules.
-- Resolved import and module relationship facts.
-- Symbols and references through the public SDK.
-- Direct and resolved call facts with resolution confidence.
-- Real control-flow facts for Go and TypeScript/JavaScript.
-- Coverage fact import for Go and TypeScript/JavaScript.
-- Reusable test-suite metrics.
-- Python adapter with an explicit initial capability subset.
-- Java adapter with setup-aware initial capability subset.
+- Private analysis kernel facade and provider manifests for existing providers.
+- Provenance, precision, validation, stable-key, and merge metadata for fact families.
+- Internal evaluation harness with deterministic fixtures and promotion metrics.
+- Input snapshots, typed cache keys, persistent layer cache, and conservative invalidation.
+- Rule manifests, `polint inspect rule`, and first `polint test` fixture runner.
+- Deepened semantic index and layered module/package/topology graph.
+- Private semantic MIR, place identity, CFG/control dependence, and direct call facts.
+- Abstract-domain, summary, demand-query, and summary-SCC cache foundations.
+- Repo-local Rust extension/provider sink with validation, provenance, precision ceilings, and cache participation.
+- Framework entrypoint, lifecycle, dispatch, and trust-boundary facts.
+- P0 type/value/place/alias substrate, refined call graph providers, data-flow facts, slicing, paths, and evidence bundles.
+- Benchmark adapters, promotion gates, and validated SDK query/agent ergonomics.
 
-The longer-term target is a complete, agent-consumable static-analysis graph of
-the codebase: modules, symbols, references, calls, CFGs, test/coverage evidence,
-dataflow, taint, and interprocedural summaries. v1.1 should sequence toward
-that graph without promising perfect precision in the first implementation of
-each fact family.
+The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 should build the substrate first, keep internals private by default, and promote public SDK/CLI contracts only when fixtures and benchmark gates prove them.
 
 ## Requirements
 
@@ -80,37 +81,35 @@ each fact family.
 - [x] Resolve TS/JS imports through project-aware resolver setup including relative paths, package metadata, and `tsconfig` aliases where available. Validated in Phase 12: Resolved Imports and Module Relationships.
 - [x] Resolve Go imports through Go package/module metadata where setup is available. Validated in Phase 12: Resolved Imports and Module Relationships.
 - [x] Expose file, package, module, and dependency relationships for architecture rules through typed module graph facts. Validated in Phase 12: Resolved Imports and Module Relationships.
+- [x] Let rule authors read symbol, definition, and reference facts through typed SDK fact views. Validated in Phase 13: Symbols and References.
+- [x] Populate Go symbols and references from typed package information where setup is available. Validated in Phase 13: Symbols and References.
+- [x] Populate TS/JS symbols and references from Oxc semantic facts where setup is available. Validated in Phase 13: Symbols and References.
+- [x] Expose symbol/reference precision tiers and stable IDs suitable for diagnostics and cache restore. Validated in Phase 13: Symbols and References.
 
 ### Active
 
-- [ ] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
-- [ ] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
-- [ ] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
-- [ ] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
-- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
-- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
-- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
-- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
-- [ ] **CFG-01**: Rule authors can read real per-function control-flow facts through typed SDK fact views.
-- [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
-- [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared control-flow model.
-- [ ] **CFG-04**: CFG facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
-- [ ] **COV-01**: Rule authors can read coverage facts for files, functions, and branches through typed SDK fact views.
-- [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
-- [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
-- [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
-- [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through typed SDK fact views.
-- [ ] **TEST-02**: Go metrics aggregate existing test facts into assertions, subtests, table rows, evidence terms, and related test evidence.
-- [ ] **TEST-03**: TS/JS metrics detect common Jest/Vitest/Mocha-style test structures and assertion evidence.
-- [ ] **TEST-04**: Test metrics state heuristic limits and avoid claiming exact behavioral coverage.
-- [ ] **PY-01**: Python files participate in discovery, parsing, diagnostics, and the shared fact model.
-- [ ] **PY-02**: Python adapter exposes the declared initial capability tier: syntax, functions/classes, imports, literals, branches, tests, and coverage import.
-- [ ] **PY-03**: Python import/call uncertainty and optional interpreter or virtualenv setup are represented explicitly.
-- [ ] **PY-04**: Python rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
-- [ ] **JAVA-01**: Java files participate in discovery, parsing, diagnostics, and the shared fact model.
-- [ ] **JAVA-02**: Java adapter exposes the declared initial capability tier: packages/imports, classes/methods, literals, branches, tests, and coverage import.
-- [ ] **JAVA-03**: Java classpath/build setup requirements are represented explicitly when deeper facts are requested.
-- [ ] **JAVA-04**: Java rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
+- [ ] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior.
+- [ ] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
+- [ ] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
+- [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
+- [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
+- [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
+- [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
+- [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
+- [ ] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations.
+- [ ] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
+- [ ] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
+- [ ] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
+- [ ] **SAE-INT-02**: polint has a summary kernel with summary keys, typed summary domains, local/direct summaries, control effects, return/TITO, memory-touch approximations, resource/external effects, and summary metadata.
+- [ ] **SAE-INT-03**: polint has an internal demand-query layer, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace/debug output for expensive analyses.
+- [ ] **SAE-INT-04**: polint has a repo-local Rust extension/provider sink with typed sinks, declared read sets, validation, precision ceilings, provenance, activation status, fixture requirements, and cache-key participation.
+- [ ] **SAE-INT-05**: polint models framework entrypoints, lifecycle callbacks, dispatch, jobs, CLIs, MCP tools/resources/prompts, tests, generated dispatch, and trust boundaries with Go and TS/JS defaults plus extension overlays.
+- [ ] **SAE-PREC-01**: polint has a P0 type/value/place/alias substrate with declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and explicit alias statuses.
+- [ ] **SAE-PREC-02**: polint has opt-in refined call graph providers over direct calls, entrypoints, summaries, type/value facts, function tokens, receiver types, and bounded points-to constraints with explicit unresolved and budget-exceeded statuses.
+- [ ] **SAE-PREC-03**: polint has local and summary-projected data-flow facts, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search.
+- [ ] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering.
+- [ ] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, and accepted/rejected extension facts.
+- [ ] **SAE-PROM-02**: Validated typed SDK query views and agent ergonomics are promoted only where contracts are proven, including bounded query builders and stable JSON for accepted public commands.
 
 ### Out of Scope
 
@@ -119,7 +118,9 @@ each fact family.
 - Full Go type checking in the first pass - leave a trait boundary for a future `go/packages` or `go/analysis` sidecar.
 - Full dynamic branch coverage in the first pass - design the model so exact coverage can be added later.
 - Fully automatic compilation/loading of repo-local Rust rules in the first pass - scaffolding, SDK, and native registration are sufficient for v1.
-- Perfect semantic precision in the first implementation of every capability - v1.1 should expose precision tiers and useful facts incrementally instead of pretending all dynamic or setup-sensitive behavior is exact.
+- Perfect semantic precision in the first implementation of every capability - v1.2 should expose precision tiers and useful facts incrementally instead of pretending all dynamic or setup-sensitive behavior is exact.
+- Public broad analysis APIs before validation - v1.2 should keep new analysis modules private by default and promote only deliberately scoped SDK/CLI contracts.
+- Replacing current user behavior while building the static-analysis engine substrate - existing CLI, SDK, cache, and rule behavior must keep working unless a phase explicitly changes a reviewed contract.
 - Running user test suites inside polint by default - coverage should be imported from reports that users or CI already produce.
 - Exposing raw language-tool output as the public SDK - rule authors should consume normalized polint facts, not raw `go/packages`, Oxc, Python, javac, Maven, Gradle, or coverage report structures.
 - Python and Java parity before Go and TS/JS capability coverage - Go and TS/JS should prove the complete model first; Python and Java start with declared subsets and expand later.
@@ -144,6 +145,9 @@ each fact family.
 - Quick task 260502-ehi removed all product built-in policy rules from the CLI while keeping example policies as external rule code.
 - Quick task 260502-qsd made every example self-contained, with one local Rust rule crate under `examples/<name>/.polint/rules/` and no shared example rule pack.
 - Phase 12 completed on 2026-05-11 through GSD plan execution, code review fixes, full workspace regression, clippy, and verification on `main`, closing resolved imports and module relationship facts for Go and TS/JS without claiming symbols, call graph, CFG, dataflow, type checking, or project-level graph caching.
+- v1.2 Static Analysis Engine Implementation requirements are defined in `.planning/REQUIREMENTS.md`.
+- v1.2 Static Analysis Engine Implementation roadmap is defined in `.planning/ROADMAP.md`.
+- Static-analysis engine research and implementation sequencing live in `research/ROADMAP.md`.
 
 ## Constraints
 
@@ -179,13 +183,13 @@ each fact family.
 | Keep CI output SARIF-like, not certified SARIF | Phase 8 emits useful SARIF-shaped JSON for CI while avoiding conformance claims beyond the implemented fields. | Accepted in Phase 8 |
 | Make README and examples the v1 user-facing documentation surface | Phase 9 completed concise command-oriented docs and examples instead of creating a separate docs site or publishing automation. | Accepted in Phase 9 |
 | Fulfill capability promises instead of removing them | The v1.1 milestone should make declared capabilities operational through public facts, setup validation, cache semantics, docs, and external-consumer tests. | Accepted in Phase 11 for planning/cache/diagnostic semantics; remaining fact families continue in later v1.1 phases |
-| Keep Go and TS/JS as full-coverage targets before Python and Java parity | The current adapters are the proving ground for the complete capability model; Python and Java should enter through explicit subsets and expand after the model is proven. | Pending in v1.1 |
-| Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Pending in v1.1 |
+| Keep Go and TS/JS as full-coverage targets before Python and Java parity | The current adapters are the proving ground for the complete capability model; Python and Java should enter through explicit subsets and expand after the model is proven. | Accepted for v1.2 sequencing |
+| Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Accepted for v1.2 sequencing |
+| Build the static-analysis substrate before promoting broad public graph/query APIs | The research roadmap shows kernel, provenance, evaluation, cache, MIR, CFG, summaries, extensions, and benchmark gates must precede stable public advanced query surfaces. | Accepted for v1.2 |
 
 ## Next Milestone Goals
 
-v1.1 Capability Fulfillment is active. See `.planning/REQUIREMENTS.md` and
-`.planning/ROADMAP.md` for scoped requirements and phase mapping.
+v1.2 Static Analysis Engine Implementation is active. See `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` for scoped requirements and phase mapping. `research/ROADMAP.md` remains the source of truth for the implementation order.
 
 ## Evolution
 
@@ -205,4 +209,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-11 after completing Phase 12 Resolved Imports and Module Relationships*
+*Last updated: 2026-05-16 after starting v1.2 Static Analysis Engine Implementation from `research/ROADMAP.md`*

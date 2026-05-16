@@ -1,142 +1,100 @@
-# Requirements: polint Capability Fulfillment
+# Requirements: polint Static Analysis Engine Implementation
 
-**Defined:** 2026-05-08
+**Defined:** 2026-05-16
 **Core Value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
+**Source of Truth:** `research/ROADMAP.md`, "Implementation Roadmap: One PR Per Step"
 
-## v1.1 Requirements
+## v1.2 Requirements
 
-Requirements for the Capability Fulfillment milestone. Each requirement maps to
-one roadmap phase.
+Requirements for the Static Analysis Engine Implementation milestone. Each requirement maps to exactly one shippable phase, preserving the PR order from `research/ROADMAP.md`.
 
-### Capability Planning
+### Foundation
 
-- [x] **PLAN-01**: Rule authors can declare capabilities and see an explicit analysis plan derived from enabled rules.
-- [x] **PLAN-02**: The runner passes the resolved analysis plan to Go and TS/JS adapters before fact harvesting.
-- [x] **PLAN-03**: Cache keys change when requested capabilities or setup-sensitive analysis inputs change.
-- [x] **PLAN-04**: Missing or unsupported setup for requested capabilities becomes a clear diagnostic or structured warning.
+- [ ] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior.
+- [ ] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
+- [ ] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
+- [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
+- [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
+- [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
 
-### Module Resolution
+### Semantic Backbone
 
-- [x] **MOD-01**: Rule authors can read resolved import facts and unresolved import reasons through typed SDK fact views.
-- [x] **MOD-02**: TS/JS imports resolve through project-aware resolver setup such as `tsconfig` and package metadata.
-- [x] **MOD-03**: Go imports resolve through Go package/module information where setup is available.
-- [x] **MOD-04**: Module relationship facts expose file, package, module, and dependency relationships for architecture rules.
+- [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
+- [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
+- [ ] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations.
+- [ ] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
+- [ ] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
 
-### Symbols And References
+### Interprocedural Substrate
 
-- [x] **SYM-01**: Rule authors can read symbol, definition, and reference facts through typed SDK fact views.
-- [x] **SYM-02**: Go symbols and references are populated from typed package information where setup is available.
-- [x] **SYM-03**: TS/JS symbols and references are populated from Oxc semantic facts where setup is available.
-- [x] **SYM-04**: Symbol/reference facts expose precision tiers and stable IDs suitable for diagnostics and cache restore.
+- [ ] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
+- [ ] **SAE-INT-02**: polint has a summary kernel with summary keys, typed summary domains, local/direct summaries, control effects, return/TITO, memory-touch approximations, resource/external effects, and summary metadata.
+- [ ] **SAE-INT-03**: polint has an internal demand-query layer, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace/debug output for expensive analyses.
+- [ ] **SAE-INT-04**: polint has a repo-local Rust extension/provider sink with typed sinks, declared read sets, validation, precision ceilings, provenance, activation status, fixture requirements, and cache-key participation.
+- [ ] **SAE-INT-05**: polint models framework entrypoints, lifecycle callbacks, dispatch, jobs, CLIs, MCP tools/resources/prompts, tests, generated dispatch, and trust boundaries with Go and TS/JS defaults plus extension overlays.
 
-### Call Graph
+### Precision
 
-- [ ] **CALL-01**: Rule authors can read direct call edge facts through typed SDK fact views.
-- [ ] **CALL-02**: Go and TS/JS call facts include caller, callee text, span, resolution status, and confidence.
-- [ ] **CALL-03**: Direct call facts consume resolved imports and symbols when available.
-- [ ] **CALL-04**: Direct call facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
+- [ ] **SAE-PREC-01**: polint has a P0 type/value/place/alias substrate with declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and explicit alias statuses.
+- [ ] **SAE-PREC-02**: polint has opt-in refined call graph providers over direct calls, entrypoints, summaries, type/value facts, function tokens, receiver types, and bounded points-to constraints with explicit unresolved and budget-exceeded statuses.
+- [ ] **SAE-PREC-03**: polint has local and summary-projected data-flow facts, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search.
+- [ ] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering.
 
-### Control Flow Graphs
+### Promotion
 
-- [ ] **CFG-01**: Rule authors can read real per-function control-flow facts through typed SDK fact views.
-- [ ] **CFG-02**: Go functions expose syntax-level CFGs for branches, loops, switches, returns, and exits.
-- [ ] **CFG-03**: TS/JS functions expose syntax-level CFGs through the shared control-flow model.
-- [ ] **CFG-04**: CFG facts are covered by public SDK docs and external-consumer tests without exposing a debug CLI command.
-
-### Coverage Facts
-
-- [ ] **COV-01**: Rule authors can read coverage facts for files, functions, and branches through typed SDK fact views.
-- [ ] **COV-02**: Go `coverprofile` input maps to repo-relative coverage facts.
-- [ ] **COV-03**: TS/JS LCOV input maps to repo-relative coverage facts.
-- [ ] **COV-04**: Coverage facts expose precision/source metadata and report missing setup clearly.
-
-### Test Metrics
-
-- [ ] **TEST-01**: Rule authors can read normalized test-suite metrics through typed SDK fact views.
-- [ ] **TEST-02**: Go metrics aggregate existing test facts into assertions, subtests, table rows, evidence terms, and related test evidence.
-- [ ] **TEST-03**: TS/JS metrics detect common Jest/Vitest/Mocha-style test structures and assertion evidence.
-- [ ] **TEST-04**: Test metrics state heuristic limits and avoid claiming exact behavioral coverage.
-
-### Python Adapter
-
-- [ ] **PY-01**: Python files participate in discovery, parsing, diagnostics, and the shared fact model.
-- [ ] **PY-02**: Python adapter exposes the declared initial capability tier: syntax, functions/classes, imports, literals, branches, tests, and coverage import.
-- [ ] **PY-03**: Python import/call uncertainty and optional interpreter or virtualenv setup are represented explicitly.
-- [ ] **PY-04**: Python rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
-
-### Java Adapter
-
-- [ ] **JAVA-01**: Java files participate in discovery, parsing, diagnostics, and the shared fact model.
-- [ ] **JAVA-02**: Java adapter exposes the declared initial capability tier: packages/imports, classes/methods, literals, branches, tests, and coverage import.
-- [ ] **JAVA-03**: Java classpath/build setup requirements are represented explicitly when deeper facts are requested.
-- [ ] **JAVA-04**: Java rule packs can be written against `polint::sdk::prelude::*` with external-consumer tests.
+- [ ] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, and accepted/rejected extension facts.
+- [ ] **SAE-PROM-02**: Validated typed SDK query views and agent ergonomics are promoted only where contracts are proven, including bounded query builders and stable JSON for accepted public commands.
 
 ## Future Requirements
 
-Deferred until after Go and TS/JS prove the full capability model:
+Deferred until after this implementation sequence validates the internal engine substrate:
 
-- **GRAPH-01**: Rule authors can consume a coherent codebase graph spanning
-  modules, symbols, calls, CFG nodes, and test/coverage evidence.
-- **DATA-01**: Rule authors can consume cross-language dataflow facts.
-- **TAINT-01**: Rule authors can define and consume source/sink taint facts.
-- **TYPE-01**: Rule authors can consume deeper type-aware facts beyond symbol/reference resolution.
-- **LANG-01**: Additional languages can be added through the adapter contract after Python and Java.
+- **SAE-FUT-01**: Public stable SDK views for any analysis family not explicitly promoted in this milestone.
+- **SAE-FUT-02**: Broad language parity for Python, Java, and later adapters across all advanced analysis families.
+- **SAE-FUT-03**: Watch/daemon-mode red-green incrementality beyond the native layered cache and query foundations.
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Perfect semantic precision in the first implementation of every capability | The milestone should expose precision tiers and useful facts incrementally instead of pretending all dynamic or setup-sensitive behavior is exact. |
-| Running user test suites inside polint by default | Coverage should be imported from reports that users or CI already produce. |
-| Exposing raw language-tool output as the public SDK | Rule authors should consume normalized polint facts, not raw `go/packages`, Oxc, Python, javac, Maven, Gradle, or coverage report structures. |
-| Python and Java parity before Go and TS/JS capability coverage | Go and TS/JS should prove the complete model first; Python and Java start with declared subsets and expand later. |
+| Public broad analysis APIs before validation | The research roadmap requires private/internal implementation first and deliberate public promotion only when contracts are proven. |
+| Replacing current user behavior while building the kernel | Each phase must preserve existing CLI, SDK, and rule behavior unless the phase explicitly promotes a reviewed contract change. |
+| Perfect whole-program precision | Unknown, unsupported, setup-missing, ambiguous, and budget-exceeded states must stay observable instead of being hidden behind overconfident facts. |
+| Random OSS analyzers as runtime dependencies | Official language tooling may be used where it is the compatibility source of truth, but outputs must be normalized into polint-owned facts. |
+| Public whole-program graph/query surfaces before promotion gates | Internal snapshots and hidden/preview debug paths may exist, but stable public commands and SDK views require benchmark and fixture evidence. |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PLAN-01 | Phase 11 | Complete |
-| PLAN-02 | Phase 11 | Complete |
-| PLAN-03 | Phase 11 | Complete |
-| PLAN-04 | Phase 11 | Complete |
-| MOD-01 | Phase 12 | Complete |
-| MOD-02 | Phase 12 | Complete |
-| MOD-03 | Phase 12 | Complete |
-| MOD-04 | Phase 12 | Complete |
-| SYM-01 | Phase 13 | Complete |
-| SYM-02 | Phase 13 | Complete |
-| SYM-03 | Phase 13 | Complete |
-| SYM-04 | Phase 13 | Complete |
-| CALL-01 | Phase 14 | Pending |
-| CALL-02 | Phase 14 | Pending |
-| CALL-03 | Phase 14 | Pending |
-| CALL-04 | Phase 14 | Pending |
-| CFG-01 | Phase 15 | Pending |
-| CFG-02 | Phase 15 | Pending |
-| CFG-03 | Phase 15 | Pending |
-| CFG-04 | Phase 15 | Pending |
-| COV-01 | Phase 16 | Pending |
-| COV-02 | Phase 16 | Pending |
-| COV-03 | Phase 16 | Pending |
-| COV-04 | Phase 16 | Pending |
-| TEST-01 | Phase 17 | Pending |
-| TEST-02 | Phase 17 | Pending |
-| TEST-03 | Phase 17 | Pending |
-| TEST-04 | Phase 17 | Pending |
-| PY-01 | Phase 18 | Pending |
-| PY-02 | Phase 18 | Pending |
-| PY-03 | Phase 18 | Pending |
-| PY-04 | Phase 18 | Pending |
-| JAVA-01 | Phase 19 | Pending |
-| JAVA-02 | Phase 19 | Pending |
-| JAVA-03 | Phase 19 | Pending |
-| JAVA-04 | Phase 19 | Pending |
+| SAE-FND-01 | Phase 20 | Pending |
+| SAE-FND-02 | Phase 21 | Pending |
+| SAE-FND-03 | Phase 22 | Pending |
+| SAE-FND-04 | Phase 23 | Pending |
+| SAE-FND-05 | Phase 24 | Pending |
+| SAE-FND-06 | Phase 25 | Pending |
+| SAE-SEM-01 | Phase 26 | Pending |
+| SAE-SEM-02 | Phase 27 | Pending |
+| SAE-SEM-03 | Phase 28 | Pending |
+| SAE-SEM-04 | Phase 29 | Pending |
+| SAE-SEM-05 | Phase 30 | Pending |
+| SAE-INT-01 | Phase 31 | Pending |
+| SAE-INT-02 | Phase 32 | Pending |
+| SAE-INT-03 | Phase 33 | Pending |
+| SAE-INT-04 | Phase 34 | Pending |
+| SAE-INT-05 | Phase 35 | Pending |
+| SAE-PREC-01 | Phase 36 | Pending |
+| SAE-PREC-02 | Phase 37 | Pending |
+| SAE-PREC-03 | Phase 38 | Pending |
+| SAE-PREC-04 | Phase 39 | Pending |
+| SAE-PROM-01 | Phase 40 | Pending |
+| SAE-PROM-02 | Phase 41 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 36 total
-- Mapped to phases: 36
+- v1.2 requirements: 22 total
+- Mapped to phases: 22
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-05-08*
-*Last updated: 2026-05-11 after resequencing v1.1 toward codebase graph foundations*
+*Requirements defined: 2026-05-16*
+*Last updated: 2026-05-16 after converting `research/ROADMAP.md` implementation PRs into GSD phases*
