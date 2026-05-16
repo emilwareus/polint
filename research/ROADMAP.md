@@ -22,8 +22,8 @@ Date: 2026-05-16
 - [x] Data-flow implementation design revised against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness. See `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`.
 - [x] Program slicing, path explanation, and evidence research completed: PDG/SDG slicing, thin slices, chops, path ranking, SARIF/JSON evidence, provenance, extension merges, and native implementation path. See `research/program-slicing-evidence/`.
 - [x] Incremental query engine and caching research completed: native layered cache/query design, input snapshots, shape digests, dependency indexes, invalidation planning, summary SCC caching, extension quarantine, and future red-green/relation paths. See `research/incremental-query-engine/`.
-- [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
-- [ ] Start implementation of the private semantic bootstrap only after the revised call graph/data-flow implementation notes confirm they consume the bootstrap rather than bypass it.
+- [x] Rule SDK, query ergonomics, and AI-agent authoring research completed: typed Rust rule surface, rule manifests, narrow `RuleCtx`, model/provider boundary, `polint test`, inspect/explain/diff tooling, and fixture-first agent workflow. See `research/agent-rule-authoring/`.
+- [ ] Start implementation of the private semantic bootstrap and minimal incremental/authoring support slice.
 
 This roadmap orders the remaining research needed to turn polint into a native, multi-language static-analysis engine that AI agents can write high-value repo-local rules and analysis extensions on top of.
 
@@ -172,6 +172,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R11. Implementation Bootstrap Rust Design | Done, use as first coding plan | `research/implementation-bootstrap/` | Private Rust `analysis` module recommendation, semantic store boundaries, stable IDs and metadata, MIR/place/direct-call/P0-domain/direct-summary sequence, semantic cache keys, extension sinks, local code review, and public SDK promotion gates. |
 | R12. Program Slicing, Path Explanation, And Evidence | Done, implement after semantic bootstrap, CFG/control dependence, def-use, direct calls, and summaries exist | `research/program-slicing-evidence/` | Native evidence/slicing recommendation: typed evidence nodes and edges, thin/full slices, chops, context-matched paths, summary expansion, JSON/SARIF rendering, provenance, uncertainty, extension merge validation, and diagnostic evidence bundles. |
 | R13. Incremental Query Engine And Caching | Done, implement minimal dependency-digest/layer-cache slice with semantic bootstrap, then full demand query engine before expensive global analyses | `research/incremental-query-engine/` | Native layered incrementality plan: input snapshots, layer/query/summary/diagnostic keys, shape digests, dependency indexes, invalidation planner, extension-aware cache validation/quarantine, summary SCC backdating, future watch/daemon red-green mode, and optional relation/differential backend. |
+| R14. Rule SDK, Query Ergonomics, And AI-Agent Authoring | Done, implement rule manifests, fact/unknown inspection, and `polint test` with the bootstrap | `research/agent-rule-authoring/` | Typed Rust `#[polint::rule]` surface, macro-derived inspectable manifests, narrow `RuleCtx`, domain query builders, model pack versus provider extension boundary, fixture runner, model/provider delta tests, and agent inspect/explain/diff workflow. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -561,7 +562,12 @@ ideas without adopting any one of them as the first core dependency.
 
 **Folder:** `research/agent-rule-authoring/`
 
-This should happen after the core fact family and extension-surface research are underway, but before public APIs harden. The SDK shape is the product surface.
+Status: researched in `research/agent-rule-authoring/`.
+
+This happened after the core fact family, extension-surface, kernel,
+incremental, and evidence research because the SDK shape is the product surface.
+The research validates the existing typed-rule direction and adds the missing
+authoring loop for AI agents.
 
 Research questions:
 
@@ -571,13 +577,31 @@ Research questions:
 - How does an agent decide whether to write a rule, a model, a summary, or a provider extension?
 - How do CodeQL, Semgrep, Pysa models, Joern queries, ESLint, Rust Clippy, and custom policy engines make rules authorable?
 
-Deliverables:
+Deliverables completed:
 
-- Public SDK ergonomics report.
-- Example generated rules using only `polint::sdk::prelude::*`.
-- Capability derivation and diagnostics plan.
-- Agent-facing documentation style guide.
-- Decision tree for rule vs model vs analysis extension.
+- Public SDK ergonomics report covering CodeQL, Semgrep, ESLint,
+  typescript-eslint, Go `analysis`, Joern, Pysa, Ruff, Clippy, OpenRewrite, and
+  current polint.
+- Recommended typed Rust rule shape using only `polint::sdk::prelude::*`.
+- Rule manifest plan: id, metadata, typed fact views, derived capabilities,
+  precision, option schema, fixability, stability, SDK version, and limitations.
+- Narrow `RuleCtx` plan: diagnostics, options, path/source metadata,
+  setup/capability status, and future structured fixes; no broad fact access.
+- Domain query builder strategy for imports, modules, symbols, references,
+  calls, data flow, effects, summaries, and evidence.
+- Decision tree for rule vs model vs summary vs provider extension vs fixture.
+- `polint test` fixture runner plan with inline markers, JSON snapshots,
+  before/after fix snapshots, model delta tests, and provider fact snapshots.
+- Agent inspect/explain/diff/eval CLI plan.
+- Paper index covering QLCoder, KNighter, IRIS, SemTaint, and RuleLLM.
+- OSS repository index and subagent synthesis.
+
+Core decision: keep typed Rust `#[polint::rule]` functions as the primary
+public authoring surface. Do not build a CodeQL clone, Semgrep YAML clone,
+Joern raw graph shell, or broad `RuleCtx` fact database first. Add generated
+rule manifests, fact/unknown inspection, model packs, provider extension
+boundaries, domain query builders, and a fixture-first `polint test` workflow so
+agents can author executable artifacts with evidence.
 
 ## Cross-Cutting Research Standard
 
@@ -669,32 +693,20 @@ observes unresolved/low-confidence analysis facts
 
 That means research should prefer architectures with clear typed extension points over architectures that are theoretically elegant but closed to repo-specific augmentation.
 
-## Recommended Next Research Task
+## Recommended Next Task
 
-Research:
-
-```text
-research/agent-rule-authoring/
-```
-
-Reason: most engine-side research is now deep enough to start implementation
-planning, but the public/product surface still needs one focused pass. polint's
-engine can be powerful and still fail if agents cannot decide whether to write a
-rule, model, summary, provider extension, or benchmark fixture. The rule SDK and
-agent-authoring research should define that authoring decision tree before
-public APIs harden.
-
-Then implement the private semantic bootstrap:
+Start implementation:
 
 ```text
 research/implementation-bootstrap/
 ```
 
-Reason: the bootstrap now has supporting research for semantic MIR, CFG,
-places, direct calls, P0 domains, summaries, minimal cache/invalidation,
-extension sinks, call graph integration, data-flow integration, slicing/evidence,
-and incremental query/caching. Keep the first implementation private and
-promotion-gated by the evaluation harness.
+Reason: the broad research stack is now complete enough to build. The bootstrap
+has supporting research for semantic MIR, CFG, places, direct calls, P0 domains,
+summaries, minimal cache/invalidation, extension sinks, call graph integration,
+data-flow integration, slicing/evidence, incremental query/caching, and
+agent-rule authoring. Keep the first implementation private and promotion-gated
+by the evaluation harness.
 
 Implementation should include the minimal incremental slice:
 
@@ -704,7 +716,11 @@ LayerKey
 LayerCacheManifest
 DependencyIndex
 InvalidationPlan
+RuleManifest
+polint inspect rule
+polint test fixture skeleton
 ```
 
-Reason: this prevents semantic bootstrap artifacts from growing as one-off
-uncacheable facts that later require a rewrite.
+Reason: this prevents semantic bootstrap artifacts and rule authoring features
+from growing as one-off uncacheable or uninspectable code that later requires a
+rewrite.
