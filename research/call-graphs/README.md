@@ -4,6 +4,9 @@ This folder is a research package for adding call graph facts to polint without 
 
 Date: 2026-05-15
 
+Revision: 2026-05-16 bootstrap integration update after
+`research/implementation-bootstrap/`.
+
 ## Main Finding
 
 There is no single state-of-the-art call graph algorithm that works well across Go, JavaScript/TypeScript, Java, Python, and other languages. The practical state of the art is a layered architecture:
@@ -14,7 +17,10 @@ There is no single state-of-the-art call graph algorithm that works well across 
 4. Preserve unresolved and uncertain calls as first-class facts instead of pretending they do not exist.
 5. Make precision explicit in every fact and cache key.
 
-For polint, the right next step is not a monolithic "build a call graph" feature. It is a typed `Calls` / `CallGraph` fact family with pluggable providers and algorithm provenance.
+For polint, the right next step is not a monolithic "build a call graph"
+feature. After the bootstrap research, it is an internal `analysis::calls` fact
+family that consumes MIR, places, symbols, direct summaries, and extension sinks.
+Public `Calls<'_>` / `CallGraph<'_>` views come later, after validation gates.
 
 The product-specific refinement is that polint should support repo-local call graph models authored by AI agents or rule authors. These models should bind back to native facts, carry provenance, and reduce unresolved calls for the specific codebase instead of forcing the native engine to auto-discover every framework convention.
 
@@ -34,6 +40,7 @@ The product-specific refinement is that polint should support repo-local call gr
 - [languages/java.md](languages/java.md): Java/JVM-specific findings.
 - [languages/python.md](languages/python.md): Python-specific findings.
 - [implementation/polint-call-graph-path.md](implementation/polint-call-graph-path.md): concrete polint implementation path.
+- [implementation/BOOTSTRAP-INTEGRATION.md](implementation/BOOTSTRAP-INTEGRATION.md): revised implementation path aligned with the semantic bootstrap, `SemanticStore`, `PlaceId`, direct summaries, cache keys, and extension sinks.
 
 ## Local Clone Policy
 

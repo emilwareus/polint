@@ -2,6 +2,41 @@
 
 Date: 2026-05-15
 
+Revision: 2026-05-16. This file should now be read together with
+`implementation/BOOTSTRAP-INTEGRATION.md`, which supersedes older recommendations
+to implement public call graph SDK views as the first task.
+
+## Bootstrap Integration Decision
+
+The call graph implementation should live inside the private semantic bootstrap:
+
+```text
+crates/polint/src/analysis/
+  mir/
+  places.rs
+  calls.rs
+  summaries/
+  extensions/
+```
+
+The first deliverable is internal `analysis::calls`, consuming MIR and
+`PlaceId`, not public `Calls<'_>` / `CallGraph<'_>` views.
+
+The implementation path is:
+
+1. lower parser facts into MIR call operations;
+2. derive `CallSiteFact` from MIR ops and `PlaceId`;
+3. emit direct/binding `CallTargetFact` from symbols/references/imports;
+4. emit unresolved call facts for dynamic/interface/unsupported cases;
+5. feed direct calls into direct summaries;
+6. route repo-local model targets through validated extension sinks;
+7. add refined semantic providers later;
+8. promote public SDK views only after docs, fixtures, cache tests, and
+   temp-repo rule tests.
+
+See [implementation/BOOTSTRAP-INTEGRATION.md](implementation/BOOTSTRAP-INTEGRATION.md)
+for the revised fact model, provider tiers, cache keys, and validation gates.
+
 ## Decision
 
 Build a native Rust call-facts and call-graph engine inside polint.
@@ -81,12 +116,15 @@ This is directly motivated by the research: graph size is not enough, and even "
 ```text
 language parser
   -> declaration/scope/reference facts
-  -> syntactic call-site facts
-  -> language-specific resolution providers
-  -> repo-local call graph models
-  -> normalized call-edge facts
-  -> project call graph view
-  -> SDK queries, diagnostics, debug exporters
+  -> semantic MIR
+  -> PlaceId / PlaceKey facts
+  -> internal call-site facts
+  -> direct/binding target facts
+  -> direct summaries
+  -> language-specific refined target providers
+  -> repo-local call model sinks
+  -> internal graph views
+  -> SDK queries later, diagnostics, debug exporters
 ```
 
 The implementation should have five internal pieces:
@@ -106,8 +144,10 @@ The implementation should have five internal pieces:
 5. **Graph materialization**
    Build whole-repo and filtered call graphs from normalized call facts.
 
-6. **Public SDK views**
-   Expose stable query views such as `Calls<'_>` and `CallGraph<'_>`, not internal graph structures.
+6. **Public SDK views later**
+   Expose stable query views such as `Calls<'_>` and `CallGraph<'_>` only after
+   internal validation. The first implementation should expose debug snapshots,
+   not a supported SDK contract.
 
 ## Fact Model
 
@@ -137,7 +177,7 @@ enum CallSyntaxKind {
     Unknown,
 }
 
-struct CallEdgeFact {
+struct CallTargetFact {
     site_id: CallSiteId,
     caller: Option<SymbolId>,
     target: Option<SymbolId>,
@@ -196,7 +236,7 @@ The full call graph is a view over facts.
 ```rust
 struct ProjectCallGraph {
     nodes: SymbolGraph,
-    edges: CallEdgeIndex,
+    edges: CallTargetIndex,
     unresolved: UnresolvedCallIndex,
 }
 ```
@@ -227,31 +267,25 @@ This gives users a real full-project graph without pretending dynamic languages 
 
 ## Provider Contract
 
-Use a provider registry keyed by language and algorithm.
+Older versions of this research suggested starting with a trait-based call
+provider registry. The bootstrap integration revises that: start with internal
+provider IDs and enum dispatch, then introduce trait/dynamic boundaries only for
+extension loading or when native provider variation justifies it.
 
 ```rust
-trait CallFactsProvider {
-    fn language(&self) -> LanguageId;
-    fn algorithm(&self) -> CallAlgorithm;
-    fn required_capabilities(&self) -> CapabilitySet;
-
-    fn emit_call_sites(
-        &self,
-        ctx: &AnalysisCtx,
-        file: FileId,
-        sink: &mut CallSiteSink,
-    ) -> ProviderResult<()>;
-
-    fn resolve_edges(
-        &self,
-        ctx: &AnalysisCtx,
-        sites: &CallSiteStore,
-        sink: &mut CallEdgeSink,
-    ) -> ProviderResult<()>;
+pub(crate) enum CallProviderId {
+    CallSites,
+    DirectTargets,
+    FrameworkModels,
+    GoStatic,
+    GoRta,
+    TsFunctionTokens,
 }
 ```
 
-Providers must be additive. A binding provider and an RTA provider can both emit candidates for the same call site. The fact model records which algorithm produced which edge.
+Providers must still be additive. A binding provider and an RTA provider can both
+emit candidates for the same call site. The fact model records which algorithm
+produced which edge.
 
 ## Repo-Local Model Contract
 
@@ -437,30 +471,25 @@ It should get advanced graph support by adding:
 
 ## Recommended Module Layout
 
-Exact file paths should follow the existing crate layout, but the ownership boundaries should look like this:
+Exact file paths should follow the semantic bootstrap layout:
 
 ```text
-crates/polint/src/facts/calls/
+crates/polint/src/analysis/calls/
   mod.rs
-  model.rs
-  provider.rs
+  facts.rs
   store.rs
-  graph.rs
-  sdk.rs
+  direct.rs
+  unresolved.rs
+  graph_view.rs
   algorithms/
-    binding.rs
-    cha.rs
-    rta.rs
-    vta.rs
-    subset_flow.rs
-  languages/
-    go.rs
-    ts_js.rs
-    python.rs
-    java.rs
+    go_static.rs
+    go_rta.rs
+    ts_function_tokens.rs
 ```
 
-Keep most of this `pub(crate)`. The supported public surface should be the SDK fact views and documented behavior under `docs/facts/`.
+Keep all of this `pub(crate)` at first. The supported public surface should be
+the SDK fact views and documented behavior under `docs/facts/`, but only after
+promotion gates.
 
 ## Language Plan
 
@@ -589,7 +618,8 @@ Config that affects results must participate in deterministic cache digests:
 
 ## Public SDK
 
-Rule authors should consume typed fact views.
+Rule authors should eventually consume typed fact views. Do not expose these in
+the first internal bootstrap.
 
 ```rust
 #[polint::rule]
@@ -612,7 +642,9 @@ Do not expose:
 - mutable call graph builders;
 - broad fact access through `RuleCtx`.
 
-Document this under `docs/facts/call-graph.md` before advertising it.
+Document this under `docs/facts/call-graph.md` before advertising it. Promotion
+requires temp-repo rule tests, cache digest tests, deterministic snapshots, and
+capability diagnostics.
 
 ## Testing and Validation
 
@@ -645,11 +677,11 @@ Use IDs, arenas, interning, and compact indexes.
 Recommended internal indexes:
 
 - `CallSiteId -> CallSiteFact`;
-- `SymbolId -> outgoing CallEdgeId`;
-- `SymbolId -> incoming CallEdgeId`;
-- `CallSiteId -> candidate CallEdgeId`;
+- `SymbolId -> outgoing CallTargetId`;
+- `SymbolId -> incoming CallTargetId`;
+- `CallSiteId -> candidate CallTargetId`;
 - `FileId -> CallSiteId`;
-- `Algorithm -> CallEdgeId`;
+- `Algorithm -> CallTargetId`;
 - `ResolutionStatus -> CallSiteId`.
 
 Run extraction per file, then resolution per package/module, then graph assembly at repository scope.
@@ -667,29 +699,44 @@ Use deterministic parallelism:
 
 Deliver:
 
-- internal `CallSiteFact`;
-- internal `CallEdgeFact`;
-- provider registry;
-- graph store and indexes;
-- `Calls<'_>` SDK view;
-- `CallGraph<'_>` SDK view;
-- docs for current limits;
+- internal `analysis::calls` module;
+- `CallSiteFact`, `CallTargetFact`, and unresolved status/facts;
+- stable keys and `FactMeta` integration;
+- call store and indexes;
+- enum-backed internal provider IDs;
+- semantic cache keys;
+- deterministic debug snapshots;
 - fixture snapshots.
 
-This milestone enables full syntactic call-site graphs.
+This milestone enables internal full syntactic call-site facts without freezing
+public SDK APIs.
 
 ### Milestone 2: Go and TS/JS Binding Graphs
 
 Deliver:
 
-- Go syntax call sites;
-- TS/JS syntax call sites;
+- Go call sites from MIR;
+- TS/JS call sites from MIR;
 - direct lexical binding;
 - import/export resolution where existing facts support it;
 - unresolved facts for unsupported dynamic cases;
-- rule-author temp-repo tests.
+- direct-summary dependency edges;
+- extension sink validation tests.
 
 This milestone enables useful full project call graphs for direct calls.
+
+### Milestone 2.5: Public View Promotion
+
+Deliver only after Milestones 1-2 have stable fixtures:
+
+- `docs/facts/calls.md` or `docs/facts/call-graph.md`;
+- `Calls<'_>` SDK view for call-site iteration;
+- temp-repo rule-author tests;
+- capability support diagnostics;
+- cache digest regression tests;
+- `CallGraph<'_>` later for direct/binding targets and unresolved sites.
+
+This milestone is intentionally separate from internal fact construction.
 
 ### Milestone 3: Native Go Semantic Graph
 
@@ -763,14 +810,17 @@ Do not add both until the shared engine and harness are stable.
 
 ## Recommended First Implementation Task
 
-Implement Milestone 1 and the smallest useful slice of Milestone 2:
+Implement Milestone 1 and the internal slice of Milestone 2:
 
-1. add the internal call fact model;
-2. add call-site extraction for Go and TS/JS;
-3. add `Calls<'_>` as a public SDK view;
-4. add `CallGraph<'_>` with unresolved and direct-bound edges only;
-5. add honest docs under `docs/facts/call-graph.md`;
-6. add temp-repo tests that consume the SDK like an external rule author;
-7. add fixture snapshots for graph output.
+1. add `analysis::calls` IDs, facts, store, stable keys, and indexes;
+2. derive call sites from MIR call operations for Go and TS/JS;
+3. add direct/binding target facts where symbols/references/imports resolve;
+4. emit unresolved facts with explicit reasons for every unsupported/dynamic case;
+5. add semantic cache key tests for call-site and direct-target layers;
+6. add deterministic debug snapshots and evaluation fixtures;
+7. add extension sink validation tests;
+8. do not expose public SDK views yet.
 
-That creates the permanent architecture for full call graphs while keeping the first shippable version small enough to review and verify.
+That creates the internal architecture for full call graphs while keeping the
+first version small enough to review and verify. Public views are a promotion
+step, not the bootstrap.

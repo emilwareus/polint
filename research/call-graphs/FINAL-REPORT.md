@@ -2,6 +2,10 @@
 
 Date: 2026-05-15
 
+Revision: 2026-05-16. The implementation path now assumes the private semantic
+bootstrap in `research/implementation-bootstrap/`: MIR, `PlaceId`,
+`CallSiteFact`, direct summaries, semantic cache keys, and extension sinks.
+
 ## Executive Conclusion
 
 A call graph is not a single artifact. It is an approximation family parameterized by language semantics, entrypoints, dependency scope, dispatch model, heap/type abstraction, context sensitivity, and feature models for reflection, callbacks, dynamic imports, decorators, async dispatch, and framework lifecycle.
@@ -14,7 +18,11 @@ The research result is sharper than the original implementation report:
 - **A full project call graph should include unresolved facts.** Omitting unresolved calls hides false-negative risk; treating them as first-class facts lets rules choose their precision budget.
 - **polint can raise the ceiling with repo-local models.** Unlike a generic black-box analyzer, polint can let AI agents add validated call models for the specific repository's routers, decorators, dependency injection, generated clients, event buses, and tool registration patterns.
 
-For polint, the correct product is a layered `Calls<'_>` / `CallGraph<'_>` fact family with algorithm provenance, confidence, status, and unresolved reasons on every edge.
+For polint, the correct product is a layered call fact family with algorithm
+provenance, confidence, status, and unresolved reasons on every edge. The first
+implementation should be internal `analysis::calls`; public `Calls<'_>` /
+`CallGraph<'_>` views should be promoted only after internal fixtures, cache
+tests, debug snapshots, and temp-repo SDK tests exist.
 
 ## Metrics And Evaluation Caveats
 
@@ -172,19 +180,25 @@ Research implication:
 
 ## Revised Polint Direction
 
-The next call graph phase should not say "build a call graph." It should say:
+The next call graph phase should not say "build a call graph." After the
+bootstrap research, it should say:
 
-> Add language-neutral call-site and call-edge facts, explicit unresolved call facts, direct/binding resolution for Go and TS/JS, a provider registry for semantic algorithms, and a repo-local call-model layer with measured precision/cost metadata.
+> Add internal language-neutral call-site and call-target facts under
+> `analysis::calls`, derive them from MIR and `PlaceId`, emit explicit
+> unresolved call facts, add direct/binding resolution for Go and TS/JS, route
+> model-produced edges through validated extension sinks, and delay public SDK
+> views until the fact family is validated.
 
 Minimum first version:
 
 1. `CallSiteFact` for every syntactic call expression.
-2. `CallEdgeFact` for direct/binding-resolved targets only.
+2. `CallTargetFact` for direct/binding-resolved targets only.
 3. `UnresolvedCallFact` or unresolved edge status for dynamic/interface/unsupported calls.
-4. `Calls<'_>` SDK view for call-site queries.
-5. `CallGraph<'_>` SDK view for graph traversal over selected algorithm tiers.
-6. Repo-local call graph model loading with model identity and validation status.
+4. `CallStore` indexes by caller, site, target, incoming/outgoing, and unresolved reason.
+5. Semantic artifact cache keys for call-site and direct-target layers.
+6. Extension call-model sinks with model identity and validation status.
 7. Debug export that reports counts by language, algorithm, status, unresolved reason, and model provenance.
+8. Public `Calls<'_>` and `CallGraph<'_>` views only after validation gates.
 
 Then add:
 

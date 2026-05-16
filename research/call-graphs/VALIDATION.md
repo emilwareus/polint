@@ -145,3 +145,31 @@ No broken repository paths or materially false core claims were found in the cur
 - The cloned repositories are snapshots from 2026-05-15. Upstream HEAD may change.
 - Some research papers are arXiv/preprint-style PDFs rather than final proceedings PDFs. The report uses them for technical direction, not as normative standards.
 - The recommendations intentionally favor polint's product constraints: repo-local rules, typed facts, performance, and honest diagnostics. A different product, such as an IDE or vulnerability scanner, might choose heavier defaults.
+
+## 2026-05-16 Bootstrap Integration Validation
+
+The call graph implementation path was revalidated against the new
+implementation-bootstrap research.
+
+Additional checked source points:
+
+- Current polint stores only string call hints on `FunctionFact`: `crates/polint/src/core/mod.rs:142-153`.
+- Current Go adapter extracts sorted/deduped call names from tree-sitter call expressions: `crates/polint/src/go/adapter.rs:431-444`, `:549-562`.
+- Current TS/JS adapter recursively collects call names from Oxc expressions: `crates/polint/src/ts/adapter.rs:1181-1303`.
+- Go static call graph follows `StaticCallee`: `repos/golang-tools/go/callgraph/static/static.go:16-40`.
+- Go RTA requires explicit roots and fixed-point processing: `repos/golang-tools/go/callgraph/rta/rta.go:300-354`.
+- Go VTA is explicitly experimental and uses a global type-propagation graph: `repos/golang-tools/go/callgraph/vta/vta.go:5-55`.
+- Jelly registers JS call edges when a function token binds: `repos/jelly/src/analysis/operations.ts:433-454`.
+- CodeQL JS exposes potential callees plus imprecision/incompleteness predicates: `repos/codeql/javascript/ql/lib/semmle/javascript/dataflow/Nodes.qll:193-261`.
+- Pyre/Pysa stores decorated, higher-order, shim, unresolved, and recognized-call fields separately: `repos/pyre-check/source/interprocedural/callGraph.ml:645-664`.
+- OPAL separates type producers from call graph clients through `TypeIterator`: `repos/opal/OPAL/tac/src/main/scala/org/opalj/tac/fpcf/analyses/cg/TypeIterator.scala:82-132`.
+- OPAL records incomplete call sites for unresolved invokedynamic: `repos/opal/OPAL/tac/src/main/scala/org/opalj/tac/fpcf/analyses/cg/CallGraphAnalysis.scala:267-289`.
+
+Validation result:
+
+- The old recommendation to implement public `Calls<'_>` / `CallGraph<'_>` as
+  the next task was too early after the bootstrap research.
+- The revised recommendation is internally consistent with the semantic
+  bootstrap: derive call sites from MIR and places, emit direct targets and
+  unresolved facts, feed direct summaries, validate extension sinks, and promote
+  SDK views only after gates.

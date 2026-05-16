@@ -1,5 +1,9 @@
 # Polint Call Graph Implementation Path
 
+Revision: 2026-05-16. The implementation path is now aligned with
+`research/implementation-bootstrap/` and
+`implementation/BOOTSTRAP-INTEGRATION.md`.
+
 ## Product Decision
 
 Do not ship "the call graph" as if it were exact. Ship typed fact views that expose call sites, resolved targets, algorithm provenance, and uncertainty.
@@ -11,6 +15,9 @@ Recommended SDK shape:
 - `Calls<'_>`: cheap syntactic call-site view.
 - `CallGraph<'_>`: resolved call-edge view.
 - `CallTargets<'_>` or methods on `CallGraph<'_>`: target lookup by call site, caller, callee, symbol, and confidence.
+
+These are promotion targets, not the first implementation step. The first step
+is internal `analysis::calls` facts derived from MIR and `PlaceId`.
 
 ## Internal Fact Model
 
@@ -38,7 +45,7 @@ enum CallSyntaxKind {
     Unknown,
 }
 
-struct CallEdgeFact {
+struct CallTargetFact {
     site_id: CallSiteId,
     caller: Option<SymbolId>,
     target: Option<SymbolId>,
@@ -95,6 +102,10 @@ enum ValidationStatus {
 
 ## Provider Contract
 
+Bootstrap revision: do not start with this as a public or extension-facing
+trait. Use internal provider IDs and enum dispatch first. Treat this trait shape
+as a later refactoring target if native provider variation needs it.
+
 ```rust
 trait CallFactsProvider {
     fn language(&self) -> LanguageId;
@@ -134,7 +145,7 @@ for file in supported_files:
     ast = parse(file)
     for call in language_adapter.call_expressions(ast):
         emit(CallSiteFact(...))
-        emit(CallEdgeFact(
+        emit(CallTargetFact(
             site_id=call.id,
             target=direct_syntax_target_if_trivial(call),
             algorithm="Syntax",
@@ -263,7 +274,7 @@ for model in repo_call_models:
         continue
 
     for edge in bound.edges:
-        emit(CallEdgeFact(
+        emit(CallTargetFact(
             site_id=edge.site_id,
             caller=edge.caller,
             target=edge.target,
@@ -328,12 +339,15 @@ Python:
 
 ## Recommended Next Implementation Task
 
-Implement Phase A + a thin Phase B for the currently supported languages:
+Implement the internal direct-call bootstrap for the currently supported
+languages:
 
-1. Add internal `CallSiteFact` and `CallEdgeFact`.
-2. Add `Calls<'_>` SDK view with call-site iteration.
-3. Add `CallGraph<'_>` SDK view that can return direct bound edges and unresolved sites.
-4. Implement Go syntax call sites from tree-sitter and TS/JS call sites from Oxc.
-5. Add model/provenance fields now, even if repo-local model loading ships in the next slice.
-6. Add docs under `docs/facts/call-graph.md` that clearly label current precision.
-7. Add temp-repo style tests for rule authors consuming the public SDK view.
+1. Add `analysis::calls` IDs, facts, stable keys, store, and indexes.
+2. Derive `CallSiteFact` from MIR call operations and `PlaceId`.
+3. Add direct/binding `CallTargetFact` where symbols/references/imports resolve.
+4. Emit unresolved facts with explicit reasons for everything else.
+5. Add model/provenance fields now, even before repo-local model loading ships.
+6. Add deterministic debug snapshots and evaluation fixtures.
+7. Add cache key tests for call-site and direct-target layers.
+8. Add extension sink validation tests.
+9. Delay `Calls<'_>` / `CallGraph<'_>` SDK views until docs and temp-repo tests exist.
