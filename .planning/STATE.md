@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-16T19:51:02.864Z"
-last_activity: 2026-05-16 -- Phase 20 execution started
+last_updated: "2026-05-16T20:02:48.300Z"
+last_activity: 2026-05-16
 progress:
   total_phases: 22
   completed_phases: 0
   total_plans: 2
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 50
 ---
 
 # State: polint
@@ -38,16 +38,16 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 20
+Status: Ready to execute
 Phase: 20 (Private Analysis Kernel Facade) — EXECUTING
-Plan: 1 of 2
-Last activity: 2026-05-16 -- Phase 20 execution started
+Plan: 2 of 2
+Last activity: 2026-05-16
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 20 | Pending | Private analysis kernel facade; requirement SAE-FND-01 |
+| 20 | In Progress | 1/2 plans complete; private kernel facade/delegation done, provider manifests next |
 | 21 | Pending | Provenance, precision, and validation metadata; requirement SAE-FND-02 |
 | 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
@@ -80,13 +80,30 @@ Last activity: 2026-05-16 -- Phase 20 execution started
 - Go semantic lifecycle must support monorepos without requiring a root `go.mod`; module roots are inferred or configured in `.polint.toml`.
 - New analysis modules for v1.2 should stay private until validation and promotion gates justify public SDK or CLI exposure.
 - Every new fact family should carry stable IDs, precision/status/provenance, deterministic ordering, cache inputs, validation fixtures, and explicit unknown states.
+- Phase 20 Plan 01 added a crate-private `AnalysisKernel` facade that owns the existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics execution order.
+- Runner and parent CLI analysis paths delegate provider execution through `AnalysisKernel::run`; rule selection, rule options, ignores, report filtering/rendering, exit behavior, and rule execution remain outside the kernel.
+
+## Decisions
+
+- Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
+- Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
+- Merge module graph support over the static plan support view, then symbol graph support over module support, before rules run.
+
+## Execution Metrics
+
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
+
+## Session
+
+- Last session: 2026-05-16
+- Stopped at: Completed 20-01-PLAN.md
 
 ## Next Action
 
-Discuss and plan Phase 20:
+Execute the next Phase 20 plan:
 
-`/gsd-discuss-phase 20`
+`/gsd-execute-phase 20`
 
-or plan directly:
-
-`/gsd-plan-phase 20`
+Next incomplete plan: `.planning/phases/20-private-analysis-kernel-facade/20-02-PLAN.md`

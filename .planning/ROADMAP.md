@@ -22,7 +22,7 @@ The milestone should preserve public API discipline. New internals stay private 
 
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
-| 20 | Private Analysis Kernel Facade | Move orchestration behind a private kernel boundary and provider manifests without changing behavior. | SAE-FND-01 |
+| 20 | Private Analysis Kernel Facade | In Progress (1/2 plans): move orchestration behind a private kernel boundary and provider manifests without changing behavior. | SAE-FND-01 |
 | 21 | Provenance, Precision, and Validation Metadata | Attach shared truth labels, stable keys, and merge validation to existing facts. | SAE-FND-02 |
 | 22 | Internal Evaluation Harness MVP | Add deterministic native fixture evaluation for facts, graphs, diagnostics, invariants, and budgets. | SAE-FND-03 |
 | 23 | Input Snapshots and Cache-Key Vocabulary | Add snapshot and typed key vocabulary for source, config, lifecycle, rules, tools, and models. | SAE-FND-04 |
@@ -52,10 +52,10 @@ The milestone should preserve public API discipline. New internals stay private 
 **Goal:** Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers.
 **Requirements:** SAE-FND-01
 **Research:** `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`, `research/implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 20-01-PLAN.md - Private kernel facade and runner/CLI delegation
+- [x] 20-01-PLAN.md - Private kernel facade and runner/CLI delegation
 - [ ] 20-02-PLAN.md - Internal provider manifests and deterministic provider-order inspection
 
 **Success criteria:**
