@@ -179,7 +179,9 @@ Rejected. Most rules need typed answers for specific places/calls/flows. Build a
 
 ### Assumption: "External analyzers can be the implementation."
 
-Rejected for the product goal. External analyzers are oracles and references, not runtime dependencies. Their APIs, licensing, performance models, and language assumptions do not match a unified Rust fact engine.
+Mostly rejected for arbitrary OSS analyzers. Ty, Pyright, CodeQL, WALA, Soot, SVF, Doop, and similar tools are research references, comparison oracles, and benchmark sources, not the core runtime implementation.
+
+Official language tooling is different. If the Go toolchain, JDK/JVM metadata, `javac`, TypeScript compiler behavior, or official Python metadata is the compatibility authority for a language, polint may use it behind a provider boundary. The invariant is that downstream consumers see polint-owned facts with stable IDs, provenance, precision labels, cache keys, and validation status.
 
 ### Assumption: "Alias analysis is language-neutral."
 

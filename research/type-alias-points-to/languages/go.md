@@ -95,13 +95,16 @@ Go is easier than Python/JS in many ways because the language has a strong type 
 10. Validate against `go/types`, `go/ssa`, and `x/tools/go/callgraph` fixtures.
 ```
 
-## Native Versus Oracle
+## Native Versus Official Toolchain
 
-For the "full native implementation" goal, do not call Go tools as the polint runtime analyzer. Use them as:
+For the "full native implementation" goal, Go tools are not the same category as random OSS analysis libraries. They are the official compatibility authority for Go modules, packages, build tags, type checking, method sets, aliases, generics, and SSA behavior.
+
+polint may use Go tools as:
 
 - fixture generators;
 - differential validation oracles;
 - behavior references;
-- compatibility checks during development.
+- compatibility checks during development;
+- provider inputs for package loading, type checking, or SSA-shaped facts where exact Go semantics are worth delegating.
 
-The runtime engine should emit polint-owned facts with polint-owned IDs, provenance, precision labels, and cache keys.
+The runtime engine should still emit polint-owned facts with polint-owned IDs, provenance, precision labels, and cache keys. It should not expose Go tool internal IDs or make non-official Go analysis libraries core dependencies.

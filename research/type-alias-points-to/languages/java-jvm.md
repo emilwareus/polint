@@ -12,6 +12,8 @@ The JVM ecosystem has the most mature public work on call graph, pointer analysi
 - Checker Framework: source-level Java data-flow/type-qualifier analysis.
 - CodeQL Java: query-facing semantic/data-flow/call graph model.
 
+Official JVM/JDK tooling is allowed as an implementation input. `javac`, classfile metadata, module metadata, JVM descriptors/signatures, bytecode attributes, and standard resolution behavior are language-native authority, not random OSS analyzer dependencies. Third-party frameworks such as Doop, WALA, Soot, OPAL, Checker Framework, and CodeQL should remain research references and validation/comparison sources unless a future adapter explicitly wraps them behind polint-owned fact boundaries.
+
 ## Algorithm Ladder
 
 JVM tools converge on this precision ladder:
@@ -112,3 +114,5 @@ Java is not a first adapter today, but the future design should be:
 ```
 
 Do not implement Java as a separate analysis universe. It should use the same polint fact layers as Go/TS/Python.
+
+Prefer official JDK/JVM inputs for language truth, then normalize into polint facts. Avoid making Soot/WALA/Doop/etc. required runtime dependencies for core Java capability.

@@ -264,7 +264,7 @@ This document applies the standard structure from `STANDARD.md` to the main impl
 
 **Cost model:** package loading and SSA construction cost; VTA benchmark comments show higher time/memory than CHA/RTA.
 
-**Lessons for polint:** use Go tools as validation oracle and copy the precision ladder natively.
+**Lessons for polint:** Go tools are official language authority, not random OSS analyzers. Use them as validation oracles and, where it makes semantic sense, provider inputs. Always normalize their output into polint-owned facts and keep the precision ladder under polint's fact/provenance model.
 
 ## Staticcheck
 

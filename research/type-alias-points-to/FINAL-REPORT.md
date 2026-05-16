@@ -48,6 +48,19 @@ A call graph that does not expose which edges are exact, heuristic, extension-pr
 
 ## Major Findings
 
+### 0. Official Language Toolchains Are Allowed Integration Points
+
+The "native implementation" goal should not be interpreted as "never call or reuse official language functionality." It means polint should own the normalized fact model, scheduling, provenance, cache keys, SDK views, validation, and extension merges.
+
+Official language tooling is allowed when it is the compatibility authority for the language:
+
+- Go: `go list`, `go env`, `go/types`, `go/packages`, `go/ssa`, and official callgraph behavior can be used as provider inputs, compatibility checks, or even delegated semantic phases when that is the most correct path.
+- JVM/Java: `javac`, JDK classfile/module metadata, bytecode attributes, and JVM resolution semantics are valid language-native inputs.
+- TypeScript: the TypeScript compiler can be used as a semantic oracle for type/narrowing behavior, even if polint's first TS/JS frontend remains Oxc-based.
+- Python: official import metadata, packaging metadata, and runtime/library specifications are valid inputs, while third-party type checkers remain references.
+
+The line is not "no external programs." The line is: do not make polint's core engine depend on arbitrary OSS analyzers whose APIs, semantics, release cadence, or precision model we do not control. If an official toolchain provides the language truth, use it pragmatically and wrap its output into polint facts.
+
 ### 1. Types Carry More Precision Than Traditional Alias Analysis In Dynamic Languages
 
 For Python and TS/JS, the highest return comes from type and flow-narrowing facts before deep points-to:
@@ -135,12 +148,13 @@ For polint, this ladder should become the cross-language pattern even before Jav
 
 The Go reference stack is `go/types`, `go/packages`, `go/ssa`, and `x/tools/go/callgraph/{static,cha,rta,vta}`. The current `golang.org/x/tools` snapshot inspected here includes static, CHA, RTA, and VTA call graph packages, but no current `go/pointer` package under `x/tools/go`. Older Andersen-style Go pointer analysis exists historically, but this research should not describe it as current state of `x/tools`.
 
-For a full native polint implementation, use Go tools as an external validation oracle, not as a runtime dependency:
+For a full native polint implementation, Go tools are allowed because they are the official language authority. The key is not to expose Go tool internals as polint's product model. Use them through a controlled provider boundary:
 
-- implement module-root/build-tag/package lifecycle natively or through a controlled compatibility phase;
-- implement enough Go type facts to resolve selectors, interfaces, method sets, aliases, and generics;
-- implement Go value/place facts over the native CFG;
-- use `go/types`/`go/ssa`/VTA fixtures to validate behavior.
+- use `go list`, `go/packages`, and `go/types` where exact Go lifecycle/type compatibility is worth delegating;
+- normalize every output into polint-owned type/place/value/call facts;
+- implement native fact layers and solvers around those facts;
+- validate native behavior against `go/types`/`go/ssa`/VTA fixtures;
+- avoid depending on non-official Go analysis libraries as the core implementation.
 
 ### 7. The Extension Surface Is Not Optional
 

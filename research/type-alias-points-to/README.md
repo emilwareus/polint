@@ -4,7 +4,9 @@ Date: 2026-05-15
 
 This folder researches how polint should implement native type, value, points-to, and alias analysis across Go, TypeScript/JavaScript, Python, Java/JVM, and future languages.
 
-The goal is not to embed Ty, Pyright, CodeQL, WALA, Soot, SVF, or any other external analyzer. The goal is to learn from the best available implementations and papers, then design a native Rust analysis engine with typed fact layers, explicit uncertainty, strong extension hooks, and validation against external oracles.
+The goal is not to build core capability on random third-party analysis libraries such as Ty, Pyright, CodeQL, WALA, Soot, SVF, or similar OSS analyzers. The goal is to learn from the best available implementations and papers, then design a Rust-owned analysis engine with typed fact layers, explicit uncertainty, strong extension hooks, and validation against external oracles.
+
+Official language toolchains are different. Where it meaningfully improves correctness or compatibility, polint may use language-native authority such as the Go toolchain, `go/types`, `go/packages`, `go list`, `javac`, JVM/classfile metadata, TypeScript's official compiler behavior, or Python's official import/runtime metadata as provider inputs or compatibility oracles. Those integrations should still normalize into polint-owned facts with polint provenance, cache keys, validation, and SDK boundaries.
 
 ## Recommended Reading Order
 

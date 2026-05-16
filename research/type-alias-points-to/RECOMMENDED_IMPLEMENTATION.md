@@ -2,7 +2,9 @@
 
 ## Goal
 
-Build a native Rust implementation that gives polint strong type, value, points-to, and alias facts across languages without embedding external analysis engines.
+Build a Rust-owned implementation that gives polint strong type, value, points-to, and alias facts across languages without building core capability on arbitrary third-party analysis engines.
+
+"Native" means polint owns the normalized facts, provenance, scheduling, cache keys, validation, SDK views, and extension merge behavior. It does not forbid using official language-native tooling where that tooling is the compatibility authority. The Go toolchain, JVM/JDK metadata and `javac`, TypeScript compiler behavior, and official Python import/package metadata can be used as provider inputs when that is the most accurate and maintainable choice.
 
 The design must support:
 
@@ -427,7 +429,8 @@ Important constraints:
 
 - Do not expose a raw global points-to graph as the public SDK.
 - Do not make "alias analysis" a mandatory whole-repo pass.
-- Do not rely on Ty, Pyright, CodeQL, WALA, Soot, SVF, or Go tools at runtime.
+- Do not rely on Ty, Pyright, CodeQL, WALA, Soot, SVF, or other third-party OSS analyzers as runtime core dependencies.
+- Do not reject official language tools on principle. Use them when they are the language authority, but wrap their outputs into polint-owned facts and cache/provenance boundaries.
 - Do not let extension facts erase unknowns without preserving evidence.
 - Do not claim exact Python/JS dynamic dispatch or reflection support from heuristic type/value facts.
 - Do not build high-k context sensitivity before a measured use case requires it.

@@ -102,7 +102,8 @@ Third-party repositories were cloned under `research/type-alias-points-to/repos/
 
 ## Repository Caveats
 
-- Cloned repositories are research inputs and should not become runtime dependencies.
+- Cloned third-party repositories are research inputs and should not become runtime dependencies by default.
+- Official language toolchains are a separate category: Go toolchain packages, JDK/JVM metadata, `javac`, TypeScript compiler behavior, and official Python metadata may be used behind polint provider boundaries when they are the language authority.
 - Some clones are sparse or partial to reduce disk usage; source paths were inspected through checkout or `git show` where needed.
 - The `ty` repository is a wrapper around a Ruff submodule; the relevant Ty implementation was inspected in the Ruff clone.
 - Current `golang-tools` did not include `go/pointer`; this corrected an earlier assumption that current x/tools still ships that package.

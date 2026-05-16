@@ -50,15 +50,15 @@ Reason:
 - Unvalidated replacement facts create false confidence.
 - Provenance and conflict diagnostics are mandatory for trust.
 
-## D6: Go Tools Are Oracles, Not Runtime Dependencies
+## D6: Official Language Toolchains Are Allowed Provider Inputs
 
-Decision: use `go/types`, `go/ssa`, and Go callgraph packages for validation, not as the long-term runtime engine.
+Decision: official language toolchains are allowed when they are the compatibility authority. For Go this includes `go list`, `go/packages`, `go/types`, and `go/ssa`-shaped behavior. For JVM/Java this includes `javac`, JDK classfile/module metadata, and JVM resolution semantics.
 
 Reason:
 
-- User wants full native implementation.
-- polint needs one unified fact/provenance/cache model.
-- Go official tools remain the best compatibility oracle.
+- "Native" means polint owns the normalized fact/provenance/cache/SDK model, not that it must reimplement every official compiler semantic from scratch immediately.
+- Official tools reduce semantic drift in hard language-lifecycle areas.
+- Random third-party OSS analyzers should remain references/oracles unless wrapped by a deliberate provider boundary.
 
 ## D7: Sparse Flow-Sensitive Analysis Comes Later
 
