@@ -52,12 +52,24 @@ pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
 
 #[cfg(test)]
 pub(crate) fn provider_order_for_test() -> Vec<&'static str> {
-    Vec::new()
+    provider_manifests()
+        .iter()
+        .map(|manifest| manifest.id)
+        .collect()
 }
 
 #[cfg(test)]
 pub(crate) fn provider_order_report_for_test() -> Vec<ProviderOrderRow> {
-    Vec::new()
+    provider_manifests()
+        .iter()
+        .map(|manifest| ProviderOrderRow {
+            id: manifest.id,
+            kind: provider_kind_label(manifest.kind),
+            language_scope: language_scope_label(manifest.language_scope),
+            inputs: manifest.inputs.to_vec(),
+            outputs: manifest.outputs.to_vec(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -68,6 +80,26 @@ pub(crate) struct ProviderOrderRow {
     pub(crate) language_scope: &'static str,
     pub(crate) inputs: Vec<&'static str>,
     pub(crate) outputs: Vec<&'static str>,
+}
+
+#[cfg(test)]
+fn provider_kind_label(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::SourceDiscovery => "source_discovery",
+        ProviderKind::LanguageSyntax => "language_syntax",
+        ProviderKind::WholeRepoDerived => "whole_repo_derived",
+        ProviderKind::MetricsDerived => "metrics_derived",
+    }
+}
+
+#[cfg(test)]
+fn language_scope_label(scope: LanguageScope) -> &'static str {
+    match scope {
+        LanguageScope::Workspace => "workspace",
+        LanguageScope::Go => "go",
+        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
+        LanguageScope::MultiLanguage => "multi_language",
+    }
 }
 
 const SOURCE_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -191,6 +223,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn provider_manifests_have_required_metadata() {
@@ -306,5 +339,54 @@ mod tests {
         assert!(!rendered.contains('/'));
         assert!(!rendered.contains('\\'));
         assert!(!rendered.contains("202"));
+    }
+
+    #[test]
+    fn provider_manifests_are_not_public_sdk_runner_or_cli_contract() {
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lib = read_source(&crate_root.join("src/lib.rs"));
+        assert!(!lib.contains("pub mod analysis_kernel"));
+
+        assert_no_manifest_contract_terms(&crate_root.join("src/runner/mod.rs"));
+        assert_no_manifest_contract_terms(&crate_root.join("src/cli/mod.rs"));
+        for source_path in rust_sources_under(&crate_root.join("src/sdk")) {
+            assert_no_manifest_contract_terms(&source_path);
+        }
+    }
+
+    fn assert_no_manifest_contract_terms(path: &Path) {
+        let source = read_source(path);
+        for term in ["ProviderManifest", "provider_order", "provider_manifests"] {
+            assert!(
+                !source.contains(term),
+                "unexpected manifest contract term `{term}` in {}",
+                path.display()
+            );
+        }
+    }
+
+    fn rust_sources_under(dir: &Path) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        collect_rust_sources(dir, &mut sources);
+        sources.sort();
+        sources
+    }
+
+    fn collect_rust_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read sdk source directory") {
+            let entry = entry.expect("read sdk source entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rust_sources(&path, sources);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                sources.push(path);
+            }
+        }
+    }
+
+    fn read_source(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!("read {}: {error}", path.display());
+        })
     }
 }
