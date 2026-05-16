@@ -50,6 +50,26 @@ pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
     PROVIDER_MANIFESTS
 }
 
+#[cfg(test)]
+pub(crate) fn provider_order_for_test() -> Vec<&'static str> {
+    Vec::new()
+}
+
+#[cfg(test)]
+pub(crate) fn provider_order_report_for_test() -> Vec<ProviderOrderRow> {
+    Vec::new()
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderOrderRow {
+    pub(crate) id: &'static str,
+    pub(crate) kind: &'static str,
+    pub(crate) language_scope: &'static str,
+    pub(crate) inputs: Vec<&'static str>,
+    pub(crate) outputs: Vec<&'static str>,
+}
+
 const SOURCE_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "source-files-1",
     version: 1,
@@ -186,5 +206,105 @@ mod tests {
             let _cache_policy = manifest.cache_policy;
             let _precision_ceiling = manifest.precision_ceiling;
         }
+    }
+
+    #[test]
+    fn provider_order_matches_behavior_preserving_kernel_sequence() {
+        assert_eq!(
+            provider_order_for_test(),
+            vec![
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_manifest_dependencies_are_deterministic_metadata() {
+        let report = provider_order_report_for_test();
+
+        assert_eq!(
+            report,
+            vec![
+                ProviderOrderRow {
+                    id: "polint.source",
+                    kind: "source_discovery",
+                    language_scope: "workspace",
+                    inputs: vec!["workspace_config", "file_discovery"],
+                    outputs: vec!["source_files"],
+                },
+                ProviderOrderRow {
+                    id: "polint.go.syntax",
+                    kind: "language_syntax",
+                    language_scope: "go",
+                    inputs: vec!["source_files"],
+                    outputs: vec![
+                        "packages",
+                        "functions",
+                        "imports",
+                        "go_tests",
+                        "branch_obligations",
+                    ],
+                },
+                ProviderOrderRow {
+                    id: "polint.ts.syntax",
+                    kind: "language_syntax",
+                    language_scope: "typescript_javascript",
+                    inputs: vec!["source_files"],
+                    outputs: vec![
+                        "functions",
+                        "imports",
+                        "ts_components",
+                        "ts_classes",
+                        "string_literals",
+                        "jsx_attributes",
+                    ],
+                },
+                ProviderOrderRow {
+                    id: "polint.module_graph",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec!["source_files", "packages", "imports"],
+                    outputs: vec!["resolved_imports", "module_nodes", "module_edges"],
+                },
+                ProviderOrderRow {
+                    id: "polint.symbol_graph",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "packages",
+                        "imports",
+                        "resolved_imports",
+                        "module_nodes",
+                        "module_edges",
+                        "functions",
+                    ],
+                    outputs: vec!["symbols", "definitions", "references"],
+                },
+                ProviderOrderRow {
+                    id: "polint.metrics",
+                    kind: "metrics_derived",
+                    language_scope: "multi_language",
+                    inputs: vec!["source_files", "functions"],
+                    outputs: vec!["file_metrics", "function_metrics", "complexity_metrics"],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_order_report_for_test_is_path_stable() {
+        let report = provider_order_report_for_test();
+        let rendered = format!("{report:?}");
+
+        assert!(!rendered.contains(env!("CARGO_MANIFEST_DIR")));
+        assert!(!rendered.contains('/'));
+        assert!(!rendered.contains('\\'));
+        assert!(!rendered.contains("202"));
     }
 }
