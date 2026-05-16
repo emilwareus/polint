@@ -16,21 +16,27 @@ The codebase already reserves a `DataFlow<'_>` fact view, but it is unsupported 
 - `crates/polint/src/core/mod.rs`
 - `crates/polint/src/analysis_plan.rs`
 
-The implementation should turn that placeholder into a real SDK view without exposing solver internals.
+The implementation should **not** turn that placeholder into a real SDK view as
+the first step. First build internal `analysis::data_flow` facts that consume
+MIR, `PlaceId`, CFG, call-site/call-target facts, summaries, abstract domains,
+and validated extension model facts. Then promote the reserved SDK view once the
+internal facts, evidence paths, cache keys, and fixtures are stable.
 
 ## Target Pipeline
 
 ```text
 file discovery
   -> parser adapters
-  -> symbols/references/imports
-  -> CFG facts
-  -> call facts and call graph facts
-  -> local data-flow facts
+  -> symbols/references/imports/module graph
+  -> MIR operations and PlaceId facts
+  -> CFG facts and P0 abstract-domain facts
+  -> call-site/call-target facts
+  -> direct summary facts
+  -> internal local data-flow facts
   -> repo-local data-flow models
-  -> function summaries
-  -> interprocedural data-flow facts
-  -> typed SDK views and rule queries
+  -> summary-projected interprocedural data-flow facts
+  -> query-scoped path evidence
+  -> typed SDK views and rule queries later
 ```
 
 Data flow must depend on call graph quality. Missing call edges and unresolved dynamic dispatch should be represented as `unknown` or `havoc` flow facts instead of silently disappearing.
@@ -40,31 +46,24 @@ Data flow must depend on call graph quality. Missing call edges and unresolved d
 Suggested private module layout:
 
 ```text
-crates/polint/src/dataflow/
+crates/polint/src/analysis/data_flow/
   mod.rs
-  model.rs
-  provider.rs
+  facts.rs
   store.rs
+  local.rs
+  direct_calls.rs
+  summary_edges.rs
+  models.rs
   query.rs
   path.rs
-  summary.rs
-  access_path.rs
-  models.rs
   validation.rs
   algorithms/
-    local.rs
-    summaries.rs
+    sparse.rs
+    reachability.rs
     ifds.rs
-    abstract_domain.rs
-    relational.rs
-  languages/
-    go.rs
-    ts_js.rs
-    java.rs
-    python.rs
 ```
 
-Only the curated SDK view should be public:
+Keep this internal. Only after promotion should the curated SDK view be public:
 
 ```text
 polint::sdk::facts::DataFlow<'_>
@@ -137,7 +136,7 @@ FunctionSummaryFact(
 
 ## SDK View Shape
 
-The SDK should support direct graph inspection and higher-level path queries:
+After promotion, the SDK should support direct graph inspection and higher-level path queries:
 
 ```rust
 impl<'a> DataFlow<'a> {
@@ -180,7 +179,7 @@ DataFlowQuery::new()
 ```python
 class LanguageDataFlowProvider:
     def required_inputs(self):
-        return ["symbols", "references", "cfg", "calls"]
+        return ["symbols", "references", "mir", "places", "cfg", "calls", "summaries"]
 
     def emit_local_flow(self, file_or_package):
         # cheap and cacheable
@@ -208,9 +207,9 @@ Providers must be deterministic, cacheable, and able to return partial facts wit
 
 ### 1. Foundation
 
-Implement the internal data-flow model, stable IDs, store, diagnostics, cache digest participation, and the `DataFlow<'_>` SDK view with no global solver yet.
+Implement the internal data-flow model, stable IDs, store, diagnostics, validation, deterministic debug snapshots, and cache digest participation. Keep `DataFlow<'_>` unsupported.
 
-Deliverable: local graph inspection over synthetic fixtures.
+Deliverable: local graph inspection over synthetic fixtures through internal snapshots.
 
 ### 2. CFG and Local Flow
 
@@ -254,13 +253,7 @@ Iterate over the call dependency graph until summaries converge. Reanalyze calle
 
 Deliverable: multi-function and cross-file flow without recomputing full paths globally.
 
-### 5. Rule Query Ergonomics
-
-Add source/sink/sanitizer/barrier matchers on top of typed facts. These should be plain Rust APIs that AI agents can assemble in generated rules.
-
-Deliverable: external-rule temp repo tests where generated `.polint/rules` imports only `polint::sdk::prelude::*` and asks `DataFlow<'_>` for source-to-sink paths.
-
-### 6. Repo-Local Model Layer
+### 5. Repo-Local Model Layer
 
 Add a native model layer for high-ceiling repo-specific precision.
 
@@ -289,7 +282,27 @@ for model in repo_dataflow_models:
 
 Deliverable: debug output comparing default paths to extended paths, including paths added by models, paths pruned by sanitizers/barriers, and unknown/havoc reduction.
 
-### 7. Semantic Precision
+### 6. Query-Scoped Path Engine
+
+Add internal path queries before public SDK ergonomics:
+
+- bounded source-to-sink search;
+- call-context preservation for interprocedural paths;
+- summary-hop explanation;
+- model-edge and sanitizer/barrier provenance;
+- unknown/havoc hop reporting;
+- budget-exceeded status.
+
+Deliverable: deterministic path snapshots that explain local, direct-call,
+summary, and model edges.
+
+### 7. Rule Query Ergonomics
+
+Add source/sink/sanitizer/barrier matchers on top of typed facts. These should be plain Rust APIs that AI agents can assemble in generated rules.
+
+Deliverable: external-rule temp repo tests where generated `.polint/rules` imports only `polint::sdk::prelude::*` and asks `DataFlow<'_>` for source-to-sink paths. This is the point where the public capability can be promoted.
+
+### 8. Semantic Precision
 
 Improve languages incrementally:
 
@@ -300,13 +313,13 @@ Improve languages incrementally:
 
 Deliverable: every language can opt into a precision tier without changing the SDK.
 
-### 8. IFDS/IDE Engine
+### 9. IFDS/IDE Engine
 
 After local flow, CFG, call graph, and summaries are stable, implement an internal IFDS engine for finite facts and an IDE extension for value domains.
 
 Deliverable: exact finite data-flow clients such as taint labels, initializedness, nilness/nullness, and selected typestate facts.
 
-### 9. Relational/Incremental Engine
+### 10. Relational/Incremental Engine
 
 Add internal relation facts and semi-naive fixed-point scheduling for expensive whole-program analyses. Use the IncIDFA and FlowLog/Souffle research as architecture input, but keep it native Rust and private.
 

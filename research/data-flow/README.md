@@ -2,6 +2,8 @@
 
 Date: 2026-05-15
 
+Bootstrap integration update: 2026-05-16
+
 This folder is a research package for adding native data-flow facts to polint. It is intentionally parallel to `research/call-graphs/`, because useful interprocedural data flow depends on call graph precision, symbol identity, CFG quality, and language setup.
 
 ## Main Finding
@@ -17,7 +19,7 @@ The practical state of the art is not a single taint algorithm. The strongest sy
 7. first-class unknown/havoc facts for dynamic calls, reflection, missing setup, and unsupported language features;
 8. provenance, precision, and algorithm labels on every node, edge, and path.
 
-For polint, the right product is a typed `DataFlow<'_>` SDK view backed by native Rust providers. Rule authors and AI agents should define repo-specific sources, sinks, sanitizers, barriers, summaries, additional flow steps, and entrypoints on top of stable facts, not depend on internal solver APIs.
+For polint, the right product is ultimately a typed `DataFlow<'_>` SDK view backed by native Rust providers. The 2026-05-16 bootstrap revision is stricter about sequencing: first build internal `analysis::data_flow` facts that consume MIR, `PlaceId`, CFG, call-site/call-target facts, abstract domains, summaries, and validated extension sinks. Promote `DataFlow<'_>` only after fixtures, cache tests, docs, and temp-repo SDK tests prove the internal facts are stable.
 
 This is a product shift from black-box static analysis to an agent-extensible analysis framework. The native engine should have strong defaults, but maximum accuracy should come from validated repo-local models that bind to symbols, calls, CFG nodes, spans, and call graph facts.
 
@@ -38,6 +40,7 @@ This is a product shift from black-box static analysis to an agent-extensible an
 - [languages/java.md](languages/java.md): Java/JVM-specific data-flow notes.
 - [languages/python.md](languages/python.md): Python-specific data-flow notes.
 - [implementation/polint-data-flow-path.md](implementation/polint-data-flow-path.md): implementation path tied to polint's SDK/capability model.
+- [implementation/BOOTSTRAP-INTEGRATION.md](implementation/BOOTSTRAP-INTEGRATION.md): revised implementation design against the analysis kernel, call graph, CFG, summaries, abstract domains, extension model sinks, cache keys, and evaluation harness.
 
 ## Local Clone Policy
 

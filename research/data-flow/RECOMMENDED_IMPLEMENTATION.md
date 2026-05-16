@@ -2,19 +2,56 @@
 
 ## Recommendation
 
-Build a native Rust **analysis fact engine** with data flow as a first-class typed fact family. Do not build a taint-specific feature, and do not wrap an external engine. The target should be:
+Build a native Rust **analysis fact engine** with data flow as a first-class internal fact family. Do not build a taint-specific feature, and do not wrap an external engine. The target should be:
 
 ```text
 language adapters
-  -> common symbols/references/calls/CFG
+  -> MIR / places / CFG / symbols / references / calls
   -> common value-flow graph
+  -> summaries and P0 abstract domains
   -> repo-local data-flow models
-  -> summaries and fixed points
+  -> summary fixed points
+  -> query-scoped evidence paths
   -> typed SDK views
   -> AI-agent-authored repo rules
 ```
 
 The winning architecture is CodeQL-style query ergonomics, Pysa-style summary fixed points, Checker-style local abstract interpretation, Joern-style graph provenance, and FlowDroid/Heros-style IFDS later, implemented natively inside polint.
+
+## 2026-05-16 Bootstrap Integration Decision
+
+The implementation should now follow
+`implementation/BOOTSTRAP-INTEGRATION.md`: build `analysis::data_flow` as a
+private consumer of the semantic bootstrap before promoting the reserved public
+`DataFlow<'_>` view.
+
+Revised dependency order:
+
+```text
+analysis::mir
+  -> analysis::places
+  -> analysis::cfg
+  -> analysis::calls
+  -> analysis::domains
+  -> analysis::summaries
+  -> analysis::data_flow
+  -> query-scoped evidence paths
+  -> public DataFlow<'_> later
+```
+
+This avoids three implementation traps:
+
+- freezing an immature `DataFlow<'_>` API before the internal graph is stable;
+- rebuilding places, CFG, calls, summaries, and abstract domains inside a
+  parallel data-flow subsystem;
+- designing for taint first and then trying to generalize it into value flow,
+  nilness, typestate, secret flow, dependency flow, and agent/tool-boundary
+  policies.
+
+The first concrete deliverable is not a user-facing SDK view. It is an internal
+fact store with stable IDs, provenance, precision/status labels,
+unknown/havoc facts, semantic cache keys, deterministic debug snapshots, and
+evaluation fixtures.
 
 ## Research-Driven Precision Defaults
 
@@ -93,6 +130,7 @@ Create stable internal facts for:
 - imports/modules/packages;
 - call sites and call edges;
 - CFG nodes and edges;
+- MIR operations and places;
 - data-flow nodes and edges;
 - function summaries;
 - diagnostics, precision, and provenance.
@@ -245,9 +283,14 @@ Add IFDS/IDE only after the graph and summaries are stable:
 
 These solvers should feed the same `DataFlow<'_>` SDK view.
 
-## Public SDK
+## Public SDK Promotion
 
-Expose a typed view:
+`DataFlow<'_>` is already reserved in the SDK, but the first implementation
+should keep the capability unsupported. Promote it only after internal
+`analysis::data_flow` facts have deterministic snapshots, docs, cache tests,
+extension validation tests, evidence-path tests, and temp-repo rule tests.
+
+When promoted, expose a typed view:
 
 ```rust
 #[polint::rule]
@@ -265,7 +308,7 @@ fn unsafe_data_flow(ctx: &mut RuleCtx<'_>, data: DataFlow<'_>) -> RuleResult {
 }
 ```
 
-That exact API is illustrative, not final. The key is that rule authors work with typed facts, matchers, paths, and precision labels.
+That exact API is illustrative, not final. The key is that rule authors work with typed facts, matchers, paths, and precision labels, not solver internals.
 
 ## Language Rollout
 
@@ -325,7 +368,7 @@ Add tests that behave like external users: generated `.polint/rules`, public SDK
 
 ## Minimum Viable Powerful Version
 
-The first version worth shipping should support:
+The first version worth implementing internally should support:
 
 - intraprocedural Go and TS/JS flow;
 - direct-call interprocedural flow;
@@ -335,7 +378,15 @@ The first version worth shipping should support:
 - repo-local data-flow models with provenance and validation status;
 - path explanations;
 - unknown/havoc facts for unresolved calls and dynamic features;
-- docs under `docs/facts/data-flow.md`.
+- deterministic debug snapshots;
+- cache invalidation for source/config/model/summary/call-target changes.
+
+The first version worth shipping publicly should additionally include:
+
+- `DataFlow<'_>` SDK docs under `docs/facts/data-flow.md`;
+- temp-repo tests using only `polint::sdk::prelude::*`;
+- evaluation harness reports for default mode and extension-enabled mode;
+- documented per-language precision limits.
 
 That is enough for real repo-local policies such as:
 

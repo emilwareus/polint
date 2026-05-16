@@ -88,6 +88,86 @@ A fresh web search on 2026-05-15 found and incorporated:
 
 This does not prove no newer paper exists anywhere, but it covers the relevant recent primary sources surfaced by web search for multi-language static data-flow and taint analysis.
 
+## Bootstrap Integration Validation
+
+Date: 2026-05-16
+
+The data-flow implementation recommendation was revalidated against the current
+polint codebase and the local cloned implementation sources before adding
+`implementation/BOOTSTRAP-INTEGRATION.md`.
+
+Current polint hooks checked:
+
+- `crates/polint/src/sdk/facts.rs:650-736`: `DataFlow<'_>` is a reserved
+  placeholder fact view.
+- `crates/polint/src/analysis_plan.rs:637-642`: `dataflow` is still an
+  unsupported capability.
+- `crates/polint/src/core/mod.rs:142-153`: `FunctionFact.calls` is a string
+  list, not a semantic call graph input.
+- `crates/polint/src/core/mod.rs:1109-1127`: `Capabilities::dataflow` is
+  documented as future facts built on CFG, symbols, and call graph support.
+- `crates/polint-macros/src/lib.rs:318-327`: the rule macro maps `DataFlow` to
+  the `dataflow` capability.
+
+Reference implementation paths rechecked:
+
+- CodeQL data-flow config, barriers, additional steps, access-path limits, and
+  path graph contracts:
+  `repos/codeql/shared/dataflow/codeql/dataflow/DataFlow.qll:400-451`,
+  `:681-723`.
+- CodeQL taint-as-layer design:
+  `repos/codeql/shared/dataflow/codeql/dataflow/TaintTracking.qll:56-150`.
+- CodeQL summary implementation:
+  `repos/codeql/shared/dataflow/codeql/dataflow/internal/FlowSummaryImpl.qll:1769-1786`,
+  `:1910-1938`.
+- Joern sink-to-source path search, call-stack handling, and method semantics:
+  `repos/joern/dataflowengineoss/src/main/scala/io/joern/dataflowengineoss/queryengine/Engine.scala:40-54`,
+  `:192-318`,
+  `repos/joern/dataflowengineoss/src/main/scala/io/joern/dataflowengineoss/queryengine/TaskCreator.scala:32-86`,
+  `repos/joern/dataflowengineoss/src/main/scala/io/joern/dataflowengineoss/semanticsloader/Semantics.scala:8-90`,
+  `:111-176`.
+- Pysa global taint fixpoint, per-callable CFG/call-graph/model analysis, callee
+  model lookup, actual-to-formal matching, sanitizer matching, and forward local
+  fixpoint extraction:
+  `repos/pyre-check/source/interprocedural_analyses/taint/taintFixpoint.ml:8-52`,
+  `:112-207`,
+  `repos/pyre-check/source/interprocedural_analyses/taint/callModel.ml:23-52`,
+  `:209-260`,
+  `repos/pyre-check/source/interprocedural_analyses/taint/forwardAnalysis.ml:3740-3792`.
+- OpenGrep deterministic generic fixpoint, taint precision caveats, lvalue
+  environment, signatures, call graph, CFG transfer, and fixpoint call:
+  `repos/opengrep/src/analyzing/Dataflow_core.ml:138-180`,
+  `repos/opengrep/src/tainting/Dataflow_tainting.ml:55-67`,
+  `:110-125`,
+  `:2528-2684`,
+  `:2801-2862`.
+- Heros IFDS problem contract:
+  `repos/heros/src/heros/IFDSTabulationProblem.java:21-60`.
+- WALA tabulation problem and solver storage for path, call-flow, summary, seed,
+  and call-processing edges:
+  `repos/WALA/core/src/main/java/com/ibm/wala/dataflow/IFDS/TabulationProblem.java:20-48`,
+  `repos/WALA/core/src/main/java/com/ibm/wala/dataflow/IFDS/TabulationSolver.java:100-152`,
+  `:201-236`,
+  `:500-548`.
+- FlowDroid IFDS-style normal/call/return/call-to-return taint functions and
+  alias/field/kill behavior:
+  `repos/FlowDroid/soot-infoflow/src/soot/jimple/infoflow/problems/InfoflowProblem.java:72-190`,
+  `:431-563`,
+  `:776-832`.
+
+Design conclusions validated by this pass:
+
+- `DataFlow<'_>` should remain unsupported until internal facts are stable.
+- Data flow must consume MIR, `PlaceId`, CFG, call targets, summaries, abstract
+  domains, and extension model facts instead of owning parallel versions of
+  those concepts.
+- Taint must be a query/domain layer over general data-flow facts.
+- Unknown/havoc facts must be queryable and cacheable.
+- Summary-projected edges are the first scalable global layer.
+- IFDS/IDE is a later internal solver once the ICFG and finite fact domains are
+  stable.
+- Path evidence should be query-scoped and call-context-aware.
+
 ## Accuracy Notes
 
 - CodeQL and Semgrep product documentation is used for public API and design tradeoff claims.
@@ -119,6 +199,9 @@ find research/data-flow -maxdepth 2 -type f | sort
 file research/data-flow/papers/*.pdf | sort
 for p in <representative source paths>; do test -e "$p"; done
 git status --short
+git diff --check
+git check-ignore -v research/data-flow/repos/codeql research/data-flow/repos/joern research/data-flow/repos/pyre-check research/data-flow/repos/opengrep research/data-flow/repos/WALA research/data-flow/repos/heros research/data-flow/repos/FlowDroid
+LC_ALL=C rg -n "[^\x00-\x7F]" research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md research/data-flow/README.md research/data-flow/FINAL-REPORT.md research/data-flow/RECOMMENDED_IMPLEMENTATION.md research/data-flow/implementation/polint-data-flow-path.md research/data-flow/VALIDATION.md
 ```
 
 ## Residual Risks

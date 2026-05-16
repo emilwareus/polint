@@ -2,6 +2,8 @@
 
 Date: 2026-05-15
 
+Bootstrap integration update: 2026-05-16
+
 ## Executive Conclusion
 
 The data-flow report should not be read as "pick IFDS" or "copy CodeQL." The research points to a layered native engine:
@@ -18,9 +20,40 @@ CFG/local facts
 
 Accuracy comes from the composition of representation, call graph quality, access-path precision, summary design, source/sink/sanitizer models, and domain-specific entrypoint recovery. The solver alone does not make the engine state of the art.
 
-For polint, build a native `DataFlow<'_>` fact family that is general enough for taint, nilness, constants, typestate, dependency flow, secret flow, and agent/tool-boundary policies. Taint should be a rule/query layer over data-flow facts, not the whole engine.
+For polint, build a native data-flow fact family that is general enough for taint, nilness, constants, typestate, dependency flow, secret flow, and agent/tool-boundary policies. Taint should be a rule/query layer over data-flow facts, not the whole engine.
+
+The implementation sequencing is now sharper: do not make `DataFlow<'_>` public first. Build the private `analysis::data_flow` layer first, downstream of MIR, stable places, CFG, direct call facts, P0 abstract domains, and summaries. Then promote `DataFlow<'_>` after evidence paths, provenance, cache keys, model validation, and evaluation fixtures are working.
 
 The product-specific conclusion is stronger: polint should be an agent-extensible analysis framework, not a black-box analyzer that tries to infer every source, sink, sanitizer, summary, and framework lifecycle convention by itself. The native engine supplies the substrate; agents and repo-local rules add validated models for the codebase.
+
+## 2026-05-16 Bootstrap Revision
+
+The later research on the analysis kernel, implementation bootstrap, call graph, CFG, type/alias facts, summaries, abstract interpretation, and evaluation harness changes the data-flow implementation plan in one important way: data flow must be a consumer of the shared semantic kernel, not a parallel engine.
+
+The revised internal dependency chain is:
+
+```text
+analysis::mir
+  -> analysis::places
+  -> analysis::cfg
+  -> analysis::calls
+  -> analysis::domains
+  -> analysis::summaries
+  -> analysis::data_flow
+  -> query-scoped evidence paths
+  -> public SDK views later
+```
+
+This means:
+
+- `FunctionFact.calls: Vec<String>` is not a data-flow input except as legacy display/debug evidence.
+- `DataFlow<'_>` remains a reserved unsupported SDK view until internal facts are validated.
+- direct-call interprocedural flow uses `CallSiteFact`, `CallTargetFact`, `PlaceId`, and summary facts.
+- extension models add sources, sinks, sanitizers, barriers, summaries, and additional steps through validated sinks, not by mutating the native graph.
+- unknown/havoc facts are first-class and auditable.
+- path evidence is query-scoped; global path enumeration is not a default provider output.
+
+The implementation-ready details are in `implementation/BOOTSTRAP-INTEGRATION.md`.
 
 ## Research-Level Accuracy Lessons
 
@@ -183,17 +216,19 @@ World-class does not mean claiming complete static truth across Go, TS/JS, Java,
 
 ## Revised Implementation Path
 
-1. **Local substrate:** CFG facts, places, operations, value-flow edges.
-2. **Typed SDK:** `DataFlow<'_>` with node/edge/path inspection and precision labels.
+1. **Internal store:** `analysis::data_flow` IDs, facts, metadata, validation, indexes, and deterministic snapshots.
+2. **Local substrate:** MIR, CFG facts, places, operations, local sparse value-flow edges, and unknown/havoc facts.
 3. **Bounded access paths:** default low depth, wildcard overflow, digest-aware config.
 4. **Direct-call interprocedural:** use call graph facts for param/return/receiver edges.
 5. **Function summaries:** TITO, param-return, source-return, param-sink, field/receiver effects, unknown effects.
 6. **Repo-local model layer:** sources, sinks, sanitizers, barriers, summaries, additional steps, entrypoints, trust boundaries, and model validation.
-7. **Source/sink/sanitizer query API:** rule-authored and config-authored matchers.
-8. **Domain packs:** web handlers, MCP/tool boundaries, logging/secrets, DB/shell/file APIs.
-9. **IFDS/IDE:** internal finite-fact solver after ICFG/summaries stabilize.
-10. **Points-to/access-path refinement:** selected languages and high-value rule families.
-11. **Incremental fixed points:** summary and relation invalidation by changed files/functions.
+7. **Query-scoped path evidence:** reconstruct paths with call context, provenance, precision, and budget status.
+8. **Public SDK promotion:** `DataFlow<'_>` with path/query APIs after docs, fixtures, cache tests, and temp-repo tests pass.
+9. **Source/sink/sanitizer query API:** rule-authored and config-authored matchers.
+10. **Domain packs:** web handlers, MCP/tool boundaries, logging/secrets, DB/shell/file APIs.
+11. **IFDS/IDE:** internal finite-fact solver after ICFG/summaries stabilize.
+12. **Points-to/access-path refinement:** selected languages and high-value rule families.
+13. **Incremental fixed points:** summary and relation invalidation by changed files/functions.
 
 ## What To Avoid
 
