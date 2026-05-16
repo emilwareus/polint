@@ -1,0 +1,310 @@
+<html prefix="http://ogp.me/ns/website#">
+<head>
+<title>ELINA: ETH LIbrary for Numerical Analysis</title>
+<meta property="og:description" content="ETH LIbrary for Numerical Analysis" />
+<meta property="og:image" content="http://elina.ethz.ch/images/ELINA_Thumbnail2.png"/>
+<meta property="og:url" content="http://elina.ethz.ch/"/>
+<meta property="og:title" content="ELINA"/>
+<meta property="og:type" content="website"/>
+<script type="text/javascript">
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-43783024-1']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+</script>
+
+<script type="text/javascript" charset="utf-8">
+	//Load Twitter
+    window.twttr = (function (d,s,id) {
+        var t, js, fjs = d.getElementsByTagName(s)[0];
+        if (d.getElementById(id)) return; js=d.createElement(s); js.id=id;
+        js.src="//platform.twitter.com/widgets.js"; fjs.parentNode.insertBefore(js, fjs);
+        return window.twttr || (t = { _e: [], ready: function(f){ t._e.push(f) } });
+      }(document, "script", "twitter-wjs"));
+
+</script>
+<link rel="stylesheet" href="css/style.css" type="text/css">
+<script type="text/javascript" src="//use.typekit.net/rve8bgk.js"></script>
+<script type="text/javascript">try{Typekit.load();}catch(e){}</script>
+
+</head>
+
+<body>
+<div id="fb-root"></div>
+<script>(function(d, s, id) {
+  var js, fjs = d.getElementsByTagName(s)[0];
+  if (d.getElementById(id)) return;
+  js = d.createElement(s); js.id = id;
+  js.src = "//connect.facebook.net/en_US/sdk.js#xfbml=1&version=v2.0";
+  fjs.parentNode.insertBefore(js, fjs);
+}(document, 'script', 'facebook-jssdk'));</script>
+
+<div id="header_wrapper">
+
+	<div id="header">
+	<div id="nav">
+			<ul class="clearfix">
+				<li class="selected"> <a href="#domain"> ELINA </a></li>
+				<li><a href="#news">News</a></li>
+				<li><a href="#download">Download</a></li>
+				<li><a href="#documentation">Documentation</a></li>
+				<li><a href="#publications">Publications</a></li>
+				<li><a href="#bench">Performance</a></li>
+				<li><a href="#team">Team</a></li>
+			</ul>
+			<div class="shareboxes">
+				<div class="sharebox">
+				<div class="fb-like" data-layout="button_count" data-action="like" data-show-faces="false" data-share="false"></div>
+				</div>
+				<div class="sharebox">
+					<a href="http://twitter.com/share" class="twitter-share-button"  data-text="ELINA" data-via="">Tweet</a>
+				</div>
+			</div>
+
+	</div>
+
+</div>
+</div>
+
+<div class="post" id="domain">
+<br>
+<div id="logo"> <p><font face="Source Sans Pro">EL</font><font face="flash" >I</font><font face="Source Sans Pro">NA</font></p></div>
+<h3> ETH LIbrary for Numerical Analysis </h3>
+<img src="images/numerical_shapes.png">
+<p> ELINA contains optimized implementations of popular numerical abstract domains such as Polyhedra, Octagon and Zones for static analysis.
+ELINA uses improved algorithms, online decomposition as well as state of the art performance optimizations from linear algebra such as vectorization, locality of reference, scalar replacement etc. to significantly improve the performance of static analysis with the numerical domains. </p>
+</div>
+
+<div class="container" >
+<div class="post" id="news">
+<h2>News</h2>
+<p>
+<a>25 Jul 2018: Version 1.1 with various bugfixes released.</a><br>
+<a>21 Mar 2018: Python Interface for the Octagon domain added. </a><br>
+<a>15 Jan 2018: Limited support for Zonotope transformers added. </a><br>
+<a>05 Dec 2017: Faster implementation of Polyhedra domain based on POPL'18 paper released. </a><br>
+<a>24 Nov 2017: Added support for the Zones domain. </a><br>
+<a>03 Aug 2017: Improved precision for Polyhedra transformers in case of integer overflow. </a><br>
+<a>15 Feb 2017: Added Java interface based on APRON. </a><br>
+<a>31 Jan 2017: Added OCaml interface based on APRON. </a><br>
+<a>23 Jan 2017: Added support for APRON interface. </a><br>
+<a>15 Jan 2017: Added support for fold and expand transformers for Polyhedra.</a><br>
+<a>28 Nov 2016: Source code for Polyhedra and Octagon domain released.</a>
+</p>
+</div>
+
+<div class="post" id="download">
+<h2>Download</h2>
+<p>The source code for ELINA is available on Github using the link below.</p>
+<a href="https://github.com/eth-srl/ELINA">
+                <img src="images/github_icon.png" alt="Github" style="width:60px;height:60px;">
+            </a>
+<p>We also provide a tar file containing latest compressed source code <a href="http://files.sri.inf.ethz.ch/elina-1.1.tar.gz">here</a>.</p>
+</div>
+
+<div class="post" id="documentation">
+<h2>Documentation</h2>
+
+
+<h3>Requirements</h3>
+  The installation is preferable for Linux 64-bit. Make sure you have latest version of gcc and g++.
+
+  Install the following libraries.
+    <h4> GNU m4</h4>
+		<li> sudo apt-get install m4 </li>
+
+    <h4> GMP </h4>
+		<li> Download the tar file from <a href="https://gmplib.org/">https://gmplib.org/</a>. </li>
+		<li> Extract the source.</li>
+		<li> Go to the gmp folder and run:
+			<ul><li> ./configure --enable-cxx</li>
+			<li>make </li>
+			<li>make check </li>
+			<li> sudo make install</li> </ul> </li>
+		<li> This will install the gmp library in "/usr/local" folder. </li>
+
+    <h4> GNU MPFR</h4>
+		<li> Download the tar file from <a href="http://www.mpfr.org/">http://www.mpfr.org/</a></li>
+		<li> Extract the source.</li>
+		<li> Go to the mpfr folder and run:
+			<ul><li>./configure</li>
+			<li>make</li>
+			<li>make check</li>
+			<li> sudo make install</li></ul></li>
+		<li> This will install the mpfr library in "/usr/local" folder.</li>
+
+
+
+<h3>Compiling and installing</h3>
+    ELINA uses Intel's Vector Instructions for improving the performance of the Octagon and Zones domain. ELINA also supports backward compatibility with APRON so that existing analyzers using APRON can benefit from ELINA with minimal changes.
+We also provide Python interface as well as OCaml and Java interface based on APRON. For Python interface, make sure you have at least Python 3.4. <br> <br>
+		<li> Run "./configure". The ocaml and java support are disabled by default. Both are accessed using the APRON API. To use the apron API, specify "./configure -use-apron". To enable java and ocaml support, add "-use-ocaml" and "-use-java" options. Type "./configure -help" for more configuration options.
+		<li> Check if your machine supports AVX as follows:
+			<ul> <li> For Linux: Run "cat /proc/cpuinfo | grep "avx””, For Mac: Run “sysctl -a | grep machdep.cpu.features”.</li>
+			<li> Check for the string "avx" in output.</li></ul></li>
+		<li> If your machine support AVX instructions, then ELINA can be configured using "./configure -use-vector". This will enable ELINA to benefit from AVX instructions for making the Octagon and Zones domain implementation faster.</li>
+
+		<li>For 32-bit systems, disable the architecture specific flags (m64, march=native etc. ) and DTIMING in DFLAGS. </li>
+		<li>ELINA can be compiled and installed by running "make" and then "make install".</li>
+
+
+
+<h3>Running the Library</h3>
+  The library can be used directly from C.
+  <h4> Polyhedra </h4>
+	Create the manager for the Polyhedra domain as follows:
+		<p id="poly">&nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp	elina_manager_t *  man = opt_pk_manager_alloc(false);</p>
+	<li>The file "elina_test_poly.c" contains examples for calling Polyhedra transformers such as Join, Meet and more. The file requires two integer arguments:
+	<ul><li>dim: number of variables in the created Octagons</li>
+	<li> nbcons: number of constraints used to create input Octagons for various transformers</li>
+	</ul>
+	<li>The function "opt_pk_manager_alloc" in the file "opt_pk_internal.c" contains list of supported Polyhedra transformers. </li>
+
+  <h4> Octagon </h4>
+	Create the manager for the Octagon domain as follows:
+		<p>&nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp	elina_manager_t *  man = opt_oct_manager_alloc(); </p>
+	<li>The file "elina_test_oct.c" contains examples for calling Octagon transformers such as Join, Meet and more. The file requires same arguments as for the Polyhedra domain.</li>
+	<li>The function "opt_oct_manager_alloc" in the file "opt_oct_representation.c" contains list of supported Octagon transformers.</li>
+
+  <h4> Zones </h4>
+	Create the manager for the Zones domain as follows:
+		<p>&nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp &nbsp	elina_manager_t *  man = opt_zones_manager_alloc(); </p>
+	<li>The function "opt_zones_manager_alloc" in the file "opt_zones_representation.c" contains list of supported Zones transformers.</li>
+
+
+  <h4> OCaml interface </h4>
+	<li> Make sure APRON's ocaml interface is installed.</li>
+	<li> We provide a test file "mlexample.ml" showing how to access the OCaml interface.</li>
+	<li> Type "ocamlrun mlexample.byte" to run the tests.</li>
+  <h4> Java interface </h4>
+	<li> Make sure APRON's java interface is installed.</li>
+	<li> We provide a test file "Test.java" showing how to access the Java interface.</li>
+	<li> Type "java -Djava.library.path=PATH_TO_INSTALLED.so elina.Test" to run the tests.</li>
+  <h4> Python interface </h4>
+	<li> We currently support Octagon domain with the Python interface.</li>
+	<li> We provide a test file "tests/elina_oct_test.py" showing how to access the Python interface.</li>
+	<li> Type "python elina_oct_test.py (dim) (nbcons) " to run the file. The two integer arguments have the same meaning as for the C interface.</li>
+</div>
+
+<div class="post" id="publications">
+<h2>Publications</h2>
+
+<br>
+<b>Fast Numerical Program Analysis with Reinforcement Learning</b>
+<br>
+Gagandeep Singh, Markus P&uuml;schel, Martin Vechev<br>
+<i>CAV 2018</i><br>
+<a href="papers/CAV18-RLPOLY_Paper.pdf" class="pdf" title="CAV18"><img src="images/adobe.png"></a>Paper
+<a href="slides/CAV18-RLPOLY_Slides.pdf" class="pdf" title="CAV18"><img src="images/adobe.png"></a>Slides
+<br>
+<b>A Practical Construction for Decomposing Numerical Abstract Domains</b>
+<br>
+Gagandeep Singh, Markus P&uuml;schel, Martin Vechev<br>
+<i>ACM POPL 2018</i><br>
+<a href="papers/POPL18-Generic.pdf" class="pdf" title="POPL18"><img src="images/adobe.png"></a>Paper
+<a href="slides/popl2018_slides.pdf" class="pdf" title="POPL18"><img src="images/adobe.png" class=pdf-load border="0" alt="PDF" noborder></a>Slides
+<a href="https://www.youtube.com/watch?v=t_ht1p67tOA&t=1073s" class="pdf" title="POPL18"><img src="images/youtube.png"></a>Talk
+
+<br>
+<b>Fast Polyhedra Abstract Domain</b>
+<br>
+Gagandeep Singh, Markus P&uuml;schel, Martin Vechev<br>
+<i>ACM POPL 2017</i><br>
+<a href="papers/POPL17-Polyhedra.pdf" class="pdf" title="POPL17"><img src="images/adobe.png"></a>Paper
+<a href="slides/popl2017-fast-polyhedra.pdf" class="pdf" title="POPL17"><img src="images/adobe.png"></a>Slides
+<a href="https://www.youtube.com/watch?v=z8-ESNHxOI0" class="pdf" title="POPL17"><img src="images/youtube.png"></a>Promo
+<a href="https://www.youtube.com/watch?v=SdOaoIcVZAY" class="pdf" title="POPL17"><img src="images/youtube.png"></a>Talk
+
+<br>
+<b>Making Numerical Program Analysis Fast</b>
+<br>
+Gagandeep Singh, Markus P&uuml;schel, Martin Vechev<br>
+<i>ACM PLDI 2015</i><br>
+<a href="papers/PLDI15-Octagon.pdf" class="pdf" title="PLDI15"><img src="images/adobe.png" class=pdf-load border="0" alt="PDF" noborder></a>Paper
+<a href="slides/pldi2015-fast-octagon.pdf" class="pdf" title="POPL17"><img src="images/adobe.png"></a>Slides
+<a href="https://www.youtube.com/watch?v=O3F428P9vIk" class="pdf" title="POPL17"><img src="images/youtube.png" alt="PDF"></a>Promo
+</div>
+
+<div class="post" id="bench">
+<h2>Performance</h2>
+<p>We selected a number of realistic programs as benchmarks including linux device drivers from <a href="https://sv-comp.sosy-lab.org/2016/benchmarks.php">software verification competition</a>. These benchmarks were analyzed using published analyzers including <a href="http://seahorn.github.io/">SeaHorn</a>, <a href="http://www.srl.ethz.ch/dps.php">DPS</a>, <a href="https://www.touchdevelop.com/ehgq">TouchBoost</a>, <a href="https://github.com/tech-srl/differential">DIZY</a> and <a href="https://cpachecker.sosy-lab.org/">CPAchecker</a>. We compare speedup for ELINA over APRON for the end-to-end Octagon analysis. For the Polyhedra analysis, we compare ELINA against both APRON and Parma Polyhedra Library (PPL). PPL and APRON do not finish on some benchmarks either due to timeout after 4 hours or they run out of memory, we provide a conservative lower bound in such cases. The benchmarks which do not finish with APRON have ^ and those with PPL have * as superscript.</p>
+<h3>Speedup for Octagon</h3>
+<img src="images/octagon_speedup.png">
+<h3>Speedup for Polyhedra</h3>
+<img src="images/Polyhedra_speedup.png">
+</div>
+
+
+<div class="post" id="team">
+<h2>Team </h2><br>
+<div class="column-left">
+<img src="http://elina.ethz.ch/images/GGN_icon.jpg" alt="Gagandeep Singh" style="width:100px;margin: 0 auto;"></img>
+<h4>
+Gagandeep Singh<br>
+</h4>
+<p>
+PhD Student
+<br>
+Department of Computer Science
+<br>
+ETH Zurich
+<br>
+<a href="http://www.sri.inf.ethz.ch/ggn.php" target="_blank">Website</a>
+</p>
+
+</div>
+
+<div class="column-right">
+<img src="http://elina.ethz.ch/images/mvpic.jpg" alt="Martin Vechev" style="width:100px;height:100px;margin:0px auto;"></img>
+<h4>
+Martin Vechev
+</h4>
+<p>
+Professor
+<br>
+Department of Computer Science
+<br>
+ETH Zurich
+<br>
+<a href="http://www.sri.inf.ethz.ch/vechev.php" target="_blank">Website</a>
+</p>
+
+</div>
+
+<div class="column-center">
+<img src="http://elina.ethz.ch/images/markus.jpg" alt="Markus Puschel" style="width:100px;height:100px;margin:0px auto;"></img>
+<h4>
+Markus P&uuml;schel
+</h4>
+<p>
+Professor
+<br>
+Department of Computer Science
+<br>
+ETH Zurich
+<br>
+<a href="http://www.inf.ethz.ch/personal/markusp/" target="_blank">Website</a>
+</p>
+</div>
+
+
+
+
+</div>
+
+</div>
+
+<div id="footer">
+<p> &copy ELINA | <a href="http://www.inf.ethz.ch" target="_blank">Department of Computer Science</a>, <a href="http://www.ethz.ch/index_EN" target="_blank">ETH Zurich</a></p>
+</div>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+<script src="js/jquery.scrollTo.js"></script>
+<script src="js/jquery.nav.js"></script>
+<script src="js/global.js"></script>
+</body>
+</html>

@@ -6,6 +6,7 @@ Start with [ROADMAP.md](ROADMAP.md).
 
 Existing research:
 
+- [abstract-interpretation/](abstract-interpretation/): reduced-product abstract-domain kernel, lattice/transfer interfaces, widening/narrowing, nilness/nullish, constants, strings, ranges, initializedness, shapes, typestate/resource, extension validation, and benchmark strategy.
 - [cfg-control-flow/](cfg-control-flow/): native operation/basic-block CFG facts, exceptional and cleanup edges, dominance/postdominance, control dependence, path evidence, and extension overlays.
 - [module-graph/](module-graph/): native workspace roots, package managers, lockfiles, dependency edges, import-to-package resolution, source sets, build targets, and repo topology.
 - [type-alias-points-to/](type-alias-points-to/): native type, value, place, points-to, and alias fact layers; bounded Andersen-style solver; alias provider stack; and agent extension hooks.

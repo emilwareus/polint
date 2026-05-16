@@ -1,0 +1,93 @@
+<html>
+  <head>
+    <title>APRON Numerical Abstract Domain Library</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+
+  <body onload="main()">
+
+    <div id="header">
+      <h1>APRON</h1>
+      <h2>Numerical Abstract Domain Library</h2>
+    </div>
+
+    <div id="menu">
+        <span id="menubar">
+          &nbsp;
+          <a href="#intro">Introduction</a>&nbsp;|
+          <a href="#contents">Contents</a>&nbsp;|
+          <a href="https://github.com/antoinemine/apron"><span class="menubold">Code</span>&nbsp;🔗</a>&nbsp;|
+          <a href="#api"><span class="menubold">API Documentation</span></a>&nbsp;|
+          <a href="#extra">Resources</a>&nbsp;
+        </span>
+      </div>
+    <div id="contents">
+
+      <a href="papers/poster.pdf">
+        <img class="center" width="60%" src="apron.png" alt="[Apron]"/>
+      </a>
+
+      <h1><a name="intro">Introduction</a></h1>
+
+
+      <p>
+        Apron is a library to represent properties of numeric variables, such as variable bounds or linear relations between variables, and to manipulate these properties through semantic operations, such as variable assignments, tests, conjunctions, entailment.
+
+      <p>
+        Apron is intended to be used in static program analyzers, in order to infer invariants of numeric variables, i.e., properties that hold for all executions of a program. It is based on the theory of Abstract Interpretation.
+
+      <p>
+        The library is open-source, and <a href="https://github.com/antoinemine/apron">hosted on GitHub</a>.
+
+
+
+      <h1><a name="contents">Library Contents</a></h1>
+
+      <p>
+        The Apron library includes several numeric abstract domains, corresponding to different classes of numeric properties with their own internal representation and algorithms, achieving various trade-offs between precision, expressiveness, and efficiency.
+
+      <p>
+        Apron includes the following numeric domains: intervals (boxes), polyhedra (newpolka), octagons, zonotopes (taylor1plus).
+        Additional domains are made available through the optional PPL third-party library: alternate polyhedra implementation, grids, reduced products of polyhedra and grids.
+
+      <p>
+        The domains are made available under a common interface, so that changing the abstract domain of interpretation in a static analysis should only take a one-line change.
+
+      <p>
+        The core API is in C, but optional API wrappers for additional languages are provided: OCaml, Java, C++.
+
+
+    <h1><a name="api">API Documentation</a></h1>
+
+      <p>
+        Some documentations are not up-to-date.
+        However, the API is pretty stable.
+
+        <ul>
+          <li><a href="api/c/index.html">C API</a>, also in <a href="api/c/apron.pdf">PDF form</a> (main API)
+          <li><a href="api/ocaml/index.html">OCaml API</a>
+          <li><a href="api/java/index.html">Java API</a>
+          <li><a href="api/cxx/index.html">C++ API</a> (not much used)
+        </ul>
+
+
+    <h1><a name="extra">Additional Resources</a></h1>
+
+    <p>
+    Presentations and articles about Apron:
+    <ul>
+      <li> <a href="papers/flyer.pdf">Apron flyer</a>
+      <li> <a href="papers/poster.pdf">Apron poster</a>
+      <li> <a href="papers/expose_CEA_2007.pdf">slides from a detailed presentation</a>
+      <li> <a href="papers/article-mine-jeannet-cav09.pdf">reference article</a> (at CAV 2009)
+    </ul>
+
+    <p>
+      Some projects that use Apron:
+      <ul>
+        <li><a href="http://pop-art.inrialpes.fr/interproc/interprocweb.cgi">the Interproc analyzer</a>
+      </ul>
+
+  </body>
+</html>

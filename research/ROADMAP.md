@@ -16,9 +16,10 @@ Date: 2026-05-16
 - [x] CFG and control dependence research completed: operation nodes, basic blocks, typed normal/abrupt/exceptional edges, dominance/postdominance, control dependence, path evidence, and extension overlays. See `research/cfg-control-flow/`.
 - [x] Type, value, points-to, and alias analysis research completed: native type/value/place facts, flow narrowing, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and extension hooks. See `research/type-alias-points-to/`.
 - [x] Function effects and summaries research completed: typed summary domains, SCC fixpoint, provenance, precision, cache keys, extension validation, and implementation path. See `research/effects-summaries/`.
-- [ ] Research abstract interpretation domains.
-- [ ] Revisit call graph implementation details against the analysis kernel, summaries, type/value/alias facts, framework models, and evaluation harness.
-- [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness.
+- [x] Abstract interpretation domains research completed: reduced-product domain kernel, lattice/transfer interfaces, widening/narrowing, domain priorities, validation, extension-safe domain products, and benchmark strategy. See `research/abstract-interpretation/`.
+- [ ] Write the implementation-ready bootstrap design: semantic MIR + place identity + direct call facts + P0 domains + direct summaries + minimal cache/invalidation + model-extension sinks.
+- [ ] Revise call graph implementation design against the analysis kernel, summaries, type/value/alias facts, framework models, abstract domains, and evaluation harness.
+- [ ] Revise data-flow implementation design against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness.
 - [ ] Research program slicing, path explanation, and evidence.
 - [ ] Research incremental query engine and caching beyond the first kernel design.
 - [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
@@ -167,6 +168,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R7. CFG And Control Dependence | Done, implement before type/value/alias and serious data-flow integration | `research/cfg-control-flow/` | Native CFG model: operation nodes, basic blocks, typed normal/abrupt/exceptional/cleanup edges, graph views, reachability, dominators, postdominators, control dependence, path evidence, extension overlays, Go/TS first implementation path, and differential validation plan. |
 | R8. Type, Value, Points-To, And Alias Analysis | Done, implement type/value/place substrate before global call/data-flow precision | `research/type-alias-points-to/` | Native layered analysis plan: places/access paths, declared/inferred/narrowed type facts, abstract values/allocation tokens, local flow, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and agent-authored Rust extension sinks. |
 | R9. Function Effects And Summaries | Done, implement summary kernel before serious global call/data-flow/alias precision | `research/effects-summaries/` | Summary kernel recommendation: typed summary domains, `SummaryKey`, precision/status/provenance, local summaries, SCC fixpoint/widening, extension summary validation, memory/effect/product lattices, TITO summaries, external effects, and SDK view path. |
+| R10. Abstract Interpretation Domains | Done, implement P0 domain kernel before revisiting call/data-flow implementation details | `research/abstract-interpretation/` | Reduced-product abstract-domain kernel recommendation: deterministic solver, semantic operation layer, lattice/transfer traits, widening/narrowing policy, domain priority ladder, `Nilness<'_>`, `Constants<'_>`, `StringValues<'_>`, `Typestate<'_>` candidate views, extension validation, and benchmark gates. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -446,6 +448,8 @@ Core decision: summaries are an internal typed product lattice plus kernel metad
 
 **Folder:** `research/abstract-interpretation/`
 
+Status: researched in `research/abstract-interpretation/`.
+
 This is where polint gets beyond call/data-flow and into precise semantic rule facts.
 
 Research questions:
@@ -455,12 +459,18 @@ Research questions:
 - What domains can be local-only, summary-based, or interprocedural?
 - Which domains benefit from agent-supplied invariants or repo-specific typestate definitions?
 
-Deliverables:
+Deliverables completed:
 
 - Domain priority list.
 - Generic lattice/transfer interface recommendation.
 - `Nilness<'_>`, `Constants<'_>`, `StringValues<'_>`, `Typestate<'_>` candidate fact views.
 - Safe model format for repo-specific invariants, guard functions, state transitions, and domain-specific validators.
+- Algorithm analysis covering worklist fixpoints, reduced products, widening/narrowing, trace partitioning, abstract garbage collection/scoped forgetting, summary fixpoints, and extension validation.
+- Tool implementation reports for Infer/Pulse, Clang Static Analyzer, rustc MIR dataflow, Checker Framework, TypeScript/Pyright/Flow, Pyre/mypy/Ty, Goblint, Eva plus contextual Astrée, Apron/ELINA/IKOS, CodeQL, Semgrep, TAJS, and Jelly.
+- Language-specific domain strategy for Go, TS/JS, Python, JVM, and Rust-inspired kernel design.
+- Benchmark and validation strategy for domain laws, transfer monotonicity, top-rate tracking, deterministic output, default-vs-agent-extended deltas, and external benchmark suites.
+
+Core decision: abstract interpretation should be implemented as a native reduced-product domain kernel, not one monolithic value analysis and not a default whole-program symbolic executor. Start with reachability, nilness/nullish, truthiness, constants, string facts, initializedness, intervals, shapes, and typestate/resource domains. Add relational numeric precision through selected packed domains later. Let AI agents add repo-specific Rust guard, summary, invariant, and typestate products, but validate them through lattice-law tests, monotonicity checks, deterministic merge policies, provenance, cache keys, and suppressive-model review.
 
 ### 11. Program Slicing, Path Explanation, And Evidence
 
@@ -571,16 +581,20 @@ Analysis Kernel
   -> Agent Extension Surface
   -> Framework/Entrypoint Modeling
   -> Module Graph
-  -> CFG
-  -> Type/Alias/Points-To
-  -> Call Graphs
-  -> Data Flow
-  -> Effects/Summaries
-  -> Abstract Interpretation
+  -> Semantic MIR + CFG
+  -> Place/Type/Value Substrate
+  -> Direct/Syntactic Call Facts
+  -> P0 Local Abstract Domains
+  -> Minimal Summary Kernel
+  -> Minimal Cache/Invalidation Slice
+  -> Model Extension Sinks
+  -> Refined Call Graph Implementation
+  -> Refined Data Flow Implementation
+  -> P1 Domains And Public SDK Views
   -> Slicing/Evidence
   -> Agent Rule SDK
 
-Incremental Query Engine deepens the Analysis Kernel once expensive global analyses begin.
+Full Incremental Query Engine deepens the Analysis Kernel once expensive global analyses begin, but a minimal dependency-digest/invalidation slice must happen before summary SCCs and interprocedural domains.
 Evaluation Harness runs across all tracks and gates public precision claims.
 Framework/Entrypoint Modeling feeds Call Graphs, Data Flow, Effects, and Slicing.
 Agent-authored models and extensions feed every analysis family, but must bind to typed facts and validation results.
@@ -606,23 +620,26 @@ observes unresolved/low-confidence analysis facts
 
 That means research should prefer architectures with clear typed extension points over architectures that are theoretically elegant but closed to repo-specific augmentation.
 
-## Recommended Next Research Task
+## Recommended Next Design Task
 
 Start with:
 
 ```text
-research/abstract-interpretation/
+research/abstract-interpretation/implementation/BOOTSTRAP-SEQUENCE.md
 ```
 
-Reason: summaries define the scaling boundary, but the most valuable semantic facts now need concrete abstract domains: nilness/nullness, constants, string values, numeric ranges, initializedness, resource state, typestate, permissions, and path conditions. This research should define domain traits, widening rules, validation strategy, precision labels, and how agent-authored Rust extensions can add repo-specific invariants/state machines without corrupting the kernel.
+Reason: the next step is not more broad research. It is an implementation-ready
+bootstrap design that ties together the existing research without circular
+dependencies: semantic MIR, place identity, direct call facts, P0 local domains,
+direct summaries, minimal cache/invalidation, and model-extension sinks.
 
-Then revisit:
+Then revise:
 
 ```text
 research/call-graphs/
 ```
 
-Reason: call graph implementation should now consume the kernel, evaluation harness, semantic index, module graph, framework dispatch overlays, CFG, type/value facts, and points-to/value-token decisions rather than inventing its own lifecycle.
+Reason: call graph implementation should consume the kernel, evaluation harness, semantic index, module graph, framework dispatch overlays, CFG, type/value facts, points-to/value-token decisions, function summaries, and abstract-domain facts rather than inventing its own lifecycle. The original call graph research should be revised into an implementation-ready design with explicit provider tiers, precision labels, extension merge policy, and benchmark gates.
 
 Then revisit:
 
