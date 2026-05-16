@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-16T20:16:44.205Z"
+status: ready
+last_updated: "2026-05-16T20:30:12.768Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 22
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 20 — Private Analysis Kernel Facade
+**Current focus:** Phase 21 — Provenance, Precision, and Validation Metadata
 
 ## Current Status
 
@@ -38,9 +38,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 20 (Private Analysis Kernel Facade) — COMPLETE
-Plan: 2 of 2
+Status: Phase 20 verified and complete; ready to plan Phase 21
+Phase: 21
+Plan: Not started
 Last activity: 2026-05-16
 
 ## Phase Progress
@@ -104,10 +104,10 @@ Last activity: 2026-05-16
 ## Session
 
 - Last session: 2026-05-16
-- Stopped at: Completed 20-02-PLAN.md
+- Stopped at: Phase 20 verified and complete
 
 ## Next Action
 
-Verify Phase 20, then plan or execute Phase 21:
+Plan Phase 21:
 
-`/gsd-verify-work 20`
+`/gsd-discuss-phase 21 --auto`
