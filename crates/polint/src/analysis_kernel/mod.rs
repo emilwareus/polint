@@ -22,8 +22,44 @@ pub(crate) struct KernelOutput {
 }
 
 impl AnalysisKernel {
-    pub(crate) fn run(_input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
-        todo!("analysis kernel facade execution")
+    pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
+        let mut db = crate::fs::load_analysis_files(input.loaded)?;
+        let mut diagnostics = Vec::new();
+
+        diagnostics.extend(crate::go::analyze_with_plan_options(
+            &mut db,
+            input.cache,
+            input.config_digest,
+            input.rule_digest,
+            input.plan,
+            input.parallel,
+        ));
+        diagnostics.extend(crate::ts::analyze_with_plan_options(
+            &mut db,
+            input.cache,
+            input.config_digest,
+            input.rule_digest,
+            input.plan,
+            input.parallel,
+        ));
+
+        let module_graph =
+            crate::module_graph::derive_requested_module_graph(&mut db, input.loaded, input.plan);
+        let module_support = module_graph.support_view(input.plan.support_view());
+        diagnostics.extend(module_graph.diagnostics);
+
+        let symbol_graph =
+            crate::symbol_graph::derive_requested_symbols(&mut db, input.loaded, input.plan);
+        let capability_support = symbol_graph.support_view(&module_support);
+        diagnostics.extend(symbol_graph.diagnostics);
+
+        crate::metrics::derive_requested_metrics(&mut db, input.plan);
+
+        Ok(KernelOutput {
+            db,
+            diagnostics,
+            capability_support,
+        })
     }
 }
 

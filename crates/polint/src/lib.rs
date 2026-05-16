@@ -14,8 +14,8 @@ pub fn run_main() -> anyhow::Result<u8> {
     cli::run()
 }
 
-pub(crate) mod analysis_plan;
 pub(crate) mod analysis_kernel;
+pub(crate) mod analysis_plan;
 pub(crate) mod baseline;
 pub(crate) mod cache;
 pub(crate) mod cli;
