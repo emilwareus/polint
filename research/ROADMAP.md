@@ -14,7 +14,7 @@ Date: 2026-05-15
 - [x] Semantic index deep research completed: scopes, aliases, generated symbols, type-aware resolution, unresolved references, extension-provided resolution facts, and export identity. See `research/semantic-index/`.
 - [x] Module/package/dependency/repo topology graph research completed: package managers, lockfiles, workspaces, import-to-package resolution, source sets, build targets, repo topology overlays, and extension facts. See `research/module-graph/`.
 - [x] CFG and control dependence research completed: operation nodes, basic blocks, typed normal/abrupt/exceptional edges, dominance/postdominance, control dependence, path evidence, and extension overlays. See `research/cfg-control-flow/`.
-- [ ] Research type, value, points-to, and alias analysis.
+- [x] Type, value, points-to, and alias analysis research completed: native type/value/place facts, flow narrowing, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and extension hooks. See `research/type-alias-points-to/`.
 - [ ] Revisit call graph implementation details against the analysis kernel and evaluation harness.
 - [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, and evaluation harness.
 - [ ] Research function effects and summaries.
@@ -165,6 +165,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R5. Framework, Lifecycle, And Entrypoint Modeling | Done, implement first fact-family vertical slice | `research/framework-entrypoints/` | Native framework boundary layer recommendation: `Entrypoints<'_>`, trust-boundary facts, framework dispatch overlays, explicit unknowns, Go and TS/JS first recognizers, MCP as a first-class boundary, repo-local Rust providers, validation fixtures, and default-vs-extension metrics. |
 | R6. Module, Package, Dependency, And Repo Topology Graph | Done, implement before serious call graph/data-flow integration | `research/module-graph/` | Layered native topology model: workspace roots, packages/projects/source sets, declared requirements, lockfile/native/tool-reported resolved edges, import-to-package facts, build target overlays, repo topology, package-manager coverage, precision labels, cache keys, and extension merge rules. |
 | R7. CFG And Control Dependence | Done, implement before type/value/alias and serious data-flow integration | `research/cfg-control-flow/` | Native CFG model: operation nodes, basic blocks, typed normal/abrupt/exceptional/cleanup edges, graph views, reachability, dominators, postdominators, control dependence, path evidence, extension overlays, Go/TS first implementation path, and differential validation plan. |
+| R8. Type, Value, Points-To, And Alias Analysis | Done, implement type/value/place substrate before global call/data-flow precision | `research/type-alias-points-to/` | Native layered analysis plan: places/access paths, declared/inferred/narrowed type facts, abstract values/allocation tokens, local flow, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and agent-authored Rust extension sinks. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -390,6 +391,8 @@ Core decision: build layered native CFG facts, not one universal AST-walk graph.
 
 **Folder:** `research/type-alias-points-to/`
 
+Status: researched in `research/type-alias-points-to/`.
+
 This research feeds call graphs and data flow. It should not be treated as a data-flow subchapter; alias/points-to precision determines whether method dispatch, heap flow, field flow, and summaries are useful.
 
 Research questions:
@@ -399,12 +402,17 @@ Research questions:
 - Where do Andersen, Steensgaard, RTA/VTA, object sensitivity, field sensitivity, access paths, shape analysis, and type narrowing fit?
 - How do TypeScript, Go `x/tools`, Pyright/Pyre, WALA, Doop, Soot Spark, OPAL, TAJS, Jelly, and PoTo handle the precision/cost frontier?
 
-Deliverables:
+Deliverables completed:
 
 - `Types<'_>`, `Values<'_>`, `Aliases<'_>`, and `PointsTo<'_>` research recommendation.
-- Cost/accuracy table for type inference and alias tiers.
-- How points-to facts should feed call graph and data flow providers.
-- Agent-supplied type/value/alias hint model with strict provenance and confidence labels.
+- Cost/accuracy table for type inference, value facts, points-to, alias, context sensitivity, and sparse refinement tiers.
+- Native implementation path for place/access-path facts, type facts, value/allocation facts, local narrowing, summaries, bounded Andersen-style points-to, and alias provider queries.
+- How points-to/value facts should feed call graph and data-flow providers without making call graphs/data flow submodules of alias analysis.
+- Agent-supplied type/value/summary/points-to/alias fact model with strict provenance, validation, precision ceilings, cache keys, and conflict handling.
+- OSS implementation reports for Ty/Ruff, Pyrefly, Pyright, Pyre/Pysa, mypy, pytype, TypeScript, Oxc, Flow, TAJS, Jelly, CodeQL, Go tools, Staticcheck, Doop, WALA, Soot/SootUp, OPAL, Checker Framework, LLVM, SVF, Rust borrowck/Polonius, rust-analyzer, Souffle, and Joern.
+- Paper/source index covering Andersen/Steensgaard/Shapiro-Horwitz, SVF, Doop, TAJS, Flow, IFDS, abstract interpretation, PoTo, CodeQL, LLVM AliasAnalysis/MemorySSA, Ty, Pyrefly, Oxc, WALA, and current trend preprints.
+
+Core decision: do not build a mandatory whole-repo alias graph first. Implement layered native facts: `PlaceFact`, `TypeFact`, `NarrowedTypeFact`, `ValueFact`, `AllocationTokenFact`, `SummaryFact`, requestable bounded points-to constraints, and an alias provider stack that returns `NoAlias`, `MayAlias`, `MustAlias`, `PartialAlias`, or `Unknown` with evidence. Use Ty/Pyright/Pyrefly/TypeScript/Go/WALA/Soot/SVF/LLVM as references and validation oracles, not runtime dependencies.
 
 ### 9. Function Effects And Summaries
 
@@ -595,10 +603,10 @@ That means research should prefer architectures with clear typed extension point
 Start with:
 
 ```text
-research/cfg-control-flow/
+research/effects-summaries/
 ```
 
-Reason: module graph research is now complete enough to define packages, source sets, imports, generated zones, and lifecycle roots. CFG/control-dependence is the next missing substrate before serious local data-flow, interprocedural summaries, path explanation, and language-specific call/data-flow precision.
+Reason: type/value/place/points-to research makes it clear that summaries are the scaling boundary. Without a strong effect and summary model, call graphs, data flow, alias queries, and agent-authored framework integrations will either stay local or become expensive whole-program guesses.
 
 Then revisit:
 
@@ -606,7 +614,7 @@ Then revisit:
 research/call-graphs/
 ```
 
-Reason: call graph implementation should now consume the kernel, evaluation harness, semantic index, module graph, and framework dispatch overlay decisions rather than inventing its own lifecycle.
+Reason: call graph implementation should now consume the kernel, evaluation harness, semantic index, module graph, framework dispatch overlays, CFG, type/value facts, and points-to/value-token decisions rather than inventing its own lifecycle.
 
 Then revisit:
 
@@ -614,4 +622,4 @@ Then revisit:
 research/data-flow/
 ```
 
-Reason: data flow should consume CFG, call graph, semantic index, module graph, and extension-model decisions so source/sink/sanitizer/summary facts are accurate and explainable.
+Reason: data flow should consume CFG, call graph, semantic index, module graph, type/value/alias facts, summaries, and extension-model decisions so source/sink/sanitizer/summary facts are accurate and explainable.
