@@ -20,7 +20,7 @@ Date: 2026-05-16
 - [x] Implementation-ready Rust bootstrap design completed: semantic MIR, place identity, direct call facts, P0 domains, direct summaries, minimal cache/invalidation, model-extension sinks, and current code review. See `research/implementation-bootstrap/`.
 - [x] Call graph implementation design revised against the semantic bootstrap, analysis kernel, summaries, type/value/alias facts, framework models, abstract domains, and evaluation harness. See `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`.
 - [x] Data-flow implementation design revised against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness. See `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`.
-- [ ] Research program slicing, path explanation, and evidence.
+- [x] Program slicing, path explanation, and evidence research completed: PDG/SDG slicing, thin slices, chops, path ranking, SARIF/JSON evidence, provenance, extension merges, and native implementation path. See `research/program-slicing-evidence/`.
 - [ ] Research incremental query engine and caching beyond the first kernel design.
 - [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
 - [ ] Start implementation of the private semantic bootstrap only after the revised call graph/data-flow implementation notes confirm they consume the bootstrap rather than bypass it.
@@ -170,6 +170,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R9. Function Effects And Summaries | Done, implement summary kernel before serious global call/data-flow/alias precision | `research/effects-summaries/` | Summary kernel recommendation: typed summary domains, `SummaryKey`, precision/status/provenance, local summaries, SCC fixpoint/widening, extension summary validation, memory/effect/product lattices, TITO summaries, external effects, and SDK view path. |
 | R10. Abstract Interpretation Domains | Done, implement P0 domain kernel before revisiting call/data-flow implementation details | `research/abstract-interpretation/` | Reduced-product abstract-domain kernel recommendation: deterministic solver, semantic operation layer, lattice/transfer traits, widening/narrowing policy, domain priority ladder, `Nilness<'_>`, `Constants<'_>`, `StringValues<'_>`, `Typestate<'_>` candidate views, extension validation, and benchmark gates. |
 | R11. Implementation Bootstrap Rust Design | Done, use as first coding plan | `research/implementation-bootstrap/` | Private Rust `analysis` module recommendation, semantic store boundaries, stable IDs and metadata, MIR/place/direct-call/P0-domain/direct-summary sequence, semantic cache keys, extension sinks, local code review, and public SDK promotion gates. |
+| R12. Program Slicing, Path Explanation, And Evidence | Done, implement after semantic bootstrap, CFG/control dependence, def-use, direct calls, and summaries exist | `research/program-slicing-evidence/` | Native evidence/slicing recommendation: typed evidence nodes and edges, thin/full slices, chops, context-matched paths, summary expansion, JSON/SARIF rendering, provenance, uncertainty, extension merge validation, and diagnostic evidence bundles. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -475,9 +476,15 @@ Core decision: abstract interpretation should be implemented as a native reduced
 
 ### 11. Program Slicing, Path Explanation, And Evidence
 
-**Folder:** `research/program-slicing/`
+**Folder:** `research/program-slicing-evidence/`
 
-AI agents and humans need explanations, not just true/false answers. Slicing connects diagnostics to evidence.
+Status: researched in `research/program-slicing-evidence/`.
+
+AI agents and humans need explanations, not just true/false answers. Slicing
+connects diagnostics to evidence. The completed research recommends building
+`analysis::evidence` and `analysis::slicing` as internal query layers over the
+semantic operation store, CFG/control dependence, def-use/data dependence, call
+graph, summaries, data-flow, type/value/alias facts, and extension/model facts.
 
 Research questions:
 
@@ -486,12 +493,21 @@ Research questions:
 - How can slices stay small enough to be useful for AI agents?
 - How should evidence distinguish engine-derived facts from agent-authored model facts?
 
-Deliverables:
+Deliverables completed:
 
-- `Slice<'_>` and `EvidencePath` proposal.
-- Path compression and ranking strategy.
-- Diagnostic evidence format for CLI JSON and SDK rules.
-- Evidence provenance schema for "native", "heuristic", "agent-authored", "validated", and "unvalidated" path segments.
+- Standard vocabulary for slices, paths, evidence nodes/edges, provenance, precision, and status.
+- Paper index covering PDG, SDG/interprocedural slicing, thin slicing, slicing taxonomy, SliceFormer, SliceMate, and SliceT5.
+- Repository index and source-code findings for WALA, CodeQL, Joern, Semgrep, Frama-C, and JavaSlicer.
+- Algorithm analysis for PDG/SDG reachability, context-matched interprocedural traversal, chops, thin slices, ranked paths, summary expansion, and extension merges.
+- Recommended implementation path for internal `EvidenceBundle`, `SliceQuery`, `PathQuery`, JSON/SARIF rendering, and future SDK views.
+- Validation plan for local dependence, thin/full slices, source-to-sink paths, interprocedural context, extension evidence, determinism, cache invalidation, and external benchmarks.
+
+Core decision: evidence is the user-facing form of the engine. Build structured
+evidence bundles before exposing a public raw graph API. Default diagnostics
+should show a small thin slice or ranked path, while preserving richer JSON/debug
+detail, provenance, unknowns, and summary expansion handles. Do not build
+executable slices first, do not materialize a whole-program SDG for every run,
+and do not treat LLM-generated slices as trusted facts without validation.
 
 ### 12. Incremental Analysis, Query Engine, And Caching
 
