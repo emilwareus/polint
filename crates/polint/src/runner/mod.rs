@@ -1,3 +1,4 @@
+use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_plan::{AnalysisPlan, RulePlanInputs};
 use crate::config::{LoadedConfig, load_config};
 use crate::core::{Rule, run_rules_with_capability_support};
@@ -5,7 +6,6 @@ use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
     limit_report_diagnostics, render_with_sarif_help,
 };
-use crate::fs::load_analysis_files;
 use crate::ignores::apply_ignores;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -162,34 +162,26 @@ fn analyze_and_run(
     let rule_digest = plan_inputs.rule_digest(&options);
     let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
 
-    let mut db = load_analysis_files(&loaded)?;
     let mut diagnostics = plan_inputs.diagnostics();
     diagnostics.extend(plan.diagnostics());
-    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
-    let go_diagnostics =
-        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
-    diagnostics.extend(go_diagnostics);
-
-    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
-    let ts_diagnostics =
-        analyze_with_plan_options(&mut db, &cache, &config_digest, &rule_digest, &plan, true);
-    diagnostics.extend(ts_diagnostics);
-    let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
-    let module_support = module_graph.support_view(plan.support_view());
-    diagnostics.extend(module_graph.diagnostics);
-    let symbol_graph = crate::symbol_graph::derive_requested_symbols(&mut db, &loaded, &plan);
-    let capability_support = symbol_graph.support_view(&module_support);
-    diagnostics.extend(symbol_graph.diagnostics);
-    crate::metrics::derive_requested_metrics(&mut db, &plan);
+    let output = AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
+        parallel: true,
+    })?;
+    diagnostics.extend(output.diagnostics);
     diagnostics.extend(run_rules_with_capability_support(
-        &db,
+        &output.db,
         rules,
         &options,
         enabled.as_ref(),
         true,
-        &capability_support,
+        &output.capability_support,
     ));
-    Ok((diagnostics, db, loaded))
+    Ok((diagnostics, output.db, loaded))
 }
 
 fn selected_rule_patterns(

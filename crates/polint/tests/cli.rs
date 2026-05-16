@@ -4078,7 +4078,11 @@ fn main() -> ExitCode {
         let diagnostic = diagnostics[0];
         assert!(diagnostic_has_evidence(diagnostic, "file_metrics", "1"));
         assert!(diagnostic_has_evidence(diagnostic, "function_metrics", "1"));
-        assert!(diagnostic_has_evidence(diagnostic, "complexity_metrics", "1"));
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "complexity_metrics",
+            "1"
+        ));
         assert!(diagnostic_has_evidence(diagnostic, "symbol", "answer"));
     }
 

@@ -1,3 +1,4 @@
+use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_plan::AnalysisPlan;
 use crate::baseline::{
     BaselineConfig, BaselineSummary, DEFAULT_BASELINE_PATH, classify_diagnostics, load_baseline,
@@ -1232,36 +1233,23 @@ fn analyze_and_run(
     let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
     let plan = AnalysisPlan::empty();
 
-    let mut db = load_analysis_files(&loaded)?;
-    let mut diagnostics = Vec::new();
-    let analyze_with_plan_options = crate::go::analyze_with_plan_options;
-    let go_diagnostics = analyze_with_plan_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        &plan,
+    let output = AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
         parallel,
-    );
-    diagnostics.extend(go_diagnostics);
-
-    let analyze_with_plan_options = crate::ts::analyze_with_plan_options;
-    let ts_diagnostics = analyze_with_plan_options(
-        &mut db,
-        &cache,
-        &config_digest,
-        &rule_digest,
-        &plan,
+    })?;
+    let mut diagnostics = output.diagnostics;
+    diagnostics.extend(run_rules(
+        &output.db,
+        &rules,
+        &options,
+        enabled.as_ref(),
         parallel,
-    );
-    diagnostics.extend(ts_diagnostics);
-    let module_graph = crate::module_graph::derive_requested_module_graph(&mut db, &loaded, &plan);
-    diagnostics.extend(module_graph.diagnostics);
-    let symbol_graph = crate::symbol_graph::derive_requested_symbols(&mut db, &loaded, &plan);
-    diagnostics.extend(symbol_graph.diagnostics);
-
-    diagnostics.extend(run_rules(&db, &rules, &options, enabled.as_ref(), parallel));
-    Ok((diagnostics, db, loaded))
+    ));
+    Ok((diagnostics, output.db, loaded))
 }
 
 fn selected_rule_patterns(
