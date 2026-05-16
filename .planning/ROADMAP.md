@@ -52,6 +52,11 @@ The milestone should preserve public API discipline. New internals stay private 
 **Goal:** Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers.
 **Requirements:** SAE-FND-01
 **Research:** `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`, `research/implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`
+**Plans:** 2 plans
+
+Plans:
+- [ ] 20-01-PLAN.md - Private kernel facade and runner/CLI delegation
+- [ ] 20-02-PLAN.md - Internal provider manifests and deterministic provider-order inspection
 
 **Success criteria:**
 1. Existing tests pass with current behavior preserved.
