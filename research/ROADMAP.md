@@ -1,6 +1,6 @@
 # Static Analysis Research Roadmap
 
-Date: 2026-05-15
+Date: 2026-05-16
 
 ## Research TODO
 
@@ -15,10 +15,10 @@ Date: 2026-05-15
 - [x] Module/package/dependency/repo topology graph research completed: package managers, lockfiles, workspaces, import-to-package resolution, source sets, build targets, repo topology overlays, and extension facts. See `research/module-graph/`.
 - [x] CFG and control dependence research completed: operation nodes, basic blocks, typed normal/abrupt/exceptional edges, dominance/postdominance, control dependence, path evidence, and extension overlays. See `research/cfg-control-flow/`.
 - [x] Type, value, points-to, and alias analysis research completed: native type/value/place facts, flow narrowing, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and extension hooks. See `research/type-alias-points-to/`.
-- [ ] Revisit call graph implementation details against the analysis kernel and evaluation harness.
-- [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, and evaluation harness.
-- [ ] Research function effects and summaries.
+- [x] Function effects and summaries research completed: typed summary domains, SCC fixpoint, provenance, precision, cache keys, extension validation, and implementation path. See `research/effects-summaries/`.
 - [ ] Research abstract interpretation domains.
+- [ ] Revisit call graph implementation details against the analysis kernel, summaries, type/value/alias facts, framework models, and evaluation harness.
+- [ ] Revisit data-flow implementation details against the analysis kernel, call graph, CFG, summaries, abstract domains, and evaluation harness.
 - [ ] Research program slicing, path explanation, and evidence.
 - [ ] Research incremental query engine and caching beyond the first kernel design.
 - [ ] Research rule SDK, query ergonomics, and AI-agent authoring.
@@ -166,6 +166,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R6. Module, Package, Dependency, And Repo Topology Graph | Done, implement before serious call graph/data-flow integration | `research/module-graph/` | Layered native topology model: workspace roots, packages/projects/source sets, declared requirements, lockfile/native/tool-reported resolved edges, import-to-package facts, build target overlays, repo topology, package-manager coverage, precision labels, cache keys, and extension merge rules. |
 | R7. CFG And Control Dependence | Done, implement before type/value/alias and serious data-flow integration | `research/cfg-control-flow/` | Native CFG model: operation nodes, basic blocks, typed normal/abrupt/exceptional/cleanup edges, graph views, reachability, dominators, postdominators, control dependence, path evidence, extension overlays, Go/TS first implementation path, and differential validation plan. |
 | R8. Type, Value, Points-To, And Alias Analysis | Done, implement type/value/place substrate before global call/data-flow precision | `research/type-alias-points-to/` | Native layered analysis plan: places/access paths, declared/inferred/narrowed type facts, abstract values/allocation tokens, local flow, summaries, bounded Andersen-style points-to, alias provider stack, precision/cost ladder, and agent-authored Rust extension sinks. |
+| R9. Function Effects And Summaries | Done, implement summary kernel before serious global call/data-flow/alias precision | `research/effects-summaries/` | Summary kernel recommendation: typed summary domains, `SummaryKey`, precision/status/provenance, local summaries, SCC fixpoint/widening, extension summary validation, memory/effect/product lattices, TITO summaries, external effects, and SDK view path. |
 
 These tracks are not implementation endpoints. They are inputs to the next research tracks.
 
@@ -418,6 +419,8 @@ Core decision: do not build a mandatory whole-repo alias graph first. Implement 
 
 **Folder:** `research/effects-summaries/`
 
+Status: researched in `research/effects-summaries/`.
+
 Effects are the bridge between local facts and practical repo rules. They also provide a compact substrate for interprocedural data flow and agent explanations.
 
 Research questions:
@@ -427,12 +430,17 @@ Research questions:
 - How can agents add or correct project-specific summaries for wrappers, adapters, generated clients, RPC layers, and framework APIs?
 - How do Pysa, CodeQL summaries, CFTaint, Infer, Checker Framework, WALA slicing, and effect systems model this?
 
-Deliverables:
+Deliverables completed:
 
 - `Effects<'_>` SDK view proposal.
 - Function summary schema.
 - Query examples: "this handler writes to disk", "this function logs secrets", "this utility is pure", "this path can execute shell".
 - Model format for agent-authored summaries and effect overrides, including benchmark-required proof before high-confidence activation.
+- Algorithm analysis covering functional summaries, IFDS, IDE, WPDS, abstract-interpretation summaries, SCC fixpoints, widening, and demand summaries.
+- Implementation reports for CodeQL, Pysa, Infer/Pulse/RacerD, LLVM/MLIR, Go tooling, WALA, Soot, OPAL, Heros, PhASAR, Joern, and Semgrep.
+- Recommended native implementation path: internal summary kernel, typed domains, extension provider sink, validation gates, and typed SDK views.
+
+Core decision: summaries are an internal typed product lattice plus kernel metadata, not one generic effect bag and not the first public rule primitive. Implement `SummaryKey`, `SummaryStore`, precision/status/provenance, local summaries, SCC closure, and typed domains such as `ControlEffects`, `CallEffects`, `DataFlowTito`, `MemoryEffects`, `AliasEscapeEffects`, `ResourceEffects`, `TaintEffects`, `ConcurrencyEffects`, and `ExternalEffects`. Let AI agents add Rust-code summary providers, but activate their summaries only after validation and precision downgrading/merge checks.
 
 ### 10. Abstract Interpretation Domains
 
@@ -603,10 +611,10 @@ That means research should prefer architectures with clear typed extension point
 Start with:
 
 ```text
-research/effects-summaries/
+research/abstract-interpretation/
 ```
 
-Reason: type/value/place/points-to research makes it clear that summaries are the scaling boundary. Without a strong effect and summary model, call graphs, data flow, alias queries, and agent-authored framework integrations will either stay local or become expensive whole-program guesses.
+Reason: summaries define the scaling boundary, but the most valuable semantic facts now need concrete abstract domains: nilness/nullness, constants, string values, numeric ranges, initializedness, resource state, typestate, permissions, and path conditions. This research should define domain traits, widening rules, validation strategy, precision labels, and how agent-authored Rust extensions can add repo-specific invariants/state machines without corrupting the kernel.
 
 Then revisit:
 
