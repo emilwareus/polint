@@ -6,7 +6,9 @@ use crate::diagnostics::Diagnostic;
 
 mod provider;
 
-pub(crate) use provider::ProviderManifest;
+pub(crate) use provider::{
+    CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+};
 
 pub(crate) struct AnalysisKernel;
 
@@ -31,6 +33,7 @@ impl AnalysisKernel {
     }
 
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
+        let _manifest_metadata_token = Self::provider_manifest_metadata_token();
         let mut db = crate::fs::load_analysis_files(input.loaded)?;
         let mut diagnostics = Vec::new();
 
@@ -69,6 +72,74 @@ impl AnalysisKernel {
             capability_support,
         })
     }
+
+    fn provider_manifest_metadata_token() -> usize {
+        Self::provider_manifests()
+            .iter()
+            .map(provider_manifest_metadata_weight)
+            .sum()
+    }
+}
+
+fn provider_manifest_metadata_weight(manifest: &ProviderManifest) -> usize {
+    manifest.id.len()
+        + provider_kind_weight(manifest.kind)
+        + language_scope_weight(manifest.language_scope)
+        + cache_policy_weight(manifest.cache_policy)
+        + precision_ceiling_weight(manifest.precision_ceiling)
+        + manifest
+            .inputs
+            .iter()
+            .map(|input| input.len())
+            .sum::<usize>()
+        + manifest
+            .outputs
+            .iter()
+            .map(|output| output.len())
+            .sum::<usize>()
+        + manifest
+            .schema_versions
+            .iter()
+            .map(schema_version_weight)
+            .sum::<usize>()
+}
+
+fn provider_kind_weight(kind: ProviderKind) -> usize {
+    match kind {
+        ProviderKind::SourceDiscovery => 1,
+        ProviderKind::LanguageSyntax => 2,
+        ProviderKind::WholeRepoDerived => 3,
+        ProviderKind::MetricsDerived => 4,
+    }
+}
+
+fn language_scope_weight(scope: LanguageScope) -> usize {
+    match scope {
+        LanguageScope::Workspace => 1,
+        LanguageScope::Go => 2,
+        LanguageScope::TypeScriptJavaScript => 3,
+        LanguageScope::MultiLanguage => 4,
+    }
+}
+
+fn cache_policy_weight(policy: CachePolicy) -> usize {
+    match policy {
+        CachePolicy::NoCache => 1,
+        CachePolicy::ExistingFileFactCache { schema } => schema.len(),
+        CachePolicy::InMemoryDerived => 2,
+    }
+}
+
+fn precision_ceiling_weight(precision: PrecisionCeiling) -> usize {
+    match precision {
+        PrecisionCeiling::Exact => 1,
+        PrecisionCeiling::Syntax => 2,
+        PrecisionCeiling::SetupAware => 3,
+    }
+}
+
+fn schema_version_weight(schema: &SchemaVersion) -> usize {
+    schema.name.len() + schema.version as usize
 }
 
 #[cfg(test)]
