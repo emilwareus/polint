@@ -4,6 +4,10 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
+mod provider;
+
+pub(crate) use provider::ProviderManifest;
+
 pub(crate) struct AnalysisKernel;
 
 pub(crate) struct KernelInput<'a> {
@@ -22,6 +26,10 @@ pub(crate) struct KernelOutput {
 }
 
 impl AnalysisKernel {
+    pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
+        provider::provider_manifests()
+    }
+
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
         let mut db = crate::fs::load_analysis_files(input.loaded)?;
         let mut diagnostics = Vec::new();
@@ -113,6 +121,26 @@ mod tests {
         assert!(
             error.to_string().contains("invalid glob"),
             "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn provider_manifests_cover_existing_kernel_providers() {
+        let ids = AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            [
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ]
         );
     }
 }
