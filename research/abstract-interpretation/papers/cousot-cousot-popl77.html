@@ -1,0 +1,111 @@
+<!-- POPL77.shtml -->
+<html><head><title> P.  Cousot &amp; R.  Cousot, Abstract interpretation: a
+unified lattice model for static analysis of programs by construction or
+approximation of fixpoints</title>
+</head>
+<body>
+<hr>
+<UL>
+<LI>
+<STRONG>
+Patrick Cousot &amp; Radhia Cousot.<BR>
+<a href="./POPL77.shtml">Abstract interpretation: a unified lattice model for static analysis of
+programs by construction or approximation of fixpoints</A>.<BR>
+</STRONG>
+In
+<CITE>Conference Record of the Sixth Annual ACM SIGPLAN-SIGACT Symposium on
+Principles of Programming Languages</CITE>, pages 238&#8212;252, Los Angeles,
+California, 1977.  ACM Press, New York.</LI>
+
+<P>
+<LI><A HREF = "../publications.www/CousotCousot-POPL-77-ACM-p238--252-1977.pdf">PDF (941 K)</A>, readable by <A HREF = "http://www.adobe.com/prodindex/acrobat/readstep.html">Acrobate Reader</A>.
+<P>
+<LI><EM>Summary:</EM>
+A program denotes computations in some universe of objects.  Abstract
+interpretation of programs consists in using that denotation to describe
+computations in another universe of abstract objects, so that the resulta
+of abstract execution give some informations on the actual computations.
+An intuitive example (which we borrow from Sintzoff [72]) is the rule of
+signs.  The text -1515*17 may be undestood to denote computations on the
+abstract universe {(+), (-), (+-)} where the semantics of arithmetic
+operators is defined by the rule of signs.  The abstract execution -1515*17
+==> -(+)*(+) ==> (-)*(+) ==> (-), proves that -1515+17 is a negative
+number.  Abstract interpretation is concerned by a particlar underlying
+structure of the usual universe of computations (the sign, in our example).
+It gives a summay of some facets of the actual executions of a program.  In
+general this summary is simple to obtain but inacurrate (e.g.  -1515+17 ==>
+-(+)+(+) ==> (-)+(+) ==> (+-)).  Despite its fundamental incomplete results
+abstract interpretation allows the programmer or the compiler to answer
+questions which do not need full knowledge of program executions or which
+tolerate an imprecise answer (e.g.  partial correctness proofs of programs
+ignoring the termination problems, type checking, program optimizations
+which are not carried in the absence of certainty about their feasibility,
+...).
+<p>
+Section 3 describes the syntax and mathematical semantics of a simple
+flowchart language, Scott and Strachey[71].  This mathematical semantics is
+used in section 4 to built a more abstract model of the semantics of
+programs, in that it ignores the sequencing of control flow.  This model is
+taken to be the most concrete of the abstract interpretations of programs.
+Section 5 gives the formal definition of the abstract interpretations of a
+program.  Abstract program properties are modeled by a complete
+semilattice, Birkoff[61].  Elementary program constructs are locally
+interpreted by order-preserving functions which are used to associate a
+system of equations with a program.  The program global properties are then
+defined as one of the extreme fixpoints of that system, Tarski[55].  The
+abstraction process is defined in section 6.  It is shown that the program
+properties obtained by an abstract interpretation of a program are
+consistent with those obtained by a more refined interpretation of that
+program.  In particular, an abstract interpretation may be shown to be
+consistent with the formal semantics of the language.  Levels of
+abstraction are formalized by showing that consistent abstract
+interpretations form a lattice (section 7).  Section 8 gives a constructive
+definition of abstract properties of programs based on constructive
+definitions of fixpoints.  It shows that various classical algorithms such
+as Kildall[73], Wegbreit[75], compute program properties as limits of
+finite Kleene[52]'s sequences.  Section 9 introduces finite fixpoint
+approximation methods to be used when Kleene's sequences are infinite,
+Cousot[76].  They are shown to be consistent with the abstraction process.
+Practical examples illustrate the various sections.  The conclusion points
+out that the abstract interpretation of programs is a unified approach to
+apparently unrelated program analysis techniques.
+<P>
+<LI><PRE>
+\bibitem{CousotCousot77-1}
+P{.} Cousot and R{.} Cousot.
+\newblock Abstract interpretation: a unified lattice model for static
+  analysis of programs by construction or approximation of fixpoints.
+\newblock In \emph{Conference Record of the Fourth Annual ACM
+  SIGPLAN-SIGACT Symposium on Principles of Programming Languages},
+  pages 238--252, Los Angeles, California, 1977.  ACM Press, New York,
+  NY, USA.
+
+@inproceedings{CousotCousot77-1,
+   author =    {Cousot, P{.} and Cousot, R{.}},
+   title =     {Abstract interpretation: a unified lattice model for static
+                analysis of programs by construction or approximation of
+                fixpoints},
+   pages =     {238--252},
+   booktitle = {Conference Record of the Fourth Annual ACM SIGPLAN-SIGACT
+                Symposium on Principles of Programming Languages},
+   address =   {Los Angeles, California},
+   publisher = {ACM Press, New York, NY},
+   year =      1977,
+}
+</PRE>
+<P>
+<LI><a href="http://citeseer.ist.psu.edu/articles1977.html">Most cited articles in Computer Science published in 1977</A>
+<P>
+<LI><a href="http://citeseer.ist.psu.edu/articles.html">Most cited articles in Computer Science</A>
+<P>
+</UL>
+</body>
+<HR>
+<b><A HREF =
+"../copyright.shtml#copyrightnotice">copyright
+notice</A>, <b><A HREF =
+"../copyrightACM.shtml">ACM copyright</A></b>
+<br><b>Last modified:</b>
+Friday, 04-May-2012 10:01:26 EDT <br>
+<hr>
+</html>

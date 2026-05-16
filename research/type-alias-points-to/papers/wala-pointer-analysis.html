@@ -1,0 +1,450 @@
+<html>
+
+<head>
+    <title> Pointer Analysis - wala/WALA GitHub Wiki </title>
+    <style>
+        #main {
+            max-width: 38rem;
+            margin: auto;
+            overflow-wrap: break-word;
+            min-width: 0;
+            background-color: white;
+        }
+
+        body {
+            background-image: url('/callToAction.svg');
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        #header_button {
+            position: sticky;
+            top: 0;
+            padding: 10px;
+            border-style: ridge;
+            border-color: lightgrey;
+            border-width: thin;
+            color: red;
+            font-weight: bold;
+            background-color: honeydew;
+            font-size: large;
+        }
+
+        #header_button p {
+            margin-bottom: 0;
+            margin-top: 10px;
+        }
+
+        #header_info {
+            padding: 10px;
+            border-style: ridge;
+            border-color: lightgrey;
+            border-width: thin;
+            color: red;
+            font-weight: bold;
+            background-color: honeydew;
+            font-size: large;
+        }
+
+        #content,
+        #index {
+            padding-left: 10px;
+            padding-right: 10px;
+        }
+
+        #footer_info {
+            position: sticky;
+            bottom: 0;
+            padding: 10px;
+            border-style: ridge;
+            border-color: lightgrey;
+            border-width: thin;
+            color: red;
+            font-weight: bold;
+            background-color: honeydew;
+        }
+
+        #footer_info .blocks {
+            background: black;
+            color: white;
+            /* outline: 1px solid blue; */
+            padding: .1em .2em;
+        }
+
+        /* Hide useless-parts of transcluded HTML */
+        .width-full.input-group {
+            display: none;
+        }
+
+        h5:nth-last-child(2) {
+            display: none;
+        }
+
+        .Box-row.wiki-more-pages-link {
+            display: none;
+        }
+
+        .filter-bar {
+            display: none;
+        }
+
+        .Box-title>.octicon {
+            display: none;
+        }
+
+        .anchor {
+            display: none;
+        }
+
+        pre {
+            overflow: auto;
+        }
+
+        #main {
+            word-wrap: break-word;
+        }
+
+        .Counter {
+            background-color: lightgray;
+            border-radius: 20px;
+            padding: 0 10px;
+        }
+
+        table {
+            max-width: 100%;
+            overflow: auto;
+            width: 100%;
+            display: block;
+        }
+
+        .js-wiki-sidebar-toc-toggle-chevron-button {
+            display: none;
+        }
+
+        a.visit_url_original {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.2em; /* adjust as needed */
+            max-height: 1.2em; /* should match line-height */
+            display: block;
+        }
+
+        /* White background for span */
+        /* Rounded corners */
+        /* Black border */
+        .visit_url_pillbar {
+            background-color: white;
+            border-radius: 10px;
+            padding: 5px;
+            margin: 5px;
+            display: block;
+            border: 1px solid black;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Broken Images */
+        img:before {
+            content: "⚠️ MISSING OR BROKEN IMAGE RENDERING ERROR: PLEASE VIEW ORIGINAL PAGE ON GITHUB.COM ⚠️";
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        @font-face {
+            font-family: "color-emoji";
+            src: local("Apple Color Emoji"),
+                local("Segoe UI Emoji"),
+                local("Segoe UI Symbol"),
+                local("Noto Color Emoji");
+        }
+
+        .emoji {
+            font-family: "color-emoji";
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid black;
+        }
+
+        .visit_url_link {
+            font-size: xx-large;
+        }
+
+        .why_exist {
+            position: relative;
+            text-align: center;
+            /* italics */
+            font-style: italic;
+        }
+
+    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Not used, did not want to risk non-indexing. -->
+    <!-- <meta property="og:url" content="https://github.com/wala/WALA/wiki/Pointer-Analysis"> -->
+    <!-- Did not want to risk contaminating content to be indexed. -->
+    <!-- <meta property="og:description" content="not used"> -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Pointer Analysis - wala/WALA GitHub Wiki">
+</head>
+
+<body>
+    <div id="main">
+        <nav id="header_button">
+            <p>Content mirrored for search engine indexing from:</p>
+            <div>
+                <span class="visit_url_pillbar">
+                    <a href="https://github.com/wala/WALA/wiki/Pointer-Analysis" class="visit_url_original">https://github.com/wala/WALA/wiki/Pointer-Analysis</a>
+                </span>
+
+            </div>
+            <div class="why_exist">
+                <a href="/">Why does this service exist?</a>
+            </div>
+        </nav>
+        <aside id="header_info">
+            <!-- Last Modified Date added around here from redirect checker-->
+        <p>📅 Last Modified: Wed, 01 Mar 2023 17:05:04 GMT</p></aside>
+        <article id="content">
+            <h1>Pointer Analysis - wala/WALA GitHub Wiki</h1>
+            <div id="mirrored"> <p>WALA provides a framework for flow-insensitive Andersen-style pointer
+analysis. You can customize the pointer analysis context-sensitivity
+policy in various ways. We often find that for a particular client
+application, it is useful to customize the pointer analysis policy to
+focus analysis effort where it matters.</p>
+<p>Currently, all pointer analysis implementations perform on-the-fly call
+graph construction.</p>
+<p>A pointer analysis context-sensitivity policy can vary in two
+dimensions:</p>
+<ul>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/HeapModel.html" rel="nofollow ugc"><code>HeapModel</code></a>:
+how does the pointer analysis model abstract pointers and heap
+locations?</li>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/ContextSelector.html" rel="nofollow ugc"><code>ContextSelector</code></a>:
+how does the call graph construction clone methods based on context?</li>
+</ul>
+<p>You can define your own pointer analysis policy by customizing a heap
+model and context selector. Also, WALA provides a number of built-in
+policies.</p>
+<h2><a href="#heap-model" aria-hidden="true" class="anchor" id="heap-model"></a>Heap Model</h2>
+<p>A <code>HeapModel</code> tells the WALA pointer analysis how to abstract pointers
+and heap locations. The key classes are</p>
+<ul>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/PointerKey.html" rel="nofollow ugc"><code>PointerKey</code></a>:
+a representation of an abstract pointer</li>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/InstanceKey.html" rel="nofollow ugc"><code>InstanceKey</code></a>:
+a representation of an abstract heap location.</li>
+</ul>
+<p>For example, a <code>PointerKey</code> may represent a local variable or a static field, or an instance field of objects from a particular allocation site, or other variants. More technically, a <code>PointerKey</code> is the name for an equivalence class of pointers from the concrete program, which are collected into a single representative in the abstraction.</p>
+<p>An <code>InstanceKey</code> may represent all objects of a particular type or all objects from a particular allocation site, or all objects from a particular allocation site in a particular context, or other variants.</p>
+<p>A <code>HeapModel</code> provides call-backs for the pointer analysis to create
+<code>PointerKeys</code> and <code>InstanceKeys</code> during analysis. You can customize the
+policy by providing your own <code>HeapModel</code>.</p>
+<h2><a href="#heap-graph" aria-hidden="true" class="anchor" id="heap-graph"></a>Heap Graph</h2>
+<p>A <code>HeapGraph</code> provides a convenient way to navigate the results of a
+pointer analysis. The nodes in a <code>HeapGraph</code> are <code>PointerKeys</code> and
+<code>InstanceKeys</code>. There is an edge from a <code>PointerKey</code> <em>P</em> to an
+<code>InstanceKey</code> <em>I</em> if and only if the pointer analysis indicates that <em>P</em>
+may point to <em>I</em>. There is an edge from an <code>InstanceKey</code> <em>I</em> to a
+<code>PointerKey</code> <em>P</em> if and only if <em>P</em> represents a field of an object
+instance modeled by <em>I</em>, or <em>P</em> represents the array contents of array
+instance <em>I</em>.</p>
+<p>For example, given a <code>HeapGraph</code> <em>h</em>, suppose you want to know all the
+<code>PointerKey</code>s that may alias a particular <code>PointerKey</code> <em>p</em>. You first
+use <code>h.getSuccNodes(p)</code> to find all <code>InstanceKeys</code> <em>p</em> may point to, and
+for each such <code>InstanceKey</code> <em>i</em>, use <code>h.getPredNodes(i)</code> to find other
+<code>PointerKeys</code> that may alias <em>p</em>.</p>
+<h2><a href="#context-selector" aria-hidden="true" class="anchor" id="context-selector"></a>Context Selector</h2>
+<p>Recall that each call graph node represents a method in a particular
+<code>Context</code>. The
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/ContextSelector.html" rel="nofollow ugc"><code>ContextSelector</code></a>
+object controls the policy by which the call graph builds contexts.</p>
+<p>The simplest Context is
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/impl/Everywhere.html#EVERYWHERE" rel="nofollow ugc"><code>Everywhere.EVERYWHERE</code></a>,
+which represents a single, global context for a method.</p>
+<p>Other context-policies can represent call-string contexts, contexts
+naming the receiver object to implement object-sensitivity or other
+variants.</p>
+<p>You can customize a context-sensitivity policy by providing a custom
+<code>ContextSelector</code> object.</p>
+<h2><a href="#entry-points" aria-hidden="true" class="anchor" id="entry-points"></a>Entry points</h2>
+<p>Suppose we have a public entry point with the following signature:</p>
+<pre><code>public static void foo(Object x, Object y)
+</code></pre>
+<p>What will pointer analysis do with the parameters to this entry point? In
+particular, what <code>InstanceKey</code> abstractions will the pointer analysis
+instantiate as the initial contents of the actual parameters <code>x</code> and
+<code>y</code>?</p>
+<p>WALA's pointer analysis uses the <code>Entrypoint</code> interface to direct this
+policy. The crucial method, in the <code>Entrypoint</code> interface, is:</p>
+<pre><code>public abstract TypeReference[] getParameterTypes(int i);
+</code></pre>
+<p><code>getParameterTypes(i)</code> gives a set of types which will be instantiated
+for the <code>i</code>th parameter to the entry point.</p>
+<p>For example, suppose we build an <code>Entrypoint</code> implementation for <code>foo</code>
+where</p>
+<pre><code>getParameterTypes(0) = { java.lang.Object, java.lang.String }
+getParameterTypes(1) = { java.lang.Integer }
+</code></pre>
+<p>Then logically, the pointer analysis models the invocation of <code>foo</code> as
+follows:</p>
+<pre><code>Object o1 = new java.lang.Object();
+Object o2 = new java.lang.String();
+Object o3 = non-determinstic-choice ? o1 : o2;
+Object o4 = new java.lang.Integer();
+foo(o3,o4);
+</code></pre>
+<p>WALA generates synthetic IR instructions representing the above code in
+a &quot;fake root method&quot; that invokes all the entrypoints; see <a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/impl/FakeRootMethod.html" rel="nofollow ugc"><code>FakeRootMethod</code></a>.<br />
+Given that IR, the pointer analysis will create <code>InstanceKey</code> abstractions
+according to the governing <code>HeapModel</code>, as if the program encounters
+allocations of the specified types in the <code>FakeRootMethod</code>.</p>
+<p>By default, most WALA pointer analysis implementation examples use the
+<code>DefaultEntrypoint</code> implementation of <code>Entrypoint</code>. In this
+implementation, <code>getParameterTypes(i)</code> returns an array with a single
+element, which is the declared type of the ith parameter. Most
+production-level clients of WALA provide custom implementations of
+<code>Entrypoint</code>, specialized to the types of frameworks and clients being
+analyzed.</p>
+<h2><a href="#built-in-policies" aria-hidden="true" class="anchor" id="built-in-policies"></a>Built-in policies</h2>
+<p>Let's look at a few of WALA's built-in pointer analysis policies.</p>
+<h3><a href="#zerocfa" aria-hidden="true" class="anchor" id="zerocfa"></a>ZeroCFA</h3>
+<p>The ZeroCFA policy provides a simple, cheap, context-insensitive pointer
+analysis. You can get a call graph builder using the ZeroCFA policy from
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/impl/Util.html#makeZeroCFABuilder(com.ibm.wala.ipa.callgraph.AnalysisOptions,%20com.ibm.wala.ipa.cha.ClassHierarchy,%20com.ibm.wala.ipa.callgraph.AnalysisScope,%20com.ibm.wala.util.warnings.WarningSet)" rel="nofollow ugc"><code>Util.makeZeroCFABuilder()</code></a></p>
+<ul>
+<li>The <code>HeapModel</code> introduces a single <code>InstanceKey</code> for every
+concrete type. That is, all objects of a particular type are
+represented by a single abstract object.</li>
+<li>The <code>ContextSelector</code> uses a single global context for each method,
+except for some special cases dealing with reflection,
+described below.</li>
+</ul>
+<h3><a href="#zeroonecfa" aria-hidden="true" class="anchor" id="zeroonecfa"></a>ZeroOneCFA</h3>
+<p>The ZeroOneCFA policy provides an approximation of &quot;standard&quot; Andersen's
+pointer analysis, using allocation sites to name abstract objects. By
+default,</p>
+<ul>
+<li>The <code>HeapModel</code> introduces a single <code>InstanceKey</code> for every
+allocation site.</li>
+</ul>
+<p>However, there are variants of ZeroOneCFA, depending on some
+optimizations to the heap model provided by the
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/cfa/ZeroXInstanceKeys.html" rel="nofollow ugc"><code>ZeroXInstanceKeys</code></a>
+class. See the source for more details. Briefly:</p>
+<ul>
+<li>VanillaZeroOneCFA (see
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/impl/Util.html#makeVanillaZeroOneContainerCFABuilder(com.ibm.wala.ipa.callgraph.AnalysisOptions,%20com.ibm.wala.ipa.cha.ClassHierarchy,%20com.ibm.wala.ipa.callgraph.AnalysisScope,%20com.ibm.wala.util.warnings.WarningSet)" rel="nofollow ugc"><code>Util.makeVanillaZeroOneCFA</code></a>)
+turns off all optimizations; each allocation is handled separately.</li>
+<li>ZeroOneCFA (see
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/impl/Util.html#makeZeroOneCFABuilder(com.ibm.wala.ipa.callgraph.AnalysisOptions,%20com.ibm.wala.ipa.cha.ClassHierarchy,%20com.ibm.wala.ipa.callgraph.AnalysisScope,%20com.ibm.wala.util.warnings.WarningSet)" rel="nofollow ugc"><code>Util.makeZeroOneCFABuilder</code></a>)
+turns on the following optimizations
+<ul>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/cfa/ZeroXInstanceKeys.html#SMUSH_STRINGS" rel="nofollow ugc">SMUSH_STRINGS</a>:
+individual <code>String</code> or <code>StringBuffer</code> allocation sites are
+not disambiguated. A single <code>InstanceKey</code> represents all
+<code>String</code> objects, and a single <code>InstanceKey</code> represents all
+<code>StringBuffer</code> objects.</li>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/cfa/ZeroXInstanceKeys.html#SMUSH_THROWABLES" rel="nofollow ugc">SMUSH_THROWABLES</a>:
+individual exception objects are disambiguated by type, and not
+by allocation site.</li>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/cfa/ZeroXInstanceKeys.html#SMUSH_PRIMITIVE_HOLDERS" rel="nofollow ugc">SMUSH_PRIMITIVE_HOLDERS</a>:
+if a class has no reference fields, then all objects of that
+type are represented by a single <code>InstanceKey</code></li>
+<li><a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/cfa/ZeroXInstanceKeys.html#SMUSH_MANY" rel="nofollow ugc">SMUSH_MANY</a>:
+if there are more than <em>k</em> (current <em>k=25</em>) allocation sites of
+a particular type in a single method, then all these sites are
+represented by a single <code>InstanceKey</code>. For example, a library
+class initializer method might allocate 10,000 <code>Font</code> objects;
+this optimization will not disambiguate the 10,000 separate
+allocation sites.</li>
+</ul>
+</li>
+</ul>
+<p>You can customize the policies in similar ways, depending on your
+client's needs.</p>
+<h3><a href="#zeroonecontainercfa" aria-hidden="true" class="anchor" id="zeroonecontainercfa"></a>ZeroOneContainerCFA</h3>
+<p>The ZeroOneContainerCFA policy (see
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/impl/Util.java#L418" rel="nofollow ugc"><code>Util.makeZeroOneContainerCFABuilder</code></a>)
+extends the ZeroOneCFA policy with unlimited object-sensitivity for
+collection objects. For any allocation sites in collection objects, the
+allocation site is named by a tuple of allocation sites extending to the
+outermost enclosing collection allocation. This policy can be relatively
+expensive, but can be effective in disambiguating contents of the standard
+collection classes. For this to be effective, note that ZeroOneContainer
+modifies the <code>ContextSelector</code> to clone methods based on the receiver
+object's object-sensitive name. The
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/propagation/cfa/ContainerContextSelector.java" rel="nofollow ugc"><code>ContainerContextSelector</code></a>
+class manages this logic and the method
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/propagation/ContainerUtil.java#L45" rel="nofollow ugc"><code>ContainerUtil.isContainer()</code></a>
+determines which classes are considered containers.</p>
+<p>ZeroOneContainer also uses one level of call-string sensitivity for
+certain methods that are either factories or are known to require such
+precision, e.g., <code>System.arraycopy()</code>.
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/propagation/cfa/ContainerContextSelector.java#L135" rel="nofollow ugc"><code>ContainerContextSelector.isWellKnownStaticFactory()</code></a>
+determines which methods get this treatment.</p>
+<h3><a href="#call-site-sensitivityk-cfa" aria-hidden="true" class="anchor" id="call-site-sensitivityk-cfa"></a>Call-Site Sensitivity/K-CFA</h3>
+<p>For call-site sensitivity, The context of each CGNode consists of the last k call sites of the call chains. Wala uses a call <a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/propagation/cfa/CallString.java" rel="nofollow ugc">CallString</a> to record these call sites.  You can use <a href="https://github.com/wala/WALA/blob/677a292abe515f737278ad1b79a4fef853c6211e/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/impl/Util.java#L552" rel="nofollow ugc">Util.makeNCFABuilder()</a> to create a call graph builder based on call-site sensitivity. For the heap abstraction, Wala uses the <a href="https://github.com/wala/WALA/blob/master/core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/cfa/CallStringContext.java" rel="nofollow ugc">CallStringContext</a> of CGNode as the heap context to qualify it, and uses allocation sites (<a href="https://github.com/wala/WALA/blob/master/core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/AllocationSiteInNode.java" rel="nofollow ugc">AllocationSiteInNode</a>) to represent allocations.</p>
+<h3><a href="#object-sensitivityk-obj" aria-hidden="true" class="anchor" id="object-sensitivityk-obj"></a>Object Sensitivity/K-Obj</h3>
+<p>Object-Sensitivity is regarded as arguably the best for pointer analysis in object-oriented languages (like Java). Contrary to K-CFA, a K-Obj analysis uses k object allocation sites as context elements. Wala uses <a href="https://github.com/wala/WALA/blob/aa6601d312fbd0e11532fa463a56cefe7e5c99f3/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/cfa/AllocationString.java" rel="nofollow ugc">AllocationString</a> to record these allocation sites.  Use <a href="https://github.com/wala/WALA/blob/677a292abe515f737278ad1b79a4fef853c6211e/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/impl/Util.java#L591" rel="nofollow ugc">Util.makeNObjBuilder()</a> or <a href="https://github.com/wala/WALA/blob/677a292abe515f737278ad1b79a4fef853c6211e/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/impl/Util.java#L624" rel="nofollow ugc">Util.makeVanillaNObjBuilder()</a> to create a call graph builder based on the obj sensitivity. The relevant Context information is as follows:</p>
+<ul>
+<li>For virtual method calls, the context is an <a href="https://github.com/wala/WALA/blob/aa6601d312fbd0e11532fa463a56cefe7e5c99f3/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/cfa/AllocationStringContext.java" rel="nofollow ugc">AllocationStringContext</a>, which contains an <a href="https://github.com/wala/WALA/blob/aa6601d312fbd0e11532fa463a56cefe7e5c99f3/com.ibm.wala.core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/cfa/AllocationString.java" rel="nofollow ugc">AllocationString</a> inside.</li>
+<li>For static method calls, a few well-known static factory methods from the standard libraries use <a href="https://github.com/wala/WALA/blob/master/core/src/main/java/com/ibm/wala/ipa/callgraph/propagation/cfa/CallerSiteContext.java" rel="nofollow ugc">CallerSiteContext</a>. Otherwise, directly copy the context of the last non-static method as the context of the called method.</li>
+<li>For an object(fixed at allocation) : The heap context is the same as the context of CGNode, has the same number of allocation sites.</li>
+</ul>
+<h3><a href="#contexts-for-reflection" aria-hidden="true" class="anchor" id="contexts-for-reflection"></a>Contexts for Reflection</h3>
+<p>To deal with reflection, WALA uses context-sensitivity policies, even if
+using a context-insensitive base policy like ZeroCFA.</p>
+<p>Currently, all built-in pointer analysis policies treat calls to
+<code>Object.clone()</code> context sensitively, using the concrete type of the
+receiver class as the context (see
+<a href="https://wala.github.io/javadoc/com/ibm/wala/ipa/callgraph/propagation/CloneContextSelector.html" rel="nofollow ugc"><code>CloneContextSelector</code></a>).
+Also, <code>clone()</code> has a different IR in each context, to properly model the semantics of the method for the corresponding receiver type (see <a href="https://wala.github.io/javadoc/com/ibm/wala/analysis/reflection/CloneInterpreter.html" rel="nofollow ugc"><code>CloneInterpreter</code></a>).</p>
+<p>There is also significant support for other reflective constructs like
+<code>Class.forName()</code>, <code>Class.newInstance()</code>, <code>Method.invoke()</code>, etc. See
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/analysis/reflection/ReflectionContextSelector.java" rel="nofollow ugc"><code>ReflectionContextSelector</code></a>
+and
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/analysis/reflection/ReflectionContextInterpreter.java" rel="nofollow ugc"><code>ReflectionContextInterpreter</code></a>
+for the code that manages this reflection handling, and
+<a href="https://github.com/wala/WALA/blob/3e78ff7dc6ae03337404aff53c5aa9635cef0152/com.ibm.wala.core/src/com/ibm/wala/ipa/callgraph/AnalysisOptions.java#L388" rel="nofollow ugc"><code>AnalysisOptions.setReflectionOptions()</code></a>
+for tuning the handling.</p>
+<h2><a href="#improving-scalability" aria-hidden="true" class="anchor" id="improving-scalability"></a>Improving Scalability</h2>
+<p>Reflection usage and the size of modern libraries/frameworks make it
+very difficult to scale flow-insensitive points-to analysis to modern
+Java programs. For example, with default settings, WALA's pointer
+analyses cannot handle any program linked against the Java 6 standard
+libraries, due to extensive reflection in the libraries. To improve
+scalability (at the cost of some soundness in some cases) try the
+following:</p>
+<ul>
+<li>Use <code>AnalysisScope</code> exclusions to exclude classes / packages you
+know are irrelevant to the application. Exclusions are specified in
+an exclusions file passed to the appropriate method of
+<code>AnalysisScopeReader</code>. For an example, see
+<a href="https://github.com/wala/WALA/blob/ca9d5cb851838b692cb1e55e3c1a09d77de24574/com.ibm.wala.core/src/main/resources/Java60RegressionExclusions.txt" rel="nofollow ugc"><code>Java60RegressionExclusions.txt</code></a>.</li>
+<li>Analyze an older version of the standard libraries, e.g., from
+Java 1.4.</li>
+<li>Reduce the context sensitivity of the pointer analysis (see above).</li>
+<li>Reduce WALA's reflection handling by calling
+<code>setReflectionOptions()</code> on the
+<a href="https://github.com/wala/WALA/blob/master/core/src/com/ibm/wala/ipa/callgraph/AnalysisOptions.java" rel="nofollow ugc"><code>AnalysisOptions</code></a>
+an object used for pointer analysis. You may have to tinker to see what setting enables scalability for your application.</li>
+</ul>
+<h2><a href="#demand-driven-pointer-analysis" aria-hidden="true" class="anchor" id="demand-driven-pointer-analysis"></a>Demand-Driven Pointer Analysis</h2>
+<p>As of version 1.0.04, WALA also includes a demand-driven pointer
+analysis. See the <a href="/m/wala/WALA/wiki/Demand-Pointer-Analysis">Demand Pointer Analysis</a> page for details.</p>
+ </div>
+        </article>
+        <nav id="index">
+            <a href="/m/wala/WALA/wiki_index">🗂️ Page Index for this GitHub Wiki</a>
+        </nav>
+    </div>
+</body>
+
+</html>

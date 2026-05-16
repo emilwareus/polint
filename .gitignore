@@ -26,3 +26,6 @@ target
 
 # Local polint scaffold smoke dirs (validation / manual testing)
 _scaffold_smoke_*/
+
+# Third-party research checkouts; keep source snapshots local, not vendored.
+research/*/repos/

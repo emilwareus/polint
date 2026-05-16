@@ -4,5 +4,6 @@
 *.rs text eol=lf
 *.toml text eol=lf
 *.md text eol=lf
+*.pdf binary
 .gitattributes text eol=lf
 .github/**/*.yml text eol=lf

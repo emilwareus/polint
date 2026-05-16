@@ -1,0 +1,502 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IEMobile 7]><html class="iem7" xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://ogp.me/ns/fb#"><![endif]-->
+<!--[if lte IE 6]><html class="ie6 ie6-7 ie6-8" xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://ogp.me/ns/fb#"><![endif]-->
+<!--[if (IE 7)&(!IEMobile)]><html class="ie7 ie6-7 ie6-8" xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://ogp.me/ns/fb#"><![endif]-->
+<!--[if IE 8]><html class="ie8 ie6-8" xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://ogp.me/ns/fb#"><![endif]-->
+<!--[if (gte IE 9)|(gt IEMobile 7)]><!--><html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://ogp.me/ns/fb#"><!--<![endif]-->
+
+<head>
+ <title>Two approaches to interprocedural data flow analysis - CERN Document Server</title>
+<link href='https://framework.web.cern.ch/framework/2.0/fonts/PTSansWeb/PTSansWeb.css' rel='stylesheet' type='text/css' />
+ <link rel="stylesheet" href="https://cds.cern.ch/img/invenio.css?v=20141127" type="text/css" />
+ <link rel="stylesheet" href="https://cds.cern.ch/img/cern_theme/css/cern_theme.css?v=20141127" type="text/css" />
+ <link rel="stylesheet"href="/css/font-awesome.min.css">
+ <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
+
+
+
+<link rel="stylesheet" href="https://cds.cern.ch/img/cern_toolbar/css/toolbar.css" type="text/css" />
+<!--[if lt IE 8]>
+    <link href="https://cds.cern.ch/img/cern_toolbar/css/toolbar-ie.css" rel="stylesheet" type="text/css">
+<![endif]-->
+
+ <!--[if lt IE 8]>
+   <link rel="stylesheet" type="text/css" href="https://cds.cern.ch/img/invenio-ie7.css" />
+ <![endif]-->
+ <!--[if gt IE 8]>
+   <style type="text/css">div.restrictedflag {filter:none;}</style>
+ <![endif]-->
+
+   <link rel="canonical" href="https://cds.cern.ch/record/120118" />
+  <link rel="alternate" hreflang="el" href="https://cds.cern.ch/record/120118?ln=el" />
+  <link rel="alternate" hreflang="fr" href="https://cds.cern.ch/record/120118?ln=fr" />
+  <link rel="alternate" hreflang="bg" href="https://cds.cern.ch/record/120118?ln=bg" />
+  <link rel="alternate" hreflang="zh-TW" href="https://cds.cern.ch/record/120118?ln=zh_TW" />
+  <link rel="alternate" hreflang="pt" href="https://cds.cern.ch/record/120118?ln=pt" />
+  <link rel="alternate" hreflang="no" href="https://cds.cern.ch/record/120118?ln=no" />
+  <link rel="alternate" hreflang="hr" href="https://cds.cern.ch/record/120118?ln=hr" />
+  <link rel="alternate" hreflang="ca" href="https://cds.cern.ch/record/120118?ln=ca" />
+  <link rel="alternate" hreflang="de" href="https://cds.cern.ch/record/120118?ln=de" />
+  <link rel="alternate" hreflang="it" href="https://cds.cern.ch/record/120118?ln=it" />
+  <link rel="alternate" hreflang="zh-CN" href="https://cds.cern.ch/record/120118?ln=zh_CN" />
+  <link rel="alternate" hreflang="sv" href="https://cds.cern.ch/record/120118?ln=sv" />
+  <link rel="alternate" hreflang="sk" href="https://cds.cern.ch/record/120118?ln=sk" />
+  <link rel="alternate" hreflang="en" href="https://cds.cern.ch/record/120118?ln=en" />
+  <link rel="alternate" hreflang="pl" href="https://cds.cern.ch/record/120118?ln=pl" />
+  <link rel="alternate" hreflang="ru" href="https://cds.cern.ch/record/120118?ln=ru" />
+  <link rel="alternate" hreflang="ka" href="https://cds.cern.ch/record/120118?ln=ka" />
+  <link rel="alternate" hreflang="ja" href="https://cds.cern.ch/record/120118?ln=ja" />
+  <link rel="alternate" hreflang="es" href="https://cds.cern.ch/record/120118?ln=es" />
+
+ <link rel="alternate" type="application/rss+xml" title="CERN Document Server RSS" href="/rss?ln=en" />
+ <link rel="search" type="application/opensearchdescription+xml" href="https://cds.cern.ch/opensearchdescription" title="CERN Document Server" />
+ <link rel="unapi-server" type="application/xml" title="unAPI" href="https://cds.cern.ch/unapi" />
+
+ <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+ <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon-precomposed.png"/>
+ <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+ <meta http-equiv="Content-Language" content="en" />
+ <meta name="description" content="
+Sharir, M; Pnueli, A" />
+ <meta name="keywords" content="CERN Document Server, WebSearch, CERN Document Server" />
+ <script type="text/javascript" src="https://cds.cern.ch/js/jquery.min.js"></script>
+ <!-- WebNews CSS library -->
+ <link rel="stylesheet" href="https://cds.cern.ch/img/webnews.css" type="text/css" />
+ <!-- WebNews JS library -->
+ <script type="text/javascript" src="https://cds.cern.ch/js/webnews.js?v=20131009"></script>
+ <meta property="fb:app_id" content="137353533001720"/>
+ <script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  tex2jax: {inlineMath: [['$','$']],
+            processEscapes: true},
+  showProcessingMessages: false,
+  messageStyle: "none"
+});
+</script>
+<script src="/MathJax/MathJax.js?config=TeX-AMS_CHTML" type="text/javascript">
+</script>
+<!-- GoogleScholar -->
+<meta content="Two approaches to interprocedural data flow analysis" name="citation_title" />
+<meta content="Sharir, M" name="citation_author" />
+<meta content="Pnueli, A" name="citation_author" />
+<meta content="New York Univ. Comput. Sci. Dept." name="citation_publisher" />
+
+
+
+
+
+
+
+
+<meta content="1978" name="citation_publication_date" />
+<meta name="citation_online_date" content="1990/01/28">
+
+
+
+<meta content="NYU-CS-TR-78-002" name="citation_technical_report_number" />
+
+
+
+
+
+<!-- OpenGraph -->
+<meta content="Two approaches to interprocedural data flow analysis" property="og:title" />
+<meta content="website" property="og:type" />
+<meta content="website" property="og:type" />
+<meta content="https://cds.cern.ch/record/120118" property="og:url" />
+
+
+<meta content="CERN Document Server" property="og:site_name" />
+
+
+<!-- Twitter Card -->
+<meta content="summary" name="twitter:card" />
+
+ <style></style>
+</head>
+<body class="CERN32Document32Server search" lang="en">
+
+
+
+<!-- toolbar starts -->
+
+        <div id="cern-toolbar">
+            <h1><a href="http://cern.ch" title="CERN">CERN <span>Accelerating science</span></a></h1>
+			<ul>
+
+                   <li class="cern-accountlinks"><a class="cern-account" href="https://cds.cern.ch/youraccount/login?ln=en&amp;referer=https%3A//cds.cern.ch/record/120118" title="Sign in to your CERN account">Sign in</a></li>
+                                <li><a class="cern-directory" href="http://cern.ch/directory" title="Search CERN resources and browse the directory">Directory</a></li>
+			</ul>
+	</div>
+
+
+<!-- toolbar ends -->
+
+<!-- Nav header starts-->
+
+<div role="banner" class="clearfix" id="header">
+
+    <div class="header-inner inner">
+      <hgroup class="clearfix">
+
+<h2 id="site-name">
+                <a rel="home" title="Home" href="/"><span>CERN Document Server</span></a>
+              </h2>
+              <h3 id="site-slogan">Access articles, reports and multimedia content in HEP</h3>
+      </hgroup><!-- /#name-and-slogan -->
+
+
+              <div role="navigation" id="main-navigation" class="cdsmenu">
+          <h2 class="element-invisible">Main menu</h2><ul class="links inline clearfix">
+<li class="menu-386 first active-trail"><a class="active-trail" href="https://cds.cern.ch/?ln=en">Search</a></li>
+<li class="menu-444 "><a class="" title="" href="https://cds.cern.ch/submit?ln=en">Submit</a></li>
+<li class="menu-426 "><a class="" href="https://cds.cern.ch/help/?ln=en">Help</a></li>
+<li class="leaf hassubcdsmenu">
+        <a hreflang="en" class="header" href="https://cds.cern.ch/youraccount/display?ln=en">Personalize</a>
+        <ul class="subsubcdsmenu"><li><a href="https://cds.cern.ch/youralerts/list?ln=en">Your alerts</a></li><li><a href="https://cds.cern.ch/yourbaskets/display?ln=en">Your baskets</a></li><li><a href="https://cds.cern.ch/yourcomments?ln=en">Your comments</a></li><li><a href="https://cds.cern.ch/youralerts/display?ln=en">Your searches</a></li></ul></li>
+
+</ul>        </div>
+
+    </div>
+  </div>
+
+<!-- Nav header ends-->
+
+
+<table class="navtrailbox">
+ <tr>
+  <td class="navtrailboxbody">
+   <a href="/?ln=en" class="navtrail">Home</a> &gt; Two approaches to interprocedural data flow analysis
+  </td>
+ </tr>
+</table>
+
+</div>
+        <div class="pagebody"><div class="pagebodystripemiddle">
+        <div class="detailedrecordbox">
+                <div class="detailedrecordtabs">
+            <div>
+                <ul class="detailedrecordtabs"><li class="on first"><a href="/record/120118/?ln=en">Information  </a></li><li class="disabled"><a>Files </a></li></ul>
+            <div id="tabsSpacer" style="clear:both;height:0px">&nbsp;</div></div>
+        </div>
+        <div class="detailedrecordboxcontent">
+            <div class="top-left-folded"></div>
+            <div class="top-right-folded"></div>
+            <div class="inside">
+                <!--<div style="height:0.1em;">&nbsp;</div>
+                <p class="notopgap">&nbsp;</p>-->
+
+                <abbr class="unapi-id" title="120118"></abbr>
+<style type="text/css">
+    <!--
+        ul.detailedrecordtabs li.on a{background-color:#4D94CC;color:#fff !important;border-bottom:1px solid #4D94CC!important;}
+        div.detailedrecordboxcontent {padding-top:0px !important;}
+    -->
+</style>
+<script type="text/javascript" src="/js/pdf-previewer-append-to-table.js"></script>
+<table class="formatRecordTableFullWidth" >
+   <tr>
+      <td class="formatRecordHeader" style="background-image: url('https://cds.cern.ch/img/journals.jpg');" colspan="2">
+      Report
+
+</td>
+</tr>
+
+
+
+<tr><td class="formatRecordLabel">
+Report number
+</td><td style="padding-left:5px;">NYU-CS-TR-78-002</td></tr>
+
+<tr><td class="formatRecordLabel">
+Title
+</td><td style="padding-left:5px;"><b>Two approaches to interprocedural data flow analysis</b></td></tr>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<tr><td class="formatRecordLabel"><span style="white-space:nowrap;">Author(s)</span>
+</td><td style="padding-left:5px;"><a href="https://cds.cern.ch/search?f=author&amp;p=Sharir%2C%20M&amp;ln=en">Sharir, M</a> ; <a href="https://cds.cern.ch/search?f=author&amp;p=Pnueli%2C%20A&amp;ln=en">Pnueli, A</a></td></tr>
+
+<tr><td
+class="formatRecordLabel">
+Affiliation
+</td><td style="padding-left:5px;">(New York Univ.) ; (Pennsylvania Univ.) ; (Tel-Aviv Univ.)</td></tr>
+
+
+
+
+
+<tr><td
+class="formatRecordLabel">
+Publication
+</td><td style="padding-left:5px;">New York, NY : New York Univ. Comput. Sci. Dept., 1978 - 77.</td></tr>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<tr><td
+class="formatRecordLabel">
+Subject category
+</td><td style="padding-left:5px;">Computing and Computers</td></tr>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</table>
+
+
+
+
+
+
+
+<small>
+
+</small>
+
+
+
+
+
+
+
+<small>
+
+</small>
+<br/><br/><div align="right"><div style="padding-bottom:2px;padding-top:30px;"><span class="moreinfo" style="margin-right:10px;">
+                        <a href="" class="moreinfo">Back to search</a> </span></div></div>
+            <div class="bottom-left-folded"><div class="recordlastmodifiedbox" style="position:relative;margin-left:1px">&nbsp;Record created 1990-01-28, last modified 2014-12-15</div></div>
+            <div class="bottom-right-folded" style="text-align:right;padding-bottom:2px;">
+                <span class="moreinfo" style="margin-right:10px;"></span></div>
+          </div>
+      </div>
+    </div>
+    <br/>
+
+        <br />
+<div class="detailedrecordminipanel">
+<div class="top-left"></div><div class="top-right"></div>
+                <div class="inside">
+
+        <div id="detailedrecordminipanelfile" style="width:33%;float:left;text-align:center;margin-top:0">
+
+<br/>
+
+        </div>
+        <div id="detailedrecordminipanelreview" style="width:30%;float:left;text-align:center">
+
+        </div>
+
+        <div id="detailedrecordminipanelactions" style="width:36%;float:right;text-align:right;">
+
+<ul class="detailedrecordactions">
+        <li><a href="/yourbaskets/add?ln=en&amp;recid=120118">Add to personal basket</a></li>
+        <li>Export as
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/hx?ln=en">BibTeX</a>,
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/hm?ln=en">MARC</a>,
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xm?ln=en">MARCXML</a>,
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xd?ln=en">DC</a>,
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xe?ln=en">EndNote</a>,
+<!--            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xe8x?ln=en">EndNote (8-X)</a>,-->
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xn?ln=en">NLM</a>,
+
+            <a style="text-decoration:underline;font-weight:normal" href="/record/120118/export/xw?ln=en">RefWorks</a>
+            </li>
+
+
+
+</ul>
+<div style='padding-left: 13px;'>
+<!-- JQuery Bookmark Button BEGIN -->
+<div id="bookmark"></div>
+<div id="bookmark_sciencewise"></div>
+<style type="text/css">
+    #bookmark_sciencewise, #bookmark {float: left;}
+    #bookmark_sciencewise li {padding: 2px; width: 25px;}
+    #bookmark_sciencewise ul, #bookmark ul {list-style-image: none;}
+</style>
+<script type="text/javascript" src="/js/jquery.bookmark.min.js"></script>
+<style type="text/css">@import "/css/jquery.bookmark.css";</style>
+<script type="text/javascript">// <![CDATA[
+
+$.bookmark.addSite('sciencewise', 'ScienceWise.info', 'https://cds.cern.ch/img/sciencewise.png', 'en', 'bookmark', 'http://sciencewise.info/bookmarks/cds:120118/add');
+$('#bookmark_sciencewise').bookmark({sites: ['sciencewise']});
+
+    $('#bookmark').bookmark({
+        sites: ['facebook', 'twitter', 'linkedin', 'google_plusone'],
+        icons: '/img/bookmarks.png',
+        url: 'https://cds.cern.ch/record/120118',
+        addEmail: true,
+        title: "Two approaches to interprocedural data flow analysis",
+        description: ""
+    });
+// ]]>
+</script>
+<!-- JQuery Bookmark Button END -->
+</div>
+
+        </div>
+        <div style="clear:both;margin-bottom: 0;"></div>
+        </div>
+        <div class="bottom-left"></div><div class="bottom-right"></div>
+        </div>
+        </div></div>
+
+<footer id="footer" class="pagefooter clearfix">
+
+<!-- replaced page footer -->
+
+ <div class="pagefooterstripeleft">
+  CERN Document Server&nbsp;::&nbsp;<a class="footer" href="https://cds.cern.ch/?ln=en">Search</a>&nbsp;::&nbsp;<a class="footer" href="https://cds.cern.ch/submit?ln=en">Submit</a>&nbsp;::&nbsp;<a class="footer" href="https://cds.cern.ch/youraccount/display?ln=en">Personalize</a>&nbsp;::&nbsp;<a class="footer" href="https://cds.cern.ch/help/?ln=en">Help</a>&nbsp;::&nbsp;<a class="footer" href="https://cern.service-now.com/service-portal?id=privacy_policy&se=CDS-Service" target="_blank">Privacy Notice</a>&nbsp;::&nbsp;<a class="footer" href="https://repository.cern/content-policy" target="_blank">Content Policy</a>&nbsp;::&nbsp;<a class="footer" href="https://repository.cern/terms" target="_blank">Terms and Conditions</a>
+  <br />
+  Powered by <a class="footer" href="http://invenio-software.org/">Invenio</a>
+  <br />
+  Maintained by <a class="footer" href="https://cern.service-now.com/service-portal?id=service_element&name=CDS-Service">CDS Service</a> - Need help? Contact <a href="https://cern.service-now.com/service-portal?id=service_element&name=CDS-Service">CDS Support</a>.
+  <br />
+
+ </div>
+
+<div class="pagefooterstriperight">
+
+  <div  class="cern-logo">
+    <a id="logo" href="http://cern.ch" title="CERN" rel="CERN" ><img src="https://cds.cern.ch/img/cern_theme/img/cern-logo-large.png" alt="CERN" /></a>
+  </div>
+  <div class="cern-languagebox">
+    This site is also available in the following languages:<br /><a href="/record/120118?ln=bg" class="langinfo">Български</a> &nbsp;<a href="/record/120118?ln=ca" class="langinfo">Català</a> &nbsp;<a href="/record/120118?ln=de" class="langinfo">Deutsch</a> &nbsp;<a href="/record/120118?ln=el" class="langinfo">Ελληνικά</a> &nbsp;<span class="langinfo">English</span> &nbsp;<a href="/record/120118?ln=es" class="langinfo">Español</a> &nbsp;<a href="/record/120118?ln=fr" class="langinfo">Français</a> &nbsp;<a href="/record/120118?ln=hr" class="langinfo">Hrvatski</a> &nbsp;<a href="/record/120118?ln=it" class="langinfo">Italiano</a> &nbsp;<a href="/record/120118?ln=ja" class="langinfo">日本語</a> &nbsp;<a href="/record/120118?ln=ka" class="langinfo">ქართული</a> &nbsp;<a href="/record/120118?ln=no" class="langinfo">Norsk/Bokmål</a> &nbsp;<a href="/record/120118?ln=pl" class="langinfo">Polski</a> &nbsp;<a href="/record/120118?ln=pt" class="langinfo">Português</a> &nbsp;<a href="/record/120118?ln=ru" class="langinfo">Русский</a> &nbsp;<a href="/record/120118?ln=sk" class="langinfo">Slovensky</a> &nbsp;<a href="/record/120118?ln=sv" class="langinfo">Svenska</a> &nbsp;<a href="/record/120118?ln=zh_CN" class="langinfo">中文(简)</a> &nbsp;<a href="/record/120118?ln=zh_TW" class="langinfo">中文(繁)</a>
+  </div>
+</div>
+
+<!-- replaced page footer -->
+</footer>
+<script type="text/javascript">
+
+  var SyndeticsBookCovers = (function() {
+    var SMALL_SIZE = "sc.gif",
+        MEDIUM_SIZE = "mc.gif",
+        RAW_URL = "https://secure.syndetics.com/index.aspx?isbn=THEISBN/THESIZE&client=cernlibrary";
+
+    replaceCover = function(imgElement, isbns, hdFormat) {
+      var img = new Image(),
+          size = hdFormat ? MEDIUM_SIZE : SMALL_SIZE;
+      var _isbns = isbns.sort(function(a, b) {
+        // sort from shortest to longest ISBN (more modern)
+        return a.length > b.length ? 1 : -1;
+      });
+
+      function next() {
+        var isbn = _isbns.pop();
+        if (isbn) {
+          var url = RAW_URL.replace("THEISBN", isbn).replace("THESIZE", size);
+          img.src = url;
+        }
+      }
+
+      function done() {
+        imgElement.src = img.src;
+      }
+
+      img.onload = function() {
+        if (this.width > 1) {
+          done();
+        } else {
+          next();
+        }
+      };
+
+      next();
+    };
+
+    return {
+      replaceCover: replaceCover
+    };
+  })();
+
+  $(document).ready(function() {
+
+      // get book covers
+      $("img.book-cover").each(function() {
+        var $this = $(this),
+            strIsbns = $this.data("isbns") || "",
+            isbnsArray = String(strIsbns).split(","),
+            hdFormat = $this.hasClass("hd");
+        SyndeticsBookCovers.replaceCover(this, isbnsArray, hdFormat);
+      });
+
+      // WebNews tooltips
+      $.ajax({
+          url: "/news/tooltips",
+          success: function(data) {
+              create_tooltips(data);
+          },
+          dataType: "json",
+          cache: false
+      });
+  });
+
+</script>
+<!-- Feedback script -->
+<script src="//cds.cern.ch/js/feedback.js"></script>
+<!-- Feedback script -->
+
+<!-- Matomo -->
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="https://webanalytics.web.cern.ch/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '756']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<!-- End Matomo Code -->
+
+</body>
+</html>

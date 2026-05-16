@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Customizing Library Models for JavaScript &#8212; CodeQL</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+    <link rel="stylesheet" type="text/css" href="../../_static/alabaster.css?v=5f7a36bc" />
+    <script src="../../_static/documentation_options.js?v=187304be"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="icon" href="../../_static/favicon.ico"/>
+    <link rel="index" title="Index" href="../../genindex/" />
+    <link rel="search" title="Search" href="../../search/" />
+    <link rel="next" title="Migrating JavaScript Dataflow Queries" href="../migrating-javascript-dataflow-queries/" />
+    <link rel="prev" title="Data flow cheat sheet for JavaScript" href="../data-flow-cheat-sheet-for-javascript/" />
+
+<title>CodeQL docs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+<link rel="stylesheet" href="../../_static/primer.css" type="text/css" />
+
+
+  </head><body>
+<header class="Header">
+    <div class="Header-item--full">
+        <a href="https://codeql.github.com/docs" class="Header-link f2 d-flex flex-items-center">
+            <!-- <%= octicon "mark-github", class: "mr-2", height: 32 %> -->
+            <svg height="32" class="octicon octicon-mark-github mr-2" viewBox="0 0 16 16" version="1.1" width="32"
+                aria-hidden="true">
+                <path fill-rule="evenodd"
+                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z">
+                </path>
+            </svg>
+            <span class="hide-sm">CodeQL documentation</span>
+        </a>
+    </div>
+    <div class="Header-item hide-sm hide-md">
+        <script src="https://addsearch.com/js/?key=93b4d287e2fc079a4089412b669785d5&categories=!0xhelp.semmle.com,0xcodeql.github.com,1xdocs,1xcodeql-standard-libraries,1xcodeql-query-help"></script>
+    </div>
+    <div class="Header-item">
+
+        <details class="dropdown details-reset details-overlay d-inline-block">
+            <summary class="btn bg-gray-dark text-white border" aria-haspopup="true">
+                CodeQL resources
+                <div class="dropdown-caret"></div>
+            </summary>
+            <ul class="dropdown-menu dropdown-menu-se dropdown-menu-dark">
+                <li><a class="dropdown-item" href="https://codeql.github.com/docs/codeql-overview">CodeQL overview</a></li>
+                <li class="dropdown-divider" role="separator"></li>
+                <div class="dropdown-header">
+                    CodeQL guides
+                </div>
+                <li><a class="dropdown-item" href="https://codeql.github.com/docs/writing-codeql-queries">Writing CodeQL queries</a></li>
+                <li><a class="dropdown-item" href="https://codeql.github.com/docs/codeql-language-guides">CodeQL language guides</a>
+                <li class="dropdown-divider" role="separator"></li>
+                <div class="dropdown-header">
+                    Reference docs
+                </div>
+                <li><a class="dropdown-item" href="https://codeql.github.com/docs/ql-language-reference/">QL language
+                        reference</a>
+                <li><a class="dropdown-item" href="https://codeql.github.com/codeql-standard-libraries">CodeQL
+                        standard-libraries</a>
+                <li><a class="dropdown-item" href="https://codeql.github.com/codeql-query-help">CodeQL
+                        query help</a>
+                <li class="dropdown-divider" role="separator"></li>
+                <div class="dropdown-header">
+                    Source files
+                </div>
+                <li><a class="dropdown-item" href="https://github.com/github/codeql">CodeQL repository</a>
+                <li class="dropdown-divider" role="separator"></li>
+                <div class="dropdown-header">
+                    Academic
+                </div>
+                <li><a class="dropdown-item" href="https://codeql.github.com/publications">QL publications</a>
+            </ul>
+        </details>
+
+    </div>
+
+</header>
+<main class="bg-gray-light clearfix">
+<nav class="SideNav position-sticky top-0 col-lg-3 col-md-3 float-left p-4 hide-sm hide-md overflow-y-auto">
+
+    <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../codeql-overview/">CodeQL overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../writing-codeql-queries/">Writing CodeQL queries</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../">CodeQL language guides</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-cpp/">CodeQL for C and C++</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-csharp/">CodeQL for C#</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-actions/">CodeQL for GitHub Actions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-go/">CodeQL for Go</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-java/">CodeQL for Java and Kotlin</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../codeql-for-javascript/">CodeQL for JavaScript and TypeScript</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../basic-query-for-javascript-code/">Basic query for JavaScript and TypeScript code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../codeql-library-for-javascript/">CodeQL library for JavaScript</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../codeql-library-for-typescript/">CodeQL library for TypeScript</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../analyzing-data-flow-in-javascript-and-typescript/">Analyzing data flow in JavaScript and TypeScript</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-flow-labels-for-precise-data-flow-analysis/">Using flow state for precise data flow analysis</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../specifying-additional-remote-flow-sources-for-javascript/">Specifying additional remote flow sources for JavaScript</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../using-type-tracking-for-api-modeling/">Using type tracking for API modeling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../abstract-syntax-tree-classes-for-working-with-javascript-and-typescript-programs/">Abstract syntax tree classes for working with JavaScript and TypeScript programs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../data-flow-cheat-sheet-for-javascript/">Data flow cheat sheet for JavaScript</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Customizing Library Models for JavaScript</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../migrating-javascript-dataflow-queries/">Migrating JavaScript Dataflow Queries</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-python/">CodeQL for Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-ruby/">CodeQL for Ruby</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-rust/">CodeQL for Rust</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../codeql-for-swift/">CodeQL for Swift</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../ql-language-reference/">QL language reference</a></li>
+</ul>
+
+
+</nav>
+
+
+<div class="body col-sm-12 col-md-9 col-lg-9 float-left border-left">
+
+    <div class="hide-lg hide-xl px-4 pt-4">
+
+<div class="related" role="navigation" aria-label="related navigation">
+    <ul>
+        <li class="nav-item nav-item-0"><a href="../../contents/">CodeQL</a> &#187;</li>
+        <li class="nav-item nav-item-1"><a href="../"
+                >CodeQL language guides</a> &#187;</li>
+        <li class="nav-item nav-item-2"><a href="../codeql-for-javascript/"
+                accesskey="U">CodeQL for JavaScript and TypeScript</a> &#187;</li>
+    </ul>
+</div>
+    </div>
+
+    <article class="p-4 col-lg-10 col-md-10 col-sm-12">
+
+  <section id="customizing-library-models-for-javascript">
+<span id="id1"></span><h1>Customizing Library Models for JavaScript<a class="headerlink" href="#customizing-library-models-for-javascript" title="Link to this heading">¶</a></h1>
+<blockquote class="pull-quote">
+<div><p>Beta Notice - Unstable API</p>
+<p>Library customization using data extensions is currently in beta and subject to change.</p>
+<p>Breaking changes to this format may occur while in beta.</p>
+</div></blockquote>
+<p>JavaScript analysis can be customized by adding library models in data extension files.</p>
+<p>A data extension for JavaScript is a YAML file of the form:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;name of extensible predicate&gt;</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;tuple1&gt;</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;tuple2&gt;</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</pre></div>
+</div>
+<p>The CodeQL library for JavaScript exposes the following extensible predicates:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">sourceModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sinkModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">typeModel(type1,</span> <span class="pre">type2,</span> <span class="pre">path)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">summaryModel(type,</span> <span class="pre">path,</span> <span class="pre">input,</span> <span class="pre">output,</span> <span class="pre">kind)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">barrierModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">barrierGuardModel(type,</span> <span class="pre">path,</span> <span class="pre">acceptingValue,</span> <span class="pre">kind)</span></code></p></li>
+</ul>
+<p>We’ll explain how to use these using a few examples, and provide some reference material at the end of this article.</p>
+<section id="example-taint-sink-in-the-execa-package">
+<h2>Example: Taint sink in the ‘execa’ package<a class="headerlink" href="#example-taint-sink-in-the-execa-package" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add the following argument, passed to <code class="docutils literal notranslate"><span class="pre">execa</span></code>, as a command-line injection sink:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">shell</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;execa&quot;</span><span class="p">;</span>
+<span class="nx">shell</span><span class="p">(</span><span class="nx">cmd</span><span class="p">);</span><span class="w"> </span><span class="c1">// &lt;-- add &#39;cmd&#39; as a taint sink</span>
+</pre></div>
+</div>
+<p>Note that this sink is already recognized by the CodeQL JS analysis, but for this example, you could add a tuple to the
+<code class="docutils literal notranslate"><span class="pre">sinkModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sinkModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;execa&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[shell].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;command-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;execa&quot;</span></code>, identifies a set of values from which to begin the search for the sink.
+The string <code class="docutils literal notranslate"><span class="pre">&quot;execa&quot;</span></code> means we start at the places where the codebase imports the NPM package <code class="docutils literal notranslate"><span class="pre">execa</span></code>.</p></li>
+<li><p>The second column is an access path that is evaluated from left to right, starting at the values that were identified by the first column.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[shell]</span></code> selects accesses to the <code class="docutils literal notranslate"><span class="pre">shell</span></code> member of the <code class="docutils literal notranslate"><span class="pre">execa</span></code> package.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[0]</span></code> selects the first argument to calls to that member.</p></li>
+</ul>
+</li>
+<li><p><code class="docutils literal notranslate"><span class="pre">command-injection</span></code> indicates that this is considered a sink for the command injection query.</p></li>
+</ul>
+</section>
+<section id="example-taint-sources-from-window-message-events">
+<h2>Example: Taint sources from window ‘message’ events<a class="headerlink" href="#example-taint-sources-from-window-message-events" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how the <code class="docutils literal notranslate"><span class="pre">event.data</span></code> expression below could be marked as a remote flow source:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="nb">window</span><span class="p">.</span><span class="nx">addEventListener</span><span class="p">(</span><span class="s2">&quot;message&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">data</span><span class="p">;</span><span class="w"> </span><span class="c1">// &lt;-- add &#39;event.data&#39; as a taint source</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>Note that this source is already recognized by the CodeQL JS analysis, but for this example, you could add a tuple to the
+<code class="docutils literal notranslate"><span class="pre">sourceModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sourceModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[addEventListener].Argument[1].Parameter[0].Member[data]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;remote&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;global&quot;</span></code>, begins the search at references to the global object (also known as <code class="docutils literal notranslate"><span class="pre">window</span></code> in browser contexts). This is a special JavaScript object that contains all global variables and methods.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[addEventListener]</span></code> selects accesses to the <code class="docutils literal notranslate"><span class="pre">addEventListener</span></code> member.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[1]</span></code> selects the second argument of calls to that member (the argument containing the callback).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Parameter[0]</span></code> selects the first parameter of the callback (the parameter named <code class="docutils literal notranslate"><span class="pre">event</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[data]</span></code> selects accesses to the <code class="docutils literal notranslate"><span class="pre">data</span></code> property of the event object.</p></li>
+<li><p>Finally, the kind <code class="docutils literal notranslate"><span class="pre">remote</span></code> indicates that this is considered a source of remote flow.</p></li>
+</ul>
+<p>In the next section, we’ll show how to restrict the model to recognize events of a specific type.</p>
+</section>
+<section id="continued-example-restricting-the-event-type">
+<h2>Continued example: Restricting the event type<a class="headerlink" href="#continued-example-restricting-the-event-type" title="Link to this heading">¶</a></h2>
+<p>The model above treats all events as sources of remote flow, not just <code class="docutils literal notranslate"><span class="pre">message</span></code> events.
+For example, it would also pick up this irrelevant source:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="nb">window</span><span class="p">.</span><span class="nx">addEventListener</span><span class="p">(</span><span class="s2">&quot;onclick&quot;</span><span class="p">,</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="p">(</span><span class="nx">event</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">let</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">data</span><span class="p">;</span><span class="w"> </span><span class="c1">// &lt;-- &#39;event.data&#39; became a spurious taint source</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>We can refine the model by adding the <code class="docutils literal notranslate"><span class="pre">WithStringArgument</span></code> component to restrict the set of calls being considered:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sourceModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[addEventListener].WithStringArgument[0=message].Argument[1].Parameter[0].Member[data]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;remote&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">WithStringArgument[0=message]</span></code> component here selects the subset of calls to <code class="docutils literal notranslate"><span class="pre">addEventListener</span></code> where the first argument is a string literal with the value <code class="docutils literal notranslate"><span class="pre">&quot;message&quot;</span></code>.</p>
+</section>
+<section id="example-using-types-to-add-mysql-injection-sinks">
+<h2>Example: Using types to add MySQL injection sinks<a class="headerlink" href="#example-using-types-to-add-mysql-injection-sinks" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add the following SQL injection sink:</p>
+<div class="highlight-ts notranslate"><div class="highlight"><pre><span></span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Connection</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;mysql&quot;</span><span class="p">;</span>
+
+<span class="kd">function</span><span class="w"> </span><span class="nx">submit</span><span class="p">(</span><span class="nx">connection</span><span class="o">:</span><span class="w"> </span><span class="kt">Connection</span><span class="p">,</span><span class="w"> </span><span class="nx">q</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">connection</span><span class="p">.</span><span class="nx">query</span><span class="p">(</span><span class="nx">q</span><span class="p">);</span><span class="w"> </span><span class="c1">// &lt;-- add &#39;q&#39; as a SQL injection sink</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We need to add a tuple to the <code class="docutils literal notranslate"><span class="pre">sinkModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sinkModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[query].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;sql-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;mysql.Connection&quot;</span></code>, begins the search at any expression whose value is known to be an instance of
+the <code class="docutils literal notranslate"><span class="pre">Connection</span></code> type from the <code class="docutils literal notranslate"><span class="pre">mysql</span></code> package. This will select the <code class="docutils literal notranslate"><span class="pre">connection</span></code> parameter above because of its type annotation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[query]</span></code> selects the <code class="docutils literal notranslate"><span class="pre">query</span></code> member from the connection object.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[0]</span></code> selects the first argument of a call to that member.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sql-injection</span></code> indicates that this is considered a sink for the SQL injection query.</p></li>
+</ul>
+<p>This works in this example because the <code class="docutils literal notranslate"><span class="pre">connection</span></code> parameter has a type annotation that matches what the model is looking for.</p>
+<p>Note that there is a significant difference between the following two rows:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">data</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">...</span><span class="p p-Indicator">]</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[Connection]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">...</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<p>The first row matches instances of <code class="docutils literal notranslate"><span class="pre">mysql.Connection</span></code>, which are objects that encapsulate a MySQL connection.
+The second row would match something like <code class="docutils literal notranslate"><span class="pre">require('mysql').Connection</span></code>, which is not itself a connection object.</p>
+<p>In the next section, we’ll show how to generalize the model to handle the absence of type annotations.</p>
+</section>
+<section id="continued-example-dealing-with-untyped-code">
+<h2>Continued example: Dealing with untyped code<a class="headerlink" href="#continued-example-dealing-with-untyped-code" title="Link to this heading">¶</a></h2>
+<p>Suppose we want the model from above to detect the sink in this snippet:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">getConnection</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;@example/db&quot;</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="nx">connection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">getConnection</span><span class="p">();</span>
+<span class="nx">connection</span><span class="p">.</span><span class="nx">query</span><span class="p">(</span><span class="nx">q</span><span class="p">);</span><span class="w"> </span><span class="c1">// &lt;-- add &#39;q&#39; as a SQL injection sink</span>
+</pre></div>
+</div>
+<p>There is no type annotation on <code class="docutils literal notranslate"><span class="pre">connection</span></code>, and there is no indication of what <code class="docutils literal notranslate"><span class="pre">getConnection()</span></code> returns.
+By adding a tuple to the <code class="docutils literal notranslate"><span class="pre">typeModel(type1,</span> <span class="pre">type2,</span> <span class="pre">path)</span></code> extensible predicate we can tell our model that
+this function returns an instance of <code class="docutils literal notranslate"><span class="pre">mysql.Connection</span></code>:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">typeModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;@example/db&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[getConnection].ReturnValue&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;mysql.Connection&quot;</span></code>, names the type that we’re adding a new definition for.</p></li>
+<li><p>The second column, <code class="docutils literal notranslate"><span class="pre">&quot;&#64;example/db&quot;</span></code>, begins the search at imports of the hypothetical NPM package <code class="docutils literal notranslate"><span class="pre">&#64;example/db</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[getConnection]</span></code> selects references to the <code class="docutils literal notranslate"><span class="pre">getConnection</span></code> member from that package.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ReturnValue</span></code> selects the return value from a call to that member.</p></li>
+</ul>
+<p>The new model states that the return value of <code class="docutils literal notranslate"><span class="pre">getConnection()</span></code> has type <code class="docutils literal notranslate"><span class="pre">mysql.Connection</span></code>.
+Combining this with the sink model we added earlier, the sink in the example is detected by the model.</p>
+<p>The mechanism used here is how library models work for both TypeScript and plain JavaScript.
+A good library model contains <code class="docutils literal notranslate"><span class="pre">typeModel</span></code> tuples to ensure it works even in codebases without type annotations.
+For example, the <code class="docutils literal notranslate"><span class="pre">mysql</span></code> model that is included with the CodeQL JS analysis includes this type definition (among many others):</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;mysql&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[createConnection].ReturnValue&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+<section id="example-using-fuzzy-models-to-simplify-modeling">
+<h2>Example: Using fuzzy models to simplify modeling<a class="headerlink" href="#example-using-fuzzy-models-to-simplify-modeling" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add the following SQL injection sink using a “fuzzy” model:</p>
+<div class="highlight-ts notranslate"><div class="highlight"><pre><span></span><span class="k">import</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">mysql</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;mysql&#39;</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">pool</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">createPool</span><span class="p">({...});</span>
+<span class="nx">pool</span><span class="p">.</span><span class="nx">getConnection</span><span class="p">((</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">conn</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">conn</span><span class="p">.</span><span class="nx">query</span><span class="p">(</span><span class="nx">q</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">rows</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{...});</span><span class="w"> </span><span class="c1">// &lt;-- add &#39;q&#39; as a SQL injection sink</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>We need to add a tuple for a fuzzy model to the <code class="docutils literal notranslate"><span class="pre">sinkModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sinkModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Fuzzy.Member[query].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;sql-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;mysql&quot;</span></code>, begins the search at places where the <cite>mysql</cite> package is imported.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fuzzy</span></code> selects all objects that appear to originate from the <cite>mysql</cite> package, such as the <cite>pool</cite>, <cite>conn</cite>, <cite>err</cite>, and <cite>rows</cite> objects.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[query]</span></code> selects the <code class="docutils literal notranslate"><span class="pre">query</span></code> member from any of those objects. In this case, the only such member is <cite>conn.query</cite>.
+In principle, this would also find expressions such as <cite>pool.query</cite> and <cite>err.query</cite>, but in practice such expressions
+are not likely to occur, because the <cite>pool</cite> and <cite>err</cite> objects do not have a member named <cite>query</cite>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[0]</span></code> selects the first argument of a call to the selected member, that is, the <cite>q</cite> argument to <cite>conn.query</cite>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sql-injection</span></code> indicates that this is considered as a sink for the SQL injection query.</p></li>
+</ul>
+<p>For reference, a more detailed model might look like this, as described in the preceding examples:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sinkModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[query].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;sql-injection&quot;</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">typeModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Pool&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;mysql&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[createPool].ReturnValue&quot;</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;mysql.Pool&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[getConnection].Argument[0].Parameter[1]&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<p>The model using the <code class="docutils literal notranslate"><span class="pre">Fuzzy</span></code> component is simpler, at the cost of being approximate.
+This technique is useful when modeling a large or complex library, where it is difficult to write a detailed model.</p>
+</section>
+<section id="example-adding-flow-through-decodeuricomponent">
+<h2>Example: Adding flow through ‘decodeURIComponent’<a class="headerlink" href="#example-adding-flow-through-decodeuricomponent" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add flow through calls to <cite>decodeURIComponent</cite>:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="nx">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">decodeURIComponent</span><span class="p">(</span><span class="nx">x</span><span class="p">);</span><span class="w"> </span><span class="c1">// add taint flow from &#39;x&#39; to &#39;y&#39;</span>
+</pre></div>
+</div>
+<p>Note that this flow is already recognized by the CodeQL JS analysis, but for this example, you could add a tuple to the
+<code class="docutils literal notranslate"><span class="pre">summaryModel(type,</span> <span class="pre">path,</span> <span class="pre">input,</span> <span class="pre">output,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">summaryModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[decodeURIComponent]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Argument[0]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;ReturnValue&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;taint&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;global&quot;</span></code>, begins the search for relevant calls at references to the global object.
+In JavaScript, global variables are properties of the global object, so this lets us access global variables or functions.</p></li>
+<li><p>The second column, <code class="docutils literal notranslate"><span class="pre">Member[decodeURIComponent]</span></code>, is a path leading to the function calls we wish to model.
+In this case, we select references to the <code class="docutils literal notranslate"><span class="pre">decodeURIComponent</span></code> member from the global object, that is,
+the global variable named <code class="docutils literal notranslate"><span class="pre">decodeURIComponent</span></code>.</p></li>
+<li><p>The third column, <code class="docutils literal notranslate"><span class="pre">Argument[0]</span></code>, indicates the input of the flow. In this case, the first argument to the function call.</p></li>
+<li><p>The fourth column, <code class="docutils literal notranslate"><span class="pre">ReturnValue</span></code>, indicates the output of the flow. In this case, the return value of the function call.</p></li>
+<li><p>The last column, <code class="docutils literal notranslate"><span class="pre">taint</span></code>, indicates the kind of flow to add. The value <code class="docutils literal notranslate"><span class="pre">taint</span></code> means the output is not necessarily equal
+to the input, but was derived from the input in a taint-preserving way.</p></li>
+</ul>
+</section>
+<section id="example-adding-flow-through-underscore-foreach">
+<h2>Example: Adding flow through ‘underscore.forEach’<a class="headerlink" href="#example-adding-flow-through-underscore-foreach" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add flow through calls to <code class="docutils literal notranslate"><span class="pre">forEach</span></code> from the <code class="docutils literal notranslate"><span class="pre">underscore</span></code> package:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="nx">require</span><span class="p">(</span><span class="s1">&#39;underscore&#39;</span><span class="p">).</span><span class="nx">forEach</span><span class="p">([</span><span class="nx">x</span><span class="p">,</span><span class="w"> </span><span class="nx">y</span><span class="p">],</span><span class="w"> </span><span class="p">(</span><span class="nx">v</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">});</span><span class="w"> </span><span class="c1">// add value flow from &#39;x&#39; and &#39;y&#39; to &#39;v&#39;</span>
+</pre></div>
+</div>
+<p>Note that this flow is already recognized by the CodeQL JS analysis, but for this example, you could add a tuple to the
+<code class="docutils literal notranslate"><span class="pre">summaryModel(type,</span> <span class="pre">path,</span> <span class="pre">input,</span> <span class="pre">output,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">summaryModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;underscore&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[forEach]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Argument[0].ArrayElement&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Argument[1].Parameter[0]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;value&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;underscore&quot;</span></code>, begins the search for relevant calls at places where the <code class="docutils literal notranslate"><span class="pre">underscore</span></code> package is imported.</p></li>
+<li><p>The second column, <code class="docutils literal notranslate"><span class="pre">Member[forEach]</span></code>, selects references to the <code class="docutils literal notranslate"><span class="pre">forEach</span></code> member from the <code class="docutils literal notranslate"><span class="pre">underscore</span></code> package.</p></li>
+<li><p>The third column specifies the input of the flow:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[0]</span></code> selects the first argument of <code class="docutils literal notranslate"><span class="pre">forEach</span></code>, which is the array being iterated over.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ArrayElement</span></code> selects the elements of that array (the expressions <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>).</p></li>
+</ul>
+</li>
+<li><p>The fourth column specifies the output of the flow:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[1]</span></code> selects the second argument of <code class="docutils literal notranslate"><span class="pre">forEach</span></code> (the argument containing the callback function).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Parameter[0]</span></code> selects the first parameter of the callback function (the parameter named <code class="docutils literal notranslate"><span class="pre">v</span></code>).</p></li>
+</ul>
+</li>
+<li><p>The last column, <code class="docutils literal notranslate"><span class="pre">value</span></code>, indicates the kind of flow to add. The value <code class="docutils literal notranslate"><span class="pre">value</span></code> means the input value is unchanged as
+it flows to the output.</p></li>
+</ul>
+</section>
+<section id="example-modeling-properties-injected-by-a-middleware-function">
+<h2>Example: Modeling properties injected by a middleware function<a class="headerlink" href="#example-modeling-properties-injected-by-a-middleware-function" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to model a hypothetical middleware function that adds a tainted value
+on the incoming request objects:</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="kd">const</span><span class="w"> </span><span class="nx">express</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">require</span><span class="p">(</span><span class="s1">&#39;express&#39;</span><span class="p">)</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">express</span><span class="p">()</span>
+
+<span class="nx">app</span><span class="p">.</span><span class="nx">use</span><span class="p">(</span><span class="nx">require</span><span class="p">(</span><span class="s1">&#39;@example/middleware&#39;</span><span class="p">).</span><span class="nx">injectData</span><span class="p">())</span>
+
+<span class="nx">app</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;/foo&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">req</span><span class="p">.</span><span class="nx">data</span><span class="p">;</span><span class="w"> </span><span class="c1">// &lt;-- mark &#39;req.data&#39; as a taint source</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>We need to add a tuple to the <code class="docutils literal notranslate"><span class="pre">sourceModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sourceModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;@example/middleware&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[injectData].ReturnValue.GuardedRouteHandler.Parameter[0].Member[data]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;remote&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;&#64;example/middleware&quot;</span></code>, begins the search at imports of the hypothetical NPM package <code class="docutils literal notranslate"><span class="pre">&#64;example/middleware</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[injectData]</span></code> selects accesses to the <code class="docutils literal notranslate"><span class="pre">injectData</span></code> member.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ReturnValue</span></code> selects the return value of the call to <code class="docutils literal notranslate"><span class="pre">injectData</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">GuardedRouteHandler</span></code> interprets the current value as a middleware function and selects all route handlers guarded by that middleware. Since the current value is passed to <code class="docutils literal notranslate"><span class="pre">app.use()</span></code>, the callback subsequently passed to <code class="docutils literal notranslate"><span class="pre">app.get()</span></code> is seen as a guarded route handler.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Parameter[0]</span></code> selects the first parameter of the callback (the parameter named <code class="docutils literal notranslate"><span class="pre">req</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[data]</span></code> selects accesses to the <code class="docutils literal notranslate"><span class="pre">data</span></code> property of the <code class="docutils literal notranslate"><span class="pre">req</span></code> object.</p></li>
+<li><p>Finally, the kind <code class="docutils literal notranslate"><span class="pre">remote</span></code> indicates that this is considered a source of remote flow.</p></li>
+</ul>
+</section>
+<section id="example-taint-barrier-using-the-encodeuricomponent-function">
+<h2>Example: Taint barrier using the ‘encodeURIComponent’ function<a class="headerlink" href="#example-taint-barrier-using-the-encodeuricomponent-function" title="Link to this heading">¶</a></h2>
+<p>In this example, we’ll show how to add the return value of <code class="docutils literal notranslate"><span class="pre">encodeURIComponent</span></code> as a barrier for XSS.</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="nx">escaped</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">encodeURIComponent</span><span class="p">(</span><span class="nx">input</span><span class="p">);</span><span class="w"> </span><span class="c1">// The return value of this method is safe for XSS.</span>
+<span class="nb">document</span><span class="p">.</span><span class="nx">body</span><span class="p">.</span><span class="nx">innerHTML</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">escaped</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>We need to add a tuple to the <code class="docutils literal notranslate"><span class="pre">barrierModel(type,</span> <span class="pre">path,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">barrierModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[encodeURIComponent].ReturnValue&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;html-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;global&quot;</span></code>, begins the search for relevant calls at references to the global object.</p></li>
+<li><p>The second column, <code class="docutils literal notranslate"><span class="pre">Member[encodeURIComponent].ReturnValue</span></code>, selects the return value of the <code class="docutils literal notranslate"><span class="pre">encodeURIComponent</span></code> function.</p></li>
+<li><p>The third column, <code class="docutils literal notranslate"><span class="pre">&quot;html-injection&quot;</span></code>, is the kind of the barrier.</p></li>
+</ul>
+</section>
+<section id="example-add-a-barrier-guard">
+<h2>Example: Add a barrier guard<a class="headerlink" href="#example-add-a-barrier-guard" title="Link to this heading">¶</a></h2>
+<p>This example shows how to model a barrier guard that stops the flow of taint when a conditional check is performed on data.
+Consider a function called <cite>isValid</cite> which returns <cite>true</cite> when the data is considered safe.</p>
+<div class="highlight-js notranslate"><div class="highlight"><pre><span></span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">isValid</span><span class="p">(</span><span class="nx">userInput</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// The check guards the use, so the input is safe.</span>
+<span class="w">  </span><span class="nx">db</span><span class="p">.</span><span class="nx">query</span><span class="p">(</span><span class="nx">userInput</span><span class="p">);</span><span class="w"> </span><span class="c1">// This is safe.</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>We need to add a tuple to the <code class="docutils literal notranslate"><span class="pre">barrierGuardModel(type,</span> <span class="pre">path,</span> <span class="pre">acceptingValue,</span> <span class="pre">kind)</span></code> extensible predicate by updating a data extension file.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">barrierGuardModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;my-package&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[isValid].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;true&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;sql-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>The first column, <code class="docutils literal notranslate"><span class="pre">&quot;my-package&quot;</span></code>, begins the search at imports of the hypothetical NPM package <code class="docutils literal notranslate"><span class="pre">my-package</span></code>.</p></li>
+<li><p>The second column, <code class="docutils literal notranslate"><span class="pre">Member[isValid].Argument[0]</span></code>, selects the first argument of the <cite>isValid</cite> function. This is the value being validated.</p></li>
+<li><p>The third column, <code class="docutils literal notranslate"><span class="pre">&quot;true&quot;</span></code>, is the accepting value of the barrier guard. This is the value that the conditional check must return for the barrier to apply.</p></li>
+<li><p>The fourth column, <code class="docutils literal notranslate"><span class="pre">&quot;sql-injection&quot;</span></code>, is the kind of the barrier guard.</p></li>
+</ul>
+</section>
+<section id="reference-material">
+<h2>Reference material<a class="headerlink" href="#reference-material" title="Link to this heading">¶</a></h2>
+<p>The following sections provide reference material for extensible predicates, access paths, types, and kinds.</p>
+</section>
+<section id="extensible-predicates">
+<h2>Extensible predicates<a class="headerlink" href="#extensible-predicates" title="Link to this heading">¶</a></h2>
+<section id="sourcemodel-type-path-kind">
+<h3>sourceModel(type, path, kind)<a class="headerlink" href="#sourcemodel-type-path-kind" title="Link to this heading">¶</a></h3>
+<p>Adds a new taint source. Most taint-tracking queries will use the new source.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">type</span></code>: Name of a type from which to evaluate <code class="docutils literal notranslate"><span class="pre">path</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">path</span></code>: Access path leading to the source.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kind</span></code>: Kind of source to add. See the section on source kinds for a list of supported kinds.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sourceModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[user].Member[name]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;remote&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+<section id="sinkmodel-type-path-kind">
+<h3>sinkModel(type, path, kind)<a class="headerlink" href="#sinkmodel-type-path-kind" title="Link to this heading">¶</a></h3>
+<p>Adds a new taint sink. Sinks are query-specific and will typically affect one or two queries.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">type</span></code>: Name of a type from which to evaluate <code class="docutils literal notranslate"><span class="pre">path</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">path</span></code>: Access path leading to the sink.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kind</span></code>: Kind of sink to add. See the section on sink kinds for a list of supported kinds.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sinkModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Member[eval].Argument[0]&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;code-injection&quot;</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+<section id="summarymodel-type-path-input-output-kind">
+<h3>summaryModel(type, path, input, output, kind)<a class="headerlink" href="#summarymodel-type-path-input-output-kind" title="Link to this heading">¶</a></h3>
+<p>Adds flow through a function call.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">type</span></code>: Name of a type from which to evaluate <code class="docutils literal notranslate"><span class="pre">path</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">path</span></code>: Access path leading to a function call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">input</span></code>: Path relative to the function call that leads to input of the flow.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">output</span></code>: Path relative to the function call leading to the output of the flow.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kind</span></code>: Kind of summary to add. Can be <code class="docutils literal notranslate"><span class="pre">taint</span></code> for taint-propagating flow, or <code class="docutils literal notranslate"><span class="pre">value</span></code> for value-preserving flow.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">      </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">summaryModel</span>
+<span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">          </span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Member[decodeURIComponent]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;Argument[0]&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;ReturnValue&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">          </span><span class="s">&quot;taint&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+<section id="typemodel-type1-type2-path">
+<h3>typeModel(type1, type2, path)<a class="headerlink" href="#typemodel-type1-type2-path" title="Link to this heading">¶</a></h3>
+<p>Adds a new definition of a type.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">type1</span></code>: Name of the type to define.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">type2</span></code>: Name of the type from which to evaluate <code class="docutils literal notranslate"><span class="pre">path</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">path</span></code>: Access path leading from <code class="docutils literal notranslate"><span class="pre">type2</span></code> to <code class="docutils literal notranslate"><span class="pre">type1</span></code>.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">extensions</span><span class="p">:</span>
+<span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">addsTo</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">pack</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">codeql/javascript-all</span>
+<span class="w">    </span><span class="nt">extensible</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">typeModel</span>
+<span class="w">  </span><span class="nt">data</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">        </span><span class="s">&quot;mysql.Connection&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="s">&quot;@example/db&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">        </span><span class="s">&quot;Member[getConnection].ReturnValue&quot;</span><span class="p p-Indicator">,</span>
+<span class="w">      </span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="types">
+<h2>Types<a class="headerlink" href="#types" title="Link to this heading">¶</a></h2>
+<p>A type is a string that identifies a set of values.
+In each of the extensible predicates mentioned in previous section, the first column is always the name of a type.
+A type can be defined by adding <code class="docutils literal notranslate"><span class="pre">typeModel</span></code> tuples for that type. Additionally, the following built-in types are available:</p>
+<ul class="simple">
+<li><p>The name of an NPM package matches imports of that package. For example, the type <code class="docutils literal notranslate"><span class="pre">express</span></code> matches the expression <code class="docutils literal notranslate"><span class="pre">require(&quot;express&quot;)</span></code>. If the package name includes dots, it must be surrounded by single quotes, such as in <code class="docutils literal notranslate"><span class="pre">'lodash.escape'</span></code>.</p></li>
+<li><p>The type <code class="docutils literal notranslate"><span class="pre">global</span></code> identifies the global object, also known as <code class="docutils literal notranslate"><span class="pre">window</span></code>. In JavaScript, global variables are properties of the global object, so global variables can be identified using this type. (This type also matches imports of the NPM package named <code class="docutils literal notranslate"><span class="pre">global</span></code>, which is a package that happens to export the global object.)</p></li>
+<li><p>A qualified type name of form <code class="docutils literal notranslate"><span class="pre">&lt;package&gt;.&lt;type&gt;</span></code> identifies expressions of type <code class="docutils literal notranslate"><span class="pre">&lt;type&gt;</span></code> from <code class="docutils literal notranslate"><span class="pre">&lt;package&gt;</span></code>. For example, <code class="docutils literal notranslate"><span class="pre">mysql.Connection</span></code> identifies expression of type <code class="docutils literal notranslate"><span class="pre">Connection</span></code> from the <code class="docutils literal notranslate"><span class="pre">mysql</span></code> package. Note that this only works if type annotations are present in the codebase, or if sufficient <code class="docutils literal notranslate"><span class="pre">typeModel</span></code> tuples have been provided for that type.</p></li>
+</ul>
+</section>
+<section id="access-paths">
+<h2>Access paths<a class="headerlink" href="#access-paths" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">path</span></code>, <code class="docutils literal notranslate"><span class="pre">input</span></code>, and <code class="docutils literal notranslate"><span class="pre">output</span></code> columns consist of a <code class="docutils literal notranslate"><span class="pre">.</span></code>-separated list of components, which is evaluated from left to right, with each step selecting a new set of values derived from the previous set of values.</p>
+<p>The following components are supported:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[</span></code><cite>number</cite><code class="docutils literal notranslate"><span class="pre">]</span></code> selects the argument at the given index.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[this]</span></code> selects the receiver of a method call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Parameter[</span></code><cite>number</cite><code class="docutils literal notranslate"><span class="pre">]</span></code> selects the parameter at the given index.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Parameter[this]</span></code> selects the <code class="docutils literal notranslate"><span class="pre">this</span></code> parameter of a function.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ReturnValue</span></code> selects the return value of a function or call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Member[</span></code><cite>name</cite><code class="docutils literal notranslate"><span class="pre">]</span></code> selects the property with the given name.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AnyMember</span></code> selects any property regardless of name.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ArrayElement</span></code> selects an element of an array.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MapValue</span></code> selects a value of a map object.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Awaited</span></code> selects the value of a promise.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Instance</span></code> selects instances of a class, including instances of its subclasses.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Fuzzy</span></code> selects all values that are derived from the current value through a combination of the other operations described in this list.
+For example, this can be used to find all values that appear to originate from a particular package. This can be useful for finding method calls
+from a known package, but where the receiver type is not known or is difficult to model.</p></li>
+</ul>
+<p>The following components are called “call site filters”. They select a subset of the previously-selected calls, if the call fits certain criteria:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">WithArity[</span></code><cite>number</cite><code class="docutils literal notranslate"><span class="pre">]</span></code> selects the subset of calls that have the given number of arguments.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WithStringArgument[</span></code><cite>number</cite><code class="docutils literal notranslate"><span class="pre">=</span></code><cite>value</cite><code class="docutils literal notranslate"><span class="pre">]</span></code> selects the subset of calls where the argument at the given index is a string literal with the given value.</p></li>
+</ul>
+<p>Components related to decorators:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DecoratedClass</span></code> selects a class that has the current value as a decorator. For example, <code class="docutils literal notranslate"><span class="pre">Member[Component].DecoratedClass</span></code> selects any class that is decorated with <code class="docutils literal notranslate"><span class="pre">&#64;Component</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DecoratedParameter</span></code> selects a parameter that is decorated by the current value.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DecoratedMember</span></code> selects a method, field, or accessor that is decorated by the current value.</p></li>
+</ul>
+<p>Additionally there is a component related to middleware functions:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">GuardedRouteHandler</span></code> interprets the current value as a middleware function, and selects any route handler function that comes after it in the routing hierarchy.
+This can be used to model properties injected onto request and response objects, such as <code class="docutils literal notranslate"><span class="pre">req.db</span></code> after a middleware that injects a database connection.
+Note that this currently over-approximates the set of route handlers but may be made more accurate in the future.</p></li>
+</ul>
+<p>Additional notes about the syntax of operands:</p>
+<ul class="simple">
+<li><p>Multiple operands may be given to a single component, as a shorthand for the union of the operands. For example, <code class="docutils literal notranslate"><span class="pre">Member[foo,bar]</span></code> matches the union of <code class="docutils literal notranslate"><span class="pre">Member[foo]</span></code> and <code class="docutils literal notranslate"><span class="pre">Member[bar]</span></code>.</p></li>
+<li><p>Numeric operands to <code class="docutils literal notranslate"><span class="pre">Argument</span></code>, <code class="docutils literal notranslate"><span class="pre">Parameter</span></code>, and <code class="docutils literal notranslate"><span class="pre">WithArity</span></code> may be given as an interval. For example, <code class="docutils literal notranslate"><span class="pre">Argument[0..2]</span></code> matches argument 0, 1, or 2.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Argument[N-1]</span></code> selects the last argument of a call, and <code class="docutils literal notranslate"><span class="pre">Parameter[N-1]</span></code> selects the last parameter of a function, with <code class="docutils literal notranslate"><span class="pre">N-2</span></code> being the second-to-last and so on.</p></li>
+</ul>
+</section>
+<section id="kinds">
+<h2>Kinds<a class="headerlink" href="#kinds" title="Link to this heading">¶</a></h2>
+<section id="source-kinds">
+<h3>Source kinds<a class="headerlink" href="#source-kinds" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">remote</span></code>: A general source of remote flow.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser</span></code>: A source in the browser environment that does not fit a more specific browser kind.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-url-query</span></code>: A source derived from the query parameters of the browser URL, such as <code class="docutils literal notranslate"><span class="pre">location.search</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-url-fragment</span></code>: A source derived from the fragment part of the browser URL, such as <code class="docutils literal notranslate"><span class="pre">location.hash</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-url-path</span></code>: A source derived from the pathname of the browser URL, such as <code class="docutils literal notranslate"><span class="pre">location.pathname</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-url</span></code>: A source derived from the browser URL, where the untrusted part is prefixed by trusted data such as the scheme and hostname.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-window-name</span></code>: A source derived from the window name, such as <code class="docutils literal notranslate"><span class="pre">window.name</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">browser-message-event</span></code>: A source derived from cross-window message passing, such as <code class="docutils literal notranslate"><span class="pre">event</span></code> in <code class="docutils literal notranslate"><span class="pre">window.onmessage</span> <span class="pre">=</span> <span class="pre">event</span> <span class="pre">=&gt;</span> <span class="pre">{...}</span></code>.</p></li>
+</ul>
+<p>See also <a class="reference internal" href="#threat-models-javascript"><span class="std std-ref">Threat models</span></a>.</p>
+</section>
+<section id="sink-kinds">
+<h3>Sink kinds<a class="headerlink" href="#sink-kinds" title="Link to this heading">¶</a></h3>
+<p>Unlike sources, sinks tend to be highly query-specific, rarely affecting more than one or two queries. Not every query supports customizable sinks. If the following sinks are not suitable for your use case, you should add a new query.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">code-injection</span></code>: A sink that can be used to inject code, such as in calls to <code class="docutils literal notranslate"><span class="pre">eval</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">command-injection</span></code>: A sink that can be used to inject shell commands, such as in calls to <code class="docutils literal notranslate"><span class="pre">child_process.spawn</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">path-injection</span></code>: A sink that can be used for path injection in a file system access, such as in calls to <code class="docutils literal notranslate"><span class="pre">fs.readFile</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sql-injection</span></code>: A sink that can be used for SQL injection, such as in a MySQL <code class="docutils literal notranslate"><span class="pre">query</span></code> call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">nosql-injection</span></code>: A sink that can be used for NoSQL injection, such as in a MongoDB <code class="docutils literal notranslate"><span class="pre">findOne</span></code> call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">html-injection</span></code>: A sink that can be used for HTML injection, such as in a jQuery <code class="docutils literal notranslate"><span class="pre">$()</span></code> call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">request-forgery</span></code>: A sink that controls the URL of a request, such as in a <code class="docutils literal notranslate"><span class="pre">fetch</span></code> call.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">url-redirection</span></code>: A sink that can be used to redirect the user to a malicious URL.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">unsafe-deserialization</span></code>: A deserialization sink that can lead to code execution or other unsafe behaviour, such as an unsafe YAML parser.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">log-injection</span></code>: A sink that can be used for log injection, such as in a <code class="docutils literal notranslate"><span class="pre">console.log</span></code> call.</p></li>
+</ul>
+</section>
+<section id="summary-kinds">
+<h3>Summary kinds<a class="headerlink" href="#summary-kinds" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">taint</span></code>: A summary that propagates taint. This means the output is not necessarily equal to the input, but it was derived from the input in an unrestrictive way. An attacker who controls the input will have significant control over the output as well.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">value</span></code>: A summary that preserves the value of the input or creates a copy of the input such that all of its object properties are preserved.</p></li>
+</ul>
+</section>
+</section>
+<section id="threat-models">
+<span id="threat-models-javascript"></span><h2>Threat models<a class="headerlink" href="#threat-models" title="Link to this heading">¶</a></h2>
+<blockquote class="pull-quote">
+<div><p>Note</p>
+<p>Threat models are currently in beta and subject to change. During the beta, threat models are supported only by Java, C#, Python and JavaScript/TypeScript analysis.</p>
+</div></blockquote>
+<p>A threat model is a named class of dataflow sources that can be enabled or disabled independently. Threat models allow you to control the set of dataflow sources that you want to consider unsafe. For example, one codebase may only consider remote HTTP requests to be tainted, whereas another may also consider data from local files to be unsafe. You can use threat models to ensure that the relevant taint sources are used in a CodeQL analysis.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">kind</span></code> property of the <code class="docutils literal notranslate"><span class="pre">sourceModel</span></code> determines which threat model a source is associated with. There are two main categories:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">remote</span></code> which represents requests and responses from the network.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">local</span></code> which represents data from local files (<code class="docutils literal notranslate"><span class="pre">file</span></code>), command-line arguments (<code class="docutils literal notranslate"><span class="pre">commandargs</span></code>), database reads (<code class="docutils literal notranslate"><span class="pre">database</span></code>), environment variables(<code class="docutils literal notranslate"><span class="pre">environment</span></code>), standard input (<code class="docutils literal notranslate"><span class="pre">stdin</span></code>) and Windows registry values (“windows-registry”). Currently, Windows registry values are used by C# only.</p></li>
+</ul>
+<p>Note that subcategories can be turned included or excluded separately, so you can specify <code class="docutils literal notranslate"><span class="pre">local</span></code> without <code class="docutils literal notranslate"><span class="pre">database</span></code>, or just <code class="docutils literal notranslate"><span class="pre">commandargs</span></code> and <code class="docutils literal notranslate"><span class="pre">environment</span></code> without the rest of <code class="docutils literal notranslate"><span class="pre">local</span></code>.</p>
+<p>The less commonly used categories are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">android</span></code> which represents reads from external files in Android (<code class="docutils literal notranslate"><span class="pre">android-external-storage-dir</span></code>) and parameter of an entry-point method declared in a <code class="docutils literal notranslate"><span class="pre">ContentProvider</span></code> class (<code class="docutils literal notranslate"><span class="pre">contentprovider</span></code>). Currently only used by Java/Kotlin.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">database-access-result</span></code> which represents a database access. Currently only used by JavaScript.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">file-write</span></code> which represents opening a file in write mode. Currently only used in C#.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">reverse-dns</span></code> which represents reverse DNS lookups. Currently only used in Java.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">view-component-input</span></code> which represents inputs to a React, Vue, or Angular component (also known as “props”). Currently only used by JavaScript/TypeScript.</p></li>
+</ul>
+<p>When running a CodeQL analysis, the <code class="docutils literal notranslate"><span class="pre">remote</span></code> threat model is included by default. You can optionally include other threat models as appropriate when using the CodeQL CLI and in GitHub code scanning. For more information, see <a class="reference external" href="https://docs.github.com/code-security/codeql-cli/getting-started-with-the-codeql-cli/analyzing-your-code-with-codeql-queries#including-model-packs-to-add-potential-sources-of-tainted-data">Analyzing your code with CodeQL queries</a> and <a class="reference external" href="https://docs.github.com/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning#extending-codeql-coverage-with-threat-models">Customizing your advanced setup for code scanning</a>.</p>
+</section>
+</section>
+
+
+    </article>
+
+    <!-- GitHub footer, with links to terms and privacy statement -->
+    <div class="px-3 px-md-6 f6 py-4 d-sm-flex flex-justify-between flex-row-reverse flex-items-center border-top">
+        <ul class="list-style-none d-flex flex-items-center mb-3 mb-sm-0 lh-condensed-ultra">
+            <li class="mr-3">
+                <a href="https://twitter.com/github" title="GitHub on Twitter" style="color: #959da5;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 273.5 222.3" class="d-block" height="18">
+                        <path
+                            d="M273.5 26.3a109.77 109.77 0 0 1-32.2 8.8 56.07 56.07 0 0 0 24.7-31 113.39 113.39 0 0 1-35.7 13.6 56.1 56.1 0 0 0-97 38.4 54 54 0 0 0 1.5 12.8A159.68 159.68 0 0 1 19.1 10.3a56.12 56.12 0 0 0 17.4 74.9 56.06 56.06 0 0 1-25.4-7v.7a56.11 56.11 0 0 0 45 55 55.65 55.65 0 0 1-14.8 2 62.39 62.39 0 0 1-10.6-1 56.24 56.24 0 0 0 52.4 39 112.87 112.87 0 0 1-69.7 24 119 119 0 0 1-13.4-.8 158.83 158.83 0 0 0 86 25.2c103.2 0 159.6-85.5 159.6-159.6 0-2.4-.1-4.9-.2-7.3a114.25 114.25 0 0 0 28.1-29.1"
+                            fill="currentColor"></path>
+                    </svg>
+                </a>
+            </li>
+            <li class="mr-3">
+                <a href="https://www.facebook.com/GitHub" title="GitHub on Facebook" style="color: #959da5;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15.3 15.4" class="d-block" height="18">
+                        <path
+                            d="M14.5 0H.8a.88.88 0 0 0-.8.9v13.6a.88.88 0 0 0 .8.9h7.3v-6h-2V7.1h2V5.4a2.87 2.87 0 0 1 2.5-3.1h.5a10.87 10.87 0 0 1 1.8.1v2.1h-1.3c-1 0-1.1.5-1.1 1.1v1.5h2.3l-.3 2.3h-2v5.9h3.9a.88.88 0 0 0 .9-.8V.8a.86.86 0 0 0-.8-.8z"
+                            fill="currentColor"></path>
+                    </svg>
+                </a>
+            </li>
+            <li class="mr-3">
+                <a href="https://www.youtube.com/github" title="GitHub on YouTube" style="color: #959da5;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19.17 13.6" class="d-block" height="16">
+                        <path
+                            d="M18.77 2.13A2.4 2.4 0 0 0 17.09.42C15.59 0 9.58 0 9.58 0a57.55 57.55 0 0 0-7.5.4A2.49 2.49 0 0 0 .39 2.13 26.27 26.27 0 0 0 0 6.8a26.15 26.15 0 0 0 .39 4.67 2.43 2.43 0 0 0 1.69 1.71c1.52.42 7.5.42 7.5.42a57.69 57.69 0 0 0 7.51-.4 2.4 2.4 0 0 0 1.68-1.71 25.63 25.63 0 0 0 .4-4.67 24 24 0 0 0-.4-4.69zM7.67 9.71V3.89l5 2.91z"
+                            fill="currentColor"></path>
+                    </svg>
+                </a>
+            </li>
+            <li class="mr-3 flex-self-start">
+                <a href="https://www.linkedin.com/company/github" title="GitHub on Linkedin" style="color: #959da5;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19 18" class="d-block" height="18">
+                        <path
+                            d="M3.94 2A2 2 0 1 1 2 0a2 2 0 0 1 1.94 2zM4 5.48H0V18h4zm6.32 0H6.34V18h3.94v-6.57c0-3.66 4.77-4 4.77 0V18H19v-7.93c0-6.17-7.06-5.94-8.72-2.91z"
+                            fill="currentColor"></path>
+                    </svg>
+                </a>
+            </li>
+            <li>
+                <a href="https://github.com/github" title="GitHub's organization" style="color: #959da5;">
+                    <svg version="1.1" width="20" height="20" viewBox="0 0 16 16" class="octicon octicon-mark-github"
+                        aria-hidden="true">
+                        <path fill-rule="evenodd"
+                            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                        </path>
+                    </svg>
+                </a>
+            </li>
+        </ul>
+        <ul class="list-style-none d-flex text-gray">
+            <li class="mr-3">&copy;
+                <script type="text/javascript">document.write(new Date().getFullYear());</script> GitHub, Inc.</li>
+            <li class="mr-3"><a
+                    href="https://docs.github.com/site-policy/github-terms/github-terms-of-service"
+                    class="link-gray">Terms </a></li>
+            <li><a href="https://docs.github.com/site-policy/privacy-policies/github-privacy-statement"
+                    class="link-gray">Privacy </a></li>
+        </ul>
+    </div>
+</div>
+</main>
+
+<script type="text/javascript">
+    $(document).ready(function () {
+        $(".toggle > *").hide();
+        $(".toggle .name").show();
+        $(".toggle .name").click(function () {
+            $(this).parent().children().not(".name").toggle(400);
+            $(this).parent().children(".name").toggleClass("open");
+        })
+    });
+</script>
+
+  </body>
+</html>
