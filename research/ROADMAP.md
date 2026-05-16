@@ -2,7 +2,7 @@
 
 Date: 2026-05-16
 
-## Research TODO
+## Research And Implementation TODO
 
 - [x] Semantic index baseline implemented: `Symbols<'_>` and `References<'_>` are available through the SDK.
 - [x] Call graph research completed: see `research/call-graphs/`.
@@ -23,9 +23,30 @@ Date: 2026-05-16
 - [x] Program slicing, path explanation, and evidence research completed: PDG/SDG slicing, thin slices, chops, path ranking, SARIF/JSON evidence, provenance, extension merges, and native implementation path. See `research/program-slicing-evidence/`.
 - [x] Incremental query engine and caching research completed: native layered cache/query design, input snapshots, shape digests, dependency indexes, invalidation planning, summary SCC caching, extension quarantine, and future red-green/relation paths. See `research/incremental-query-engine/`.
 - [x] Rule SDK, query ergonomics, and AI-agent authoring research completed: typed Rust rule surface, rule manifests, narrow `RuleCtx`, model/provider boundary, `polint test`, inspect/explain/diff tooling, and fixture-first agent workflow. See `research/agent-rule-authoring/`.
-- [ ] Start implementation of the private semantic bootstrap and minimal incremental/authoring support slice.
+- [ ] PR 1: Introduce the private analysis kernel facade and provider manifests without changing behavior.
+- [ ] PR 2: Add provenance, precision, validation, and merge metadata for existing fact families.
+- [ ] PR 3: Add the internal evaluation harness MVP and native fixtures.
+- [ ] PR 4: Add `InputSnapshot`, typed cache keys, and layer-cache instrumentation.
+- [ ] PR 5: Persist layer cache entries for existing cheap facts and implement conservative invalidation.
+- [ ] PR 6: Add generated rule manifests, `polint inspect rule`, and the first `polint test` fixture runner.
+- [ ] PR 7: Deepen the semantic index with scopes, imports, resolution status, and explicit unknowns.
+- [ ] PR 8: Ship the first layered module/package/dependency topology graph.
+- [ ] PR 9: Add private semantic MIR and normalized place identity for Go and TS/JS.
+- [ ] PR 10: Add local CFG, dominance/postdominance, and control-dependence facts.
+- [ ] PR 11: Add direct call-site, direct target, and unresolved-call facts.
+- [ ] PR 12: Add the P0 abstract-domain kernel over MIR/CFG.
+- [ ] PR 13: Add the summary kernel and direct function summaries.
+- [ ] PR 14: Add the demand query layer, summary SCC cache, and extension-aware cache quarantine.
+- [ ] PR 15: Add the Rust extension/provider sink and model lifecycle.
+- [ ] PR 16: Add framework entrypoint, lifecycle, dispatch, and trust-boundary facts.
+- [ ] PR 17: Add the P0 type/value/place/alias substrate.
+- [ ] PR 18: Add refined call graph providers.
+- [ ] PR 19: Add local plus summary-projected data flow.
+- [ ] PR 20: Add slicing, path explanation, and structured evidence bundles.
+- [ ] PR 21: Add external benchmark adapters and promotion gates for graph/flow/evidence claims.
+- [ ] PR 22: Promote validated SDK query views and agent authoring ergonomics.
 
-This roadmap orders the remaining research needed to turn polint into a native, multi-language static-analysis engine that AI agents can write high-value repo-local rules and analysis extensions on top of.
+This roadmap records the completed research and the next implementation sequence needed to turn polint into a native, multi-language static-analysis engine that AI agents can write high-value repo-local rules and analysis extensions on top of.
 
 The order is dependency-driven. Later topics should consume the facts, precision labels, and implementation lessons from earlier topics instead of reinventing their own substrate.
 
@@ -174,9 +195,140 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R13. Incremental Query Engine And Caching | Done, implement minimal dependency-digest/layer-cache slice with semantic bootstrap, then full demand query engine before expensive global analyses | `research/incremental-query-engine/` | Native layered incrementality plan: input snapshots, layer/query/summary/diagnostic keys, shape digests, dependency indexes, invalidation planner, extension-aware cache validation/quarantine, summary SCC backdating, future watch/daemon red-green mode, and optional relation/differential backend. |
 | R14. Rule SDK, Query Ergonomics, And AI-Agent Authoring | Done, implement rule manifests, fact/unknown inspection, and `polint test` with the bootstrap | `research/agent-rule-authoring/` | Typed Rust `#[polint::rule]` surface, macro-derived inspectable manifests, narrow `RuleCtx`, domain query builders, model pack versus provider extension boundary, fixture runner, model/provider delta tests, and agent inspect/explain/diff workflow. |
 
-These tracks are not implementation endpoints. They are inputs to the next research tracks.
+These tracks are not implementation endpoints. They are inputs to the implementation roadmap below.
 
-## Recommended Research Order
+## Final Research Review
+
+The research tracks converge on one implementation thesis: polint should not
+start by building a public call graph, a public data-flow graph, or a generic
+query language. The first product-quality asset is a private analysis kernel
+that can produce typed, provenance-labeled facts with stable identities,
+precision/status metadata, validation gates, cache keys, and evaluation results.
+Every higher analysis family should consume that substrate instead of creating
+its own graph, cache, ID space, extension format, or uncertainty model.
+
+The most important findings across the corpus are:
+
+- **The kernel is the product boundary.** `research/analysis-kernel/` shows that
+  fact layers, provider manifests, scheduling, validation, merge policy, and
+  provenance must be shared from the beginning. Otherwise call graphs, data
+  flow, framework models, summaries, and extensions will fork into incompatible
+  subsystems.
+- **Semantic operations and places come before global analyses.**
+  `research/implementation-bootstrap/`, `research/cfg-control-flow/`,
+  `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`, and
+  `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md` all reach the
+  same conclusion: local MIR, normalized places, CFG, direct calls, and direct
+  summaries are the safe cycle breaker. Full call graph and data-flow precision
+  should be later consumers, not bootstrap prerequisites.
+- **Summaries are the scaling boundary.** `research/effects-summaries/` and
+  `research/incremental-query-engine/` both show that global call graph, data
+  flow, alias, evidence, and extension queries become either too expensive or
+  too local without typed summaries and summary-aware cache invalidation.
+- **Agent extensibility changes the static-analysis design.**
+  `research/agent-extension-surface/`, `research/framework-entrypoints/`, and
+  `research/agent-rule-authoring/` show that polint can expose a more powerful
+  integration surface than classic black-box analyzers because agents can
+  inspect repos and write Rust models. That power must be balanced by typed
+  sinks, validation, provenance, precision ceilings, fixtures, and
+  default-vs-extended evaluation.
+- **Unknowns are first-class facts.** The call graph, data-flow, framework,
+  semantic-index, and type/alias research all warn against hiding dynamic or
+  unsupported behavior. `Unresolved`, `Unsupported`, `SetupMissing`,
+  `BudgetExceeded`, and `Unknown` states should be observable so agents can add
+  models or summaries intentionally.
+- **Evaluation must arrive before public precision claims.**
+  `research/evaluation-harness/` argues for an external-benchmark-first
+  strategy combined with native fixtures. Public `Calls<'_>`, `DataFlow<'_>`,
+  `Effects<'_>`, and `Evidence<'_>` views should not be promoted until fixtures
+  prove determinism, provenance, invalidation, extension behavior, and measured
+  precision/recall.
+
+The main implementation risk is skipping the foundation because the visible
+features are more exciting. Building full call graphs or taint paths before the
+kernel, evaluation harness, cache keys, MIR/place model, CFG, summaries, and
+extension validation would almost certainly create a second analysis engine
+that has to be rewritten. The roadmap below intentionally ships the boring
+substrate first, but each PR still delivers a reviewable product increment.
+
+## Implementation Roadmap: One PR Per Step
+
+Each step below is intended to be one independently reviewable PR. A PR is
+shippable only if it compiles, keeps existing user behavior working, includes
+tests or fixtures for the new contract, and does not expose a broad public API
+before the relevant facts are validated. Internal commands may be hidden or
+preview-gated until the public CLI contract is intentionally accepted.
+
+### Foundation PRs
+
+| PR | Shipped Scope | Why This Comes Now | Acceptance Gate | Research References |
+|---|---|---|---|---|
+| 1. Private analysis kernel facade | Move current analysis orchestration behind an internal kernel boundary; add provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers; preserve current behavior. | Establishes ownership before adding new fact families. | Existing tests pass; runner delegates to kernel; provider order can be inspected in an internal/debug path; no new public SDK surface. | [`analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`](analysis-kernel/RECOMMENDED_IMPLEMENTATION.md), [`implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`](implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md) |
+| 2. Provenance, precision, and validation metadata | Add internal `FactMeta`, `Producer`, `Precision`, `Confidence`, `ValidationStatus`, stable-key side tables, and validation/merge gates for current facts. | New facts need shared truth labels before call/data-flow/extensions can be trusted. | New kernel-produced facts have metadata; duplicate/conflicting stable keys fail deterministically; debug JSON can show provenance for files/imports/symbols/references. | [`analysis-kernel/FINAL-REPORT.md`](analysis-kernel/FINAL-REPORT.md), [`analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`](analysis-kernel/RECOMMENDED_IMPLEMENTATION.md), [`semantic-index/FINAL-REPORT.md`](semantic-index/FINAL-REPORT.md) |
+| 3. Internal evaluation harness MVP | Add hidden/internal evaluation model, deterministic expected/observed JSON, generic matchers, metrics, and a native fixture adapter for kernel/provenance/cache/extension invariants. | Prevents future precision claims from becoming anecdotal. | Fixtures can assert facts, graph edges, paths, diagnostics, invariants, runtime budgets; deterministic output hash excludes timestamps and machine paths. | [`evaluation-harness/FINAL-REPORT.md`](evaluation-harness/FINAL-REPORT.md), [`evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`](evaluation-harness/RECOMMENDED_IMPLEMENTATION.md), [`evaluation-harness/VALIDATION.md`](evaluation-harness/VALIDATION.md) |
+| 4. Input snapshots and cache-key vocabulary | Add `InputSnapshot`, `Digest`, `LayerKey`, `QueryKey`, `SummaryKey`, `DiagnosticKey`, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest plumbing. | Cache correctness depends on complete inputs before persistent reuse. | Snapshot tests cover file text, config, Go lifecycle inputs, TS/JS lifecycle inputs, rule digests, model digests, and official tool invocation digests where present. | [`incremental-query-engine/FINAL-REPORT.md`](incremental-query-engine/FINAL-REPORT.md), [`incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`](incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md), [`module-graph/RECOMMENDED_IMPLEMENTATION.md`](module-graph/RECOMMENDED_IMPLEMENTATION.md) |
+| 5. Persistent layer cache for existing cheap facts | Persist layer manifests/blobs for parse/syntax, imports, existing module facts, symbols/references, and metrics; add `DependencyIndex`, `ChangeSet`, and conservative invalidation. | Delivers real repeated-run value before expensive global analyses exist. | Syntax cache is not invalidated by unrelated rule edits; module/symbol layers invalidate on import/lifecycle/config changes; cache stats report hits/misses; stale reuse tests fail safely. | [`incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`](incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md), [`analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`](analysis-kernel/RECOMMENDED_IMPLEMENTATION.md), [`semantic-index/RECOMMENDED_IMPLEMENTATION.md`](semantic-index/RECOMMENDED_IMPLEMENTATION.md) |
+| 6. Rule manifest, inspect, and test skeleton | Extend the rule macro metadata path; generate `RuleManifest`; add `polint inspect rule --format json`; add the first `polint test` fixture runner using temp repos and public SDK imports only. | Gives agents the authoring/debug loop needed before advanced facts arrive. | Temp-repo tests compile generated rules using `polint::sdk::prelude::*`; manifest includes derived fact views/capabilities/options; fixture runner asserts JSON diagnostics. | [`agent-rule-authoring/FINAL-REPORT.md`](agent-rule-authoring/FINAL-REPORT.md), [`agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`](agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md), [`agent-rule-authoring/VALIDATION.md`](agent-rule-authoring/VALIDATION.md) |
+
+### Semantic Backbone PRs
+
+| PR | Shipped Scope | Why This Comes Now | Acceptance Gate | Research References |
+|---|---|---|---|---|
+| 7. Semantic index deepening | Add `ScopeFact`, richer `ImportFact`, `ResolutionFact`, alias/generated-symbol hooks, explicit unresolved references, stable export identities, and language-owned providers for Go and TS/JS. | MIR, calls, module topology, type facts, and rules need stronger name identity than the current baseline. | Fixtures cover resolved, ambiguous, unresolved, generated, alias, import/export, and cross-file references; unknowns are visible and precision-labeled. | [`semantic-index/FINAL-REPORT.md`](semantic-index/FINAL-REPORT.md), [`semantic-index/RECOMMENDED_IMPLEMENTATION.md`](semantic-index/RECOMMENDED_IMPLEMENTATION.md), [`semantic-index/VALIDATION.md`](semantic-index/VALIDATION.md) |
+| 8. Layered module/package/topology graph | Add workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-reported resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS first. | Package/source-set boundaries are needed for import resolution, architecture rules, entrypoints, cache digests, and cross-package call/data-flow. | Go monorepo module-root inference works; TS/JS package/workspace facts are deterministic; import-to-package facts distinguish source/test/generated/vendor/external where known. | [`module-graph/FINAL-REPORT.md`](module-graph/FINAL-REPORT.md), [`module-graph/RECOMMENDED_IMPLEMENTATION.md`](module-graph/RECOMMENDED_IMPLEMENTATION.md), [`module-graph/VALIDATION.md`](module-graph/VALIDATION.md) |
+| 9. Private semantic MIR and place identity | Add `analysis::mir` and `analysis::places`; lower Go and TS/JS function bodies into a small owned operation set; assign `PlaceId` and stable place keys; emit explicit unsupported operations. | This is the real semantic bootstrap for CFG, calls, domains, summaries, and data flow. | MIR snapshots are deterministic; parser AST references do not escape lowering; places cover locals, parameters, globals, temporaries, fields/properties, indexes, call returns, and unknown roots. | [`implementation-bootstrap/FINAL-REPORT.md`](implementation-bootstrap/FINAL-REPORT.md), [`implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`](implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md), [`abstract-interpretation/implementation/MIR-CONTRACT.md`](abstract-interpretation/implementation/MIR-CONTRACT.md) |
+| 10. Local CFG and control dependence | Build CFG nodes/blocks/edges over MIR, including normal, abrupt, exceptional/cleanup where available; compute reachability, dominators, postdominators, and control dependence. | Data flow and evidence need path-sensitive local structure; rules need control-dependence without raw AST traversal. | Fixtures cover branches, loops, returns, short-circuiting, panics/throws, `defer`/`finally`-like behavior where supported, unreachable code, and unsupported constructs. | [`cfg-control-flow/FINAL-REPORT.md`](cfg-control-flow/FINAL-REPORT.md), [`cfg-control-flow/RECOMMENDED_IMPLEMENTATION.md`](cfg-control-flow/RECOMMENDED_IMPLEMENTATION.md), [`cfg-control-flow/VALIDATION.md`](cfg-control-flow/VALIDATION.md) |
+| 11. Direct call facts | Add `CallSiteFact`, `CallTargetFact`, `UnresolvedCallFact`, direct/static resolution from semantic references, call indexes, and debug snapshots. Keep public `CallGraph<'_>` unsupported. | Direct calls break the cycle between calls, summaries, and data flow without needing whole-program inference. | Fixtures cover direct functions, methods, constructors, member calls, function values as unresolved/unknown, unsupported dynamic calls, and precise statuses. | [`call-graphs/FINAL-REPORT.md`](call-graphs/FINAL-REPORT.md), [`call-graphs/RECOMMENDED_IMPLEMENTATION.md`](call-graphs/RECOMMENDED_IMPLEMENTATION.md), [`call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`](call-graphs/implementation/BOOTSTRAP-INTEGRATION.md) |
+
+### Interprocedural Substrate PRs
+
+| PR | Shipped Scope | Why This Comes Now | Acceptance Gate | Research References |
+|---|---|---|---|---|
+| 12. P0 abstract-domain kernel | Add lattice/transfer traits, product state, deterministic worklist solver, and first local domains: reachability, nullish/nilness, truthiness, constants, simple string facts, and initializedness where cheap. | These domains improve calls, summaries, data-flow precision, and future policy rules without whole-program cost. | Domain-law tests cover partial order/join/widening behavior; transfer monotonicity tests exist; fixtures expose top/unknown/budget states honestly. | [`abstract-interpretation/FINAL-REPORT.md`](abstract-interpretation/FINAL-REPORT.md), [`abstract-interpretation/RECOMMENDED_IMPLEMENTATION.md`](abstract-interpretation/RECOMMENDED_IMPLEMENTATION.md), [`abstract-interpretation/VALIDATION.md`](abstract-interpretation/VALIDATION.md) |
+| 13. Summary kernel and direct summaries | Add `SummaryKey`, `SummaryStore`, typed summary domains, local/direct summaries for calls, control effects, return/TITO, memory-touch approximations, resource/external effects, and summary metadata. | Summaries are required before scalable interprocedural calls, data flow, alias, and evidence. | Direct summary snapshots are deterministic; summary status/precision/provenance is present; missing callees produce unknown/havoc summaries rather than silent certainty. | [`effects-summaries/FINAL-REPORT.md`](effects-summaries/FINAL-REPORT.md), [`effects-summaries/RECOMMENDED_IMPLEMENTATION.md`](effects-summaries/RECOMMENDED_IMPLEMENTATION.md), [`effects-summaries/VALIDATION.md`](effects-summaries/VALIDATION.md) |
+| 14. Demand queries and summary SCC cache | Add the internal demand query layer for expensive views, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace/debug output. | Expensive global providers should not become eager whole-repo work by default. | Body edits, public API edits, summary SCC edits, rule option edits, model edits, and extension code edits invalidate the correct layers; stale extension output is quarantined. | [`incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`](incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md), [`effects-summaries/RECOMMENDED_IMPLEMENTATION.md`](effects-summaries/RECOMMENDED_IMPLEMENTATION.md), [`analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`](analysis-kernel/RECOMMENDED_IMPLEMENTATION.md) |
+| 15. Rust extension/provider sink | Add the first advanced extension boundary for repo-local Rust model/provider code, typed sinks, declared read sets, validation, precision ceilings, provenance, activation status, and fixture requirements. | Agent-authored engine improvements must be possible before framework/call/data-flow modeling grows large. | Invalid extension facts are rejected before merge; extension digests affect cache keys; default-vs-extended eval reports changed facts and unknown reduction. | [`agent-extension-surface/FINAL-REPORT.md`](agent-extension-surface/FINAL-REPORT.md), [`agent-extension-surface/RECOMMENDED_IMPLEMENTATION.md`](agent-extension-surface/RECOMMENDED_IMPLEMENTATION.md), [`agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`](agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md) |
+| 16. Framework entrypoints and trust boundaries | Add native facts for entrypoints, routes, handlers, callbacks, jobs, CLIs, MCP tools/resources/prompts, tests, generated dispatch, and trust boundaries; include Go and TS/JS default recognizers plus extension overlays. | Call graph and data flow are wrong if reachable roots and external inputs/outputs are wrong. | Fixtures cover HTTP, CLI/env/stdin, jobs/queues where modeled, test entrypoints, unresolved framework dispatch, and extension-improved discovery. | [`framework-entrypoints/FINAL-REPORT.md`](framework-entrypoints/FINAL-REPORT.md), [`framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`](framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md), [`framework-entrypoints/VALIDATION.md`](framework-entrypoints/VALIDATION.md) |
+
+### Precision PRs
+
+| PR | Shipped Scope | Why This Comes Now | Acceptance Gate | Research References |
+|---|---|---|---|---|
+| 17. P0 type/value/place/alias substrate | Add declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and an alias provider stack returning `NoAlias`, `MayAlias`, `MustAlias`, `PartialAlias`, or `Unknown`. Use official language tooling where it is the compatibility source, but normalize into polint-owned facts. | Refined calls and high-value data flow need type/value/place information, but not a mandatory whole-repo points-to graph. | Fixtures cover receiver narrowing, function values, object/property allocations, field sensitivity limits, unresolved aliases, and official-tool input digests when used. | [`type-alias-points-to/FINAL-REPORT.md`](type-alias-points-to/FINAL-REPORT.md), [`type-alias-points-to/RECOMMENDED_IMPLEMENTATION.md`](type-alias-points-to/RECOMMENDED_IMPLEMENTATION.md), [`type-alias-points-to/VALIDATION.md`](type-alias-points-to/VALIDATION.md) |
+| 18. Refined call graph providers | Add opt-in refined call providers over direct calls, entrypoints, summaries, type/value facts, function tokens, receiver types, and bounded points-to constraints. Keep unresolved and budget-exceeded statuses explicit. | This is where the engine starts building real whole-repo call graphs without guessing as a default baseline. | Native fixtures and eval suites measure direct vs refined edges; precision/status is attached to every edge; dynamic dispatch and framework edges retain provenance. | [`call-graphs/FINAL-REPORT.md`](call-graphs/FINAL-REPORT.md), [`call-graphs/RECOMMENDED_IMPLEMENTATION.md`](call-graphs/RECOMMENDED_IMPLEMENTATION.md), [`call-graphs/VALIDATION.md`](call-graphs/VALIDATION.md) |
+| 19. Local plus summary-projected data flow | Add `DataFlowNodeFact`, `DataFlowEdgeFact`, local value-flow graph, direct-call interprocedural edges, summary-projected edges, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search. | Data flow becomes useful after CFG, calls, summaries, entrypoints, extension models, and alias/type facts exist. | Fixtures cover local flow, parameter/return flow, sanitizer/barrier behavior, missing summaries, extension-added flows, false-positive traps, and deterministic budget handling. | [`data-flow/FINAL-REPORT.md`](data-flow/FINAL-REPORT.md), [`data-flow/RECOMMENDED_IMPLEMENTATION.md`](data-flow/RECOMMENDED_IMPLEMENTATION.md), [`data-flow/implementation/BOOTSTRAP-INTEGRATION.md`](data-flow/implementation/BOOTSTRAP-INTEGRATION.md) |
+| 20. Slicing, paths, and evidence bundles | Add internal evidence nodes/edges, thin/full slices, chops, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering. | Humans and agents need explainable findings, not just graph reachability. | Fixtures cover local dependence, interprocedural direct-call evidence, summary expansion, extension evidence, uncertainty markers, deterministic ranking, and compact path limits. | [`program-slicing-evidence/FINAL-REPORT.md`](program-slicing-evidence/FINAL-REPORT.md), [`program-slicing-evidence/RECOMMENDED_IMPLEMENTATION.md`](program-slicing-evidence/RECOMMENDED_IMPLEMENTATION.md), [`program-slicing-evidence/VALIDATION.md`](program-slicing-evidence/VALIDATION.md) |
+
+### Promotion PRs
+
+| PR | Shipped Scope | Why This Comes Now | Acceptance Gate | Research References |
+|---|---|---|---|---|
+| 21. External benchmark adapters and promotion gates | Add high-value external adapters in the order justified by the harness research: native fixtures first, then OWASP/SecBench/CodeQL/Pysa-style suites where supported. Record default-vs-extension deltas, runtime, memory, cache, and unknown metrics. | Public precision claims need independent evidence. | Reports show TP/FP/FN, precision/recall/F-score, unknown counts, graph/path metrics, runtime/memory, cache reuse, extension overhead, accepted/rejected extension facts. | [`evaluation-harness/FINAL-REPORT.md`](evaluation-harness/FINAL-REPORT.md), [`evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`](evaluation-harness/RECOMMENDED_IMPLEMENTATION.md), [`data-flow/VALIDATION.md`](data-flow/VALIDATION.md), [`call-graphs/VALIDATION.md`](call-graphs/VALIDATION.md) |
+| 22. Public SDK query views and agent ergonomics | Promote validated typed views such as `Calls<'_>`, `CallGraph<'_>`, `DataFlow<'_>`, `Effects<'_>`, `Evidence<'_>`, selected domain views, and bounded query builders. Expand `polint facts`, `polint unknowns`, `polint explain`, `polint diff`, and `polint eval` only where contracts are ready. | This is the moment where internal capability becomes agent-authorable product surface. | Temp-repo rule tests consume public SDK views only; docs explain limits/heuristics; public commands have stable JSON; expensive queries require limits or explicit unbounded mode. | [`agent-rule-authoring/FINAL-REPORT.md`](agent-rule-authoring/FINAL-REPORT.md), [`agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`](agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md), [`ROADMAP.md`](ROADMAP.md) |
+
+## Implementation Guardrails
+
+- Keep new analysis modules private by default. Public promotion happens only in
+  PR 22 or in a deliberately scoped earlier PR.
+- Prefer official language tooling as compatibility input when it is the
+  language-native source of truth, but normalize outputs into polint-owned facts
+  with provenance and cache digests. Do not make random OSS analyzers runtime
+  dependencies.
+- Treat rule packs, model packs, and provider extensions as external consumers.
+  They must use `polint::sdk::prelude::*` or explicit advanced extension
+  surfaces, not internal modules.
+- Every fact family must have stable IDs, precision/status/provenance,
+  deterministic ordering, cache inputs, validation fixtures, and unknown states.
+- Every extension-created fact must declare reads, pass validation, carry a
+  precision ceiling, participate in cache keys, and be separable in default vs
+  extended evaluation reports.
+- Do not expose raw whole-program graphs as the primary SDK. Expose typed views
+  and bounded query builders first; keep debug snapshots internal or preview
+  gated.
+- Do not block useful local rules on global precision. Ship local facts early,
+  but label their limits honestly.
+
+## Completed Research Order
 
 ### 1. Analysis Kernel: Fact Layers, Scheduling, Provenance, And Invalidation
 
@@ -644,30 +796,32 @@ Each report should explicitly cover:
 
 ```text
 Analysis Kernel
+  -> Provenance/Validation Metadata
   -> Evaluation Harness
+  -> InputSnapshot + Layer Cache
+  -> Rule Manifest + Agent Test Harness
   -> Semantic Index Deepening
-  -> Agent Extension Surface
-  -> Framework/Entrypoint Modeling
   -> Module Graph
-  -> Semantic MIR + CFG
-  -> Place/Type/Value Substrate
-  -> Direct/Syntactic Call Facts
+  -> Semantic MIR + Place Identity
+  -> CFG + Control Dependence
+  -> Direct Call Facts
   -> P0 Local Abstract Domains
-  -> Minimal Summary Kernel
-  -> Minimal Cache/Invalidation Slice
-  -> Model Extension Sinks
-  -> Refined Call Graph Implementation
-  -> Refined Data Flow Implementation
-  -> P1 Domains And Public SDK Views
+  -> Summary Kernel
+  -> Demand Query + Summary Cache
+  -> Rust Extension/Provider Sinks
+  -> Framework/Entrypoint Modeling
+  -> Type/Value/Alias Substrate
+  -> Refined Call Graph Providers
+  -> Data Flow
   -> Slicing/Evidence
-  -> Full Incremental Query Engine
-  -> Agent Rule SDK
+  -> External Benchmark Adapters
+  -> Public SDK Query Views
 
 Incremental Query Engine research is complete. The first implementation should
-include the minimal dependency-digest/layer-cache/invalidation slice with the
-semantic bootstrap. The full demand query engine should land before expensive
-global call graph, data-flow, alias, and evidence queries become normal rule
-dependencies.
+include the minimal dependency-digest/layer-cache/invalidation slice before the
+semantic bootstrap starts depending on new one-off caches. The full demand
+query engine should land before expensive global call graph, data-flow, alias,
+and evidence queries become normal rule dependencies.
 Evaluation Harness runs across all tracks and gates public precision claims.
 Framework/Entrypoint Modeling feeds Call Graphs, Data Flow, Effects, and Slicing.
 Agent-authored models and extensions feed every analysis family, but must bind to typed facts and validation results.
@@ -693,34 +847,35 @@ observes unresolved/low-confidence analysis facts
 
 That means research should prefer architectures with clear typed extension points over architectures that are theoretically elegant but closed to repo-specific augmentation.
 
-## Recommended Next Task
+## Recommended Next Implementation PR
 
-Start implementation:
-
-```text
-research/implementation-bootstrap/
-```
-
-Reason: the broad research stack is now complete enough to build. The bootstrap
-has supporting research for semantic MIR, CFG, places, direct calls, P0 domains,
-summaries, minimal cache/invalidation, extension sinks, call graph integration,
-data-flow integration, slicing/evidence, incremental query/caching, and
-agent-rule authoring. Keep the first implementation private and promotion-gated
-by the evaluation harness.
-
-Implementation should include the minimal incremental slice:
+Start with **PR 1: Private analysis kernel facade**.
 
 ```text
-InputSnapshot
-LayerKey
-LayerCacheManifest
-DependencyIndex
-InvalidationPlan
-RuleManifest
-polint inspect rule
-polint test fixture skeleton
+crates/polint/src/analysis_kernel/
 ```
 
-Reason: this prevents semantic bootstrap artifacts and rule authoring features
-from growing as one-off uncacheable or uninspectable code that later requires a
-rewrite.
+Reason: the broad research stack is complete enough to build, but the first PR
+should not start with MIR or call graph code. It should move the existing
+analysis orchestration behind a private kernel boundary, add provider manifests
+for the current source/Go/TS/module/symbol/metrics passes, and preserve current
+behavior. That gives every later PR a single place to attach provenance,
+validation, cache keys, scheduling, extension outputs, and evaluation stats.
+
+The first PR should ship:
+
+```text
+AnalysisKernel
+KernelInput
+KernelOutput
+ProviderManifest
+ProviderId
+ProviderKind
+LanguageScope
+CachePolicy
+schema versions
+provider-order tests
+```
+
+Do not expose a public graph/query API in this PR. The whole point is to create
+the private boundary that later PRs can build on without forcing a rewrite.
