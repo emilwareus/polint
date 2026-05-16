@@ -69,6 +69,13 @@ Plans:
 **Goal:** Add shared internal metadata for fact origin, precision, confidence, validation, stable keys, and deterministic merge behavior.
 **Requirements:** SAE-FND-02
 **Research:** `research/analysis-kernel/FINAL-REPORT.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`, `research/semantic-index/FINAL-REPORT.md`
+**Plans:** 4 plans
+
+Plans:
+- [ ] 21-01-PLAN.md - Metadata vocabulary and source/syntax sidecar attachment
+- [ ] 21-02-PLAN.md - Derived provider metadata coverage and missing-metadata detection
+- [ ] 21-03-PLAN.md - Stable-key merge validation and kernel diagnostics
+- [ ] 21-04-PLAN.md - Internal provenance debug JSON and compatibility proof
 
 **Success criteria:**
 1. Kernel-produced existing facts have internal metadata.
