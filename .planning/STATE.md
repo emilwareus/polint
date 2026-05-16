@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-16T19:50:33.390Z"
-last_activity: 2026-05-16 -- Phase 20 planning complete
+last_updated: "2026-05-16T19:51:02.864Z"
+last_activity: 2026-05-16 -- Phase 20 execution started
 progress:
   total_phases: 22
   completed_phases: 0
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.2 Static Analysis Engine Implementation, sourced from `research/ROADMAP.md`.
+**Current focus:** Phase 20 — Private Analysis Kernel Facade
 
 ## Current Status
 
@@ -38,10 +38,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 20
-Plan: Not started
-Last activity: 2026-05-16 -- Phase 20 planning complete
+Status: Executing Phase 20
+Phase: 20 (Private Analysis Kernel Facade) — EXECUTING
+Plan: 1 of 2
+Last activity: 2026-05-16 -- Phase 20 execution started
 
 ## Phase Progress
 
