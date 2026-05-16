@@ -3996,6 +3996,96 @@ mod capability_planning {
         );
     }
 
+    #[test]
+    fn kernel_delegation_preserves_existing_rule_facts() {
+        let runner_source =
+            fs::read_to_string(repo_root().join("crates/polint/src/runner/mod.rs")).unwrap();
+        let cli_source =
+            fs::read_to_string(repo_root().join("crates/polint/src/cli/mod.rs")).unwrap();
+        assert!(
+            runner_source.contains("AnalysisKernel::run") && runner_source.contains("KernelInput"),
+            "runner analysis path must delegate through AnalysisKernel"
+        );
+        assert!(
+            cli_source.contains("AnalysisKernel::run") && cli_source.contains("KernelInput"),
+            "parent CLI analysis path must delegate through AnalysisKernel"
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        write_external_symbol_rule_repo(
+            temp.path(),
+            r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/kernel-fact-probe",
+    description = "Reads facts after kernel delegation.",
+    severity = "warn"
+)]
+fn kernel_fact_probe(
+    ctx: &mut RuleCtx<'_>,
+    file_metrics: FileMetrics<'_>,
+    function_metrics: FunctionMetrics<'_>,
+    complexity_metrics: ComplexityMetrics<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let Some(symbol) = symbols.by_name("answer").next() else {
+        return Ok(());
+    };
+    let _reference_count = references.iter().count();
+    let file = symbol
+        .file
+        .map(|file| ctx.file_path(file))
+        .unwrap_or_else(|| "<workspace>".to_string());
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            file,
+            DiagnosticRange::point(1, 1),
+            "kernel delegation preserved rule-visible facts",
+        )
+        .with_evidence("file_metrics", file_metrics.iter().count().to_string())
+        .with_evidence("function_metrics", function_metrics.iter().count().to_string())
+        .with_evidence("complexity_metrics", complexity_metrics.iter().count().to_string())
+        .with_evidence("symbol", symbol.name.clone()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![kernel_fact_probe()])
+}
+"#,
+        );
+        write_file(
+            &temp.path().join("src/app.ts"),
+            "export function answer() { return 42; }\n",
+        );
+
+        let json = stdout_json(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        let diagnostics = diagnostics_for_rule(&json, "local/kernel-fact-probe");
+        assert_eq!(diagnostics.len(), 1, "{json:#?}");
+        let diagnostic = diagnostics[0];
+        assert!(diagnostic_has_evidence(diagnostic, "file_metrics", "1"));
+        assert!(diagnostic_has_evidence(diagnostic, "function_metrics", "1"));
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "complexity_metrics",
+            "1"
+        ));
+        assert!(diagnostic_has_evidence(diagnostic, "symbol", "answer"));
+    }
+
     fn symbol_reference_id_evidence(
         report: &polint::sdk::prelude::PolintReport,
     ) -> Vec<(String, String, String, String, String)> {
