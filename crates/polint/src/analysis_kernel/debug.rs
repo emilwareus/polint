@@ -382,6 +382,7 @@ mod tests {
     use crate::core::AnalysisDb;
     use serde_json::Value;
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     struct DebugFixture {
         temp: tempfile::TempDir,
@@ -450,6 +451,43 @@ export const value = answer();
         let fixture = debug_fixture();
         let report = AnalysisKernel::metadata_debug_json_for_test(&fixture.db);
         (fixture.temp, report)
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn read_source_tree(path: &Path) -> String {
+        let mut files = Vec::new();
+        collect_files(path, &mut files);
+        files.sort();
+
+        files
+            .into_iter()
+            .map(|file| fs::read_to_string(&file).expect("read public source file"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn collect_files(path: &Path, files: &mut Vec<PathBuf>) {
+        if path.is_file() {
+            files.push(path.to_path_buf());
+            return;
+        }
+
+        let mut entries = fs::read_dir(path)
+            .expect("read source directory")
+            .map(|entry| entry.expect("read source entry").path())
+            .collect::<Vec<_>>();
+        entries.sort();
+
+        for entry in entries {
+            collect_files(&entry, files);
+        }
     }
 
     #[test]
@@ -522,6 +560,38 @@ export const value = answer();
             assert!(
                 !rendered.contains(forbidden),
                 "debug JSON should not contain `{forbidden}`:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_debug_helpers_are_not_public() {
+        let root = repo_root();
+        let lib_source =
+            fs::read_to_string(root.join("crates/polint/src/lib.rs")).expect("read lib.rs");
+        assert!(lib_source.contains("pub(crate) mod analysis_kernel;"));
+        assert!(!lib_source.contains("pub mod analysis_kernel;"));
+
+        let public_sources = [
+            lib_source,
+            read_source_tree(&root.join("crates/polint/src/sdk")),
+            read_source_tree(&root.join("crates/polint/src/runner")),
+        ]
+        .join("\n");
+
+        for forbidden in [
+            "FactMeta",
+            "FactMetaStore",
+            "metadata_debug_json_for_test",
+            "producer_id",
+            "layer_id",
+            "confidence",
+            "validation",
+            "provenance metadata",
+        ] {
+            assert!(
+                !public_sources.contains(forbidden),
+                "metadata internals must stay out of public surfaces: `{forbidden}`"
             );
         }
     }
