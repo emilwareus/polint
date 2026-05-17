@@ -159,7 +159,10 @@ fn items_match(expected: &ExpectedItem, observed: &ObservedItem, config: Matcher
 fn fact_matches(expected: &ExpectedFact, observed: &ObservedFact) -> bool {
     expected.family == observed.family
         && fact_stable_key_matches(expected.mode, &expected.stable_key, &observed.stable_key)
-        && optional_str_matches(expected.producer_id.as_deref(), observed.producer_id.as_deref())
+        && optional_str_matches(
+            expected.producer_id.as_deref(),
+            observed.producer_id.as_deref(),
+        )
         && optional_str_matches(expected.precision.as_deref(), observed.precision.as_deref())
         && optional_value_matches(expected.status, observed.status)
 }

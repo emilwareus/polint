@@ -141,7 +141,8 @@ pub(crate) fn run_cache_current_determinism_fixture_for_test(
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
     let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
 
-    let cold_warm_no_cache_equal = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+    let cold_warm_no_cache_equal = cache_comparison_json(&cold_run)
+        == cache_comparison_json(&warm_run)
         && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run)
         && cold_run.output_hash == warm_run.output_hash
         && cold_run.output_hash == no_cache_run.output_hash;
@@ -428,9 +429,7 @@ diagnostic = { rule_id = "local/rule", relative_path = "src\\app.ts", line = 1, 
     #[test]
     fn eval_fixture_manifest_rejects_alternate_fact_producer_field_name() {
         let temp = tempfile::tempdir().unwrap();
-        let fixture_dir = temp
-            .path()
-            .join("tests/eval-fixtures/provenance/metadata");
+        let fixture_dir = temp.path().join("tests/eval-fixtures/provenance/metadata");
         write_fixture(
             &fixture_dir,
             r#"
@@ -572,10 +571,9 @@ mod eval_native_fixture_runner_tests {
     #[test]
     fn eval_provenance_fixture_expected_facts_use_producer_id_fields() {
         let fixture = load_native_fixture(&provenance_fixture_dir()).unwrap();
-        let manifest = std::fs::read_to_string(
-            provenance_fixture_dir().join("expected.polint-eval.toml"),
-        )
-        .unwrap();
+        let manifest =
+            std::fs::read_to_string(provenance_fixture_dir().join("expected.polint-eval.toml"))
+                .unwrap();
         let expected_facts = fixture
             .manifest
             .expected
@@ -624,9 +622,10 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_cache_current_determinism_fixture_passes() {
-        let run =
-            run_cache_current_determinism_fixture_for_test(&cache_current_determinism_fixture_dir())
-                .unwrap();
+        let run = run_cache_current_determinism_fixture_for_test(
+            &cache_current_determinism_fixture_dir(),
+        )
+        .unwrap();
         let case = run.cases.first().expect("cache determinism case");
 
         assert_eq!(run.metrics.false_negatives, 0);
@@ -666,9 +665,10 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_cache_current_determinism_runtime_budget_hash_ignores_duration() {
-        let mut first =
-            run_cache_current_determinism_fixture_for_test(&cache_current_determinism_fixture_dir())
-                .unwrap();
+        let mut first = run_cache_current_determinism_fixture_for_test(
+            &cache_current_determinism_fixture_dir(),
+        )
+        .unwrap();
         let mut second = first.clone();
         first.cases[0].runtime.observed_runtime_ms = Some(1);
         second.cases[0].runtime.observed_runtime_ms = Some(999);
