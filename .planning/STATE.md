@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-17T16:24:25.705Z"
-last_activity: 2026-05-17 -- Phase 22 execution started
+last_updated: "2026-05-17T16:39:10.766Z"
+last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 2
   total_plans: 12
-  completed_plans: 6
-  percent: 50
+  completed_plans: 7
+  percent: 58
 ---
 
 # State: polint
@@ -38,10 +38,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 22
+Status: Ready to execute
 Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
-Plan: 1 of 6
-Last activity: 2026-05-17 -- Phase 22 execution started
+Plan: 2 of 6
+Last activity: 2026-05-17
 
 ## Phase Progress
 
@@ -105,6 +105,10 @@ Last activity: 2026-05-17 -- Phase 22 execution started
 - [Phase 21-provenance-precision-and-validation-metadata]: Metadata debug JSON remains behind cfg(test) and crate-private AnalysisKernel helpers, with no SDK, runner, or public CLI surface.
 - [Phase 21-provenance-precision-and-validation-metadata]: Debug rows use SourceFile.relative_path and explicit row sorting by path/span/name/stable key/run id to avoid machine-local or transient details.
 - [Phase 21-provenance-precision-and-validation-metadata]: Public compatibility is proven through a temp-repo external rule importing only polint::sdk::prelude::* and checking metadata-only keys stay out of public JSON.
+- [Phase 22-internal-evaluation-harness-mvp]: Keep eval crate-private and internal; no public SDK, runner, crate-root public, or CLI contract was introduced.
+- [Phase 22-internal-evaluation-harness-mvp]: Normalize reports by sorting cases, expected items, observed items, and matches before serialization and hashing.
+- [Phase 22-internal-evaluation-harness-mvp]: Compute output hashes from canonical JSON with output_hash cleared and runtime durations removed, while preserving runtime pass/fail semantics.
+- [Phase 22-internal-evaluation-harness-mvp]: Use a scoped dead_code lint expectation on the eval module until later Phase 22 plans consume the foundation types.
 
 ## Execution Metrics
 
