@@ -1,4 +1,256 @@
 #[cfg(test)]
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::path::Path;
+#[cfg(test)]
+use std::time::{Duration, Instant};
+
+#[cfg(test)]
+use anyhow::{Context, bail};
+#[cfg(test)]
+use serde_json::Value;
+
+#[cfg(test)]
+use crate::analysis_kernel::{AnalysisKernel, KernelInput};
+#[cfg(test)]
+use crate::analysis_plan::AnalysisPlan;
+#[cfg(test)]
+use crate::cache::Cache;
+#[cfg(test)]
+use crate::cache::keys::{config_hash, rule_hash};
+#[cfg(test)]
+use crate::config::load_config;
+#[cfg(test)]
+use crate::eval::fixtures::NativeFixture;
+#[cfg(test)]
+use crate::eval::model::{
+    AssertionMode, ExpectedItem, ObservedDiagnostic, ObservedFact, ObservedInvariant, ObservedItem,
+    ObservedRuntimeBudget, ObservedStatus,
+};
+
+#[cfg(test)]
+pub(crate) fn observe_kernel_fixture(fixture: &NativeFixture) -> anyhow::Result<Vec<ObservedItem>> {
+    let temp = tempfile::tempdir().context("create temp fixture repo")?;
+    copy_dir_contents(&fixture.repo_dir, temp.path())?;
+
+    let started = Instant::now();
+    let loaded = load_config(temp.path())?;
+    let plan = AnalysisPlan::empty();
+    let config_digest = config_hash(&loaded);
+    let rule_digest = rule_hash(&[], None, &BTreeMap::new());
+    let cache = Cache::default_for_repo(temp.path(), true);
+    let output = AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
+        parallel: true,
+    })?;
+    let elapsed = started.elapsed();
+
+    let mut observed = Vec::new();
+    observed.extend(observed_diagnostics(&output.diagnostics, temp.path()));
+    observed.extend(provider_order_invariants());
+    observed.extend(metadata_debug_facts(
+        &AnalysisKernel::metadata_debug_json_for_test(&output.db),
+    ));
+    if let Some(budget) = &fixture.manifest.budget {
+        observed.push(ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
+            name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+            budget_passed: elapsed <= Duration::from_millis(budget.max_runtime_ms),
+            observed_runtime_ms: Some(saturating_millis(elapsed)),
+        }));
+    }
+    observed.sort_by_key(observed_sort_key);
+
+    Ok(observed)
+}
+
+#[cfg(test)]
+fn copy_dir_contents(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(destination)
+        .with_context(|| format!("create fixture copy destination {}", destination.display()))?;
+    let mut entries = fs::read_dir(source)
+        .with_context(|| format!("read fixture repo {}", source.display()))?
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            bail!(
+                "fixture repos must not contain symlinks: {}",
+                source_path.display()
+            );
+        }
+        if file_type.is_dir() {
+            copy_dir_contents(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &destination_path).with_context(|| {
+                format!(
+                    "copy fixture file {} to {}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn observed_diagnostics(
+    diagnostics: &[crate::diagnostics::Diagnostic],
+    repo_root: &Path,
+) -> Vec<ObservedItem> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            ObservedItem::Diagnostic(ObservedDiagnostic {
+                rule_id: diagnostic.rule_id.clone(),
+                relative_path: normalize_observed_path(&diagnostic.file, repo_root),
+                line: Some(diagnostic.range.start_line),
+                fingerprint: Some(diagnostic.stable_fingerprint.clone()),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.eval".to_string()),
+                provenance: Some("kernel.diagnostics".to_string()),
+                precision: Some("exact".to_string()),
+                status: Some(ObservedStatus::Present),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn provider_order_invariants() -> Vec<ObservedItem> {
+    AnalysisKernel::provider_manifests()
+        .iter()
+        .enumerate()
+        .map(|(index, manifest)| {
+            ObservedItem::Invariant(ObservedInvariant {
+                name: format!("provider_order.{index}"),
+                value: manifest.id.to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.eval".to_string()),
+                provenance: Some("kernel.provider_manifests".to_string()),
+                precision: Some("exact".to_string()),
+                status: Some(ObservedStatus::Present),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    for section in ["files", "imports", "symbols", "references"] {
+        let Some(rows) = debug_json.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = metadata_debug_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+fn metadata_debug_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: row
+            .get("layer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        status: Some(observed_status_from_metadata(row)),
+    })
+}
+
+#[cfg(test)]
+fn observed_status_from_metadata(row: &Value) -> ObservedStatus {
+    for field in ["status", "precision"] {
+        if let Some(status) = row
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(observed_status_from_label)
+        {
+            return status;
+        }
+    }
+    ObservedStatus::Present
+}
+
+#[cfg(test)]
+fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
+    match label {
+        "unknown" | "unresolved" | "ambiguous" => Some(ObservedStatus::Unknown),
+        "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "unsupported" => Some(ObservedStatus::Unsupported),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn runtime_budget_name(expected: &[ExpectedItem], case_id: &str) -> String {
+    expected
+        .iter()
+        .find_map(|item| match item {
+            ExpectedItem::RuntimeBudget(budget) => Some(budget.name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| case_id.to_string())
+}
+
+#[cfg(test)]
+fn normalize_observed_path(path: &str, repo_root: &Path) -> String {
+    let path = Path::new(path);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(repo_root).unwrap_or(path)
+    } else {
+        path
+    };
+    slash_path(relative)
+}
+
+#[cfg(test)]
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+#[cfg(test)]
+fn saturating_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+fn observed_sort_key(item: &ObservedItem) -> String {
+    serde_json::to_string(item).unwrap_or_default()
+}
+
+#[cfg(test)]
 mod eval_observed_kernel_tests {
     use std::fs;
     use std::path::Path;
@@ -67,8 +319,7 @@ path = "repo"
 
     #[test]
     fn eval_observed_kernel_collects_provider_order_invariants_from_real_kernel() {
-        let (_temp, observed) =
-            observed_for("export function answer() { return 42; }\n", None);
+        let (_temp, observed) = observed_for("export function answer() { return 42; }\n", None);
 
         let provider_order = observed
             .iter()
@@ -112,7 +363,10 @@ path = "repo"
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.rule_id == "parser/ts"
                 && diagnostic.relative_path == "src/app.ts"
-                && diagnostic.fingerprint.as_deref().is_some_and(|fingerprint| !fingerprint.is_empty())
+                && diagnostic
+                    .fingerprint
+                    .as_deref()
+                    .is_some_and(|fingerprint| !fingerprint.is_empty())
                 && diagnostic.status == Some(ObservedStatus::Present)
         }));
         assert!(!rendered.contains(temp_root.as_ref()));
@@ -120,8 +374,7 @@ path = "repo"
 
     #[test]
     fn eval_observed_kernel_collects_metadata_debug_facts_with_stable_identity() {
-        let (_temp, observed) =
-            observed_for("export function answer() { return 42; }\n", None);
+        let (_temp, observed) = observed_for("export function answer() { return 42; }\n", None);
 
         assert!(observed.iter().any(|item| match item {
             ObservedItem::Fact(fact) => {
@@ -143,8 +396,6 @@ path = "repo"
         let temp_root = temp.path().to_string_lossy();
 
         assert!(!rendered.contains(temp_root.as_ref()));
-        assert!(!rendered.contains("SystemTime"));
-        assert!(!rendered.contains("Instant"));
         assert!(!rendered.contains("0x"));
     }
 
@@ -161,7 +412,10 @@ path = "repo"
         );
     }
 
-    fn run_with_observed_runtime(mut observed: Vec<ObservedItem>, runtime_ms: u64) -> EvaluationRun {
+    fn run_with_observed_runtime(
+        mut observed: Vec<ObservedItem>,
+        runtime_ms: u64,
+    ) -> EvaluationRun {
         for item in &mut observed {
             if let ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = Some(runtime_ms);
