@@ -1,7 +1,7 @@
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
-    symbol_metadata,
+    MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
+    stable_key_from_parts, symbol_metadata,
 };
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
@@ -915,8 +915,114 @@ impl AnalysisDb {
         &mut self.fact_meta
     }
 
+    #[cfg(test)]
+    pub(crate) fn remove_fact_metadata_for_test(&mut self, fact_ref: FactRef) -> Option<FactMeta> {
+        self.fact_meta.remove_for_test(fact_ref)
+    }
+
     pub(crate) fn metadata_for(&self, fact_ref: FactRef) -> Option<&FactMeta> {
         self.fact_meta().get(fact_ref)
+    }
+
+    pub(crate) fn missing_fact_metadata(&self) -> Vec<MissingFactMeta> {
+        let mut missing = Vec::new();
+
+        for file in self.files() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::SourceFile,
+                u64::from(file.id.0),
+            );
+        }
+        for package in self.packages() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Package, package.id.0);
+        }
+        for function in self.functions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Function, function.id.0);
+        }
+        for import in self.imports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Import, import.id.0);
+        }
+        for resolved_import in self.resolved_imports() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ResolvedImport,
+                resolved_import.id.0,
+            );
+        }
+        for module_node in self.module_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleNode, module_node.id.0);
+        }
+        for module_edge in self.module_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleEdge, module_edge.id.0);
+        }
+        for symbol in self.symbols() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
+        }
+        for definition in self.definitions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Definition, definition.id.0);
+        }
+        for reference in self.references() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Reference, reference.id.0);
+        }
+        for branch in self.branches() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::BranchObligation,
+                branch.id.0,
+            );
+        }
+        for (run_id, _test) in self.tests().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Test, run_id as u64);
+        }
+        for (run_id, _coverage) in self.coverage().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Coverage, run_id as u64);
+        }
+        for (run_id, _file_metric) in self.file_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::FileMetric, run_id as u64);
+        }
+        for (run_id, _function_metric) in self.function_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::FunctionMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _complexity_metric) in self.complexity_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ComplexityMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _component) in self.ts_components().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsComponent, run_id as u64);
+        }
+        for (run_id, _class) in self.ts_classes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsClass, run_id as u64);
+        }
+        for (run_id, _literal) in self.string_literals().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::StringLiteral, run_id as u64);
+        }
+        for (run_id, _attribute) in self.jsx_attributes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::JsxAttribute, run_id as u64);
+        }
+
+        missing.sort_by(|left, right| {
+            (left.family.label(), left.run_id).cmp(&(right.family.label(), right.run_id))
+        });
+        missing
+    }
+
+    fn push_missing_fact_metadata(
+        &self,
+        missing: &mut Vec<MissingFactMeta>,
+        family: FactFamily,
+        run_id: u64,
+    ) {
+        if self.metadata_for(FactRef::new(family, run_id)).is_none() {
+            missing.push(MissingFactMeta { family, run_id });
+        }
     }
 
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {

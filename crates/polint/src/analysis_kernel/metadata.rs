@@ -88,6 +88,12 @@ impl FactRef {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MissingFactMeta {
+    pub(crate) family: FactFamily,
+    pub(crate) run_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FactMeta {
     pub(crate) stable_key: String,
@@ -173,6 +179,11 @@ impl FactMetaStore {
     pub(crate) fn remove_family(&mut self, family: FactFamily) {
         self.rows
             .retain(|reference, _metadata| reference.family != family);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_for_test(&mut self, reference: FactRef) -> Option<FactMeta> {
+        self.rows.remove(&reference)
     }
 
     pub(crate) fn get(&self, reference: FactRef) -> Option<&FactMeta> {

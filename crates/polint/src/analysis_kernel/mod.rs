@@ -9,8 +9,8 @@ mod provider;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
-    symbol_metadata,
+    MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
+    stable_key_from_parts, symbol_metadata,
 };
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
@@ -71,12 +71,18 @@ impl AnalysisKernel {
         diagnostics.extend(symbol_graph.diagnostics);
 
         crate::metrics::derive_requested_metrics(&mut db, input.plan);
+        debug_assert!(db.missing_fact_metadata().is_empty());
 
         Ok(KernelOutput {
             db,
             diagnostics,
             capability_support,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn missing_fact_metadata_for_test(db: &AnalysisDb) -> Vec<MissingFactMeta> {
+        db.missing_fact_metadata()
     }
 
     fn provider_manifest_metadata_token() -> usize {
@@ -156,12 +162,11 @@ mod tests {
     use crate::core::{
         BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
         DefinitionKind, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact,
-        ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind,
-        ModuleNode, ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ReferenceFact,
-        ReferenceId, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind,
-        SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact,
-        TsComponentFact,
+        ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode,
+        ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ReferenceFact, ReferenceId,
+        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
+        Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
+        SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
     use std::path::PathBuf;
 
