@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-16T21:59:09.528Z"
-last_activity: 2026-05-16 -- Phase 21 execution started
+last_updated: "2026-05-17T07:10:06.332Z"
+last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 1
   total_plans: 6
-  completed_plans: 2
-  percent: 33
+  completed_plans: 3
+  percent: 50
 ---
 
 # State: polint
@@ -38,17 +38,17 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 21
+Status: Ready to execute
 Phase: 21 (provenance-precision-and-validation-metadata) — EXECUTING
-Plan: 1 of 4
-Last activity: 2026-05-16 -- Phase 21 execution started
+Plan: 2 of 4
+Last activity: 2026-05-17
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
-| 21 | Pending | Provenance, precision, and validation metadata; requirement SAE-FND-02 |
+| 21 | In Progress | 1/4 plans complete; provenance, precision, and validation metadata; requirement SAE-FND-02 |
 | 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
@@ -93,6 +93,9 @@ Last activity: 2026-05-16 -- Phase 21 execution started
 - [Phase 20-private-analysis-kernel-facade]: Keep provider manifests crate-private and consume them only for behavior-preserving metadata consistency in this phase.
 - [Phase 20-private-analysis-kernel-facade]: Keep provider execution order as explicit AnalysisKernel::run calls; manifest dependency data remains deterministic test metadata only.
 - [Phase 20-private-analysis-kernel-facade]: Expose provider order inspection only through #[cfg(test)] crate-private helpers, with no SDK, runner, or CLI contract.
+- [Phase 21-provenance-precision-and-validation-metadata]: Metadata stays in an AnalysisDb sidecar rather than widening public fact structs.
+- [Phase 21-provenance-precision-and-validation-metadata]: Provider IDs polint.source, polint.go.syntax, and polint.ts.syntax are reused as producer and layer IDs for current source/syntax facts.
+- [Phase 21-provenance-precision-and-validation-metadata]: Stable keys are deterministic strings built from sorted, normalized, length-prefixed labeled parts while run-local FactRef IDs remain separate.
 
 ## Execution Metrics
 
@@ -100,14 +103,15 @@ Last activity: 2026-05-16 -- Phase 21 execution started
 |-------|------|----------|-------|-------|
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
+| 21-provenance-precision-and-validation-metadata | 01 | 9h 8m | 2 | 3 |
 
 ## Session
 
-- Last session: 2026-05-16
-- Stopped at: Phase 20 verified and complete
+- Last session: 2026-05-17
+- Stopped at: Completed 21-01-PLAN.md
 
 ## Next Action
 
-Plan Phase 21:
+Execute Phase 21 Plan 02:
 
-`/gsd-discuss-phase 21 --auto`
+`/gsd-execute-phase 21`
