@@ -292,3 +292,80 @@ diagnostic = { rule_id = "local/rule", relative_path = "src\\app.ts", line = 1, 
         ));
     }
 }
+
+#[cfg(test)]
+mod eval_native_fixture_runner_tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::ExpectedItem;
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn provider_order_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/kernel/provider-order")
+    }
+
+    #[test]
+    fn eval_native_fixture_runner_provider_order_fixture_passes() {
+        let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
+
+        assert_eq!(run.metrics.false_negatives, 0);
+        assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
+    fn eval_native_fixture_runner_manifest_asserts_all_provider_order_invariants() {
+        let fixture = load_native_fixture(&provider_order_fixture_dir()).unwrap();
+        let invariants = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            invariants,
+            vec![
+                ("provider_order.0", "polint.source"),
+                ("provider_order.1", "polint.go.syntax"),
+                ("provider_order.2", "polint.ts.syntax"),
+                ("provider_order.3", "polint.module_graph"),
+                ("provider_order.4", "polint.symbol_graph"),
+                ("provider_order.5", "polint.metrics"),
+            ]
+        );
+    }
+
+    #[test]
+    fn eval_native_fixture_runner_repeated_runs_produce_identical_json() {
+        let first = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
+        let second = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
+
+        assert_eq!(
+            to_deterministic_json_pretty(&first),
+            to_deterministic_json_pretty(&second)
+        );
+    }
+
+    #[test]
+    fn eval_native_fixture_runner_repeated_runs_produce_identical_output_hash() {
+        let first = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
+        let second = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
+
+        assert_eq!(first.output_hash, second.output_hash);
+    }
+}
