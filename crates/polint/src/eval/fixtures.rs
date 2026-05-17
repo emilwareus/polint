@@ -453,13 +453,42 @@ fact = { family = "SourceFile", stable_key = "src/app.ts", mode = "partial", pro
             "alternate producer field should be rejected: {rendered}"
         );
     }
+
+    #[test]
+    fn eval_fixture_manifest_rejects_synthetic_observed_rows_outside_extension_area() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture_dir = temp.path().join("tests/eval-fixtures/kernel/synthetic");
+        write_fixture(
+            &fixture_dir,
+            r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "kernel-synthetic"
+area = "kernel"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[[observed]]
+invariant = { name = "kernel.synthetic", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+"#,
+        );
+
+        let err = load_native_fixture(&fixture_dir).unwrap_err();
+        let rendered = format!("{err:#}");
+
+        assert!(
+            rendered.contains("synthetic observed rows are only allowed for extension fixtures"),
+            "synthetic observed rows outside extension area should be rejected: {rendered}"
+        );
+    }
 }
 
 #[cfg(test)]
 mod eval_native_fixture_runner_tests {
     use std::path::{Path, PathBuf};
 
-    use crate::eval::model::{ExpectedItem, ObservedItem};
+    use crate::eval::model::{ExpectedItem, ObservedItem, ObservedStatus};
     use crate::eval::report::{deterministic_output_hash, to_deterministic_json_pretty};
 
     use super::*;
@@ -482,6 +511,10 @@ mod eval_native_fixture_runner_tests {
 
     fn cache_current_determinism_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/cache/current-determinism")
+    }
+
+    fn extension_rejection_delta_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/extension/rejection-delta")
     }
 
     #[test]
@@ -685,5 +718,117 @@ mod eval_native_fixture_runner_tests {
             deterministic_output_hash(&first),
             deterministic_output_hash(&second)
         );
+    }
+
+    #[test]
+    fn eval_extension_synthetic_rejection_delta_fixture_passes() {
+        let run = run_native_fixture_for_test(&extension_rejection_delta_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("extension rejection-delta case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(run.metrics.false_negatives, 0);
+        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert_eq!(run.metrics.false_positive_trap_hits, 1);
+        assert!(rendered.contains("\"facts_accepted\": 1"));
+        assert!(rendered.contains("\"facts_rejected\": 1"));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.stable_key == "extension.synthetic_accepted_fact"
+                    && fact.status == Some(ObservedStatus::Accepted)
+            }
+            _ => false,
+        }));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.stable_key == "extension.synthetic_rejected_fact"
+                    && fact.status == Some(ObservedStatus::Rejected)
+            }
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn eval_extension_synthetic_fixture_covers_all_item_kinds() {
+        let run = run_native_fixture_for_test(&extension_rejection_delta_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("extension rejection-delta case");
+
+        assert_eq!(
+            item_kinds(&case.expected),
+            vec![
+                "Diagnostic",
+                "Fact",
+                "GraphEdge",
+                "Invariant",
+                "Path",
+                "RuntimeBudget",
+            ]
+        );
+        assert_eq!(
+            observed_item_kinds(&case.observed),
+            vec![
+                "Diagnostic",
+                "Fact",
+                "GraphEdge",
+                "Invariant",
+                "Path",
+                "RuntimeBudget",
+            ]
+        );
+    }
+
+    #[test]
+    fn eval_extension_synthetic_delta_uses_normalized_invariants() {
+        let run = run_native_fixture_for_test(&extension_rejection_delta_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("extension rejection-delta case");
+
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "extension.default_vs_extension_delta"
+                    && invariant.value == "changed_facts=2,rejected=1"
+            }
+            _ => false,
+        }));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "extension.real_sink_active" && invariant.value == "false"
+            }
+            _ => false,
+        }));
+    }
+
+    fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {
+        let mut kinds = items
+            .iter()
+            .map(|item| match item {
+                ExpectedItem::Diagnostic(_) => "Diagnostic",
+                ExpectedItem::Fact(_) => "Fact",
+                ExpectedItem::GraphEdge(_) => "GraphEdge",
+                ExpectedItem::Path(_) => "Path",
+                ExpectedItem::Invariant(_) => "Invariant",
+                ExpectedItem::RuntimeBudget(_) => "RuntimeBudget",
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        kinds.sort();
+        kinds
+    }
+
+    fn observed_item_kinds(items: &[ObservedItem]) -> Vec<&'static str> {
+        let mut kinds = items
+            .iter()
+            .map(|item| match item {
+                ObservedItem::Diagnostic(_) => "Diagnostic",
+                ObservedItem::Fact(_) => "Fact",
+                ObservedItem::GraphEdge(_) => "GraphEdge",
+                ObservedItem::Path(_) => "Path",
+                ObservedItem::Invariant(_) => "Invariant",
+                ObservedItem::RuntimeBudget(_) => "RuntimeBudget",
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        kinds.sort();
+        kinds
     }
 }
