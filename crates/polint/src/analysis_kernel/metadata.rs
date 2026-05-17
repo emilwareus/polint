@@ -323,14 +323,8 @@ mod tests {
         let later = FactRef::new(FactFamily::Import, 10);
         let earlier = FactRef::new(FactFamily::Import, 2);
 
-        store.insert(FactMetaInsert {
-            reference: later,
-            meta: test_meta("function"),
-        });
-        store.insert(FactMetaInsert {
-            reference: earlier,
-            meta: test_meta("import"),
-        });
+        store.insert(later, test_meta("function", "function"));
+        store.insert(earlier, test_meta("import", "import"));
 
         let rows = store.rows().collect::<Vec<_>>();
 
@@ -338,7 +332,70 @@ mod tests {
         assert_eq!(rows[1].0, later);
     }
 
-    fn test_meta(stable_key: &str) -> FactMeta {
+    #[test]
+    fn stable_key_conflict_insert_is_idempotent_when_same_reference_payload_repeats() {
+        let mut store = FactMetaStore::default();
+        let reference = FactRef::new(FactFamily::Import, 7);
+
+        let first = store.insert(reference, test_meta("import:key", "payload:a"));
+        let second = store.insert(reference, test_meta("import:key", "payload:a"));
+
+        assert_eq!(first, FactMetaInsert::Inserted);
+        assert_eq!(second, FactMetaInsert::Idempotent);
+    }
+
+    #[test]
+    fn stable_key_conflict_insert_is_idempotent_for_same_payload_different_reference() {
+        let mut store = FactMetaStore::default();
+        let first_ref = FactRef::new(FactFamily::Import, 1);
+        let second_ref = FactRef::new(FactFamily::Import, 2);
+
+        store.insert(first_ref, test_meta("import:key", "payload:a"));
+        let result = store.insert(second_ref, test_meta("import:key", "payload:a"));
+
+        assert_eq!(result, FactMetaInsert::Idempotent);
+        assert_eq!(
+            store.stable_key_owner(FactFamily::Import, "import:key")
+                .map(|owner| owner.reference),
+            Some(first_ref)
+        );
+    }
+
+    #[test]
+    fn stable_key_conflict_insert_records_conflicts_deterministically() {
+        let mut store = FactMetaStore::default();
+        let source_conflict_ref = FactRef::new(FactFamily::SourceFile, 2);
+        let import_owner_ref = FactRef::new(FactFamily::Import, 8);
+        let import_conflict_ref = FactRef::new(FactFamily::Import, 3);
+
+        store.insert(import_owner_ref, test_meta("import:key", "payload:a"));
+        let result = store.insert(import_conflict_ref, test_meta("import:key", "payload:b"));
+        store.insert(source_conflict_ref, test_meta("source:key", "payload:b"));
+        store.insert(
+            FactRef::new(FactFamily::SourceFile, 1),
+            test_meta("source:key", "payload:a"),
+        );
+        store.insert(import_conflict_ref, test_meta("import:key", "payload:b"));
+
+        let conflicts = store.stable_key_conflicts().collect::<Vec<_>>();
+
+        assert_eq!(
+            result,
+            FactMetaInsert::Conflict {
+                family: FactFamily::Import,
+                stable_key: "import:key".to_string(),
+                existing: import_owner_ref,
+                incoming: import_conflict_ref,
+            }
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].family, FactFamily::Import);
+        assert_eq!(conflicts[0].stable_key, "import:key");
+        assert_eq!(conflicts[0].existing, import_owner_ref);
+        assert_eq!(conflicts[0].incoming, import_conflict_ref);
+    }
+
+    fn test_meta(stable_key: &str, payload_digest: &str) -> FactMeta {
         FactMeta {
             stable_key: stable_key.to_string(),
             producer_id: "polint.go.syntax",
@@ -346,7 +403,7 @@ mod tests {
             precision: FactPrecision::Syntax,
             confidence: FactConfidence::High,
             validation: ValidationStatus::NativeTrusted,
-            payload_digest: stable_key.to_string(),
+            payload_digest: payload_digest.to_string(),
         }
     }
 }
