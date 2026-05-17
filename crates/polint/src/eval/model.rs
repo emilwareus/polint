@@ -1,0 +1,215 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eval_model_represents_expected_and_observed_item_kinds() {
+        let expected = vec![
+            ExpectedItem::Diagnostic(ExpectedDiagnostic {
+                rule_id: "local/no-raw-colors".to_string(),
+                relative_path: "src/button.tsx".to_string(),
+                line: Some(12),
+                fingerprint: Some("diag-fp".to_string()),
+                mode: AssertionMode::Exact,
+            }),
+            ExpectedItem::Fact(ExpectedFact {
+                family: "symbols".to_string(),
+                stable_key: "symbol:Button".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.ts.syntax".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+            }),
+            ExpectedItem::GraphEdge(ExpectedGraphEdge {
+                graph: "module".to_string(),
+                from: "src/button.tsx".to_string(),
+                to: "src/theme.ts".to_string(),
+                mode: AssertionMode::Tolerant,
+                partial_truth: true,
+            }),
+            ExpectedItem::Path(ExpectedPath {
+                path_id: "route-to-sink".to_string(),
+                nodes: vec!["handler".to_string(), "sink".to_string()],
+                mode: AssertionMode::Partial,
+                partial_truth: true,
+            }),
+            ExpectedItem::Invariant(ExpectedInvariant {
+                name: "provider_order_stable".to_string(),
+                value: "true".to_string(),
+                mode: AssertionMode::Exact,
+            }),
+            ExpectedItem::RuntimeBudget(ExpectedRuntimeBudget {
+                name: "fast-ci".to_string(),
+                max_runtime_ms: 500,
+                mode: AssertionMode::Exact,
+            }),
+        ];
+        let observed = vec![
+            ObservedItem::Diagnostic(ObservedDiagnostic {
+                rule_id: "local/no-raw-colors".to_string(),
+                relative_path: "src/button.tsx".to_string(),
+                line: Some(12),
+                fingerprint: Some("diag-fp".to_string()),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.ts.syntax".to_string()),
+                provenance: Some("native".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "symbols".to_string(),
+                stable_key: "symbol:Button".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.ts.syntax".to_string()),
+                provenance: Some("metadata-sidecar".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+            }),
+            ObservedItem::GraphEdge(ObservedGraphEdge {
+                graph: "module".to_string(),
+                from: "src/button.tsx".to_string(),
+                to: "src/theme.ts".to_string(),
+                mode: AssertionMode::Tolerant,
+                partial_truth: true,
+                producer_id: Some("polint.module_graph".to_string()),
+                provenance: Some("derived".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+            }),
+            ObservedItem::Path(ObservedPath {
+                path_id: "route-to-sink".to_string(),
+                nodes: vec!["handler".to_string(), "sink".to_string()],
+                mode: AssertionMode::Partial,
+                partial_truth: true,
+                producer_id: Some("polint.paths".to_string()),
+                provenance: Some("derived".to_string()),
+                precision: Some("partial".to_string()),
+                status: Some(ObservedStatus::Unknown),
+            }),
+            ObservedItem::Invariant(ObservedInvariant {
+                name: "provider_order_stable".to_string(),
+                value: "true".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.eval".to_string()),
+                provenance: Some("fixture".to_string()),
+                precision: Some("exact".to_string()),
+                status: Some(ObservedStatus::Accepted),
+            }),
+            ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
+                name: "fast-ci".to_string(),
+                budget_passed: true,
+                observed_runtime_ms: Some(412),
+            }),
+        ];
+
+        let suite = EvaluationSuite {
+            schema_version: "polint-eval-internal-1".to_string(),
+            suite_id: "phase-22".to_string(),
+            cases: vec![EvaluationCase {
+                case_id: "all-item-kinds".to_string(),
+                area: FixtureArea::Kernel,
+                repo_path: "fixtures/kernel/repo".to_string(),
+                expected,
+                observed,
+            }],
+        };
+
+        assert_eq!(suite.cases[0].expected.len(), 6);
+        assert_eq!(suite.cases[0].observed.len(), 6);
+    }
+
+    #[test]
+    fn eval_model_serializes_modes_as_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&AssertionMode::Exact).unwrap(),
+            "\"exact\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AssertionMode::Tolerant).unwrap(),
+            "\"tolerant\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AssertionMode::Partial).unwrap(),
+            "\"partial\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AssertionMode::Forbidden).unwrap(),
+            "\"forbidden\""
+        );
+    }
+
+    #[test]
+    fn eval_model_observed_items_carry_normalized_identity_and_statuses() {
+        let observed = vec![
+            ObservedItem::Diagnostic(ObservedDiagnostic {
+                rule_id: "local/no-raw-colors".to_string(),
+                relative_path: "src/button.tsx".to_string(),
+                line: Some(12),
+                fingerprint: Some("diag-fp".to_string()),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.ts.syntax".to_string()),
+                provenance: Some("native".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Unknown),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "symbols".to_string(),
+                stable_key: "symbol:Button".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.symbol_graph".to_string()),
+                provenance: Some("metadata-sidecar".to_string()),
+                precision: Some("setup_aware".to_string()),
+                status: Some(ObservedStatus::SetupMissing),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "call_graph".to_string(),
+                stable_key: "call:dynamic".to_string(),
+                mode: AssertionMode::Forbidden,
+                producer_id: None,
+                provenance: None,
+                precision: None,
+                status: Some(ObservedStatus::Unsupported),
+            }),
+        ];
+
+        let json = serde_json::to_string_pretty(&observed).unwrap();
+
+        assert!(json.contains("src/button.tsx"));
+        assert!(json.contains("diag-fp"));
+        assert!(json.contains("symbols"));
+        assert!(json.contains("symbol:Button"));
+        assert!(json.contains("polint.symbol_graph"));
+        assert!(json.contains("metadata-sidecar"));
+        assert!(json.contains("setup_aware"));
+        assert!(json.contains("unknown"));
+        assert!(json.contains("setup_missing"));
+        assert!(json.contains("unsupported"));
+    }
+
+    #[test]
+    fn eval_model_eval_module_stays_crate_private_in_lib_rs() {
+        let lib_rs =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
+
+        assert_eq!(lib_rs.matches("pub(crate) mod eval;").count(), 1);
+        assert!(!lib_rs.contains("pub mod eval"));
+    }
+
+    #[test]
+    fn eval_model_runtime_budgets_use_distinct_expected_and_observed_shapes() {
+        let expected = ExpectedRuntimeBudget {
+            name: "fast-ci".to_string(),
+            max_runtime_ms: 500,
+            mode: AssertionMode::Exact,
+        };
+        let observed = ObservedRuntimeBudget {
+            name: "fast-ci".to_string(),
+            budget_passed: false,
+            observed_runtime_ms: Some(725),
+        };
+
+        assert_eq!(expected.max_runtime_ms, 500);
+        assert!(!observed.budget_passed);
+        assert_eq!(observed.observed_runtime_ms, Some(725));
+    }
+}
