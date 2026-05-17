@@ -1,3 +1,864 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
+
+use crate::analysis_kernel::{
+    FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
+};
+use crate::core::{
+    AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ResolvedImportId,
+    Span, SymbolId,
+};
+use crate::diagnostics::{Diagnostic, TextRange};
+
+pub(crate) fn validate_fact_metadata(
+    db: &AnalysisDb,
+    manifests: &[ProviderManifest],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let ids = IdSets::from_db(db);
+    let manifests_by_id = manifests
+        .iter()
+        .map(|manifest| (manifest.id, *manifest))
+        .collect::<BTreeMap<_, _>>();
+
+    validate_missing_metadata(db, &mut diagnostics);
+    validate_stable_key_conflicts(db, &mut diagnostics);
+    validate_references(db, &ids, &mut diagnostics);
+    validate_spans(db, &ids.files, &mut diagnostics);
+    validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
+
+    diagnostics.sort_by(diagnostic_order);
+    diagnostics
+}
+
+#[derive(Debug, Default)]
+struct IdSets {
+    files: BTreeSet<FileId>,
+    packages: BTreeSet<PackageId>,
+    functions: BTreeSet<FunctionId>,
+    branches: BTreeSet<BranchId>,
+    imports: BTreeSet<ImportId>,
+    resolved_imports: BTreeSet<ResolvedImportId>,
+    module_nodes: BTreeSet<ModuleNodeId>,
+    symbols: BTreeSet<SymbolId>,
+}
+
+impl IdSets {
+    fn from_db(db: &AnalysisDb) -> Self {
+        Self {
+            files: db.files().iter().map(|fact| fact.id).collect(),
+            packages: db.packages().iter().map(|fact| fact.id).collect(),
+            functions: db.functions().iter().map(|fact| fact.id).collect(),
+            branches: db.branches().iter().map(|fact| fact.id).collect(),
+            imports: db.imports().iter().map(|fact| fact.id).collect(),
+            resolved_imports: db.resolved_imports().iter().map(|fact| fact.id).collect(),
+            module_nodes: db.module_nodes().iter().map(|fact| fact.id).collect(),
+            symbols: db.symbols().iter().map(|fact| fact.id).collect(),
+        }
+    }
+}
+
+fn validate_missing_metadata(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    for missing in db.missing_fact_metadata() {
+        diagnostics.push(
+            internal_diagnostic(format!(
+                "Fact metadata missing for {}#{}.",
+                missing.family.label(),
+                missing.run_id
+            ))
+            .with_evidence("family", missing.family.label())
+            .with_evidence(
+                "fact_ref",
+                fact_ref_value(FactRef::new(missing.family, missing.run_id)),
+            ),
+        );
+    }
+}
+
+fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    for conflict in db.fact_meta().stable_key_conflicts() {
+        diagnostics.push(
+            internal_diagnostic(format!(
+                "Fact metadata stable key conflict detected for {} stable key.",
+                conflict.family.label()
+            ))
+            .with_evidence("family", conflict.family.label())
+            .with_evidence("stable_key", conflict.stable_key.clone())
+            .with_evidence("existing_ref", fact_ref_value(conflict.existing))
+            .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
+        );
+    }
+}
+
+fn validate_references(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
+    for fact in db.functions() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Function,
+            fact.id.0,
+            "FunctionFact.file",
+            fact.file,
+        );
+    }
+    for fact in db.packages() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Package,
+            fact.id.0,
+            "PackageFact.file",
+            fact.file,
+        );
+    }
+    for fact in db.imports() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Import,
+            fact.id.0,
+            "ImportFact.file",
+            fact.file,
+        );
+    }
+    for fact in db.branches() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::BranchObligation,
+            fact.id.0,
+            "BranchObligation.file",
+            fact.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::BranchObligation,
+            fact.id.0,
+            "BranchObligation.function",
+            fact.function,
+        );
+    }
+    for (run_id, fact) in db.tests().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Test,
+            run_id as u64,
+            "TestFact.file",
+            fact.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::Test,
+            run_id as u64,
+            "TestFact.function",
+            fact.function,
+        );
+    }
+    for (run_id, fact) in db.coverage().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.branches,
+            FactFamily::Coverage,
+            run_id as u64,
+            "CoverageFact.branch",
+            fact.branch,
+        );
+    }
+    for (run_id, fact) in db.ts_components().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::TsComponent,
+            run_id as u64,
+            "TsComponentFact.file",
+            fact.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::TsComponent,
+            run_id as u64,
+            "TsComponentFact.function",
+            fact.function,
+        );
+    }
+    for (run_id, fact) in db.ts_classes().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::TsClass,
+            run_id as u64,
+            "TsClassFact.file",
+            fact.file,
+        );
+    }
+    for (run_id, fact) in db.string_literals().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::StringLiteral,
+            run_id as u64,
+            "StringLiteralFact.file",
+            fact.file,
+        );
+    }
+    for (run_id, fact) in db.jsx_attributes().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::JsxAttribute,
+            run_id as u64,
+            "JsxAttributeFact.file",
+            fact.file,
+        );
+    }
+    for (run_id, fact) in db.file_metrics().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::FileMetric,
+            run_id as u64,
+            "FileMetricFact.file",
+            fact.file,
+        );
+    }
+    for (run_id, fact) in db.function_metrics().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::FunctionMetric,
+            run_id as u64,
+            "FunctionMetricFact.file",
+            fact.file,
+        );
+        check_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::FunctionMetric,
+            run_id as u64,
+            "FunctionMetricFact.function",
+            fact.function,
+        );
+    }
+    for (run_id, fact) in db.complexity_metrics().iter().enumerate() {
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::ComplexityMetric,
+            run_id as u64,
+            "ComplexityMetricFact.file",
+            fact.file,
+        );
+        check_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::ComplexityMetric,
+            run_id as u64,
+            "ComplexityMetricFact.function",
+            fact.function,
+        );
+    }
+    for fact in db.resolved_imports() {
+        check_ref(
+            diagnostics,
+            &ids.imports,
+            FactFamily::ResolvedImport,
+            fact.id.0,
+            "ResolvedImportFact.import",
+            fact.import,
+        );
+        check_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::ResolvedImport,
+            fact.id.0,
+            "ResolvedImportFact.from_file",
+            fact.from_file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::ResolvedImport,
+            fact.id.0,
+            "ResolvedImportFact.target_node",
+            fact.target_node,
+        );
+    }
+    for node in db.module_nodes() {
+        check_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::ModuleNode,
+            node.id.0,
+            "ModuleNode.file",
+            node.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::ModuleNode,
+            node.id.0,
+            "ModuleNode.package",
+            node.package,
+        );
+    }
+    for edge in db.module_edges() {
+        check_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::ModuleEdge,
+            edge.id.0,
+            "ModuleEdge.from",
+            edge.from,
+        );
+        check_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::ModuleEdge,
+            edge.id.0,
+            "ModuleEdge.to",
+            edge.to,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.imports,
+            FactFamily::ModuleEdge,
+            edge.id.0,
+            "ModuleEdge.import",
+            edge.import,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.resolved_imports,
+            FactFamily::ModuleEdge,
+            edge.id.0,
+            "ModuleEdge.resolved_import",
+            edge.resolved_import,
+        );
+    }
+    for symbol in db.symbols() {
+        check_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Symbol,
+            symbol.id.0,
+            "SymbolFact.file",
+            symbol.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Symbol,
+            symbol.id.0,
+            "SymbolFact.package",
+            symbol.package,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Symbol,
+            symbol.id.0,
+            "SymbolFact.module",
+            symbol.module,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Symbol,
+            symbol.id.0,
+            "SymbolFact.owner",
+            symbol.owner,
+        );
+    }
+    for definition in db.definitions() {
+        check_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Definition,
+            definition.id.0,
+            "DefinitionFact.symbol",
+            definition.symbol,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Definition,
+            definition.id.0,
+            "DefinitionFact.file",
+            definition.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Definition,
+            definition.id.0,
+            "DefinitionFact.package",
+            definition.package,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Definition,
+            definition.id.0,
+            "DefinitionFact.module",
+            definition.module,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Definition,
+            definition.id.0,
+            "DefinitionFact.owner",
+            definition.owner,
+        );
+    }
+    for reference in db.references() {
+        check_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Reference,
+            reference.id.0,
+            "ReferenceFact.file",
+            reference.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Reference,
+            reference.id.0,
+            "ReferenceFact.package",
+            reference.package,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Reference,
+            reference.id.0,
+            "ReferenceFact.module",
+            reference.module,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Reference,
+            reference.id.0,
+            "ReferenceFact.owner",
+            reference.owner,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Reference,
+            reference.id.0,
+            "ReferenceFact.target",
+            reference.target,
+        );
+        for candidate in &reference.candidates {
+            check_ref(
+                diagnostics,
+                &ids.symbols,
+                FactFamily::Reference,
+                reference.id.0,
+                "ReferenceFact.candidates",
+                *candidate,
+            );
+        }
+    }
+}
+
+fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mut Vec<Diagnostic>) {
+    for fact in db.functions() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::Function,
+            fact.id.0,
+            "FunctionFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for fact in db.packages() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::Package,
+            fact.id.0,
+            "PackageFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for fact in db.imports() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::Import,
+            fact.id.0,
+            "ImportFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for fact in db.branches() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::BranchObligation,
+            fact.id.0,
+            "BranchObligation.decision_span",
+            Some(fact.file),
+            &fact.decision_span,
+        );
+    }
+    for (run_id, fact) in db.tests().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::Test,
+            run_id as u64,
+            "TestFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.ts_components().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::TsComponent,
+            run_id as u64,
+            "TsComponentFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.ts_classes().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::TsClass,
+            run_id as u64,
+            "TsClassFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.string_literals().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::StringLiteral,
+            run_id as u64,
+            "StringLiteralFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.jsx_attributes().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::JsxAttribute,
+            run_id as u64,
+            "JsxAttributeFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.function_metrics().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::FunctionMetric,
+            run_id as u64,
+            "FunctionMetricFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for (run_id, fact) in db.complexity_metrics().iter().enumerate() {
+        check_span(
+            db,
+            file_ids,
+            diagnostics,
+            FactFamily::ComplexityMetric,
+            run_id as u64,
+            "ComplexityMetricFact.span",
+            Some(fact.file),
+            &fact.span,
+        );
+    }
+    for symbol in db.symbols() {
+        if let Some(span) = &symbol.primary_span {
+            check_span(
+                db,
+                file_ids,
+                diagnostics,
+                FactFamily::Symbol,
+                symbol.id.0,
+                "SymbolFact.primary_span",
+                symbol.file,
+                span,
+            );
+        }
+    }
+    for definition in db.definitions() {
+        if let Some(span) = &definition.primary_span {
+            check_span(
+                db,
+                file_ids,
+                diagnostics,
+                FactFamily::Definition,
+                definition.id.0,
+                "DefinitionFact.primary_span",
+                definition.file,
+                span,
+            );
+        }
+    }
+    for reference in db.references() {
+        if let Some(span) = &reference.primary_span {
+            check_span(
+                db,
+                file_ids,
+                diagnostics,
+                FactFamily::Reference,
+                reference.id.0,
+                "ReferenceFact.primary_span",
+                reference.file,
+                span,
+            );
+        }
+    }
+}
+
+fn validate_precision_ceilings(
+    db: &AnalysisDb,
+    manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (reference, metadata) in db.fact_meta().rows() {
+        let Some(manifest) = manifests_by_id.get(metadata.producer_id) else {
+            continue;
+        };
+        if precision_within_ceiling(metadata.precision, manifest.precision_ceiling) {
+            continue;
+        }
+        diagnostics.push(
+            internal_diagnostic(format!(
+                "Fact metadata precision ceiling violated for {}#{}.",
+                reference.family.label(),
+                reference.run_id
+            ))
+            .with_evidence("producer_id", metadata.producer_id)
+            .with_evidence("family", reference.family.label())
+            .with_evidence("precision", precision_label(metadata.precision))
+            .with_evidence("ceiling", ceiling_label(manifest.precision_ceiling)),
+        );
+    }
+}
+
+fn check_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    run_id: u64,
+    field: &'static str,
+    value: T,
+) where
+    T: Copy + Debug + Ord,
+{
+    if valid_ids.contains(&value) {
+        return;
+    }
+    diagnostics.push(reference_diagnostic(family, run_id, field, value));
+}
+
+fn check_optional_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    run_id: u64,
+    field: &'static str,
+    value: Option<T>,
+) where
+    T: Copy + Debug + Ord,
+{
+    let Some(value) = value else {
+        return;
+    };
+    check_ref(diagnostics, valid_ids, family, run_id, field, value);
+}
+
+fn reference_diagnostic<T: Debug>(
+    family: FactFamily,
+    run_id: u64,
+    field: &'static str,
+    value: T,
+) -> Diagnostic {
+    internal_diagnostic(format!(
+        "Fact metadata reference validation failed for {}#{}.",
+        family.label(),
+        run_id
+    ))
+    .with_evidence("family", family.label())
+    .with_evidence("fact_ref", fact_ref_value(FactRef::new(family, run_id)))
+    .with_evidence("field", field)
+    .with_evidence("value", format!("{value:?}"))
+}
+
+fn check_span(
+    db: &AnalysisDb,
+    file_ids: &BTreeSet<FileId>,
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    run_id: u64,
+    field: &'static str,
+    owner_file: Option<FileId>,
+    span: &Span,
+) {
+    let Some(reason) = span_failure_reason(db, file_ids, owner_file, span) else {
+        return;
+    };
+    diagnostics.push(
+        internal_diagnostic(format!(
+            "Fact metadata span validation failed for {}#{}.",
+            family.label(),
+            run_id
+        ))
+        .with_evidence("family", family.label())
+        .with_evidence("fact_ref", fact_ref_value(FactRef::new(family, run_id)))
+        .with_evidence("field", field)
+        .with_evidence("reason", reason)
+        .with_evidence("span_file", format!("{:?}", span.file))
+        .with_evidence("owner_file", owner_file_value(owner_file))
+        .with_evidence("start_byte", span.start_byte.to_string())
+        .with_evidence("end_byte", span.end_byte.to_string()),
+    );
+}
+
+fn span_failure_reason(
+    db: &AnalysisDb,
+    file_ids: &BTreeSet<FileId>,
+    owner_file: Option<FileId>,
+    span: &Span,
+) -> Option<String> {
+    if !file_ids.contains(&span.file) {
+        return Some("span file does not exist".to_string());
+    }
+    if let Some(owner_file) = owner_file
+        && owner_file != span.file
+    {
+        return Some("span file does not match owning file".to_string());
+    }
+    if span.start_byte > span.end_byte {
+        return Some("start_byte exceeds end_byte".to_string());
+    }
+    let source_len = db.file(span.file).map(|file| file.source.len() as u32)?;
+    if span.end_byte > source_len {
+        return Some(format!("end_byte exceeds source length {source_len}"));
+    }
+    None
+}
+
+fn precision_within_ceiling(precision: FactPrecision, ceiling: PrecisionCeiling) -> bool {
+    match ceiling {
+        PrecisionCeiling::Exact => true,
+        PrecisionCeiling::Syntax => matches!(
+            precision,
+            FactPrecision::Syntax
+                | FactPrecision::Heuristic
+                | FactPrecision::Unresolved
+                | FactPrecision::Ambiguous
+                | FactPrecision::SetupMissing
+                | FactPrecision::Unsupported
+        ),
+        PrecisionCeiling::SetupAware => true,
+    }
+}
+
+fn internal_diagnostic(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::error(
+        "polint/internal",
+        "<workspace>",
+        TextRange::point(1, 1),
+        message,
+    )
+}
+
+fn fact_ref_value(reference: FactRef) -> String {
+    format!("{}#{}", reference.family.label(), reference.run_id)
+}
+
+fn owner_file_value(owner_file: Option<FileId>) -> String {
+    owner_file.map_or_else(|| "none".to_string(), |file| format!("{file:?}"))
+}
+
+fn precision_label(precision: FactPrecision) -> &'static str {
+    match precision {
+        FactPrecision::Exact => "exact",
+        FactPrecision::Syntax => "syntax",
+        FactPrecision::SetupAware => "setup_aware",
+        FactPrecision::Heuristic => "heuristic",
+        FactPrecision::Unresolved => "unresolved",
+        FactPrecision::Ambiguous => "ambiguous",
+        FactPrecision::SetupMissing => "setup_missing",
+        FactPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn ceiling_label(ceiling: PrecisionCeiling) -> &'static str {
+    match ceiling {
+        PrecisionCeiling::Exact => "exact",
+        PrecisionCeiling::Syntax => "syntax",
+        PrecisionCeiling::SetupAware => "setup_aware",
+    }
+}
+
+fn diagnostic_order(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
+    (
+        left.rule_id.as_str(),
+        left.file.as_str(),
+        left.range.start_line,
+        left.range.start_col,
+        left.message.as_str(),
+        evidence_order_key(left),
+        left.stable_fingerprint.as_str(),
+    )
+        .cmp(&(
+            right.rule_id.as_str(),
+            right.file.as_str(),
+            right.range.start_line,
+            right.range.start_col,
+            right.message.as_str(),
+            evidence_order_key(right),
+            right.stable_fingerprint.as_str(),
+        ))
+}
+
+fn evidence_order_key(diagnostic: &Diagnostic) -> String {
+    diagnostic
+        .evidence
+        .iter()
+        .map(|evidence| format!("{}={}", evidence.label, evidence.value))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::validate_fact_metadata;
@@ -6,7 +867,7 @@ mod tests {
         ValidationStatus,
     };
     use crate::core::{
-        AnalysisDb, BranchObligation, BranchId, ComplexityMetricFact, FileId, FileMetricFact,
+        AnalysisDb, BranchId, BranchObligation, ComplexityMetricFact, FileId, FileMetricFact,
         FunctionFact, FunctionId, FunctionMetricFact, Language, ModuleNode, ModuleNodeId,
         ModuleNodeKind, PackageId, Span, TestFact, TsComponentFact,
     };
@@ -19,10 +880,14 @@ mod tests {
         let existing = FactRef::new(FactFamily::Import, 1);
         let incoming = FactRef::new(FactFamily::Import, 2);
 
-        db.fact_meta_mut_for_test()
-            .insert(existing, test_meta(FactFamily::Import, "import:key", "payload:a"));
-        db.fact_meta_mut_for_test()
-            .insert(incoming, test_meta(FactFamily::Import, "import:key", "payload:b"));
+        db.fact_meta_mut_for_test().insert(
+            existing,
+            test_meta(FactFamily::Import, "import:key", "payload:a"),
+        );
+        db.fact_meta_mut_for_test().insert(
+            incoming,
+            test_meta(FactFamily::Import, "import:key", "payload:b"),
+        );
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
 
@@ -35,12 +900,7 @@ mod tests {
         );
         assert_eq!(
             evidence_labels(&diagnostics[0]),
-            BTreeSet::from([
-                "existing_ref",
-                "family",
-                "incoming_ref",
-                "stable_key",
-            ])
+            BTreeSet::from(["existing_ref", "family", "incoming_ref", "stable_key",])
         );
     }
 

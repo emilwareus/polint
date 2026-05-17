@@ -261,7 +261,6 @@ impl FactMetaStore {
             .get(&(family, stable_key.to_string()))
     }
 
-    #[cfg(test)]
     pub(crate) fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
         self.rows
             .iter()
