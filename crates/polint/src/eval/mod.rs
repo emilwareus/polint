@@ -7,4 +7,5 @@
 )]
 
 pub(crate) mod model;
+pub(crate) mod matcher;
 pub(crate) mod report;
