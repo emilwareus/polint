@@ -88,13 +88,15 @@ Plans:
 **Goal:** Add a hidden/internal evaluation model with deterministic expected/observed JSON, generic matchers, metrics, and native fixtures.
 **Requirements:** SAE-FND-03
 **Research:** `research/evaluation-harness/FINAL-REPORT.md`, `research/evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`, `research/evaluation-harness/VALIDATION.md`
-**Plans:** 4 plans
+**Plans:** 6 plans
 
 Plans:
 - [ ] 22-01-PLAN.md - Internal evaluation model and deterministic report hashing
 - [ ] 22-02-PLAN.md - Generic matchers and unified metrics
 - [ ] 22-03-PLAN.md - Native fixture runner and real kernel observation
-- [ ] 22-04-PLAN.md - Required native fixtures and public-boundary proof
+- [ ] 22-04-PLAN.md - Provenance and current-cache native fixtures
+- [ ] 22-05-PLAN.md - Synthetic extension rejection and delta fixture
+- [ ] 22-06-PLAN.md - Required fixture coverage and public-boundary proof
 
 **Success criteria:**
 1. Native fixtures can assert facts, graph edges, paths, diagnostics, invariants, and runtime budgets.
