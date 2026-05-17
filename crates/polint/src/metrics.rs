@@ -90,6 +90,9 @@ fn saturating_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::core::{FunctionFact, FunctionId, Language, Span};
     use std::path::PathBuf;
@@ -153,5 +156,136 @@ mod tests {
         assert_eq!(db.complexity_metrics().len(), 1);
         assert_eq!(db.complexity_metrics()[0].function, function);
         assert_eq!(db.complexity_metrics()[0].cyclomatic_complexity, 2);
+    }
+
+    #[test]
+    fn metrics_metadata_is_recorded_only_when_metrics_are_requested() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function handler() { return 1; }\n".to_string(),
+        );
+        let span = Span {
+            file,
+            start_byte: 0,
+            end_byte: 37,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 38,
+        };
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span,
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+
+        derive_requested_metrics(&mut db, &AnalysisPlan::empty());
+
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::FileMetric, 0))
+                .is_none()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::FunctionMetric, 0))
+                .is_none()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::ComplexityMetric, 0))
+                .is_none()
+        );
+
+        derive_requested_metrics(
+            &mut db,
+            &AnalysisPlan::from_capability_names_for_test(&["complexity_metrics"]),
+        );
+
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::FileMetric, 0))
+                .is_some()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::FunctionMetric, 0))
+                .is_some()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::ComplexityMetric, 0))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn metrics_metadata_uses_provider_defaults_and_source_stable_keys() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function handler() {\n  return 1;\n}\n".to_string(),
+        );
+        let span = Span {
+            file,
+            start_byte: 0,
+            end_byte: 40,
+            start_line: 1,
+            start_col: 1,
+            end_line: 3,
+            end_col: 2,
+        };
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span,
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let file_key = db
+            .metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .expect("source metadata should exist")
+            .stable_key
+            .clone();
+        let function_key = db
+            .metadata_for(FactRef::new(FactFamily::Function, function.0))
+            .expect("function metadata should exist")
+            .stable_key
+            .clone();
+
+        derive_requested_metrics(
+            &mut db,
+            &AnalysisPlan::from_capability_names_for_test(&["function_metrics"]),
+        );
+
+        let file_metric = db
+            .metadata_for(FactRef::new(FactFamily::FileMetric, 0))
+            .expect("file metric metadata should be recorded");
+        let function_metric = db
+            .metadata_for(FactRef::new(FactFamily::FunctionMetric, 0))
+            .expect("function metric metadata should be recorded");
+        let complexity_metric = db
+            .metadata_for(FactRef::new(FactFamily::ComplexityMetric, 0))
+            .expect("complexity metric metadata should be recorded");
+
+        assert_eq!(file_metric.producer_id, "polint.metrics");
+        assert_eq!(file_metric.layer_id, "polint.metrics");
+        assert_eq!(file_metric.precision, FactPrecision::Syntax);
+        assert_eq!(file_metric.confidence, FactConfidence::High);
+        assert_eq!(file_metric.validation, ValidationStatus::NativeTrusted);
+        assert!(file_metric.stable_key.contains(&file_key));
+        assert!(function_metric.stable_key.contains(&function_key));
+        assert!(function_metric.stable_key.contains("metric_name"));
+        assert!(function_metric.stable_key.contains("function_size"));
+        assert!(complexity_metric.stable_key.contains(&function_key));
+        assert!(complexity_metric.stable_key.contains("metric_name"));
+        assert!(complexity_metric.stable_key.contains("cyclomatic_complexity"));
     }
 }
