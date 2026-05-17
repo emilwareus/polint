@@ -833,6 +833,11 @@ mod eval_native_fixture_runner_tests {
         }));
     }
 
+    #[test]
+    fn eval_native_fixture_suite_covers_required_categories() {
+        panic!("native fixture category coverage proof is not implemented yet");
+    }
+
     fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {
         let mut kinds = items
             .iter()

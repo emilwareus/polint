@@ -56,6 +56,11 @@ fn top_level_help_only_lists_supported_public_commands() {
     }
 }
 
+#[test]
+fn eval_harness_stays_internal() {
+    panic!("public eval boundary proof is not implemented yet");
+}
+
 fn write_plan_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
