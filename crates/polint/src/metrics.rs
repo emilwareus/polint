@@ -286,6 +286,10 @@ mod tests {
         assert!(function_metric.stable_key.contains("function_size"));
         assert!(complexity_metric.stable_key.contains(&function_key));
         assert!(complexity_metric.stable_key.contains("metric_name"));
-        assert!(complexity_metric.stable_key.contains("cyclomatic_complexity"));
+        assert!(
+            complexity_metric
+                .stable_key
+                .contains("cyclomatic_complexity")
+        );
     }
 }

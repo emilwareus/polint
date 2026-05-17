@@ -19,6 +19,9 @@ const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
 const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
+const METRICS_PROVIDER_ID: &str = "polint.metrics";
+const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
+const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
 
 /// Arbitrary per-rule configuration value from `.polint.toml`.
 ///
@@ -675,6 +678,7 @@ impl AnalysisDb {
         self.file_metrics = file_metrics;
         self.function_metrics = function_metrics;
         self.complexity_metrics = complexity_metrics;
+        self.refresh_metric_metadata();
     }
 
     pub(crate) fn replace_module_graph_facts(
@@ -775,6 +779,42 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in reference_metadata {
             self.record_fact_meta(FactFamily::Reference, run_id, metadata);
+        }
+    }
+
+    fn refresh_metric_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::FileMetric);
+        self.fact_meta.remove_family(FactFamily::FunctionMetric);
+        self.fact_meta.remove_family(FactFamily::ComplexityMetric);
+
+        let file_metadata = self
+            .file_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.file_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in file_metadata {
+            self.record_fact_meta(FactFamily::FileMetric, run_id, metadata);
+        }
+
+        let function_metadata = self
+            .function_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.function_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in function_metadata {
+            self.record_fact_meta(FactFamily::FunctionMetric, run_id, metadata);
+        }
+
+        let complexity_metadata = self
+            .complexity_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.complexity_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in complexity_metadata {
+            self.record_fact_meta(FactFamily::ComplexityMetric, run_id, metadata);
         }
     }
 
@@ -1354,6 +1394,72 @@ impl AnalysisDb {
         )
     }
 
+    fn file_metric_metadata(&self, fact: &FileMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::FileMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([("file_key", self.source_file_key(fact.file))]),
+            stable_parts([
+                ("language", language_label(fact.language).to_string()),
+                ("line_count", fact.line_count.to_string()),
+                (
+                    "non_empty_line_count",
+                    fact.non_empty_line_count.to_string(),
+                ),
+                ("byte_count", fact.byte_count.to_string()),
+                ("function_count", fact.function_count.to_string()),
+            ]),
+        )
+    }
+
+    fn function_metric_metadata(&self, fact: &FunctionMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::FunctionMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                (
+                    "function_key",
+                    self.function_key(fact.function, &fact.name, &fact.span),
+                ),
+                ("metric_name", FUNCTION_SIZE_METRIC_NAME.to_string()),
+            ]),
+            stable_parts([
+                ("file_key", self.source_file_key(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("line_count", fact.line_count.to_string()),
+                ("byte_count", fact.byte_count.to_string()),
+            ]),
+        )
+    }
+
+    fn complexity_metric_metadata(&self, fact: &ComplexityMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::ComplexityMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                (
+                    "function_key",
+                    self.function_key(fact.function, &fact.name, &fact.span),
+                ),
+                ("metric_name", CYCLOMATIC_COMPLEXITY_METRIC_NAME.to_string()),
+            ]),
+            stable_parts([
+                ("file_key", self.source_file_key(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "cyclomatic_complexity",
+                    fact.cyclomatic_complexity.to_string(),
+                ),
+            ]),
+        )
+    }
+
     fn module_node_metadata(&self, node: &ModuleNode) -> FactMeta {
         fact_meta_from_parts(
             FactFamily::ModuleNode,
@@ -1560,6 +1666,27 @@ impl AnalysisDb {
         self.metadata_for(FactRef::new(family, run_id))
             .map(|metadata| metadata.stable_key.clone())
             .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
+    }
+
+    fn source_file_key(&self, file: FileId) -> String {
+        self.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| self.path_for(file).replace('\\', "/"))
+    }
+
+    fn function_key(&self, function: FunctionId, name: &str, span: &Span) -> String {
+        self.metadata_for(FactRef::new(FactFamily::Function, function.0))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| {
+                stable_key_from_parts(
+                    FactFamily::Function,
+                    &[
+                        ("path", self.path_for(span.file)),
+                        ("name", name.to_string()),
+                        ("span", span_metadata_value(span)),
+                    ],
+                )
+            })
     }
 
     fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
