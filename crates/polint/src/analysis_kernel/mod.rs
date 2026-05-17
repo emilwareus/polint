@@ -5,6 +5,7 @@ use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
 mod provider;
+mod metadata;
 
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
