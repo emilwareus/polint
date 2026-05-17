@@ -90,8 +90,8 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
         (left.area, left.case_id.as_str()).cmp(&(right.area, right.case_id.as_str()))
     });
     for case in &mut normalized.cases {
-        case.expected.sort_by_key(expected_item_key);
-        case.observed.sort_by_key(observed_item_key);
+        case.expected.sort_by_cached_key(expected_item_sort_key);
+        case.observed.sort_by_cached_key(observed_item_sort_key);
         case.matches.sort_by(|left, right| {
             (
                 left.item_key.as_str(),
@@ -140,9 +140,22 @@ pub(crate) fn deterministic_output_hash(run: &EvaluationRun) -> String {
             summary.observed_runtime_ms = None;
         }
     }
+    normalized = normalize_run(&normalized);
     let canonical_json =
         serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string());
     stable_hash(&[canonical_json.as_str()])
+}
+
+fn expected_item_sort_key(item: &ExpectedItem) -> (String, String) {
+    (expected_item_key(item), canonical_json_key(item))
+}
+
+fn observed_item_sort_key(item: &ObservedItem) -> (String, String) {
+    (observed_item_key(item), canonical_json_key(item))
+}
+
+fn canonical_json_key<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_default()
 }
 
 fn expected_item_key(item: &ExpectedItem) -> String {
@@ -358,6 +371,21 @@ mod tests {
         let right = to_deterministic_json_pretty(&report_with_order(Ordering::Reverse));
 
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn eval_report_normalization_orders_equal_identity_items_by_serialized_fields() {
+        let left = report_with_order(Ordering::Forward);
+        let right = report_with_order(Ordering::Reverse);
+
+        assert_eq!(
+            to_deterministic_json_pretty(&left),
+            to_deterministic_json_pretty(&right)
+        );
+        assert_eq!(
+            deterministic_output_hash(&left),
+            deterministic_output_hash(&right)
+        );
     }
 
     #[test]
@@ -588,6 +616,15 @@ mod tests {
                 status: Some(ObservedStatus::Present),
                 false_positive_trap: false,
             }),
+            ExpectedItem::Fact(ExpectedFact {
+                family: "symbols".to_string(),
+                stable_key: "fact:module:handler".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.symbol_graph".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+                false_positive_trap: true,
+            }),
             ExpectedItem::Diagnostic(ExpectedDiagnostic {
                 rule_id: "local/rule".to_string(),
                 relative_path: "src/main.go".to_string(),
@@ -642,6 +679,15 @@ mod tests {
                 mode: AssertionMode::Exact,
                 producer_id: Some("polint.symbol_graph".to_string()),
                 provenance: Some("metadata-sidecar".to_string()),
+                precision: Some("syntactic".to_string()),
+                status: Some(ObservedStatus::Present),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "symbols".to_string(),
+                stable_key: "fact:module:handler".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.symbol_graph".to_string()),
+                provenance: Some("native-provider".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
             }),
