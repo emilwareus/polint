@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-17T16:57:35.649Z"
+last_updated: "2026-05-17T17:15:48.205Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 2
   total_plans: 12
-  completed_plans: 8
-  percent: 67
+  completed_plans: 9
+  percent: 75
 ---
 
 # State: polint
@@ -40,7 +40,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Last activity: 2026-05-17
 
 ## Phase Progress
@@ -49,7 +49,7 @@ Last activity: 2026-05-17
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
-| 22 | Executing | 2/6 plans complete; evaluation model/report hashing plus generic matchers and metrics done; requirement SAE-FND-03 |
+| 22 | Executing | 3/6 plans complete; evaluation model/report hashing, generic matchers/metrics, and native fixture runner with real kernel observation done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
@@ -113,6 +113,9 @@ Last activity: 2026-05-17
 - [Phase 22-internal-evaluation-harness-mvp]: Represent matcher outcomes as typed report data instead of outcome strings so metrics can aggregate deterministically.
 - [Phase 22-internal-evaluation-harness-mvp]: Clear observed runtime durations from match summaries before deterministic output hashing, preserving pass/fail semantics without wall-clock hash input.
 - [Phase 22-internal-evaluation-harness-mvp]: Extend the existing MetricSummary report type from Plan 22-01 instead of adding a duplicate metric report shape.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-03 kept native fixture loading, observation, and execution crate-private/test-facing under eval with no public CLI or SDK surface.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-03 copies fixture repos into temporary directories before AnalysisKernel::run and rejects symlink escape during fixture copy.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-03 sources provider-order observations from AnalysisKernel::provider_manifests() and keeps exact runtime durations out of deterministic output hashes.
 
 ## Execution Metrics
 
@@ -125,14 +128,15 @@ Last activity: 2026-05-17
 | 21-provenance-precision-and-validation-metadata | 03 | 14m | 2 | 4 |
 | 21-provenance-precision-and-validation-metadata | 04 | 11m | 2 | 3 |
 | 22-internal-evaluation-harness-mvp | 02 | 15 min | 2 | 5 |
+| 22-internal-evaluation-harness-mvp | 03 | 12 min | 3 | 7 |
 
 ## Session
 
 - Last session: 2026-05-17
-- Stopped at: Completed 22-02-PLAN.md
+- Stopped at: Completed 22-03-PLAN.md
 
 ## Next Action
 
-Continue Phase 22 with Plan 03:
+Continue Phase 22 with Plan 04:
 
 `/gsd-execute-phase 22`
