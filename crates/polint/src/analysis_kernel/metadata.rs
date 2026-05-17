@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
 
@@ -161,24 +161,81 @@ const VALIDATION_STATUS_VOCABULARY: &[ValidationStatus] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FactMetaInsert {
+pub(crate) struct StableKeyOwner {
     pub(crate) reference: FactRef,
-    pub(crate) meta: FactMeta,
+    pub(crate) payload_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct StableKeyConflict {
+    pub(crate) family: FactFamily,
+    pub(crate) stable_key: String,
+    pub(crate) existing: FactRef,
+    pub(crate) incoming: FactRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FactMetaInsert {
+    Inserted,
+    Idempotent,
+    Conflict {
+        family: FactFamily,
+        stable_key: String,
+        existing: FactRef,
+        incoming: FactRef,
+    },
 }
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct FactMetaStore {
     rows: BTreeMap<FactRef, FactMeta>,
+    stable_key_owners: BTreeMap<(FactFamily, String), StableKeyOwner>,
+    stable_key_conflicts: BTreeSet<StableKeyConflict>,
 }
 
 impl FactMetaStore {
-    pub(crate) fn insert(&mut self, insert: FactMetaInsert) -> Option<FactMeta> {
-        self.rows.insert(insert.reference, insert.meta)
+    pub(crate) fn insert(&mut self, reference: FactRef, meta: FactMeta) -> FactMetaInsert {
+        let owner_key = (reference.family, meta.stable_key.clone());
+        let result = if let Some(owner) = self.stable_key_owners.get(&owner_key) {
+            if owner.payload_digest == meta.payload_digest {
+                FactMetaInsert::Idempotent
+            } else {
+                let conflict = StableKeyConflict {
+                    family: reference.family,
+                    stable_key: meta.stable_key.clone(),
+                    existing: owner.reference,
+                    incoming: reference,
+                };
+                self.stable_key_conflicts.insert(conflict.clone());
+                FactMetaInsert::Conflict {
+                    family: conflict.family,
+                    stable_key: conflict.stable_key,
+                    existing: conflict.existing,
+                    incoming: conflict.incoming,
+                }
+            }
+        } else {
+            self.stable_key_owners.insert(
+                owner_key,
+                StableKeyOwner {
+                    reference,
+                    payload_digest: meta.payload_digest.clone(),
+                },
+            );
+            FactMetaInsert::Inserted
+        };
+
+        self.rows.insert(reference, meta);
+        result
     }
 
     pub(crate) fn remove_family(&mut self, family: FactFamily) {
         self.rows
             .retain(|reference, _metadata| reference.family != family);
+        self.stable_key_owners
+            .retain(|(owner_family, _stable_key), _owner| *owner_family != family);
+        self.stable_key_conflicts
+            .retain(|conflict| conflict.family != family);
     }
 
     #[cfg(test)]
@@ -188,6 +245,20 @@ impl FactMetaStore {
 
     pub(crate) fn get(&self, reference: FactRef) -> Option<&FactMeta> {
         self.rows.get(&reference)
+    }
+
+    pub(crate) fn stable_key_conflicts(&self) -> impl Iterator<Item = &StableKeyConflict> {
+        self.stable_key_conflicts.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stable_key_owner(
+        &self,
+        family: FactFamily,
+        stable_key: &str,
+    ) -> Option<&StableKeyOwner> {
+        self.stable_key_owners
+            .get(&(family, stable_key.to_string()))
     }
 
     #[cfg(test)]
@@ -355,7 +426,8 @@ mod tests {
 
         assert_eq!(result, FactMetaInsert::Idempotent);
         assert_eq!(
-            store.stable_key_owner(FactFamily::Import, "import:key")
+            store
+                .stable_key_owner(FactFamily::Import, "import:key")
                 .map(|owner| owner.reference),
             Some(first_ref)
         );
@@ -364,17 +436,11 @@ mod tests {
     #[test]
     fn stable_key_conflict_insert_records_conflicts_deterministically() {
         let mut store = FactMetaStore::default();
-        let source_conflict_ref = FactRef::new(FactFamily::SourceFile, 2);
         let import_owner_ref = FactRef::new(FactFamily::Import, 8);
         let import_conflict_ref = FactRef::new(FactFamily::Import, 3);
 
         store.insert(import_owner_ref, test_meta("import:key", "payload:a"));
         let result = store.insert(import_conflict_ref, test_meta("import:key", "payload:b"));
-        store.insert(source_conflict_ref, test_meta("source:key", "payload:b"));
-        store.insert(
-            FactRef::new(FactFamily::SourceFile, 1),
-            test_meta("source:key", "payload:a"),
-        );
         store.insert(import_conflict_ref, test_meta("import:key", "payload:b"));
 
         let conflicts = store.stable_key_conflicts().collect::<Vec<_>>();

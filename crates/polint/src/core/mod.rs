@@ -1,7 +1,7 @@
 use crate::analysis_kernel::{
-    FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
-    MissingFactMeta, ValidationStatus, resolution_metadata, resolution_status_metadata,
-    stable_key_from_parts, symbol_metadata,
+    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
 };
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
@@ -1358,7 +1358,7 @@ impl AnalysisDb {
 
     fn record_fact_meta(&mut self, family: FactFamily, run_id: u64, meta: FactMeta) {
         let reference = FactRef::new(family, run_id);
-        let _previous = self.fact_meta.insert(FactMetaInsert { reference, meta });
+        let _insert = self.fact_meta.insert(reference, meta);
         debug_assert!(self.metadata_for(reference).is_some());
     }
 
