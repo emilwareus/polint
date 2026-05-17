@@ -1,6 +1,7 @@
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
-    ValidationStatus, stable_key_from_parts,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
 };
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
@@ -16,6 +17,8 @@ use std::sync::Arc;
 const SOURCE_PROVIDER_ID: &str = "polint.source";
 const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
 const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
+const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
+const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 
 /// Arbitrary per-rule configuration value from `.polint.toml`.
 ///
@@ -693,6 +696,7 @@ impl AnalysisDb {
         self.resolved_imports = resolved_imports;
         self.module_nodes = module_nodes;
         self.module_edges = module_edges;
+        self.refresh_module_graph_metadata();
     }
 
     pub(crate) fn replace_symbol_graph_facts(
@@ -705,6 +709,73 @@ impl AnalysisDb {
         self.definitions = definitions;
         self.references = references;
         self.rebuild_symbol_graph_indexes();
+        self.refresh_symbol_graph_metadata();
+    }
+
+    fn refresh_module_graph_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::ModuleNode);
+        self.fact_meta.remove_family(FactFamily::ResolvedImport);
+        self.fact_meta.remove_family(FactFamily::ModuleEdge);
+
+        let node_metadata = self
+            .module_nodes
+            .iter()
+            .map(|node| (node.id.0, self.module_node_metadata(node)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::ModuleNode, run_id, metadata);
+        }
+
+        let resolved_metadata = self
+            .resolved_imports
+            .iter()
+            .map(|fact| (fact.id.0, self.resolved_import_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in resolved_metadata {
+            self.record_fact_meta(FactFamily::ResolvedImport, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .module_edges
+            .iter()
+            .map(|edge| (edge.id.0, self.module_edge_metadata(edge)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
+        }
+    }
+
+    fn refresh_symbol_graph_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Symbol);
+        self.fact_meta.remove_family(FactFamily::Definition);
+        self.fact_meta.remove_family(FactFamily::Reference);
+
+        let symbol_metadata = self
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.id.0, self.symbol_fact_metadata(symbol)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in symbol_metadata {
+            self.record_fact_meta(FactFamily::Symbol, run_id, metadata);
+        }
+
+        let definition_metadata = self
+            .definitions
+            .iter()
+            .map(|definition| (definition.id.0, self.definition_fact_metadata(definition)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in definition_metadata {
+            self.record_fact_meta(FactFamily::Definition, run_id, metadata);
+        }
+
+        let reference_metadata = self
+            .references
+            .iter()
+            .map(|reference| (reference.id.0, self.reference_fact_metadata(reference)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in reference_metadata {
+            self.record_fact_meta(FactFamily::Reference, run_id, metadata);
+        }
     }
 
     fn rebuild_symbol_graph_indexes(&mut self) {
@@ -1283,6 +1354,214 @@ impl AnalysisDb {
         )
     }
 
+    fn module_node_metadata(&self, node: &ModuleNode) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::ModuleNode,
+            MODULE_GRAPH_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::High,
+            stable_parts([
+                ("kind", module_node_kind_label(node.kind).to_string()),
+                ("label", node.label.clone()),
+                ("path", option_file_path(self, node.file)),
+                (
+                    "package_key",
+                    node.package
+                        .map(|package| self.fact_stable_key(FactFamily::Package, package.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "language",
+                    node.language
+                        .map(|language| language_label(language).to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+            stable_parts([("id", node.id.0.to_string())]),
+        )
+    }
+
+    fn resolved_import_metadata(&self, fact: &ResolvedImportFact) -> FactMeta {
+        let (precision, confidence) = resolution_metadata(fact.precision, fact.status);
+        fact_meta_from_parts(
+            FactFamily::ResolvedImport,
+            MODULE_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            stable_parts([
+                (
+                    "import_key",
+                    self.fact_stable_key(FactFamily::Import, fact.import.0),
+                ),
+                ("from_path", self.path_for(fact.from_file)),
+                (
+                    "target_node_key",
+                    fact.target_node
+                        .map(|node| self.fact_stable_key(FactFamily::ModuleNode, node.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("status", resolution_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    resolution_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "reason",
+                    fact.reason
+                        .map(|reason| unresolved_reason_label(reason).to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("import", fact.import.0.to_string()),
+                ("from_file", u64::from(fact.from_file.0).to_string()),
+                (
+                    "target_node",
+                    fact.target_node
+                        .map(|node| node.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn module_edge_metadata(&self, edge: &ModuleEdge) -> FactMeta {
+        let (precision, confidence) = resolution_status_metadata(edge.status);
+        fact_meta_from_parts(
+            FactFamily::ModuleEdge,
+            MODULE_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            stable_parts([
+                (
+                    "from_node_key",
+                    self.fact_stable_key(FactFamily::ModuleNode, edge.from.0),
+                ),
+                (
+                    "to_node_key",
+                    self.fact_stable_key(FactFamily::ModuleNode, edge.to.0),
+                ),
+                (
+                    "import_key",
+                    edge.import
+                        .map(|import| self.fact_stable_key(FactFamily::Import, import.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "resolved_import_key",
+                    edge.resolved_import
+                        .map(|resolved| {
+                            self.fact_stable_key(FactFamily::ResolvedImport, resolved.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                ("kind", module_edge_kind_label(edge.kind).to_string()),
+                ("status", resolution_status_label(edge.status).to_string()),
+            ]),
+            stable_parts([
+                ("id", edge.id.0.to_string()),
+                ("from", edge.from.0.to_string()),
+                ("to", edge.to.0.to_string()),
+            ]),
+        )
+    }
+
+    fn symbol_fact_metadata(&self, fact: &SymbolFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Symbol,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+            ]),
+        )
+    }
+
+    fn definition_fact_metadata(&self, fact: &DefinitionFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Definition,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("symbol", fact.symbol.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+            ]),
+        )
+    }
+
+    fn reference_fact_metadata(&self, fact: &ReferenceFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Reference,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "status",
+                    symbol_resolution_status_label(fact.status).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+                (
+                    "target",
+                    fact.target
+                        .map(|target| target.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
+        self.metadata_for(FactRef::new(family, run_id))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
+    }
+
     fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
         fact_meta_from_parts(
             FactFamily::TsComponent,
@@ -1387,6 +1666,28 @@ fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
     }
 }
 
+fn fact_meta_from_stable_key<const EXTRA: usize>(
+    _family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_key: String,
+    payload_extra_parts: [(&'static str, String); EXTRA],
+) -> FactMeta {
+    let payload_parts = payload_extra_parts.to_vec();
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest,
+    }
+}
+
 fn stable_parts<const N: usize>(parts: [(&'static str, String); N]) -> [(&'static str, String); N] {
     parts
 }
@@ -1421,6 +1722,10 @@ fn span_metadata_value(span: &Span) -> String {
     )
 }
 
+fn option_span_metadata_value(span: Option<&Span>) -> String {
+    span.map(span_metadata_value).unwrap_or_else(none_value)
+}
+
 fn language_label(language: Language) -> &'static str {
     match language {
         Language::Go => "go",
@@ -1429,6 +1734,79 @@ fn language_label(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Jsx => "jsx",
         Language::Unknown => "unknown",
+    }
+}
+
+fn module_node_kind_label(kind: ModuleNodeKind) -> &'static str {
+    match kind {
+        ModuleNodeKind::File => "file",
+        ModuleNodeKind::Package => "package",
+        ModuleNodeKind::Module => "module",
+        ModuleNodeKind::External => "external",
+    }
+}
+
+fn module_edge_kind_label(kind: ModuleEdgeKind) -> &'static str {
+    match kind {
+        ModuleEdgeKind::Contains => "contains",
+        ModuleEdgeKind::Imports => "imports",
+        ModuleEdgeKind::DependsOn => "depends_on",
+    }
+}
+
+fn resolution_status_label(status: ResolutionStatus) -> &'static str {
+    match status {
+        ResolutionStatus::Resolved => "resolved",
+        ResolutionStatus::External => "external",
+        ResolutionStatus::Unresolved => "unresolved",
+        ResolutionStatus::SetupMissing => "setup_missing",
+        ResolutionStatus::Dynamic => "dynamic",
+        ResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn resolution_precision_label(precision: ResolutionPrecision) -> &'static str {
+    match precision {
+        ResolutionPrecision::ExactFile => "exact_file",
+        ResolutionPrecision::Package => "package",
+        ResolutionPrecision::ExternalPackage => "external_package",
+        ResolutionPrecision::Heuristic => "heuristic",
+        ResolutionPrecision::None => "none",
+    }
+}
+
+fn unresolved_reason_label(reason: UnresolvedReason) -> &'static str {
+    match reason {
+        UnresolvedReason::NotFound => "not_found",
+        UnresolvedReason::SetupMissing => "setup_missing",
+        UnresolvedReason::DynamicExpression => "dynamic_expression",
+        UnresolvedReason::UnsupportedLanguage => "unsupported_language",
+        UnresolvedReason::UnsupportedImport => "unsupported_import",
+        UnresolvedReason::ResolverError => "resolver_error",
+        UnresolvedReason::OutsideWorkspace => "outside_workspace",
+    }
+}
+
+fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+    match precision {
+        SymbolPrecision::ExactSemantic => "exact_semantic",
+        SymbolPrecision::ExactLocal => "exact_local",
+        SymbolPrecision::ModuleLinked => "module_linked",
+        SymbolPrecision::Heuristic => "heuristic",
+        SymbolPrecision::Unresolved => "unresolved",
+        SymbolPrecision::Ambiguous => "ambiguous",
+        SymbolPrecision::SetupMissing => "setup_missing",
+        SymbolPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static str {
+    match status {
+        SymbolResolutionStatus::Resolved => "resolved",
+        SymbolResolutionStatus::Unresolved => "unresolved",
+        SymbolResolutionStatus::Ambiguous => "ambiguous",
+        SymbolResolutionStatus::SetupMissing => "setup_missing",
+        SymbolResolutionStatus::Unsupported => "unsupported",
     }
 }
 
@@ -1451,6 +1829,15 @@ fn option_function_id(function: Option<FunctionId>) -> String {
     function
         .map(|function| function.0.to_string())
         .unwrap_or_else(|| "none".to_string())
+}
+
+fn option_file_path(db: &AnalysisDb, file: Option<FileId>) -> String {
+    file.map(|file| db.path_for(file))
+        .unwrap_or_else(none_value)
+}
+
+fn none_value() -> String {
+    "<none>".to_string()
 }
 
 fn option_bool(value: Option<bool>) -> String {

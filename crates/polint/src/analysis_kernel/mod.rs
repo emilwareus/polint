@@ -9,7 +9,8 @@ mod provider;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
-    ValidationStatus, stable_key_from_parts,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
 };
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,

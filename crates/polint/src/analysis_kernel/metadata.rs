@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FactFamily {
     SourceFile,
@@ -48,7 +50,7 @@ const FACT_FAMILY_VOCABULARY: &[FactFamily] = &[
 ];
 
 impl FactFamily {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::SourceFile => "SourceFile",
             Self::Package => "Package",
@@ -168,6 +170,11 @@ impl FactMetaStore {
         self.rows.insert(insert.reference, insert.meta)
     }
 
+    pub(crate) fn remove_family(&mut self, family: FactFamily) {
+        self.rows
+            .retain(|reference, _metadata| reference.family != family);
+    }
+
     pub(crate) fn get(&self, reference: FactRef) -> Option<&FactMeta> {
         self.rows.get(&reference)
     }
@@ -195,6 +202,51 @@ pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]
         key.push_str(&length_prefixed(&value));
     }
     key
+}
+
+pub(crate) fn resolution_metadata(
+    precision: ResolutionPrecision,
+    status: ResolutionStatus,
+) -> (FactPrecision, FactConfidence) {
+    if matches!(status, ResolutionStatus::Dynamic) {
+        return (FactPrecision::Heuristic, FactConfidence::Low);
+    }
+
+    match precision {
+        ResolutionPrecision::ExactFile => (FactPrecision::Exact, FactConfidence::High),
+        ResolutionPrecision::Package | ResolutionPrecision::ExternalPackage => {
+            (FactPrecision::SetupAware, FactConfidence::High)
+        }
+        ResolutionPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
+        ResolutionPrecision::None => resolution_status_metadata(status),
+    }
+}
+
+pub(crate) fn resolution_status_metadata(
+    status: ResolutionStatus,
+) -> (FactPrecision, FactConfidence) {
+    match status {
+        ResolutionStatus::Resolved | ResolutionStatus::External => {
+            (FactPrecision::SetupAware, FactConfidence::High)
+        }
+        ResolutionStatus::Unresolved => (FactPrecision::Unresolved, FactConfidence::Low),
+        ResolutionStatus::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::Low),
+        ResolutionStatus::Dynamic => (FactPrecision::Heuristic, FactConfidence::Low),
+        ResolutionStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
+pub(crate) fn symbol_metadata(precision: SymbolPrecision) -> (FactPrecision, FactConfidence) {
+    match precision {
+        SymbolPrecision::ExactSemantic => (FactPrecision::Exact, FactConfidence::High),
+        SymbolPrecision::ExactLocal => (FactPrecision::Syntax, FactConfidence::High),
+        SymbolPrecision::ModuleLinked => (FactPrecision::SetupAware, FactConfidence::High),
+        SymbolPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
+        SymbolPrecision::Unresolved => (FactPrecision::Unresolved, FactConfidence::Low),
+        SymbolPrecision::Ambiguous => (FactPrecision::Ambiguous, FactConfidence::Low),
+        SymbolPrecision::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::Low),
+        SymbolPrecision::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
 }
 
 fn length_prefixed(value: &str) -> String {
