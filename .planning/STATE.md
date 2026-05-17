@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-17T07:10:06.332Z"
+last_updated: "2026-05-17T07:28:11.690Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 1
   total_plans: 6
-  completed_plans: 3
-  percent: 50
+  completed_plans: 4
+  percent: 67
 ---
 
 # State: polint
@@ -40,7 +40,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 21 (provenance-precision-and-validation-metadata) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Last activity: 2026-05-17
 
 ## Phase Progress
@@ -48,7 +48,7 @@ Last activity: 2026-05-17
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
-| 21 | In Progress | 1/4 plans complete; provenance, precision, and validation metadata; requirement SAE-FND-02 |
+| 21 | In Progress | 2/4 plans complete; provenance, precision, and validation metadata; requirement SAE-FND-02 |
 | 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
@@ -96,6 +96,9 @@ Last activity: 2026-05-17
 - [Phase 21-provenance-precision-and-validation-metadata]: Metadata stays in an AnalysisDb sidecar rather than widening public fact structs.
 - [Phase 21-provenance-precision-and-validation-metadata]: Provider IDs polint.source, polint.go.syntax, and polint.ts.syntax are reused as producer and layer IDs for current source/syntax facts.
 - [Phase 21-provenance-precision-and-validation-metadata]: Stable keys are deterministic strings built from sorted, normalized, length-prefixed labeled parts while run-local FactRef IDs remain separate.
+- [Phase 21-provenance-precision-and-validation-metadata]: Derived provider metadata uses hard-coded manifest IDs polint.module_graph, polint.symbol_graph, and polint.metrics.
+- [Phase 21-provenance-precision-and-validation-metadata]: Symbol, definition, and reference metadata stable keys reuse the existing symbol graph stable_key fields exactly.
+- [Phase 21-provenance-precision-and-validation-metadata]: The missing metadata report stays crate-private and test-facing, with a debug assertion keeping the invariant live inside the kernel.
 
 ## Execution Metrics
 
@@ -104,14 +107,15 @@ Last activity: 2026-05-17
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
 | 21-provenance-precision-and-validation-metadata | 01 | 9h 8m | 2 | 3 |
+| 21-provenance-precision-and-validation-metadata | 02 | 14m | 3 | 6 |
 
 ## Session
 
 - Last session: 2026-05-17
-- Stopped at: Completed 21-01-PLAN.md
+- Stopped at: Completed 21-02-PLAN.md
 
 ## Next Action
 
-Execute Phase 21 Plan 02:
+Execute Phase 21 Plan 03:
 
 `/gsd-execute-phase 21`
