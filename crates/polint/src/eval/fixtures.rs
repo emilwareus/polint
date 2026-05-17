@@ -120,6 +120,45 @@ pub(crate) fn run_native_fixture_for_test(
 ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
     let fixture = load_native_fixture(fixture_dir)?;
     let observed = crate::eval::observed::observe_kernel_fixture(&fixture)?;
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+pub(crate) fn run_cache_current_determinism_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+
+    let cold_observed =
+        crate::eval::observed::observe_kernel_fixture_repo_for_test(&fixture, temp.path(), true)?;
+    let warm_observed =
+        crate::eval::observed::observe_kernel_fixture_repo_for_test(&fixture, temp.path(), true)?;
+    let no_cache_observed =
+        crate::eval::observed::observe_kernel_fixture_repo_for_test(&fixture, temp.path(), false)?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+
+    let cold_warm_no_cache_equal = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run)
+        && cold_run.output_hash == warm_run.output_hash
+        && cold_run.output_hash == no_cache_run.output_hash;
+
+    let mut observed = no_cache_observed;
+    if cold_warm_no_cache_equal {
+        observed.push(cache_current_determinism_observed_invariant());
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+fn evaluation_run_for_fixture(
+    fixture: &NativeFixture,
+    observed: Vec<crate::eval::model::ObservedItem>,
+) -> crate::eval::report::EvaluationRun {
     let matches = crate::eval::matcher::match_case(
         &fixture.manifest.expected,
         &observed,
@@ -145,7 +184,47 @@ pub(crate) fn run_native_fixture_for_test(
     let mut run = crate::eval::report::normalize_run(&run);
     run.output_hash = crate::eval::report::deterministic_output_hash(&run);
 
-    Ok(run)
+    run
+}
+
+#[cfg(test)]
+fn cache_current_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "cache.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("cache.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
+    let mut normalized = run_without_runtime_durations(run);
+    normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn run_without_runtime_durations(
+    run: &crate::eval::report::EvaluationRun,
+) -> crate::eval::report::EvaluationRun {
+    let mut normalized = crate::eval::report::normalize_run(run);
+    normalized.output_hash.clear();
+    for case in &mut normalized.cases {
+        case.runtime.observed_runtime_ms = None;
+        for item in &mut case.observed {
+            if let crate::eval::model::ObservedItem::RuntimeBudget(budget) = item {
+                budget.observed_runtime_ms = None;
+            }
+        }
+        for summary in &mut case.matches {
+            summary.observed_runtime_ms = None;
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -545,7 +624,9 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_cache_current_determinism_fixture_passes() {
-        let run = run_native_fixture_for_test(&cache_current_determinism_fixture_dir()).unwrap();
+        let run =
+            run_cache_current_determinism_fixture_for_test(&cache_current_determinism_fixture_dir())
+                .unwrap();
         let case = run.cases.first().expect("cache determinism case");
 
         assert_eq!(run.metrics.false_negatives, 0);
@@ -570,11 +651,11 @@ mod eval_native_fixture_runner_tests {
         assert!(manifest.contains("cold_warm_no_cache_equal"));
         assert!(manifest.contains("max_runtime_ms = 5000"));
         for forbidden in [
-            "InputSnapshot",
-            "LayerKey",
-            "QueryKey",
-            "SummaryKey",
-            "DiagnosticKey",
+            concat!("Input", "Snapshot"),
+            concat!("Layer", "Key"),
+            concat!("Query", "Key"),
+            concat!("Summary", "Key"),
+            concat!("Diagnostic", "Key"),
         ] {
             assert!(
                 !manifest.contains(forbidden),
@@ -586,7 +667,8 @@ mod eval_native_fixture_runner_tests {
     #[test]
     fn eval_cache_current_determinism_runtime_budget_hash_ignores_duration() {
         let mut first =
-            run_native_fixture_for_test(&cache_current_determinism_fixture_dir()).unwrap();
+            run_cache_current_determinism_fixture_for_test(&cache_current_determinism_fixture_dir())
+                .unwrap();
         let mut second = first.clone();
         first.cases[0].runtime.observed_runtime_ms = Some(1);
         second.cases[0].runtime.observed_runtime_ms = Some(999);

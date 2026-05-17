@@ -32,15 +32,31 @@ use crate::eval::model::{
 
 #[cfg(test)]
 pub(crate) fn observe_kernel_fixture(fixture: &NativeFixture) -> anyhow::Result<Vec<ObservedItem>> {
+    let temp = copy_fixture_repo_for_test(fixture)?;
+    observe_kernel_fixture_repo_for_test(fixture, temp.path(), true)
+}
+
+#[cfg(test)]
+pub(crate) fn copy_fixture_repo_for_test(
+    fixture: &NativeFixture,
+) -> anyhow::Result<tempfile::TempDir> {
     let temp = tempfile::tempdir().context("create temp fixture repo")?;
     copy_dir_contents(&fixture.repo_dir, temp.path())?;
+    Ok(temp)
+}
 
+#[cfg(test)]
+pub(crate) fn observe_kernel_fixture_repo_for_test(
+    fixture: &NativeFixture,
+    repo_root: &Path,
+    cache_enabled: bool,
+) -> anyhow::Result<Vec<ObservedItem>> {
     let started = Instant::now();
-    let loaded = load_config(temp.path())?;
+    let loaded = load_config(repo_root)?;
     let plan = AnalysisPlan::empty();
     let config_digest = config_hash(&loaded);
     let rule_digest = rule_hash(&[], None, &BTreeMap::new());
-    let cache = Cache::default_for_repo(temp.path(), true);
+    let cache = Cache::default_for_repo(repo_root, cache_enabled);
     let output = AnalysisKernel::run(KernelInput {
         loaded: &loaded,
         cache: &cache,
@@ -52,7 +68,7 @@ pub(crate) fn observe_kernel_fixture(fixture: &NativeFixture) -> anyhow::Result<
     let elapsed = started.elapsed();
 
     let mut observed = Vec::new();
-    observed.extend(observed_diagnostics(&output.diagnostics, temp.path()));
+    observed.extend(observed_diagnostics(&output.diagnostics, repo_root));
     observed.extend(provider_order_invariants());
     observed.extend(metadata_debug_facts(
         &AnalysisKernel::metadata_debug_json_for_test(&output.db),
