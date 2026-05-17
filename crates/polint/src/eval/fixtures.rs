@@ -345,14 +345,43 @@ diagnostic = { rule_id = "local/rule", relative_path = "src\\app.ts", line = 1, 
             Some(ExpectedItem::Diagnostic(diagnostic)) if diagnostic.relative_path == "src/app.ts"
         ));
     }
+
+    #[test]
+    fn eval_fixture_manifest_rejects_alternate_fact_producer_field_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture_dir = temp
+            .path()
+            .join("tests/eval-fixtures/provenance/metadata");
+        write_fixture(
+            &fixture_dir,
+            r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "provenance-metadata"
+area = "provenance"
+
+[repo]
+path = "repo"
+
+[[expected]]
+fact = { family = "SourceFile", stable_key = "src/app.ts", mode = "partial", provider_id = "polint.source", precision = "exact", status = "present" }
+"#,
+        );
+
+        let err = load_native_fixture(&fixture_dir).unwrap_err();
+
+        assert!(
+            err.to_string().contains("provider_id"),
+            "alternate producer field should be rejected: {err:#}"
+        );
+    }
 }
 
 #[cfg(test)]
 mod eval_native_fixture_runner_tests {
     use std::path::{Path, PathBuf};
 
-    use crate::eval::model::ExpectedItem;
-    use crate::eval::report::to_deterministic_json_pretty;
+    use crate::eval::model::{ExpectedItem, ObservedItem};
+    use crate::eval::report::{deterministic_output_hash, to_deterministic_json_pretty};
 
     use super::*;
 
@@ -366,6 +395,10 @@ mod eval_native_fixture_runner_tests {
 
     fn provider_order_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/kernel/provider-order")
+    }
+
+    fn provenance_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/provenance/metadata")
     }
 
     #[test]
@@ -421,5 +454,87 @@ mod eval_native_fixture_runner_tests {
         let second = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
 
         assert_eq!(first.output_hash, second.output_hash);
+    }
+
+    #[test]
+    fn eval_provenance_fixture_passes() {
+        let run = run_native_fixture_for_test(&provenance_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("provenance case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(run.metrics.false_negatives, 0);
+        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "SourceFile"
+                    && fact.stable_key.contains("src/app.ts")
+                    && fact.producer_id.as_deref() == Some("polint.source")
+                    && fact.precision.as_deref() == Some("exact")
+            }
+            _ => false,
+        }));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "Import"
+                    && fact.stable_key.contains("./message")
+                    && fact.producer_id.as_deref() == Some("polint.ts.syntax")
+                    && fact.precision.as_deref() == Some("syntax")
+            }
+            _ => false,
+        }));
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_provenance_fixture_expected_facts_use_producer_id_fields() {
+        let fixture = load_native_fixture(&provenance_fixture_dir()).unwrap();
+        let manifest = std::fs::read_to_string(
+            provenance_fixture_dir().join("expected.polint-eval.toml"),
+        )
+        .unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.producer_id.as_deref(),
+                    fact.precision.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            expected_facts,
+            vec![
+                ("SourceFile", Some("polint.source"), Some("exact")),
+                ("Import", Some("polint.ts.syntax"), Some("syntax")),
+            ]
+        );
+        assert!(manifest.contains("producer_id"));
+        assert!(!manifest.contains("provider_id"));
+    }
+
+    #[test]
+    fn eval_provenance_fixture_runtime_budget_hash_ignores_duration() {
+        let mut first = run_native_fixture_for_test(&provenance_fixture_dir()).unwrap();
+        let mut second = first.clone();
+        first.cases[0].runtime.observed_runtime_ms = Some(1);
+        second.cases[0].runtime.observed_runtime_ms = Some(999);
+        for run in [&mut first, &mut second] {
+            let observed_runtime_ms = run.cases[0].runtime.observed_runtime_ms;
+            for item in &mut run.cases[0].observed {
+                if let ObservedItem::RuntimeBudget(budget) = item {
+                    budget.observed_runtime_ms = observed_runtime_ms;
+                }
+            }
+        }
+
+        assert_eq!(
+            deterministic_output_hash(&first),
+            deterministic_output_hash(&second)
+        );
     }
 }
