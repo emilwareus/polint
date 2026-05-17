@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-17T17:44:10.034Z"
+status: verifying
+last_updated: "2026-05-17T17:57:16.609Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 22
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_plans: 12
+  percent: 100
 ---
 
 # State: polint
@@ -38,8 +38,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
+Status: Phase complete — ready for verification
+Phase: 22 (internal-evaluation-harness-mvp) — READY FOR VERIFICATION
 Plan: 6 of 6
 Last activity: 2026-05-17
 
@@ -49,7 +49,7 @@ Last activity: 2026-05-17
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
-| 22 | Executing | 5/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance fixture, current cache determinism fixture, and synthetic extension rejection/delta fixture done; requirement SAE-FND-03 |
+| 22 | Complete | 6/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance/cache/extension fixtures, fixture category coverage, and public-boundary proof done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
@@ -123,6 +123,9 @@ Last activity: 2026-05-17
 - [Phase 22-internal-evaluation-harness-mvp]: 22-05 counts present, accepted, and rejected observed fact statuses separately in eval metrics.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-05 represents extension delta evidence with normalized invariant rows and extension.real_sink_active = false.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-05 adds no real extension provider activation, merge surface, CLI, SDK, or runner contract.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-06 keeps Phase 22 eval proof entirely test-facing with no public eval CLI, SDK export, runner entrypoint, or documented schema.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-06 proves suite category coverage by executing every native fixture manifest and requiring passing kernel, provenance, cache, and extension areas.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-06 uses repeated minimal public check JSON output as the no-leak and determinism guard.
 
 ## Execution Metrics
 
@@ -138,14 +141,15 @@ Last activity: 2026-05-17
 | 22-internal-evaluation-harness-mvp | 03 | 12 min | 3 | 7 |
 | 22-internal-evaluation-harness-mvp | 04 | 11 min | 2 | 12 |
 | 22-internal-evaluation-harness-mvp | 05 | 8 min | 1 | 9 |
+| 22-internal-evaluation-harness-mvp | 06 | 9 min | 1 | 4 |
 
 ## Session
 
 - Last session: 2026-05-17
-- Stopped at: Completed 22-05-PLAN.md
+- Stopped at: Completed 22-06-PLAN.md
 
 ## Next Action
 
-Continue Phase 22 with Plan 06:
+Phase 22 is ready for verification:
 
-`/gsd-execute-phase 22`
+`/gsd-verify-work 22`
