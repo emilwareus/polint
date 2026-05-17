@@ -7,6 +7,8 @@ use crate::diagnostics::Diagnostic;
 mod metadata;
 mod provider;
 mod validation;
+#[cfg(test)]
+mod debug;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
