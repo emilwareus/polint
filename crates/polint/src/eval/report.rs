@@ -10,7 +10,7 @@ use crate::eval::model::{
 
 pub(crate) const EVALUATION_SCHEMA_VERSION: &str = "polint-eval-internal-1";
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) struct EvaluationRun {
     pub(crate) schema_version: String,
@@ -39,7 +39,7 @@ pub(crate) struct RuntimeObservation {
     pub(crate) observed_runtime_ms: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) struct MetricSummary {
     pub(crate) true_positives: u64,
@@ -47,9 +47,23 @@ pub(crate) struct MetricSummary {
     pub(crate) false_negatives: u64,
     pub(crate) true_negatives: u64,
     pub(crate) unconfirmed: u64,
-    pub(crate) unknown: u64,
+    pub(crate) false_positive_trap_hits: u64,
+    pub(crate) forbidden_hits: u64,
+    pub(crate) unknown_count: u64,
+    pub(crate) graph_edges_expected: u64,
+    pub(crate) graph_edges_observed: u64,
+    pub(crate) graph_edges_unconfirmed: u64,
+    pub(crate) paths_expected: u64,
+    pub(crate) paths_observed: u64,
+    pub(crate) paths_unconfirmed: u64,
     pub(crate) runtime_budget_passed: u64,
     pub(crate) runtime_budget_failed: u64,
+    pub(crate) precision: Option<f64>,
+    pub(crate) recall: Option<f64>,
+    pub(crate) f1: Option<f64>,
+    pub(crate) f2: Option<f64>,
+    pub(crate) f3: Option<f64>,
+    pub(crate) false_positive_rate: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -374,42 +388,45 @@ mod tests {
 
     #[test]
     fn eval_report_hash_changes_when_semantic_output_changes() {
-        let baseline = report_with_order(Ordering::Forward);
-        let baseline_hash = deterministic_output_hash(&baseline);
+        let reference = report_with_order(Ordering::Forward);
+        let reference_hash = deterministic_output_hash(&reference);
 
-        let mut diagnostic_changed = baseline.clone();
+        let mut diagnostic_changed = reference.clone();
         let diagnostic = observed_diagnostic_mut(&mut diagnostic_changed);
         diagnostic.fingerprint = Some("changed-fingerprint".to_string());
         assert_ne!(
-            baseline_hash,
+            reference_hash,
             deterministic_output_hash(&diagnostic_changed)
         );
 
-        let mut fact_changed = baseline.clone();
+        let mut fact_changed = reference.clone();
         let fact = observed_fact_mut(&mut fact_changed);
         fact.stable_key = "fact:changed".to_string();
-        assert_ne!(baseline_hash, deterministic_output_hash(&fact_changed));
+        assert_ne!(reference_hash, deterministic_output_hash(&fact_changed));
 
-        let mut graph_changed = baseline.clone();
+        let mut graph_changed = reference.clone();
         let edge = observed_graph_edge_mut(&mut graph_changed);
         edge.to = "module:changed".to_string();
-        assert_ne!(baseline_hash, deterministic_output_hash(&graph_changed));
+        assert_ne!(reference_hash, deterministic_output_hash(&graph_changed));
 
-        let mut path_changed = baseline.clone();
+        let mut path_changed = reference.clone();
         let path = observed_path_mut(&mut path_changed);
         path.nodes[1] = "changed-node".to_string();
-        assert_ne!(baseline_hash, deterministic_output_hash(&path_changed));
+        assert_ne!(reference_hash, deterministic_output_hash(&path_changed));
 
-        let mut invariant_changed = baseline.clone();
+        let mut invariant_changed = reference.clone();
         let invariant = observed_invariant_mut(&mut invariant_changed);
         invariant.value = "false".to_string();
-        assert_ne!(baseline_hash, deterministic_output_hash(&invariant_changed));
+        assert_ne!(
+            reference_hash,
+            deterministic_output_hash(&invariant_changed)
+        );
 
-        let mut budget_changed = baseline.clone();
+        let mut budget_changed = reference.clone();
         let budget = observed_runtime_budget_mut(&mut budget_changed);
         budget.budget_passed = false;
         budget_changed.cases[0].runtime.budget_passed = false;
-        assert_ne!(baseline_hash, deterministic_output_hash(&budget_changed));
+        assert_ne!(reference_hash, deterministic_output_hash(&budget_changed));
     }
 
     #[test]
@@ -460,9 +477,23 @@ mod tests {
                 false_negatives: 2,
                 true_negatives: 5,
                 unconfirmed: 1,
-                unknown: 1,
+                false_positive_trap_hits: 1,
+                forbidden_hits: 1,
+                unknown_count: 1,
+                graph_edges_expected: 1,
+                graph_edges_observed: 2,
+                graph_edges_unconfirmed: 1,
+                paths_expected: 1,
+                paths_observed: 1,
+                paths_unconfirmed: 1,
                 runtime_budget_passed: 1,
                 runtime_budget_failed: 0,
+                precision: Some(0.75),
+                recall: Some(0.6),
+                f1: Some(2.0 * 0.75 * 0.6 / (0.75 + 0.6)),
+                f2: Some(5.0 * 0.75 * 0.6 / (4.0 * 0.75 + 0.6)),
+                f3: Some(10.0 * 0.75 * 0.6 / (9.0 * 0.75 + 0.6)),
+                false_positive_rate: Some(1.0 / 6.0),
             },
             output_hash: String::new(),
         }
