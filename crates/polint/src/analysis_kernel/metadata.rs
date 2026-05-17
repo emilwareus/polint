@@ -172,6 +172,7 @@ impl FactMetaStore {
         self.rows.get(&reference)
     }
 
+    #[cfg(test)]
     pub(crate) fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
         self.rows
             .iter()

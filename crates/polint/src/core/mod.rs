@@ -1,3 +1,7 @@
+use crate::analysis_kernel::{
+    FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
+    ValidationStatus, stable_key_from_parts,
+};
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
@@ -8,6 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+const SOURCE_PROVIDER_ID: &str = "polint.source";
+const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
+const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 
 /// Arbitrary per-rule configuration value from `.polint.toml`.
 ///
@@ -526,6 +534,7 @@ pub struct CachedFileFacts {
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
+    fact_meta: FactMetaStore,
     packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
@@ -591,6 +600,7 @@ impl AnalysisDb {
         content_hash: String,
     ) -> FileId {
         let id = FileId(self.files.len() as u32);
+        let metadata = source_file_metadata(&relative_path, language, &content_hash);
         self.files.push(SourceFile {
             id,
             path,
@@ -599,43 +609,58 @@ impl AnalysisDb {
             source,
             content_hash,
         });
+        self.record_fact_meta(FactFamily::SourceFile, u64::from(id.0), metadata);
         id
     }
 
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
         let id = PackageId(self.packages.len() as u64);
         fact.id = id;
+        let metadata = self.package_metadata(&fact);
         self.packages.push(fact);
+        self.record_fact_meta(FactFamily::Package, id.0, metadata);
         id
     }
 
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
         let id = FunctionId(self.functions.len() as u64);
         fact.id = id;
+        let metadata = self.function_metadata(&fact);
         self.functions.push(fact);
+        self.record_fact_meta(FactFamily::Function, id.0, metadata);
         id
     }
 
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
         let id = ImportId(self.imports.len() as u64);
         fact.id = id;
+        let metadata = self.import_metadata(&fact);
         self.imports.push(fact);
+        self.record_fact_meta(FactFamily::Import, id.0, metadata);
         id
     }
 
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
         let id = BranchId(self.branches.len() as u64);
         fact.id = id;
+        let metadata = self.branch_metadata(&fact);
         self.branches.push(fact);
+        self.record_fact_meta(FactFamily::BranchObligation, id.0, metadata);
         id
     }
 
     pub fn push_test(&mut self, fact: TestFact) {
+        let run_id = self.tests.len() as u64;
+        let metadata = self.test_metadata(&fact);
         self.tests.push(fact);
+        self.record_fact_meta(FactFamily::Test, run_id, metadata);
     }
 
     pub fn push_coverage(&mut self, fact: CoverageFact) {
+        let run_id = self.coverage.len() as u64;
+        let metadata = self.coverage_metadata(&fact);
         self.coverage.push(fact);
+        self.record_fact_meta(FactFamily::Coverage, run_id, metadata);
     }
 
     pub(crate) fn replace_metric_facts(
@@ -743,19 +768,44 @@ impl AnalysisDb {
     }
 
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
+        let run_id = self.ts_components.len() as u64;
+        let metadata = self.ts_component_metadata(&fact);
         self.ts_components.push(fact);
+        self.record_fact_meta(FactFamily::TsComponent, run_id, metadata);
     }
 
     pub fn push_ts_class(&mut self, fact: TsClassFact) {
+        let run_id = self.ts_classes.len() as u64;
+        let metadata = self.ts_class_metadata(&fact);
         self.ts_classes.push(fact);
+        self.record_fact_meta(FactFamily::TsClass, run_id, metadata);
     }
 
     pub fn push_string_literal(&mut self, fact: StringLiteralFact) {
+        let run_id = self.string_literals.len() as u64;
+        let metadata = self.string_literal_metadata(&fact);
         self.string_literals.push(fact);
+        self.record_fact_meta(FactFamily::StringLiteral, run_id, metadata);
     }
 
     pub fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
+        let run_id = self.jsx_attributes.len() as u64;
+        let metadata = self.jsx_attribute_metadata(&fact);
         self.jsx_attributes.push(fact);
+        self.record_fact_meta(FactFamily::JsxAttribute, run_id, metadata);
+    }
+
+    pub(crate) fn fact_meta(&self) -> &FactMetaStore {
+        &self.fact_meta
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
+        &mut self.fact_meta
+    }
+
+    pub(crate) fn metadata_for(&self, fact_ref: FactRef) -> Option<&FactMeta> {
+        self.fact_meta().get(fact_ref)
     }
 
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
@@ -1088,6 +1138,331 @@ impl AnalysisDb {
             self.push_jsx_attribute(attribute);
         }
     }
+
+    fn record_fact_meta(&mut self, family: FactFamily, run_id: u64, meta: FactMeta) {
+        let reference = FactRef::new(family, run_id);
+        let _previous = self.fact_meta.insert(FactMetaInsert { reference, meta });
+        debug_assert!(self.metadata_for(reference).is_some());
+    }
+
+    fn package_metadata(&self, fact: &PackageFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Package,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+
+    fn function_metadata(&self, fact: &FunctionFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Function,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("is_test", fact.is_test.to_string()),
+                ("is_exported", fact.is_exported.to_string()),
+                (
+                    "cyclomatic_complexity",
+                    fact.cyclomatic_complexity.to_string(),
+                ),
+                ("calls", fact.calls.join("\n")),
+            ]),
+        )
+    }
+
+    fn import_metadata(&self, fact: &ImportFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Import,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("import_path", fact.path.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([(
+                "package",
+                fact.package.clone().unwrap_or_else(|| "none".to_string()),
+            )]),
+        )
+    }
+
+    fn branch_metadata(&self, fact: &BranchObligation) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::BranchObligation,
+            GO_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("stable_fingerprint", fact.stable_fingerprint.clone()),
+            ]),
+            stable_parts([
+                ("function", option_function_id(fact.function)),
+                ("span", span_metadata_value(&fact.decision_span)),
+                ("condition_text", fact.condition_text.clone()),
+                ("edge_label", fact.edge_label.clone()),
+                ("is_error_path", fact.is_error_path.to_string()),
+            ]),
+        )
+    }
+
+    fn test_metadata(&self, fact: &TestFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Test,
+            GO_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("function", option_function_id(fact.function)),
+                ("evidence_terms", fact.evidence_terms.join("\n")),
+                ("assertion_count", fact.assertion_count.to_string()),
+                ("subtest_count", fact.subtest_count.to_string()),
+                ("subtest_names", fact.subtest_names.join("\n")),
+                ("table_rows", fact.table_rows.to_string()),
+            ]),
+        )
+    }
+
+    fn coverage_metadata(&self, fact: &CoverageFact) -> FactMeta {
+        let branch = self.branches.iter().find(|branch| branch.id == fact.branch);
+        let (path, branch_fingerprint, precision, confidence) = if let Some(branch) = branch {
+            (
+                self.path_for(branch.file),
+                branch.stable_fingerprint.clone(),
+                FactPrecision::SetupAware,
+                FactConfidence::Medium,
+            )
+        } else {
+            (
+                "<unknown>".to_string(),
+                format!("unresolved:{}", fact.branch.0),
+                FactPrecision::Unsupported,
+                FactConfidence::Low,
+            )
+        };
+
+        fact_meta_from_parts(
+            FactFamily::Coverage,
+            branch
+                .map(|branch| syntax_provider_for_file(self.file(branch.file)))
+                .unwrap_or(GO_SYNTAX_PROVIDER_ID),
+            precision,
+            confidence,
+            stable_parts([
+                ("path", path),
+                ("branch_fingerprint", branch_fingerprint),
+                ("source", fact.source.clone()),
+            ]),
+            stable_parts([
+                ("branch", fact.branch.0.to_string()),
+                ("covered", option_bool(fact.covered)),
+            ]),
+        )
+    }
+
+    fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsComponent,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([("function", option_function_id(fact.function))]),
+        )
+    }
+
+    fn ts_class_metadata(&self, fact: &TsClassFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsClass,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("is_exported", fact.is_exported.to_string()),
+                ("is_component_like", fact.is_component_like.to_string()),
+            ]),
+        )
+    }
+
+    fn string_literal_metadata(&self, fact: &StringLiteralFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::StringLiteral,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("value", fact.value.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+
+    fn jsx_attribute_metadata(&self, fact: &JsxAttributeFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::JsxAttribute,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("value", option_string(fact.value.as_deref())),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+}
+
+fn source_file_metadata(relative_path: &str, language: Language, content_hash: &str) -> FactMeta {
+    fact_meta_from_parts(
+        FactFamily::SourceFile,
+        SOURCE_PROVIDER_ID,
+        FactPrecision::Exact,
+        FactConfidence::High,
+        stable_parts([
+            ("path", relative_path.to_string()),
+            ("content_hash", content_hash.to_string()),
+        ]),
+        stable_parts([("language", language_label(language).to_string())]),
+    )
+}
+
+fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
+    family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_parts: [(&'static str, String); STABLE],
+    payload_extra_parts: [(&'static str, String); EXTRA],
+) -> FactMeta {
+    let stable_key = stable_key_from_parts(family, &stable_parts);
+    let mut payload_parts = stable_parts.to_vec();
+    payload_parts.extend(payload_extra_parts);
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest,
+    }
+}
+
+fn stable_parts<const N: usize>(parts: [(&'static str, String); N]) -> [(&'static str, String); N] {
+    parts
+}
+
+fn metadata_payload_digest(stable_key: &str, parts: &[(&'static str, String)]) -> String {
+    let mut normalized = parts
+        .iter()
+        .map(|(label, value)| format!("{label}={}", metadata_value(value)))
+        .collect::<Vec<_>>();
+    normalized.sort();
+
+    let mut digest_parts = Vec::with_capacity(normalized.len() + 1);
+    digest_parts.push(stable_key.to_string());
+    digest_parts.extend(normalized);
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    fingerprint(&digest_refs)
+}
+
+fn metadata_value(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
+fn span_metadata_value(span: &Span) -> String {
+    format!(
+        "{}-{}:{}:{}-{}:{}",
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col
+    )
+}
+
+fn language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn syntax_provider_for_language(language: Language) -> &'static str {
+    if language.is_ts_family() {
+        TS_SYNTAX_PROVIDER_ID
+    } else if language == Language::Go {
+        GO_SYNTAX_PROVIDER_ID
+    } else {
+        SOURCE_PROVIDER_ID
+    }
+}
+
+fn syntax_provider_for_file(file: Option<&SourceFile>) -> &'static str {
+    file.map(|file| syntax_provider_for_language(file.language))
+        .unwrap_or(GO_SYNTAX_PROVIDER_ID)
+}
+
+fn option_function_id(function: Option<FunctionId>) -> String {
+    function
+        .map(|function| function.0.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn option_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn option_string(value: Option<&str>) -> String {
+    value
+        .map(|value| format!("some:{value}"))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Static metadata for a rule as shown in diagnostics, config, and registries.
@@ -1864,6 +2239,11 @@ mod tests {
         assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
         assert!(metadata.stable_key.contains("4:path=11:src/main.go"));
         assert!(metadata.stable_key.contains("12:content_hash="));
+        assert!(
+            db.fact_meta_mut_for_test()
+                .get(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+                .is_some()
+        );
     }
 
     #[test]
