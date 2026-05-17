@@ -115,6 +115,60 @@ fn has_parent_dir_component(value: &str) -> bool {
 }
 
 #[cfg(test)]
+pub(crate) fn run_native_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let fixture = load_native_fixture(fixture_dir)?;
+    let observed = crate::eval::observed::observe_kernel_fixture(&fixture)?;
+    let matches = crate::eval::matcher::match_case(
+        &fixture.manifest.expected,
+        &observed,
+        crate::eval::matcher::MatcherConfig::default(),
+    );
+    let metrics: crate::eval::report::MetricSummary =
+        crate::eval::metrics::compute_metrics(&matches).into();
+    let runtime = runtime_observation(&fixture.manifest, &observed);
+    let run = crate::eval::report::EvaluationRun {
+        schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
+        suite_id: "native-fixtures".to_string(),
+        cases: vec![crate::eval::report::CaseResult {
+            case_id: fixture.manifest.case_id.clone(),
+            area: fixture.manifest.area,
+            expected: fixture.manifest.expected.clone(),
+            observed,
+            matches,
+            runtime,
+        }],
+        metrics,
+        output_hash: String::new(),
+    };
+    let mut run = crate::eval::report::normalize_run(&run);
+    run.output_hash = crate::eval::report::deterministic_output_hash(&run);
+
+    Ok(run)
+}
+
+#[cfg(test)]
+fn runtime_observation(
+    manifest: &NativeFixtureManifest,
+    observed: &[crate::eval::model::ObservedItem],
+) -> crate::eval::report::RuntimeObservation {
+    let runtime_budget = observed.iter().find_map(|item| match item {
+        crate::eval::model::ObservedItem::RuntimeBudget(budget) => Some(budget),
+        _ => None,
+    });
+    crate::eval::report::RuntimeObservation {
+        budget_name: runtime_budget
+            .map(|budget| budget.name.clone())
+            .unwrap_or_else(|| manifest.case_id.clone()),
+        budget_passed: runtime_budget
+            .map(|budget| budget.budget_passed)
+            .unwrap_or(true),
+        observed_runtime_ms: runtime_budget.and_then(|budget| budget.observed_runtime_ms),
+    }
+}
+
+#[cfg(test)]
 mod eval_fixture_manifest_tests {
     use std::fs;
     use std::path::Path;
