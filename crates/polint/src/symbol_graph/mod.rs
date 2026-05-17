@@ -189,6 +189,9 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 #[cfg(test)]
 mod symbol_graph_derivation {
     use super::{SymbolGraphDerivation, derive_requested_symbols};
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -274,6 +277,131 @@ mod symbol_graph_derivation {
             status: SymbolResolutionStatus::Unsupported,
             precision: SymbolPrecision::Unsupported,
         }
+    }
+
+    #[test]
+    fn symbol_graph_metadata_records_provider_and_reuses_existing_stable_keys() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "export const value = 1;\n".to_string(),
+        );
+        let symbol = SymbolFact {
+            id: SymbolId(7),
+            language: Language::TypeScript,
+            name: "value".to_string(),
+            qualified_name: "value".to_string(),
+            kind: SymbolKind::Variable,
+            namespace: SymbolNamespace::Value,
+            file: Some(file),
+            package: None,
+            module: None,
+            owner: None,
+            primary_span: Some(Span::point(file, 1, 14)),
+            is_exported: true,
+            stable_key: "symbol:key:value".to_string(),
+            precision: SymbolPrecision::ExactSemantic,
+        };
+        let definition = DefinitionFact {
+            id: DefinitionId(11),
+            symbol: symbol.id,
+            language: Language::TypeScript,
+            name: "value".to_string(),
+            qualified_name: "value".to_string(),
+            kind: DefinitionKind::Declaration,
+            namespace: SymbolNamespace::Value,
+            file: Some(file),
+            package: None,
+            module: None,
+            owner: None,
+            primary_span: Some(Span::point(file, 1, 14)),
+            is_primary: true,
+            is_exported: true,
+            stable_key: "definition:key:value".to_string(),
+            precision: SymbolPrecision::ExactSemantic,
+        };
+        let reference = ReferenceFact {
+            id: ReferenceId(13),
+            language: Language::TypeScript,
+            name: "value".to_string(),
+            qualified_name: "value".to_string(),
+            kind: ReferenceKind::Read,
+            namespace: SymbolNamespace::Value,
+            file: Some(file),
+            package: None,
+            module: None,
+            owner: None,
+            primary_span: Some(Span::point(file, 1, 14)),
+            target: Some(symbol.id),
+            candidates: Vec::new(),
+            stable_key: "reference:key:value".to_string(),
+            status: SymbolResolutionStatus::Resolved,
+            precision: SymbolPrecision::ExactSemantic,
+        };
+
+        db.replace_symbol_graph_facts(vec![symbol], vec![definition], vec![reference]);
+
+        let symbol_meta = db
+            .metadata_for(FactRef::new(FactFamily::Symbol, 7))
+            .expect("symbol metadata should be recorded");
+        let definition_meta = db
+            .metadata_for(FactRef::new(FactFamily::Definition, 11))
+            .expect("definition metadata should be recorded");
+        let reference_meta = db
+            .metadata_for(FactRef::new(FactFamily::Reference, 13))
+            .expect("reference metadata should be recorded");
+
+        assert_eq!(symbol_meta.producer_id, "polint.symbol_graph");
+        assert_eq!(symbol_meta.layer_id, "polint.symbol_graph");
+        assert_eq!(symbol_meta.precision, FactPrecision::Exact);
+        assert_eq!(symbol_meta.confidence, FactConfidence::High);
+        assert_eq!(symbol_meta.validation, ValidationStatus::NativeTrusted);
+        assert_eq!(symbol_meta.stable_key, "symbol:key:value");
+        assert_eq!(definition_meta.stable_key, "definition:key:value");
+        assert_eq!(reference_meta.stable_key, "reference:key:value");
+    }
+
+    #[test]
+    fn symbol_graph_metadata_maps_low_confidence_precisions_without_mutating_status_fields() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "missing;\n".to_string(),
+        );
+        let reference = ReferenceFact {
+            id: ReferenceId(23),
+            language: Language::TypeScript,
+            name: "missing".to_string(),
+            qualified_name: "missing".to_string(),
+            kind: ReferenceKind::Read,
+            namespace: SymbolNamespace::Value,
+            file: Some(file),
+            package: None,
+            module: None,
+            owner: None,
+            primary_span: Some(Span::point(file, 1, 1)),
+            target: None,
+            candidates: Vec::new(),
+            stable_key: "reference:key:missing".to_string(),
+            status: SymbolResolutionStatus::SetupMissing,
+            precision: SymbolPrecision::SetupMissing,
+        };
+
+        db.replace_symbol_graph_facts(Vec::new(), Vec::new(), vec![reference]);
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::Reference, 23))
+            .expect("reference metadata should be recorded");
+
+        assert_eq!(metadata.precision, FactPrecision::SetupMissing);
+        assert_eq!(metadata.confidence, FactConfidence::Low);
+        assert_eq!(
+            db.references()[0].status,
+            SymbolResolutionStatus::SetupMissing
+        );
+        assert_eq!(db.references()[0].precision, SymbolPrecision::SetupMissing);
     }
 
     #[test]
