@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-17T17:15:48.205Z"
+last_updated: "2026-05-17T17:31:42.192Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 2
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # State: polint
@@ -40,7 +40,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Last activity: 2026-05-17
 
 ## Phase Progress
@@ -49,7 +49,7 @@ Last activity: 2026-05-17
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
-| 22 | Executing | 3/6 plans complete; evaluation model/report hashing, generic matchers/metrics, and native fixture runner with real kernel observation done; requirement SAE-FND-03 |
+| 22 | Executing | 4/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance fixture, and current cache determinism fixture done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
@@ -116,6 +116,9 @@ Last activity: 2026-05-17
 - [Phase 22-internal-evaluation-harness-mvp]: 22-03 kept native fixture loading, observation, and execution crate-private/test-facing under eval with no public CLI or SDK surface.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-03 copies fixture repos into temporary directories before AnalysisKernel::run and rejects symlink escape during fixture copy.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-03 sources provider-order observations from AnalysisKernel::provider_manifests() and keeps exact runtime durations out of deterministic output hashes.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-04 keeps provenance and cache fixtures crate-private/test-facing with no public CLI, SDK, runner, or crate-root surface.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-04 expected fact matching honors producer_id, precision, and status when manifests specify them, with partial stable-key matching for content-hash-bearing metadata rows.
+- [Phase 22-internal-evaluation-harness-mvp]: 22-04 derives cache.current_determinism only after cold, warm, and no-cache fixture runs have matching normalized JSON and output_hash values.
 
 ## Execution Metrics
 
@@ -129,14 +132,15 @@ Last activity: 2026-05-17
 | 21-provenance-precision-and-validation-metadata | 04 | 11m | 2 | 3 |
 | 22-internal-evaluation-harness-mvp | 02 | 15 min | 2 | 5 |
 | 22-internal-evaluation-harness-mvp | 03 | 12 min | 3 | 7 |
+| 22-internal-evaluation-harness-mvp | 04 | 11 min | 2 | 12 |
 
 ## Session
 
 - Last session: 2026-05-17
-- Stopped at: Completed 22-03-PLAN.md
+- Stopped at: Completed 22-04-PLAN.md
 
 ## Next Action
 
-Continue Phase 22 with Plan 04:
+Continue Phase 22 with Plan 05:
 
 `/gsd-execute-phase 22`
