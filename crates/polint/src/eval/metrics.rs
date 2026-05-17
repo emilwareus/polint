@@ -14,6 +14,9 @@ pub(crate) struct ComputedMetrics {
     pub(crate) false_positive_trap_hits: u64,
     pub(crate) forbidden_hits: u64,
     pub(crate) unknown_count: u64,
+    pub(crate) facts_present: u64,
+    pub(crate) facts_accepted: u64,
+    pub(crate) facts_rejected: u64,
     pub(crate) graph_edges_expected: u64,
     pub(crate) graph_edges_observed: u64,
     pub(crate) graph_edges_unconfirmed: u64,
@@ -41,6 +44,9 @@ impl From<ComputedMetrics> for MetricSummary {
             false_positive_trap_hits: metrics.false_positive_trap_hits,
             forbidden_hits: metrics.forbidden_hits,
             unknown_count: metrics.unknown_count,
+            facts_present: metrics.facts_present,
+            facts_accepted: metrics.facts_accepted,
+            facts_rejected: metrics.facts_rejected,
             graph_edges_expected: metrics.graph_edges_expected,
             graph_edges_observed: metrics.graph_edges_observed,
             graph_edges_unconfirmed: metrics.graph_edges_unconfirmed,
@@ -69,6 +75,9 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
         false_positive_trap_hits: 0,
         forbidden_hits: 0,
         unknown_count: 0,
+        facts_present: 0,
+        facts_accepted: 0,
+        facts_rejected: 0,
         graph_edges_expected: 0,
         graph_edges_observed: 0,
         graph_edges_unconfirmed: 0,
@@ -111,6 +120,17 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                     metrics.graph_edges_unconfirmed += 1;
                 }
             }
+            MatchItemKind::Fact => match summary.observed_status {
+                Some(crate::eval::model::ObservedStatus::Present) => metrics.facts_present += 1,
+                Some(crate::eval::model::ObservedStatus::Accepted) => metrics.facts_accepted += 1,
+                Some(crate::eval::model::ObservedStatus::Rejected) => metrics.facts_rejected += 1,
+                Some(
+                    crate::eval::model::ObservedStatus::Unknown
+                    | crate::eval::model::ObservedStatus::SetupMissing
+                    | crate::eval::model::ObservedStatus::Unsupported,
+                )
+                | None => {}
+            },
             MatchItemKind::Path => {
                 if summary.expected_key.is_some() {
                     metrics.paths_expected += 1;
@@ -122,10 +142,8 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                     metrics.paths_unconfirmed += 1;
                 }
             }
-            MatchItemKind::Diagnostic
-            | MatchItemKind::Fact
-            | MatchItemKind::Invariant
-            | MatchItemKind::RuntimeBudget => {}
+            MatchItemKind::Diagnostic | MatchItemKind::Invariant | MatchItemKind::RuntimeBudget => {
+            }
         }
     }
 
@@ -267,6 +285,9 @@ mod tests {
                 false_positive_trap_hits: 1,
                 forbidden_hits: 1,
                 unknown_count: 1,
+                facts_present: 1,
+                facts_accepted: 0,
+                facts_rejected: 0,
                 graph_edges_expected: 1,
                 graph_edges_observed: 2,
                 graph_edges_unconfirmed: 1,
@@ -364,6 +385,31 @@ mod tests {
     }
 
     #[test]
+    fn eval_metrics_count_fact_statuses_separately() {
+        let metrics = compute_metrics(&[
+            summary_with_status(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Fact,
+                crate::eval::model::ObservedStatus::Present,
+            ),
+            summary_with_status(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Fact,
+                crate::eval::model::ObservedStatus::Accepted,
+            ),
+            summary_with_status(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Fact,
+                crate::eval::model::ObservedStatus::Rejected,
+            ),
+        ]);
+
+        assert_eq!(metrics.facts_present, 1);
+        assert_eq!(metrics.facts_accepted, 1);
+        assert_eq!(metrics.facts_rejected, 1);
+    }
+
+    #[test]
     fn eval_metrics_convert_into_report_metric_summary() {
         let metrics = compute_metrics(&[
             summary(
@@ -400,8 +446,27 @@ mod tests {
             item_kind,
             expected_key: has_expected.then(|| "expected".to_string()),
             observed_key: has_observed.then(|| "observed".to_string()),
+            observed_status: has_observed.then_some(crate::eval::model::ObservedStatus::Present),
             expected_runtime_budget_ms: None,
             expected_mode: has_expected.then_some(AssertionMode::Exact),
+            observed_runtime_ms: None,
+        }
+    }
+
+    fn summary_with_status(
+        outcome: MatchOutcome,
+        item_kind: MatchItemKind,
+        observed_status: crate::eval::model::ObservedStatus,
+    ) -> MatchSummary {
+        MatchSummary {
+            item_key: format!("{item_kind:?}:{outcome:?}:{observed_status:?}"),
+            outcome,
+            item_kind,
+            expected_key: Some("expected".to_string()),
+            observed_key: Some("observed".to_string()),
+            observed_status: Some(observed_status),
+            expected_runtime_budget_ms: None,
+            expected_mode: Some(AssertionMode::Exact),
             observed_runtime_ms: None,
         }
     }

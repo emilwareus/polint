@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 use serde::Deserialize;
 
-use crate::eval::model::ExpectedItem;
+use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem};
 
 const FIXTURE_SCHEMA_VERSION: &str = "polint-eval-fixture-1";
 const FIXTURE_MANIFEST_FILE: &str = "expected.polint-eval.toml";
@@ -14,10 +14,14 @@ const FIXTURE_MANIFEST_FILE: &str = "expected.polint-eval.toml";
 pub(crate) struct NativeFixtureManifest {
     pub(crate) schema_version: String,
     pub(crate) case_id: String,
-    pub(crate) area: crate::eval::model::FixtureArea,
+    pub(crate) area: FixtureArea,
+    #[serde(default)]
+    pub(crate) synthetic_observed: bool,
     pub(crate) repo: FixtureRepo,
     #[serde(default)]
     pub(crate) expected: Vec<ExpectedItem>,
+    #[serde(default)]
+    pub(crate) observed: Vec<ObservedItem>,
     pub(crate) budget: Option<FixtureBudget>,
 }
 
@@ -57,6 +61,8 @@ pub(crate) fn load_native_fixture(fixture_dir: &Path) -> anyhow::Result<NativeFi
     );
     validate_manifest_relative_path("repo.path", &manifest.repo.path)?;
     normalize_expected_item_paths(&mut manifest.expected)?;
+    normalize_observed_item_paths(&mut manifest.observed)?;
+    validate_synthetic_observed_rows(&manifest)?;
 
     let repo_dir = fixture_dir.join(Path::new(&manifest.repo.path));
     let repo_dir = repo_dir
@@ -82,6 +88,33 @@ fn normalize_expected_item_paths(expected: &mut [ExpectedItem]) -> anyhow::Resul
                 &diagnostic.relative_path,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn normalize_observed_item_paths(observed: &mut [ObservedItem]) -> anyhow::Result<()> {
+    for item in observed {
+        if let ObservedItem::Diagnostic(diagnostic) = item {
+            diagnostic.relative_path = normalize_manifest_relative_path(
+                "observed.diagnostic.relative_path",
+                &diagnostic.relative_path,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_synthetic_observed_rows(manifest: &NativeFixtureManifest) -> anyhow::Result<()> {
+    if manifest.synthetic_observed {
+        ensure!(
+            manifest.area == FixtureArea::Extension,
+            "synthetic observed rows are only allowed for extension fixtures"
+        );
+    } else {
+        ensure!(
+            manifest.observed.is_empty(),
+            "manifest observed rows require synthetic_observed = true"
+        );
     }
     Ok(())
 }
@@ -119,7 +152,11 @@ pub(crate) fn run_native_fixture_for_test(
     fixture_dir: &Path,
 ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
     let fixture = load_native_fixture(fixture_dir)?;
-    let observed = crate::eval::observed::observe_kernel_fixture(&fixture)?;
+    let observed = if fixture.manifest.synthetic_observed {
+        fixture.manifest.observed.clone()
+    } else {
+        crate::eval::observed::observe_kernel_fixture(&fixture)?
+    };
     Ok(evaluation_run_for_fixture(&fixture, observed))
 }
 
