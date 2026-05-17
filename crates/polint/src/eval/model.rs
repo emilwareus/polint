@@ -72,6 +72,8 @@ pub(crate) struct ExpectedDiagnostic {
     pub(crate) line: Option<u32>,
     pub(crate) fingerprint: Option<String>,
     pub(crate) mode: AssertionMode,
+    #[serde(default)]
+    pub(crate) false_positive_trap: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -97,6 +99,8 @@ pub(crate) struct ExpectedFact {
     pub(crate) producer_id: Option<String>,
     pub(crate) precision: Option<String>,
     pub(crate) status: Option<ObservedStatus>,
+    #[serde(default)]
+    pub(crate) false_positive_trap: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -217,6 +221,7 @@ mod tests {
                 line: Some(12),
                 fingerprint: Some("diag-fp".to_string()),
                 mode: AssertionMode::Exact,
+                false_positive_trap: false,
             }),
             ExpectedItem::Fact(ExpectedFact {
                 family: "symbols".to_string(),
@@ -225,6 +230,7 @@ mod tests {
                 producer_id: Some("polint.ts.syntax".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
+                false_positive_trap: false,
             }),
             ExpectedItem::GraphEdge(ExpectedGraphEdge {
                 graph: "module".to_string(),

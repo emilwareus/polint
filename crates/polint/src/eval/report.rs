@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cache::stable_hash;
+use crate::eval::matcher::{MatchItemKind, MatchOutcome};
 use crate::eval::model::{
     AssertionMode, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant, ExpectedItem, ExpectedPath,
     ExpectedRuntimeBudget, FixtureArea, ObservedFact, ObservedGraphEdge, ObservedInvariant,
@@ -55,7 +56,13 @@ pub(crate) struct MetricSummary {
 #[serde(rename_all = "snake_case")]
 pub(crate) struct MatchSummary {
     pub(crate) item_key: String,
-    pub(crate) outcome: String,
+    pub(crate) outcome: MatchOutcome,
+    pub(crate) item_kind: MatchItemKind,
+    pub(crate) expected_key: Option<String>,
+    pub(crate) observed_key: Option<String>,
+    pub(crate) expected_runtime_budget_ms: Option<u64>,
+    pub(crate) expected_mode: Option<AssertionMode>,
+    pub(crate) observed_runtime_ms: Option<u64>,
 }
 
 pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
@@ -68,8 +75,26 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
         case.expected.sort_by_key(expected_item_key);
         case.observed.sort_by_key(observed_item_key);
         case.matches.sort_by(|left, right| {
-            (left.item_key.as_str(), left.outcome.as_str())
-                .cmp(&(right.item_key.as_str(), right.outcome.as_str()))
+            (
+                left.item_key.as_str(),
+                left.outcome,
+                left.item_kind,
+                left.expected_key.as_deref(),
+                left.observed_key.as_deref(),
+                left.expected_runtime_budget_ms,
+                left.expected_mode,
+                left.observed_runtime_ms,
+            )
+                .cmp(&(
+                    right.item_key.as_str(),
+                    right.outcome,
+                    right.item_kind,
+                    right.expected_key.as_deref(),
+                    right.observed_key.as_deref(),
+                    right.expected_runtime_budget_ms,
+                    right.expected_mode,
+                    right.observed_runtime_ms,
+                ))
         });
     }
     normalized
@@ -90,6 +115,9 @@ pub(crate) fn deterministic_output_hash(run: &EvaluationRun) -> String {
             if let ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = None;
             }
+        }
+        for summary in &mut case.matches {
+            summary.observed_runtime_ms = None;
         }
     }
     let canonical_json =
@@ -455,11 +483,25 @@ mod tests {
             matches: vec![
                 MatchSummary {
                     item_key: "fact:module:handler".to_string(),
-                    outcome: "true_positive".to_string(),
+                    outcome: MatchOutcome::TruePositive,
+                    item_kind: MatchItemKind::Fact,
+                    expected_key: Some("fact:symbols:fact:module:handler".to_string()),
+                    observed_key: Some("fact:symbols:fact:module:handler".to_string()),
+                    expected_runtime_budget_ms: None,
+                    expected_mode: Some(AssertionMode::Exact),
+                    observed_runtime_ms: None,
                 },
                 MatchSummary {
                     item_key: "diagnostic:local/rule:src/main.go".to_string(),
-                    outcome: "false_positive".to_string(),
+                    outcome: MatchOutcome::FalsePositive,
+                    item_kind: MatchItemKind::Diagnostic,
+                    expected_key: None,
+                    observed_key: Some(
+                        "diagnostic:local/rule:src/main.go:diag-fingerprint".to_string(),
+                    ),
+                    expected_runtime_budget_ms: None,
+                    expected_mode: None,
+                    observed_runtime_ms: Some(42),
                 },
             ],
             runtime: RuntimeObservation {
@@ -502,6 +544,7 @@ mod tests {
                 producer_id: Some("polint.symbol_graph".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
+                false_positive_trap: false,
             }),
             ExpectedItem::Diagnostic(ExpectedDiagnostic {
                 rule_id: "local/rule".to_string(),
@@ -509,6 +552,7 @@ mod tests {
                 line: Some(7),
                 fingerprint: Some("diag-fingerprint".to_string()),
                 mode: AssertionMode::Exact,
+                false_positive_trap: false,
             }),
         ]
     }
