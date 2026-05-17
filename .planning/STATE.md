@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
+status: planning
 last_updated: "2026-05-17T18:16:22.627Z"
 last_activity: 2026-05-17
 progress:
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 22 — internal-evaluation-harness-mvp
+**Current focus:** Phase 23 — input-snapshots-and-cache-key-vocabulary
 
 ## Current Status
 
@@ -38,8 +38,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 23
+Status: Ready to plan
+Phase: 23 (input-snapshots-and-cache-key-vocabulary) — READY FOR PLANNING
 Plan: Not started
 Last activity: 2026-05-17
 
