@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
     pub(crate) schema_version: String,
     pub(crate) suite_id: String,
@@ -9,7 +9,7 @@ pub(crate) struct EvaluationSuite {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationCase {
     pub(crate) case_id: String,
     pub(crate) area: FixtureArea,
@@ -65,7 +65,7 @@ pub(crate) enum ObservedItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedDiagnostic {
     pub(crate) rule_id: String,
     pub(crate) relative_path: String,
@@ -77,7 +77,7 @@ pub(crate) struct ExpectedDiagnostic {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedDiagnostic {
     pub(crate) rule_id: String,
     pub(crate) relative_path: String,
@@ -91,7 +91,7 @@ pub(crate) struct ObservedDiagnostic {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedFact {
     pub(crate) family: String,
     pub(crate) stable_key: String,
@@ -104,7 +104,7 @@ pub(crate) struct ExpectedFact {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedFact {
     pub(crate) family: String,
     pub(crate) stable_key: String,
@@ -116,7 +116,7 @@ pub(crate) struct ObservedFact {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedGraphEdge {
     pub(crate) graph: String,
     pub(crate) from: String,
@@ -126,7 +126,7 @@ pub(crate) struct ExpectedGraphEdge {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedGraphEdge {
     pub(crate) graph: String,
     pub(crate) from: String,
@@ -140,7 +140,7 @@ pub(crate) struct ObservedGraphEdge {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedPath {
     pub(crate) path_id: String,
     pub(crate) nodes: Vec<String>,
@@ -149,7 +149,7 @@ pub(crate) struct ExpectedPath {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedPath {
     pub(crate) path_id: String,
     pub(crate) nodes: Vec<String>,
@@ -162,7 +162,7 @@ pub(crate) struct ObservedPath {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedInvariant {
     pub(crate) name: String,
     pub(crate) value: String,
@@ -170,7 +170,7 @@ pub(crate) struct ExpectedInvariant {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedInvariant {
     pub(crate) name: String,
     pub(crate) value: String,
@@ -182,7 +182,7 @@ pub(crate) struct ObservedInvariant {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ExpectedRuntimeBudget {
     pub(crate) name: String,
     pub(crate) max_runtime_ms: u64,
@@ -190,7 +190,7 @@ pub(crate) struct ExpectedRuntimeBudget {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct ObservedRuntimeBudget {
     pub(crate) name: String,
     pub(crate) budget_passed: bool,

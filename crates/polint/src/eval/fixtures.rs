@@ -10,7 +10,7 @@ const FIXTURE_SCHEMA_VERSION: &str = "polint-eval-fixture-1";
 const FIXTURE_MANIFEST_FILE: &str = "expected.polint-eval.toml";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct NativeFixtureManifest {
     pub(crate) schema_version: String,
     pub(crate) case_id: String,
@@ -22,13 +22,13 @@ pub(crate) struct NativeFixtureManifest {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct FixtureRepo {
     pub(crate) path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct FixtureBudget {
     pub(crate) max_runtime_ms: u64,
 }
@@ -368,10 +368,11 @@ fact = { family = "SourceFile", stable_key = "src/app.ts", mode = "partial", pro
         );
 
         let err = load_native_fixture(&fixture_dir).unwrap_err();
+        let rendered = format!("{err:#}");
 
         assert!(
-            err.to_string().contains("provider_id"),
-            "alternate producer field should be rejected: {err:#}"
+            rendered.contains("provider_id"),
+            "alternate producer field should be rejected: {rendered}"
         );
     }
 }

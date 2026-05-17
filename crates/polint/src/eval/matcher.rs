@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::model::{
-    AssertionMode, ExpectedDiagnostic, ExpectedItem, ObservedDiagnostic, ObservedItem,
-    ObservedStatus,
+    AssertionMode, ExpectedDiagnostic, ExpectedFact, ExpectedItem, ObservedDiagnostic,
+    ObservedFact, ObservedItem, ObservedStatus,
 };
 use crate::eval::report::MatchSummary;
 
@@ -136,7 +136,7 @@ fn items_match(expected: &ExpectedItem, observed: &ObservedItem, config: Matcher
             diagnostic_matches(expected, observed, config)
         }
         (ExpectedItem::Fact(expected), ObservedItem::Fact(observed)) => {
-            expected.family == observed.family && expected.stable_key == observed.stable_key
+            fact_matches(expected, observed)
         }
         (ExpectedItem::GraphEdge(expected), ObservedItem::GraphEdge(observed)) => {
             expected.graph == observed.graph
@@ -154,6 +154,33 @@ fn items_match(expected: &ExpectedItem, observed: &ObservedItem, config: Matcher
         }
         _ => false,
     }
+}
+
+fn fact_matches(expected: &ExpectedFact, observed: &ObservedFact) -> bool {
+    expected.family == observed.family
+        && fact_stable_key_matches(expected.mode, &expected.stable_key, &observed.stable_key)
+        && optional_str_matches(expected.producer_id.as_deref(), observed.producer_id.as_deref())
+        && optional_str_matches(expected.precision.as_deref(), observed.precision.as_deref())
+        && optional_value_matches(expected.status, observed.status)
+}
+
+fn fact_stable_key_matches(mode: AssertionMode, expected: &str, observed: &str) -> bool {
+    if mode == AssertionMode::Partial {
+        observed.contains(expected)
+    } else {
+        expected == observed
+    }
+}
+
+fn optional_str_matches(expected: Option<&str>, observed: Option<&str>) -> bool {
+    expected.is_none_or(|expected| observed == Some(expected))
+}
+
+fn optional_value_matches<T>(expected: Option<T>, observed: Option<T>) -> bool
+where
+    T: Copy + Eq,
+{
+    expected.is_none_or(|expected| observed == Some(expected))
 }
 
 fn diagnostic_matches(
