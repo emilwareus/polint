@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-17T08:22:41.070Z"
-last_activity: 2026-05-17
+status: executing
+last_updated: "2026-05-17T16:24:25.705Z"
+last_activity: 2026-05-17 -- Phase 22 execution started
 progress:
   total_phases: 22
   completed_phases: 2
-  total_plans: 6
+  total_plans: 12
   completed_plans: 6
-  percent: 100
+  percent: 50
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 21 — provenance-precision-and-validation-metadata
+**Current focus:** Phase 22 — internal-evaluation-harness-mvp
 
 ## Current Status
 
@@ -38,10 +38,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 22
-Plan: Not started
-Last activity: 2026-05-17
+Status: Executing Phase 22
+Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
+Plan: 1 of 6
+Last activity: 2026-05-17 -- Phase 22 execution started
 
 ## Phase Progress
 
