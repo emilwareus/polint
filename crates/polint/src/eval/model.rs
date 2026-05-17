@@ -1,3 +1,209 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct EvaluationSuite {
+    pub(crate) schema_version: String,
+    pub(crate) suite_id: String,
+    pub(crate) cases: Vec<EvaluationCase>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct EvaluationCase {
+    pub(crate) case_id: String,
+    pub(crate) area: FixtureArea,
+    pub(crate) repo_path: String,
+    pub(crate) expected: Vec<ExpectedItem>,
+    pub(crate) observed: Vec<ObservedItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FixtureArea {
+    Kernel,
+    Provenance,
+    Cache,
+    Extension,
+    Facts,
+    Graphs,
+    Paths,
+    Diagnostics,
+    Invariants,
+    Budgets,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssertionMode {
+    Exact,
+    Tolerant,
+    Partial,
+    Forbidden,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ExpectedItem {
+    Diagnostic(ExpectedDiagnostic),
+    Fact(ExpectedFact),
+    GraphEdge(ExpectedGraphEdge),
+    Path(ExpectedPath),
+    Invariant(ExpectedInvariant),
+    RuntimeBudget(ExpectedRuntimeBudget),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ObservedItem {
+    Diagnostic(ObservedDiagnostic),
+    Fact(ObservedFact),
+    GraphEdge(ObservedGraphEdge),
+    Path(ObservedPath),
+    Invariant(ObservedInvariant),
+    RuntimeBudget(ObservedRuntimeBudget),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedDiagnostic {
+    pub(crate) rule_id: String,
+    pub(crate) relative_path: String,
+    pub(crate) line: Option<u32>,
+    pub(crate) fingerprint: Option<String>,
+    pub(crate) mode: AssertionMode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedDiagnostic {
+    pub(crate) rule_id: String,
+    pub(crate) relative_path: String,
+    pub(crate) line: Option<u32>,
+    pub(crate) fingerprint: Option<String>,
+    pub(crate) mode: AssertionMode,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) provenance: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedFact {
+    pub(crate) family: String,
+    pub(crate) stable_key: String,
+    pub(crate) mode: AssertionMode,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedFact {
+    pub(crate) family: String,
+    pub(crate) stable_key: String,
+    pub(crate) mode: AssertionMode,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) provenance: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedGraphEdge {
+    pub(crate) graph: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) mode: AssertionMode,
+    pub(crate) partial_truth: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedGraphEdge {
+    pub(crate) graph: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) mode: AssertionMode,
+    pub(crate) partial_truth: bool,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) provenance: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedPath {
+    pub(crate) path_id: String,
+    pub(crate) nodes: Vec<String>,
+    pub(crate) mode: AssertionMode,
+    pub(crate) partial_truth: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedPath {
+    pub(crate) path_id: String,
+    pub(crate) nodes: Vec<String>,
+    pub(crate) mode: AssertionMode,
+    pub(crate) partial_truth: bool,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) provenance: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedInvariant {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) mode: AssertionMode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedInvariant {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) mode: AssertionMode,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) provenance: Option<String>,
+    pub(crate) precision: Option<String>,
+    pub(crate) status: Option<ObservedStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ExpectedRuntimeBudget {
+    pub(crate) name: String,
+    pub(crate) max_runtime_ms: u64,
+    pub(crate) mode: AssertionMode,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct ObservedRuntimeBudget {
+    pub(crate) name: String,
+    pub(crate) budget_passed: bool,
+    pub(crate) observed_runtime_ms: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ObservedStatus {
+    Present,
+    Unknown,
+    SetupMissing,
+    Unsupported,
+    Rejected,
+    Accepted,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
