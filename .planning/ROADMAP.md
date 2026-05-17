@@ -23,7 +23,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
 | 20 | Private Analysis Kernel Facade | Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers. | SAE-FND-01 |
-| 21 | Provenance, Precision, and Validation Metadata | Complete | SAE-FND-02 |
+| 21 | 4/4 | Complete    | 2026-05-17 |
 | 22 | Internal Evaluation Harness MVP | Add deterministic native fixture evaluation for facts, graphs, diagnostics, invariants, and budgets. | SAE-FND-03 |
 | 23 | Input Snapshots and Cache-Key Vocabulary | Add snapshot and typed key vocabulary for source, config, lifecycle, rules, tools, and models. | SAE-FND-04 |
 | 24 | Persistent Layer Cache for Existing Cheap Facts | Persist existing cheap fact layers with conservative invalidation and hit/miss reporting. | SAE-FND-05 |
