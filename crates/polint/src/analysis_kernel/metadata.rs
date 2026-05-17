@@ -1,3 +1,215 @@
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum FactFamily {
+    SourceFile,
+    Package,
+    Function,
+    Import,
+    BranchObligation,
+    Test,
+    Coverage,
+    TsComponent,
+    TsClass,
+    StringLiteral,
+    JsxAttribute,
+    ResolvedImport,
+    ModuleNode,
+    ModuleEdge,
+    Symbol,
+    Definition,
+    Reference,
+    FileMetric,
+    FunctionMetric,
+    ComplexityMetric,
+}
+
+const FACT_FAMILY_VOCABULARY: &[FactFamily] = &[
+    FactFamily::SourceFile,
+    FactFamily::Package,
+    FactFamily::Function,
+    FactFamily::Import,
+    FactFamily::BranchObligation,
+    FactFamily::Test,
+    FactFamily::Coverage,
+    FactFamily::TsComponent,
+    FactFamily::TsClass,
+    FactFamily::StringLiteral,
+    FactFamily::JsxAttribute,
+    FactFamily::ResolvedImport,
+    FactFamily::ModuleNode,
+    FactFamily::ModuleEdge,
+    FactFamily::Symbol,
+    FactFamily::Definition,
+    FactFamily::Reference,
+    FactFamily::FileMetric,
+    FactFamily::FunctionMetric,
+    FactFamily::ComplexityMetric,
+];
+
+impl FactFamily {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SourceFile => "SourceFile",
+            Self::Package => "Package",
+            Self::Function => "Function",
+            Self::Import => "Import",
+            Self::BranchObligation => "BranchObligation",
+            Self::Test => "Test",
+            Self::Coverage => "Coverage",
+            Self::TsComponent => "TsComponent",
+            Self::TsClass => "TsClass",
+            Self::StringLiteral => "StringLiteral",
+            Self::JsxAttribute => "JsxAttribute",
+            Self::ResolvedImport => "ResolvedImport",
+            Self::ModuleNode => "ModuleNode",
+            Self::ModuleEdge => "ModuleEdge",
+            Self::Symbol => "Symbol",
+            Self::Definition => "Definition",
+            Self::Reference => "Reference",
+            Self::FileMetric => "FileMetric",
+            Self::FunctionMetric => "FunctionMetric",
+            Self::ComplexityMetric => "ComplexityMetric",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FactRef {
+    pub(crate) family: FactFamily,
+    pub(crate) run_id: u64,
+}
+
+impl FactRef {
+    pub(crate) fn new(family: FactFamily, run_id: u64) -> Self {
+        Self { family, run_id }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FactMeta {
+    pub(crate) stable_key: String,
+    pub(crate) producer_id: &'static str,
+    pub(crate) layer_id: &'static str,
+    pub(crate) precision: FactPrecision,
+    pub(crate) confidence: FactConfidence,
+    pub(crate) validation: ValidationStatus,
+    pub(crate) payload_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FactPrecision {
+    Exact,
+    Syntax,
+    SetupAware,
+    Heuristic,
+    Unresolved,
+    Ambiguous,
+    SetupMissing,
+    Unsupported,
+}
+
+const FACT_PRECISION_VOCABULARY: &[FactPrecision] = &[
+    FactPrecision::Exact,
+    FactPrecision::Syntax,
+    FactPrecision::SetupAware,
+    FactPrecision::Heuristic,
+    FactPrecision::Unresolved,
+    FactPrecision::Ambiguous,
+    FactPrecision::SetupMissing,
+    FactPrecision::Unsupported,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FactConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+const FACT_CONFIDENCE_VOCABULARY: &[FactConfidence] = &[
+    FactConfidence::High,
+    FactConfidence::Medium,
+    FactConfidence::Low,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValidationStatus {
+    NativeTrusted,
+    SchemaValidated,
+    ReferentiallyValidated,
+    SpanValidated,
+    StableKeyValidated,
+    ConflictRejected,
+}
+
+const VALIDATION_STATUS_VOCABULARY: &[ValidationStatus] = &[
+    ValidationStatus::NativeTrusted,
+    ValidationStatus::SchemaValidated,
+    ValidationStatus::ReferentiallyValidated,
+    ValidationStatus::SpanValidated,
+    ValidationStatus::StableKeyValidated,
+    ValidationStatus::ConflictRejected,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FactMetaInsert {
+    pub(crate) reference: FactRef,
+    pub(crate) meta: FactMeta,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct FactMetaStore {
+    rows: BTreeMap<FactRef, FactMeta>,
+}
+
+impl FactMetaStore {
+    pub(crate) fn insert(&mut self, insert: FactMetaInsert) -> Option<FactMeta> {
+        self.rows.insert(insert.reference, insert.meta)
+    }
+
+    pub(crate) fn get(&self, reference: FactRef) -> Option<&FactMeta> {
+        self.rows.get(&reference)
+    }
+
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
+        self.rows
+            .iter()
+            .map(|(reference, metadata)| (*reference, metadata))
+    }
+}
+
+pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]) -> String {
+    let mut normalized = parts
+        .iter()
+        .map(|(label, value)| (*label, value.replace('\\', "/")))
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.0.cmp(right.0));
+
+    let mut key = length_prefixed(family.label());
+    for (label, value) in normalized {
+        key.push('|');
+        key.push_str(&length_prefixed(label));
+        key.push('=');
+        key.push_str(&length_prefixed(&value));
+    }
+    key
+}
+
+fn length_prefixed(value: &str) -> String {
+    format!("{}:{value}", value.len())
+}
+
+pub(super) fn metadata_vocabulary_weight() -> usize {
+    FACT_FAMILY_VOCABULARY
+        .iter()
+        .map(|family| family.label().len())
+        .sum::<usize>()
+        + FACT_PRECISION_VOCABULARY.len()
+        + FACT_CONFIDENCE_VOCABULARY.len()
+        + VALIDATION_STATUS_VOCABULARY.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,7 +256,7 @@ mod tests {
     #[test]
     fn fact_meta_store_rows_are_deterministically_ordered() {
         let mut store = FactMetaStore::default();
-        let later = FactRef::new(FactFamily::Function, 10);
+        let later = FactRef::new(FactFamily::Import, 10);
         let earlier = FactRef::new(FactFamily::Import, 2);
 
         store.insert(FactMetaInsert {

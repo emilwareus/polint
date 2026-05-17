@@ -4,9 +4,13 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
-mod provider;
 mod metadata;
+mod provider;
 
+pub(crate) use metadata::{
+    FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
+    ValidationStatus, stable_key_from_parts,
+};
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
 };
@@ -75,10 +79,11 @@ impl AnalysisKernel {
     }
 
     fn provider_manifest_metadata_token() -> usize {
-        Self::provider_manifests()
-            .iter()
-            .map(provider_manifest_metadata_weight)
-            .sum()
+        metadata::metadata_vocabulary_weight()
+            + Self::provider_manifests()
+                .iter()
+                .map(provider_manifest_metadata_weight)
+                .sum::<usize>()
     }
 }
 
