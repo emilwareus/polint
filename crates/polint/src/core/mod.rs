@@ -687,14 +687,41 @@ impl AnalysisDb {
         mut module_nodes: Vec<ModuleNode>,
         mut module_edges: Vec<ModuleEdge>,
     ) {
+        let resolved_import_ids = resolved_imports
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (fact.id, ResolvedImportId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+        let module_node_ids = module_nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id, ModuleNodeId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+
         for (index, fact) in resolved_imports.iter_mut().enumerate() {
             fact.id = ResolvedImportId(index as u64);
+            if let Some(target_node) = fact.target_node
+                && let Some(remapped) = module_node_ids.get(&target_node)
+            {
+                fact.target_node = Some(*remapped);
+            }
         }
         for (index, node) in module_nodes.iter_mut().enumerate() {
             node.id = ModuleNodeId(index as u64);
         }
         for (index, edge) in module_edges.iter_mut().enumerate() {
             edge.id = ModuleEdgeId(index as u64);
+            if let Some(remapped) = module_node_ids.get(&edge.from) {
+                edge.from = *remapped;
+            }
+            if let Some(remapped) = module_node_ids.get(&edge.to) {
+                edge.to = *remapped;
+            }
+            if let Some(resolved_import) = edge.resolved_import
+                && let Some(remapped) = resolved_import_ids.get(&resolved_import)
+            {
+                edge.resolved_import = Some(*remapped);
+            }
         }
 
         self.resolved_imports = resolved_imports;
@@ -4040,6 +4067,76 @@ mod tests {
         assert_eq!(
             db.module_edges()[1].resolved_import,
             Some(ResolvedImportId(1))
+        );
+    }
+
+    #[test]
+    fn module_relationship_core_contract_remaps_relationship_ids_when_normalizing_inputs() {
+        let mut db = AnalysisDb::new();
+        let from_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\n".to_string(),
+        );
+        let target_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "export function Button() {}\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "./button".to_string(),
+            span: test_span(from_file, 1),
+            language: Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(40),
+                import,
+                from_file,
+                target_node: Some(ModuleNodeId(42)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(41),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(from_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(42),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(target_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            vec![ModuleEdge {
+                id: ModuleEdgeId(43),
+                from: ModuleNodeId(41),
+                to: ModuleNodeId(42),
+                import: Some(import),
+                resolved_import: Some(ResolvedImportId(40)),
+                kind: ModuleEdgeKind::Imports,
+                status: ResolutionStatus::Resolved,
+            }],
+        );
+
+        assert_eq!(db.resolved_imports()[0].target_node, Some(ModuleNodeId(1)));
+        assert_eq!(db.module_edges()[0].from, ModuleNodeId(0));
+        assert_eq!(db.module_edges()[0].to, ModuleNodeId(1));
+        assert_eq!(
+            db.module_edges()[0].resolved_import,
+            Some(ResolvedImportId(0))
         );
     }
 

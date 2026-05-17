@@ -25,6 +25,7 @@ pub(crate) fn validate_fact_metadata(
     validate_stable_key_conflicts(db, &mut diagnostics);
     validate_references(db, &ids, &mut diagnostics);
     validate_spans(db, &ids.files, &mut diagnostics);
+    validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
@@ -87,6 +88,29 @@ fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
             .with_evidence("existing_ref", fact_ref_value(conflict.existing))
             .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
         );
+    }
+}
+
+fn validate_metadata_providers(
+    db: &AnalysisDb,
+    manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (reference, metadata) in db.fact_meta().rows() {
+        if !manifests_by_id.contains_key(metadata.producer_id) {
+            diagnostics.push(provider_manifest_diagnostic(
+                reference,
+                "producer_id",
+                metadata.producer_id,
+            ));
+        }
+        if !manifests_by_id.contains_key(metadata.layer_id) {
+            diagnostics.push(provider_manifest_diagnostic(
+                reference,
+                "layer_id",
+                metadata.layer_id,
+            ));
+        }
     }
 }
 
@@ -749,6 +773,22 @@ fn reference_diagnostic<T: Debug>(
     .with_evidence("value", format!("{value:?}"))
 }
 
+fn provider_manifest_diagnostic(
+    reference: FactRef,
+    field: &'static str,
+    value: &'static str,
+) -> Diagnostic {
+    internal_diagnostic(format!(
+        "Fact metadata provider manifest missing for {}#{}.",
+        reference.family.label(),
+        reference.run_id
+    ))
+    .with_evidence("family", reference.family.label())
+    .with_evidence("fact_ref", fact_ref_value(reference))
+    .with_evidence("field", field)
+    .with_evidence("value", value)
+}
+
 struct SpanCheck<'a> {
     family: FactFamily,
     run_id: u64,
@@ -1137,6 +1177,42 @@ mod tests {
             evidence_labels(&diagnostics[0]),
             BTreeSet::from(["ceiling", "family", "precision", "producer_id"])
         );
+    }
+
+    #[test]
+    fn metadata_validation_reports_unknown_producer_and_layer_ids() {
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::FileMetric, 0),
+            FactMeta {
+                stable_key: "metric:key".to_string(),
+                producer_id: "polint.unknown_producer",
+                layer_id: "polint.unknown_layer",
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:a".to_string(),
+            },
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let provider_fields = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Fact metadata provider manifest missing")
+            })
+            .flat_map(|diagnostic| {
+                diagnostic
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.label == "field")
+                    .map(|evidence| evidence.value.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(provider_fields, BTreeSet::from(["layer_id", "producer_id"]));
     }
 
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {

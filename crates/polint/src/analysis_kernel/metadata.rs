@@ -197,7 +197,7 @@ impl FactMetaStore {
     pub(crate) fn insert(&mut self, reference: FactRef, meta: FactMeta) -> FactMetaInsert {
         let owner_key = (reference.family, meta.stable_key.clone());
         let result = if let Some(owner) = self.stable_key_owners.get(&owner_key) {
-            if owner.payload_digest == meta.payload_digest {
+            if owner.reference == reference && owner.payload_digest == meta.payload_digest {
                 FactMetaInsert::Idempotent
             } else {
                 let conflict = StableKeyConflict {
@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_key_conflict_insert_is_idempotent_for_same_payload_different_reference() {
+    fn stable_key_conflict_insert_records_duplicate_reference_for_same_payload() {
         let mut store = FactMetaStore::default();
         let first_ref = FactRef::new(FactFamily::Import, 1);
         let second_ref = FactRef::new(FactFamily::Import, 2);
@@ -423,7 +423,16 @@ mod tests {
         store.insert(first_ref, test_meta("import:key", "payload:a"));
         let result = store.insert(second_ref, test_meta("import:key", "payload:a"));
 
-        assert_eq!(result, FactMetaInsert::Idempotent);
+        assert_eq!(
+            result,
+            FactMetaInsert::Conflict {
+                family: FactFamily::Import,
+                stable_key: "import:key".to_string(),
+                existing: first_ref,
+                incoming: second_ref,
+            }
+        );
+        assert_eq!(store.stable_key_conflicts().count(), 1);
         assert_eq!(
             store
                 .stable_key_owner(FactFamily::Import, "import:key")

@@ -74,7 +74,6 @@ impl AnalysisKernel {
         diagnostics.extend(symbol_graph.diagnostics);
 
         crate::metrics::derive_requested_metrics(&mut db, input.plan);
-        debug_assert!(db.missing_fact_metadata().is_empty());
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
