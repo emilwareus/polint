@@ -136,6 +136,7 @@ fn validate_manifest_relative_path(field: &str, value: &str) -> anyhow::Result<(
 
 fn is_absolute_manifest_path(value: &str) -> bool {
     Path::new(value).is_absolute()
+        || value.starts_with('/')
         || value.starts_with('\\')
         || value.as_bytes().get(1) == Some(&b':')
 }
