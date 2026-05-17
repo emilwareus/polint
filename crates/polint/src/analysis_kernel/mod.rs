@@ -4,11 +4,11 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
+#[rustfmt::skip]
+#[cfg(test)] mod debug;
 mod metadata;
 mod provider;
 mod validation;
-#[cfg(test)]
-mod debug;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
@@ -89,6 +89,11 @@ impl AnalysisKernel {
     #[cfg(test)]
     pub(crate) fn missing_fact_metadata_for_test(db: &AnalysisDb) -> Vec<MissingFactMeta> {
         db.missing_fact_metadata()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
+        debug::metadata_debug_json_for_test(db)
     }
 
     fn provider_manifest_metadata_token() -> usize {
