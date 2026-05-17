@@ -428,7 +428,7 @@ mod tests {
             deterministic_output_hash(&invariant_changed)
         );
 
-        let mut budget_changed = reference.clone();
+        let mut budget_changed = reference;
         let budget = observed_runtime_budget_mut(&mut budget_changed);
         budget.budget_passed = false;
         budget_changed.cases[0].runtime.budget_passed = false;

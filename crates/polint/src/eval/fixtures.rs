@@ -525,7 +525,7 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 mod eval_native_fixture_runner_tests {
     use std::path::{Path, PathBuf};
 
-    use crate::eval::model::{ExpectedItem, ObservedItem, ObservedStatus};
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
     use crate::eval::report::{deterministic_output_hash, to_deterministic_json_pretty};
 
     use super::*;
@@ -835,7 +835,59 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
-        panic!("native fixture category coverage proof is not implemented yet");
+        let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
+        let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
+
+        assert!(
+            !fixture_dirs.is_empty(),
+            "native fixture suite should contain fixture manifests"
+        );
+
+        for fixture_dir in fixture_dirs {
+            let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
+                panic!(
+                    "native fixture should run: {}\n{error:#}",
+                    fixture_dir.display()
+                )
+            });
+            let case = run
+                .cases
+                .first()
+                .expect("native fixture run should have a case");
+
+            assert_eq!(
+                run.metrics.false_negatives, 0,
+                "fixture should not miss expected rows: {}",
+                case.case_id
+            );
+            assert_eq!(
+                run.metrics.forbidden_hits, 0,
+                "fixture should not hit forbidden rows: {}",
+                case.case_id
+            );
+            assert_eq!(
+                run.metrics.runtime_budget_failed, 0,
+                "fixture should stay inside runtime budget: {}",
+                case.case_id
+            );
+
+            passing_by_area
+                .entry(case.area)
+                .or_default()
+                .push(case.case_id.clone());
+        }
+
+        for required_area in [
+            FixtureArea::Kernel,
+            FixtureArea::Provenance,
+            FixtureArea::Cache,
+            FixtureArea::Extension,
+        ] {
+            assert!(
+                passing_by_area.contains_key(&required_area),
+                "native fixture suite must include a passing {required_area:?} fixture; found {passing_by_area:#?}"
+            );
+        }
     }
 
     fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {
@@ -872,5 +924,43 @@ mod eval_native_fixture_runner_tests {
             .collect::<Vec<_>>();
         kinds.sort();
         kinds
+    }
+
+    fn collect_native_fixture_dirs(root: &Path) -> Vec<PathBuf> {
+        let mut fixture_dirs = Vec::new();
+        collect_native_fixture_dirs_in(root, &mut fixture_dirs);
+        fixture_dirs.sort();
+        fixture_dirs
+    }
+
+    fn collect_native_fixture_dirs_in(current: &Path, fixture_dirs: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(current).unwrap_or_else(|error| {
+            panic!("read native fixture dir {}: {error}", current.display())
+        }) {
+            let path = entry
+                .unwrap_or_else(|error| panic!("read native fixture entry: {error}"))
+                .path();
+            if path.is_dir() {
+                collect_native_fixture_dirs_in(&path, fixture_dirs);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(FIXTURE_MANIFEST_FILE))
+            {
+                fixture_dirs.push(current.to_path_buf());
+            }
+        }
+    }
+
+    fn run_fixture_for_suite_coverage(
+        fixture_dir: &Path,
+    ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+        let fixture = load_native_fixture(fixture_dir)?;
+        if fixture.manifest.area == FixtureArea::Cache
+            && fixture.manifest.case_id == "cache-current-determinism"
+        {
+            run_cache_current_determinism_fixture_for_test(fixture_dir)
+        } else {
+            run_native_fixture_for_test(fixture_dir)
+        }
     }
 }
