@@ -1,0 +1,15 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "cache-current-determinism"
+area = "cache"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 5000
+
+[[expected]]
+invariant = { name = "cache.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "cache.current_determinism", max_runtime_ms = 5000, mode = "exact" }

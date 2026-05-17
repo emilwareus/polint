@@ -402,6 +402,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/provenance/metadata")
     }
 
+    fn cache_current_determinism_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/cache/current-determinism")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -521,6 +525,68 @@ mod eval_native_fixture_runner_tests {
     #[test]
     fn eval_provenance_fixture_runtime_budget_hash_ignores_duration() {
         let mut first = run_native_fixture_for_test(&provenance_fixture_dir()).unwrap();
+        let mut second = first.clone();
+        first.cases[0].runtime.observed_runtime_ms = Some(1);
+        second.cases[0].runtime.observed_runtime_ms = Some(999);
+        for run in [&mut first, &mut second] {
+            let observed_runtime_ms = run.cases[0].runtime.observed_runtime_ms;
+            for item in &mut run.cases[0].observed {
+                if let ObservedItem::RuntimeBudget(budget) = item {
+                    budget.observed_runtime_ms = observed_runtime_ms;
+                }
+            }
+        }
+
+        assert_eq!(
+            deterministic_output_hash(&first),
+            deterministic_output_hash(&second)
+        );
+    }
+
+    #[test]
+    fn eval_cache_current_determinism_fixture_passes() {
+        let run = run_native_fixture_for_test(&cache_current_determinism_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("cache determinism case");
+
+        assert_eq!(run.metrics.false_negatives, 0);
+        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "cache.current_determinism"
+                    && invariant.value == "cold_warm_no_cache_equal"
+            }
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn eval_cache_current_determinism_manifest_limits_cache_claims() {
+        let manifest = std::fs::read_to_string(
+            cache_current_determinism_fixture_dir().join("expected.polint-eval.toml"),
+        )
+        .unwrap();
+
+        assert!(manifest.contains("cache.current_determinism"));
+        assert!(manifest.contains("cold_warm_no_cache_equal"));
+        assert!(manifest.contains("max_runtime_ms = 5000"));
+        for forbidden in [
+            "InputSnapshot",
+            "LayerKey",
+            "QueryKey",
+            "SummaryKey",
+            "DiagnosticKey",
+        ] {
+            assert!(
+                !manifest.contains(forbidden),
+                "cache fixture must not claim future cache term `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_cache_current_determinism_runtime_budget_hash_ignores_duration() {
+        let mut first =
+            run_native_fixture_for_test(&cache_current_determinism_fixture_dir()).unwrap();
         let mut second = first.clone();
         first.cases[0].runtime.observed_runtime_ms = Some(1);
         second.cases[0].runtime.observed_runtime_ms = Some(999);
