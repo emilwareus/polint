@@ -11,7 +11,7 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 ### Foundation
 
 - [x] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior.
-- [ ] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
+- [x] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
 - [ ] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
 - [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
 - [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
@@ -68,7 +68,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | SAE-FND-01 | Phase 20 | Complete |
-| SAE-FND-02 | Phase 21 | Pending |
+| SAE-FND-02 | Phase 21 | Complete |
 | SAE-FND-03 | Phase 22 | Pending |
 | SAE-FND-04 | Phase 23 | Pending |
 | SAE-FND-05 | Phase 24 | Pending |

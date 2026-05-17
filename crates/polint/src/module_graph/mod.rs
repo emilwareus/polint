@@ -358,12 +358,16 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
         AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, ImportFact,
-        ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNodeId, ModuleNodeKind,
-        PackageFact, PackageId, ResolutionPrecision, ResolutionStatus, Span, UnresolvedReason,
+        ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision, ResolutionStatus, Span,
+        UnresolvedReason,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -591,6 +595,195 @@ mod tests {
         assert!(db.module_edges().iter().any(|edge| {
             edge.kind == ModuleEdgeKind::Contains && edge.from == package && edge.to == file_node
         }));
+    }
+
+    #[test]
+    fn module_graph_metadata_records_provider_for_replaced_facts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import React from 'react';\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "react".to_string(),
+            span: span(file, 0),
+            language: Language::TypeScript,
+        });
+        let import_key = db
+            .metadata_for(FactRef::new(FactFamily::Import, import.0))
+            .expect("import metadata should exist")
+            .stable_key
+            .clone();
+
+        db.replace_module_graph_facts(
+            vec![crate::core::ResolvedImportFact {
+                id: crate::core::ResolvedImportId(99),
+                import,
+                from_file: file,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(100),
+                    kind: ModuleNodeKind::External,
+                    label: "react".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            vec![ModuleEdge {
+                id: ModuleEdgeId(99),
+                from: ModuleNodeId(0),
+                to: ModuleNodeId(1),
+                import: Some(import),
+                resolved_import: Some(crate::core::ResolvedImportId(0)),
+                kind: ModuleEdgeKind::Imports,
+                status: ResolutionStatus::Resolved,
+            }],
+        );
+
+        let resolved = db
+            .metadata_for(FactRef::new(FactFamily::ResolvedImport, 0))
+            .expect("resolved import metadata should be recorded");
+        let node = db
+            .metadata_for(FactRef::new(FactFamily::ModuleNode, 0))
+            .expect("module node metadata should be recorded");
+        let edge = db
+            .metadata_for(FactRef::new(FactFamily::ModuleEdge, 0))
+            .expect("module edge metadata should be recorded");
+
+        assert_eq!(resolved.producer_id, "polint.module_graph");
+        assert_eq!(resolved.layer_id, "polint.module_graph");
+        assert_eq!(resolved.precision, FactPrecision::Exact);
+        assert_eq!(resolved.confidence, FactConfidence::High);
+        assert_eq!(resolved.validation, ValidationStatus::NativeTrusted);
+        assert!(resolved.stable_key.contains(&import_key));
+        assert_eq!(node.producer_id, "polint.module_graph");
+        assert_eq!(edge.producer_id, "polint.module_graph");
+    }
+
+    #[test]
+    fn module_graph_metadata_maps_status_precision_without_mutating_facts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import missing from './missing';\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "./missing".to_string(),
+            span: span(file, 0),
+            language: Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![
+                crate::core::ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(99),
+                    import,
+                    from_file: file,
+                    target_node: None,
+                    status: ResolutionStatus::Unresolved,
+                    precision: ResolutionPrecision::None,
+                    reason: Some(UnresolvedReason::NotFound),
+                },
+                crate::core::ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(100),
+                    import,
+                    from_file: file,
+                    target_node: None,
+                    status: ResolutionStatus::SetupMissing,
+                    precision: ResolutionPrecision::None,
+                    reason: Some(UnresolvedReason::SetupMissing),
+                },
+                crate::core::ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(101),
+                    import,
+                    from_file: file,
+                    target_node: None,
+                    status: ResolutionStatus::Unsupported,
+                    precision: ResolutionPrecision::None,
+                    reason: Some(UnresolvedReason::UnsupportedImport),
+                },
+                crate::core::ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(102),
+                    import,
+                    from_file: file,
+                    target_node: None,
+                    status: ResolutionStatus::Dynamic,
+                    precision: ResolutionPrecision::None,
+                    reason: Some(UnresolvedReason::DynamicExpression),
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let rows = db
+            .resolved_imports()
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| {
+                let metadata = db
+                    .metadata_for(FactRef::new(FactFamily::ResolvedImport, index as u64))
+                    .expect("resolved import metadata should be recorded");
+                (
+                    fact.status,
+                    fact.precision,
+                    metadata.precision,
+                    metadata.confidence,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    ResolutionStatus::Unresolved,
+                    ResolutionPrecision::None,
+                    FactPrecision::Unresolved,
+                    FactConfidence::Low,
+                ),
+                (
+                    ResolutionStatus::SetupMissing,
+                    ResolutionPrecision::None,
+                    FactPrecision::SetupMissing,
+                    FactConfidence::Low,
+                ),
+                (
+                    ResolutionStatus::Unsupported,
+                    ResolutionPrecision::None,
+                    FactPrecision::Unsupported,
+                    FactConfidence::Low,
+                ),
+                (
+                    ResolutionStatus::Dynamic,
+                    ResolutionPrecision::None,
+                    FactPrecision::Heuristic,
+                    FactConfidence::Low,
+                ),
+            ]
+        );
     }
 
     #[test]

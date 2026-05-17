@@ -4086,6 +4086,113 @@ fn main() -> ExitCode {
         assert!(diagnostic_has_evidence(diagnostic, "symbol", "answer"));
     }
 
+    #[test]
+    fn kernel_metadata_preserves_public_check_behavior() {
+        let temp = tempfile::tempdir().unwrap();
+        write_external_symbol_rule_repo(
+            temp.path(),
+            r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/kernel-metadata-public-probe",
+    description = "Reads public facts after kernel metadata checks.",
+    severity = "warn"
+)]
+fn kernel_metadata_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let Some(symbol) = symbols
+        .by_name("answer")
+        .find(|symbol| symbol.kind == SymbolKind::Function)
+    else {
+        return Ok(());
+    };
+    let reference_count = references.to(symbol.id).count();
+    let file = symbol
+        .file
+        .map(|file| ctx.file_path(file))
+        .unwrap_or_else(|| "<workspace>".to_string());
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            file,
+            DiagnosticRange::point(1, 1),
+            "kernel metadata preserved public symbol facts",
+        )
+        .with_evidence("symbol_name", symbol.name.clone())
+        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("reference_count", reference_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![kernel_metadata_public_probe()])
+}
+"#,
+        );
+        write_file(
+            &temp.path().join("src/app.ts"),
+            r#"export function answer() {
+  return 42;
+}
+
+export const value = answer();
+"#,
+        );
+
+        let run = || {
+            stdout_string(
+                polint_cmd()
+                    .current_dir(temp.path())
+                    .args(["check", "--format", "json", "--fail-on", "none"])
+                    .assert()
+                    .success(),
+            )
+        };
+        let first = run();
+        let second = run();
+        assert_eq!(first, second);
+
+        let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+            .unwrap_or_else(|error| {
+                panic!("stdout was not a public PolintReport: {error}\n{first}")
+            });
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "polint/internal"),
+            "clean repo should not expose internal diagnostics: {report:#?}"
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "polint/capability"),
+            "public symbol/reference flow should not emit capability diagnostics: {report:#?}"
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "local/kernel-metadata-public-probe"),
+            "external public SDK rule should run: {report:#?}"
+        );
+
+        for metadata_key in ["producer_id", "layer_id", "confidence", "validation"] {
+            assert!(
+                !first.contains(&format!("\"{metadata_key}\"")),
+                "public JSON must not include metadata-only key `{metadata_key}`:\n{first}"
+            );
+        }
+    }
+
     fn symbol_reference_id_evidence(
         report: &polint::sdk::prelude::PolintReport,
     ) -> Vec<(String, String, String, String, String)> {

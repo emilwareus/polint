@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: ready
-last_updated: "2026-05-16T20:30:12.768Z"
-last_activity: 2026-05-16
+status: verifying
+last_updated: "2026-05-17T08:22:41.070Z"
+last_activity: 2026-05-17
 progress:
   total_phases: 22
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  completed_phases: 2
+  total_plans: 6
+  completed_plans: 6
   percent: 100
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 21 — Provenance, Precision, and Validation Metadata
+**Current focus:** Phase 21 — provenance-precision-and-validation-metadata
 
 ## Current Status
 
@@ -38,17 +38,17 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase 20 verified and complete; ready to plan Phase 21
-Phase: 21
+Status: Phase complete — ready for verification
+Phase: 22
 Plan: Not started
-Last activity: 2026-05-16
+Last activity: 2026-05-17
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
-| 21 | Pending | Provenance, precision, and validation metadata; requirement SAE-FND-02 |
+| 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
 | 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
@@ -93,6 +93,18 @@ Last activity: 2026-05-16
 - [Phase 20-private-analysis-kernel-facade]: Keep provider manifests crate-private and consume them only for behavior-preserving metadata consistency in this phase.
 - [Phase 20-private-analysis-kernel-facade]: Keep provider execution order as explicit AnalysisKernel::run calls; manifest dependency data remains deterministic test metadata only.
 - [Phase 20-private-analysis-kernel-facade]: Expose provider order inspection only through #[cfg(test)] crate-private helpers, with no SDK, runner, or CLI contract.
+- [Phase 21-provenance-precision-and-validation-metadata]: Metadata stays in an AnalysisDb sidecar rather than widening public fact structs.
+- [Phase 21-provenance-precision-and-validation-metadata]: Provider IDs polint.source, polint.go.syntax, and polint.ts.syntax are reused as producer and layer IDs for current source/syntax facts.
+- [Phase 21-provenance-precision-and-validation-metadata]: Stable keys are deterministic strings built from sorted, normalized, length-prefixed labeled parts while run-local FactRef IDs remain separate.
+- [Phase 21-provenance-precision-and-validation-metadata]: Derived provider metadata uses hard-coded manifest IDs polint.module_graph, polint.symbol_graph, and polint.metrics.
+- [Phase 21-provenance-precision-and-validation-metadata]: Symbol, definition, and reference metadata stable keys reuse the existing symbol graph stable_key fields exactly.
+- [Phase 21-provenance-precision-and-validation-metadata]: The missing metadata report stays crate-private and test-facing, with a debug assertion keeping the invariant live inside the kernel.
+- [Phase 21-provenance-precision-and-validation-metadata]: Stable-key ownership is keyed by (FactFamily, stable_key); conflicting payloads keep existing fact rows but become deterministic validation diagnostics.
+- [Phase 21-provenance-precision-and-validation-metadata]: Metadata validation runs after metrics derivation and before KernelOutput is returned to rule execution.
+- [Phase 21-provenance-precision-and-validation-metadata]: Provider precision ceilings allow lower-confidence precision labels while flagging syntax providers that claim Exact or SetupAware output.
+- [Phase 21-provenance-precision-and-validation-metadata]: Metadata debug JSON remains behind cfg(test) and crate-private AnalysisKernel helpers, with no SDK, runner, or public CLI surface.
+- [Phase 21-provenance-precision-and-validation-metadata]: Debug rows use SourceFile.relative_path and explicit row sorting by path/span/name/stable key/run id to avoid machine-local or transient details.
+- [Phase 21-provenance-precision-and-validation-metadata]: Public compatibility is proven through a temp-repo external rule importing only polint::sdk::prelude::* and checking metadata-only keys stay out of public JSON.
 
 ## Execution Metrics
 
@@ -100,14 +112,18 @@ Last activity: 2026-05-16
 |-------|------|----------|-------|-------|
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
+| 21-provenance-precision-and-validation-metadata | 01 | 9h 8m | 2 | 3 |
+| 21-provenance-precision-and-validation-metadata | 02 | 14m | 3 | 6 |
+| 21-provenance-precision-and-validation-metadata | 03 | 14m | 2 | 4 |
+| 21-provenance-precision-and-validation-metadata | 04 | 11m | 2 | 3 |
 
 ## Session
 
-- Last session: 2026-05-16
-- Stopped at: Phase 20 verified and complete
+- Last session: 2026-05-17
+- Stopped at: Completed 21-04-PLAN.md
 
 ## Next Action
 
-Plan Phase 21:
+Verify Phase 21 completion, then continue to Phase 22:
 
-`/gsd-discuss-phase 21 --auto`
+`/gsd-execute-phase 22`

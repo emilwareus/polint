@@ -4,8 +4,17 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
+#[rustfmt::skip]
+#[cfg(test)] mod debug;
+mod metadata;
 mod provider;
+mod validation;
 
+pub(crate) use metadata::{
+    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
+};
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
 };
@@ -65,6 +74,9 @@ impl AnalysisKernel {
         diagnostics.extend(symbol_graph.diagnostics);
 
         crate::metrics::derive_requested_metrics(&mut db, input.plan);
+        let validation_diagnostics =
+            validation::validate_fact_metadata(&db, Self::provider_manifests());
+        diagnostics.extend(validation_diagnostics);
 
         Ok(KernelOutput {
             db,
@@ -73,11 +85,22 @@ impl AnalysisKernel {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn missing_fact_metadata_for_test(db: &AnalysisDb) -> Vec<MissingFactMeta> {
+        db.missing_fact_metadata()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
+        debug::metadata_debug_json_for_test(db)
+    }
+
     fn provider_manifest_metadata_token() -> usize {
-        Self::provider_manifests()
-            .iter()
-            .map(provider_manifest_metadata_weight)
-            .sum()
+        metadata::metadata_vocabulary_weight()
+            + Self::provider_manifests()
+                .iter()
+                .map(provider_manifest_metadata_weight)
+                .sum::<usize>()
     }
 }
 
@@ -146,6 +169,234 @@ fn schema_version_weight(schema: &SchemaVersion) -> usize {
 mod tests {
     use super::*;
     use crate::config::load_config;
+    use crate::core::{
+        BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
+        DefinitionKind, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact,
+        ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode,
+        ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ReferenceFact, ReferenceId,
+        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
+        Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
+        SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
+    };
+    use std::path::PathBuf;
+
+    fn span(file: crate::core::FileId, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 10,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: start_byte + 11,
+        }
+    }
+
+    fn db_with_one_fact_from_every_current_family() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.tsx"),
+            "src/app.tsx".to_string(),
+            "import React from 'react';\nexport function Button() { return <button aria-label=\"Save\">Save</button>; }\n".to_string(),
+        );
+        let package = db.push_package(PackageFact {
+            id: PackageId(99),
+            file,
+            name: "app".to_string(),
+            span: span(file, 0),
+            language: Language::Tsx,
+        });
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "Button".to_string(),
+            span: span(file, 27),
+            language: Language::Tsx,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: vec!["React.createElement".to_string()],
+        });
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "react".to_string(),
+            span: span(file, 0),
+            language: Language::Tsx,
+        });
+        let branch = db.push_branch(BranchObligation {
+            id: crate::core::BranchId(99),
+            function: Some(function),
+            file,
+            decision_span: span(file, 40),
+            condition_text: "enabled".to_string(),
+            edge_label: "true".to_string(),
+            is_error_path: false,
+            stable_fingerprint: "branch:key".to_string(),
+        });
+        db.push_test(TestFact {
+            file,
+            function: Some(function),
+            name: "TestButton".to_string(),
+            span: span(file, 50),
+            evidence_terms: vec!["render".to_string()],
+            assertion_count: 1,
+            subtest_count: 0,
+            subtest_names: Vec::new(),
+            table_rows: 0,
+        });
+        db.push_coverage(CoverageFact {
+            branch,
+            covered: Some(true),
+            source: "fixture".to_string(),
+        });
+        db.push_ts_component(TsComponentFact {
+            file,
+            function: Some(function),
+            name: "Button".to_string(),
+            span: span(file, 27),
+        });
+        db.push_ts_class(TsClassFact {
+            file,
+            name: "Dialog".to_string(),
+            span: span(file, 61),
+            is_exported: true,
+            is_component_like: false,
+        });
+        db.push_string_literal(StringLiteralFact {
+            file,
+            value: "Save".to_string(),
+            span: span(file, 88),
+            language: Language::Tsx,
+        });
+        db.push_jsx_attribute(JsxAttributeFact {
+            file,
+            name: "aria-label".to_string(),
+            value: Some("Save".to_string()),
+            span: span(file, 72),
+        });
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(99),
+                import,
+                from_file: file,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(99),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.tsx".to_string(),
+                    file: Some(file),
+                    package: Some(package),
+                    language: Some(Language::Tsx),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(100),
+                    kind: ModuleNodeKind::External,
+                    label: "react".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Tsx),
+                },
+            ],
+            vec![ModuleEdge {
+                id: ModuleEdgeId(99),
+                from: ModuleNodeId(0),
+                to: ModuleNodeId(1),
+                import: Some(import),
+                resolved_import: Some(ResolvedImportId(0)),
+                kind: ModuleEdgeKind::Imports,
+                status: ResolutionStatus::Resolved,
+            }],
+        );
+        db.replace_symbol_graph_facts(
+            vec![SymbolFact {
+                id: SymbolId(0),
+                language: Language::Tsx,
+                name: "Button".to_string(),
+                qualified_name: "Button".to_string(),
+                kind: SymbolKind::Function,
+                namespace: SymbolNamespace::Value,
+                file: Some(file),
+                package: Some(package),
+                module: Some(ModuleNodeId(0)),
+                owner: None,
+                primary_span: Some(span(file, 27)),
+                is_exported: true,
+                stable_key: "symbol:Button".to_string(),
+                precision: SymbolPrecision::ExactLocal,
+            }],
+            vec![DefinitionFact {
+                id: DefinitionId(0),
+                symbol: SymbolId(0),
+                language: Language::Tsx,
+                name: "Button".to_string(),
+                qualified_name: "Button".to_string(),
+                kind: DefinitionKind::Declaration,
+                namespace: SymbolNamespace::Value,
+                file: Some(file),
+                package: Some(package),
+                module: Some(ModuleNodeId(0)),
+                owner: None,
+                primary_span: Some(span(file, 27)),
+                is_primary: true,
+                is_exported: true,
+                stable_key: "definition:Button".to_string(),
+                precision: SymbolPrecision::ExactLocal,
+            }],
+            vec![ReferenceFact {
+                id: ReferenceId(0),
+                language: Language::Tsx,
+                name: "Button".to_string(),
+                qualified_name: "Button".to_string(),
+                kind: ReferenceKind::Read,
+                namespace: SymbolNamespace::Value,
+                file: Some(file),
+                package: Some(package),
+                module: Some(ModuleNodeId(0)),
+                owner: None,
+                primary_span: Some(span(file, 27)),
+                target: Some(SymbolId(0)),
+                candidates: Vec::new(),
+                stable_key: "reference:Button".to_string(),
+                status: SymbolResolutionStatus::Resolved,
+                precision: SymbolPrecision::ExactLocal,
+            }],
+        );
+        db.replace_metric_facts(
+            vec![FileMetricFact {
+                file,
+                language: Language::Tsx,
+                line_count: 2,
+                non_empty_line_count: 2,
+                byte_count: 100,
+                function_count: 1,
+            }],
+            vec![FunctionMetricFact {
+                function,
+                file,
+                name: "Button".to_string(),
+                span: span(file, 27),
+                language: Language::Tsx,
+                line_count: 1,
+                byte_count: 10,
+            }],
+            vec![ComplexityMetricFact {
+                function,
+                file,
+                name: "Button".to_string(),
+                span: span(file, 27),
+                language: Language::Tsx,
+                cyclomatic_complexity: 1,
+            }],
+        );
+        db
+    }
 
     #[test]
     fn run_with_empty_plan_returns_empty_db_and_plan_support() {
@@ -211,6 +462,38 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.metrics",
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_fact_metadata_reports_no_gaps_when_all_current_families_have_metadata() {
+        let db = db_with_one_fact_from_every_current_family();
+
+        let report = AnalysisKernel::missing_fact_metadata_for_test(&db);
+
+        assert!(report.is_empty(), "unexpected missing metadata: {report:?}");
+    }
+
+    #[test]
+    fn missing_fact_metadata_reports_removed_rows_sorted_by_family_and_run_id() {
+        let mut db = db_with_one_fact_from_every_current_family();
+        db.remove_fact_metadata_for_test(FactRef::new(FactFamily::Reference, 0));
+        db.remove_fact_metadata_for_test(FactRef::new(FactFamily::FileMetric, 0));
+
+        let report = AnalysisKernel::missing_fact_metadata_for_test(&db);
+
+        assert_eq!(
+            report,
+            vec![
+                MissingFactMeta {
+                    family: FactFamily::FileMetric,
+                    run_id: 0,
+                },
+                MissingFactMeta {
+                    family: FactFamily::Reference,
+                    run_id: 0,
+                },
             ]
         );
     }

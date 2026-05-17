@@ -24,6 +24,8 @@ Static-analysis engine research completed on 2026-05-16. `research/ROADMAP.md` n
 
 Phase 20 of v1.2 completed on 2026-05-16. Current source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics orchestration now runs behind a crate-private analysis kernel facade with deterministic internal provider manifests and test-only provider-order inspection, preserving existing public behavior.
 
+Phase 21 of v1.2 completed on 2026-05-17. Existing kernel-produced fact families now carry crate-private sidecar metadata for provenance, precision, confidence, validation status, stable keys, and deterministic merge validation, with internal debug JSON for files/imports/symbols/references and no public metadata surface.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -88,10 +90,10 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] Populate TS/JS symbols and references from Oxc semantic facts where setup is available. Validated in Phase 13: Symbols and References.
 - [x] Expose symbol/reference precision tiers and stable IDs suitable for diagnostics and cache restore. Validated in Phase 13: Symbols and References.
 - [x] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior. Validated in Phase 20: Private Analysis Kernel Facade.
+- [x] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation. Validated in Phase 21: Provenance, Precision, and Validation Metadata.
 
 ### Active
 
-- [ ] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
 - [ ] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
 - [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
 - [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
@@ -151,6 +153,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - v1.2 Static Analysis Engine Implementation roadmap is defined in `.planning/ROADMAP.md`.
 - Static-analysis engine research and implementation sequencing live in `research/ROADMAP.md`.
 - Phase 20 completed on 2026-05-16 through GSD plan execution, code review, full workspace regression, and verification, closing the private analysis kernel facade and provider manifest foundation without promoting a public SDK or CLI provider surface.
+- Phase 21 completed on 2026-05-17 through GSD plan execution, code review, full workspace regression, and verification, closing provenance/precision/validation sidecar metadata and deterministic merge validation for current fact families without promoting a public metadata surface.
 
 ## Constraints
 
@@ -212,4 +215,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-16 after completing Phase 20 Private Analysis Kernel Facade*
+*Last updated: 2026-05-17 after completing Phase 21 Provenance, Precision, and Validation Metadata*

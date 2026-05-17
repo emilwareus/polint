@@ -1,3 +1,8 @@
+use crate::analysis_kernel::{
+    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
+};
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
@@ -8,6 +13,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+const SOURCE_PROVIDER_ID: &str = "polint.source";
+const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
+const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
+const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
+const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
+const METRICS_PROVIDER_ID: &str = "polint.metrics";
+const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
+const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
 
 /// Arbitrary per-rule configuration value from `.polint.toml`.
 ///
@@ -526,6 +540,7 @@ pub struct CachedFileFacts {
 #[derive(Debug, Default, Clone)]
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
+    fact_meta: FactMetaStore,
     packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
@@ -591,6 +606,7 @@ impl AnalysisDb {
         content_hash: String,
     ) -> FileId {
         let id = FileId(self.files.len() as u32);
+        let metadata = source_file_metadata(&relative_path, language, &content_hash);
         self.files.push(SourceFile {
             id,
             path,
@@ -599,43 +615,58 @@ impl AnalysisDb {
             source,
             content_hash,
         });
+        self.record_fact_meta(FactFamily::SourceFile, u64::from(id.0), metadata);
         id
     }
 
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
         let id = PackageId(self.packages.len() as u64);
         fact.id = id;
+        let metadata = self.package_metadata(&fact);
         self.packages.push(fact);
+        self.record_fact_meta(FactFamily::Package, id.0, metadata);
         id
     }
 
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
         let id = FunctionId(self.functions.len() as u64);
         fact.id = id;
+        let metadata = self.function_metadata(&fact);
         self.functions.push(fact);
+        self.record_fact_meta(FactFamily::Function, id.0, metadata);
         id
     }
 
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
         let id = ImportId(self.imports.len() as u64);
         fact.id = id;
+        let metadata = self.import_metadata(&fact);
         self.imports.push(fact);
+        self.record_fact_meta(FactFamily::Import, id.0, metadata);
         id
     }
 
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
         let id = BranchId(self.branches.len() as u64);
         fact.id = id;
+        let metadata = self.branch_metadata(&fact);
         self.branches.push(fact);
+        self.record_fact_meta(FactFamily::BranchObligation, id.0, metadata);
         id
     }
 
     pub fn push_test(&mut self, fact: TestFact) {
+        let run_id = self.tests.len() as u64;
+        let metadata = self.test_metadata(&fact);
         self.tests.push(fact);
+        self.record_fact_meta(FactFamily::Test, run_id, metadata);
     }
 
     pub fn push_coverage(&mut self, fact: CoverageFact) {
+        let run_id = self.coverage.len() as u64;
+        let metadata = self.coverage_metadata(&fact);
         self.coverage.push(fact);
+        self.record_fact_meta(FactFamily::Coverage, run_id, metadata);
     }
 
     pub(crate) fn replace_metric_facts(
@@ -647,6 +678,7 @@ impl AnalysisDb {
         self.file_metrics = file_metrics;
         self.function_metrics = function_metrics;
         self.complexity_metrics = complexity_metrics;
+        self.refresh_metric_metadata();
     }
 
     pub(crate) fn replace_module_graph_facts(
@@ -655,19 +687,47 @@ impl AnalysisDb {
         mut module_nodes: Vec<ModuleNode>,
         mut module_edges: Vec<ModuleEdge>,
     ) {
+        let resolved_import_ids = resolved_imports
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (fact.id, ResolvedImportId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+        let module_node_ids = module_nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id, ModuleNodeId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+
         for (index, fact) in resolved_imports.iter_mut().enumerate() {
             fact.id = ResolvedImportId(index as u64);
+            if let Some(target_node) = fact.target_node
+                && let Some(remapped) = module_node_ids.get(&target_node)
+            {
+                fact.target_node = Some(*remapped);
+            }
         }
         for (index, node) in module_nodes.iter_mut().enumerate() {
             node.id = ModuleNodeId(index as u64);
         }
         for (index, edge) in module_edges.iter_mut().enumerate() {
             edge.id = ModuleEdgeId(index as u64);
+            if let Some(remapped) = module_node_ids.get(&edge.from) {
+                edge.from = *remapped;
+            }
+            if let Some(remapped) = module_node_ids.get(&edge.to) {
+                edge.to = *remapped;
+            }
+            if let Some(resolved_import) = edge.resolved_import
+                && let Some(remapped) = resolved_import_ids.get(&resolved_import)
+            {
+                edge.resolved_import = Some(*remapped);
+            }
         }
 
         self.resolved_imports = resolved_imports;
         self.module_nodes = module_nodes;
         self.module_edges = module_edges;
+        self.refresh_module_graph_metadata();
     }
 
     pub(crate) fn replace_symbol_graph_facts(
@@ -680,6 +740,109 @@ impl AnalysisDb {
         self.definitions = definitions;
         self.references = references;
         self.rebuild_symbol_graph_indexes();
+        self.refresh_symbol_graph_metadata();
+    }
+
+    fn refresh_module_graph_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::ModuleNode);
+        self.fact_meta.remove_family(FactFamily::ResolvedImport);
+        self.fact_meta.remove_family(FactFamily::ModuleEdge);
+
+        let node_metadata = self
+            .module_nodes
+            .iter()
+            .map(|node| (node.id.0, self.module_node_metadata(node)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::ModuleNode, run_id, metadata);
+        }
+
+        let resolved_metadata = self
+            .resolved_imports
+            .iter()
+            .map(|fact| (fact.id.0, self.resolved_import_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in resolved_metadata {
+            self.record_fact_meta(FactFamily::ResolvedImport, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .module_edges
+            .iter()
+            .map(|edge| (edge.id.0, self.module_edge_metadata(edge)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
+        }
+    }
+
+    fn refresh_symbol_graph_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Symbol);
+        self.fact_meta.remove_family(FactFamily::Definition);
+        self.fact_meta.remove_family(FactFamily::Reference);
+
+        let symbol_metadata = self
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.id.0, self.symbol_fact_metadata(symbol)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in symbol_metadata {
+            self.record_fact_meta(FactFamily::Symbol, run_id, metadata);
+        }
+
+        let definition_metadata = self
+            .definitions
+            .iter()
+            .map(|definition| (definition.id.0, self.definition_fact_metadata(definition)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in definition_metadata {
+            self.record_fact_meta(FactFamily::Definition, run_id, metadata);
+        }
+
+        let reference_metadata = self
+            .references
+            .iter()
+            .map(|reference| (reference.id.0, self.reference_fact_metadata(reference)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in reference_metadata {
+            self.record_fact_meta(FactFamily::Reference, run_id, metadata);
+        }
+    }
+
+    fn refresh_metric_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::FileMetric);
+        self.fact_meta.remove_family(FactFamily::FunctionMetric);
+        self.fact_meta.remove_family(FactFamily::ComplexityMetric);
+
+        let file_metadata = self
+            .file_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.file_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in file_metadata {
+            self.record_fact_meta(FactFamily::FileMetric, run_id, metadata);
+        }
+
+        let function_metadata = self
+            .function_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.function_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in function_metadata {
+            self.record_fact_meta(FactFamily::FunctionMetric, run_id, metadata);
+        }
+
+        let complexity_metadata = self
+            .complexity_metrics
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.complexity_metric_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in complexity_metadata {
+            self.record_fact_meta(FactFamily::ComplexityMetric, run_id, metadata);
+        }
     }
 
     fn rebuild_symbol_graph_indexes(&mut self) {
@@ -743,19 +906,150 @@ impl AnalysisDb {
     }
 
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
+        let run_id = self.ts_components.len() as u64;
+        let metadata = self.ts_component_metadata(&fact);
         self.ts_components.push(fact);
+        self.record_fact_meta(FactFamily::TsComponent, run_id, metadata);
     }
 
     pub fn push_ts_class(&mut self, fact: TsClassFact) {
+        let run_id = self.ts_classes.len() as u64;
+        let metadata = self.ts_class_metadata(&fact);
         self.ts_classes.push(fact);
+        self.record_fact_meta(FactFamily::TsClass, run_id, metadata);
     }
 
     pub fn push_string_literal(&mut self, fact: StringLiteralFact) {
+        let run_id = self.string_literals.len() as u64;
+        let metadata = self.string_literal_metadata(&fact);
         self.string_literals.push(fact);
+        self.record_fact_meta(FactFamily::StringLiteral, run_id, metadata);
     }
 
     pub fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
+        let run_id = self.jsx_attributes.len() as u64;
+        let metadata = self.jsx_attribute_metadata(&fact);
         self.jsx_attributes.push(fact);
+        self.record_fact_meta(FactFamily::JsxAttribute, run_id, metadata);
+    }
+
+    pub(crate) fn fact_meta(&self) -> &FactMetaStore {
+        &self.fact_meta
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
+        &mut self.fact_meta
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remove_fact_metadata_for_test(&mut self, fact_ref: FactRef) -> Option<FactMeta> {
+        self.fact_meta.remove_for_test(fact_ref)
+    }
+
+    pub(crate) fn metadata_for(&self, fact_ref: FactRef) -> Option<&FactMeta> {
+        self.fact_meta().get(fact_ref)
+    }
+
+    pub(crate) fn missing_fact_metadata(&self) -> Vec<MissingFactMeta> {
+        let mut missing = Vec::new();
+
+        for file in self.files() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::SourceFile,
+                u64::from(file.id.0),
+            );
+        }
+        for package in self.packages() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Package, package.id.0);
+        }
+        for function in self.functions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Function, function.id.0);
+        }
+        for import in self.imports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Import, import.id.0);
+        }
+        for resolved_import in self.resolved_imports() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ResolvedImport,
+                resolved_import.id.0,
+            );
+        }
+        for module_node in self.module_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleNode, module_node.id.0);
+        }
+        for module_edge in self.module_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleEdge, module_edge.id.0);
+        }
+        for symbol in self.symbols() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
+        }
+        for definition in self.definitions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Definition, definition.id.0);
+        }
+        for reference in self.references() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Reference, reference.id.0);
+        }
+        for branch in self.branches() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::BranchObligation,
+                branch.id.0,
+            );
+        }
+        for (run_id, _test) in self.tests().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Test, run_id as u64);
+        }
+        for (run_id, _coverage) in self.coverage().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Coverage, run_id as u64);
+        }
+        for (run_id, _file_metric) in self.file_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::FileMetric, run_id as u64);
+        }
+        for (run_id, _function_metric) in self.function_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::FunctionMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _complexity_metric) in self.complexity_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ComplexityMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _component) in self.ts_components().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsComponent, run_id as u64);
+        }
+        for (run_id, _class) in self.ts_classes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsClass, run_id as u64);
+        }
+        for (run_id, _literal) in self.string_literals().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::StringLiteral, run_id as u64);
+        }
+        for (run_id, _attribute) in self.jsx_attributes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::JsxAttribute, run_id as u64);
+        }
+
+        missing.sort_by(|left, right| {
+            (left.family.label(), left.run_id).cmp(&(right.family.label(), right.run_id))
+        });
+        missing
+    }
+
+    fn push_missing_fact_metadata(
+        &self,
+        missing: &mut Vec<MissingFactMeta>,
+        family: FactFamily,
+        run_id: u64,
+    ) {
+        if self.metadata_for(FactRef::new(family, run_id)).is_none() {
+            missing.push(MissingFactMeta { family, run_id });
+        }
     }
 
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
@@ -1088,6 +1382,734 @@ impl AnalysisDb {
             self.push_jsx_attribute(attribute);
         }
     }
+
+    fn record_fact_meta(&mut self, family: FactFamily, run_id: u64, meta: FactMeta) {
+        let reference = FactRef::new(family, run_id);
+        let _insert = self.fact_meta.insert(reference, meta);
+        debug_assert!(self.metadata_for(reference).is_some());
+    }
+
+    fn package_metadata(&self, fact: &PackageFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Package,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+
+    fn function_metadata(&self, fact: &FunctionFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Function,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("is_test", fact.is_test.to_string()),
+                ("is_exported", fact.is_exported.to_string()),
+                (
+                    "cyclomatic_complexity",
+                    fact.cyclomatic_complexity.to_string(),
+                ),
+                ("calls", fact.calls.join("\n")),
+            ]),
+        )
+    }
+
+    fn import_metadata(&self, fact: &ImportFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Import,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("import_path", fact.path.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([(
+                "package",
+                fact.package.clone().unwrap_or_else(|| "none".to_string()),
+            )]),
+        )
+    }
+
+    fn branch_metadata(&self, fact: &BranchObligation) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::BranchObligation,
+            GO_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("stable_fingerprint", fact.stable_fingerprint.clone()),
+            ]),
+            stable_parts([
+                ("function", option_function_id(fact.function)),
+                ("span", span_metadata_value(&fact.decision_span)),
+                ("condition_text", fact.condition_text.clone()),
+                ("edge_label", fact.edge_label.clone()),
+                ("is_error_path", fact.is_error_path.to_string()),
+            ]),
+        )
+    }
+
+    fn test_metadata(&self, fact: &TestFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::Test,
+            GO_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("function", option_function_id(fact.function)),
+                ("evidence_terms", fact.evidence_terms.join("\n")),
+                ("assertion_count", fact.assertion_count.to_string()),
+                ("subtest_count", fact.subtest_count.to_string()),
+                ("subtest_names", fact.subtest_names.join("\n")),
+                ("table_rows", fact.table_rows.to_string()),
+            ]),
+        )
+    }
+
+    fn coverage_metadata(&self, fact: &CoverageFact) -> FactMeta {
+        let branch = self.branches.iter().find(|branch| branch.id == fact.branch);
+        let (path, branch_fingerprint, precision, confidence) = if let Some(branch) = branch {
+            (
+                self.path_for(branch.file),
+                branch.stable_fingerprint.clone(),
+                FactPrecision::SetupAware,
+                FactConfidence::Medium,
+            )
+        } else {
+            (
+                "<unknown>".to_string(),
+                format!("unresolved:{}", fact.branch.0),
+                FactPrecision::Unsupported,
+                FactConfidence::Low,
+            )
+        };
+
+        fact_meta_from_parts(
+            FactFamily::Coverage,
+            branch
+                .map(|branch| syntax_provider_for_file(self.file(branch.file)))
+                .unwrap_or(GO_SYNTAX_PROVIDER_ID),
+            precision,
+            confidence,
+            stable_parts([
+                ("path", path),
+                ("branch_fingerprint", branch_fingerprint),
+                ("source", fact.source.clone()),
+            ]),
+            stable_parts([
+                ("branch", fact.branch.0.to_string()),
+                ("covered", option_bool(fact.covered)),
+            ]),
+        )
+    }
+
+    fn file_metric_metadata(&self, fact: &FileMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::FileMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([("file_key", self.source_file_key(fact.file))]),
+            stable_parts([
+                ("language", language_label(fact.language).to_string()),
+                ("line_count", fact.line_count.to_string()),
+                (
+                    "non_empty_line_count",
+                    fact.non_empty_line_count.to_string(),
+                ),
+                ("byte_count", fact.byte_count.to_string()),
+                ("function_count", fact.function_count.to_string()),
+            ]),
+        )
+    }
+
+    fn function_metric_metadata(&self, fact: &FunctionMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::FunctionMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                (
+                    "function_key",
+                    self.function_key(fact.function, &fact.name, &fact.span),
+                ),
+                ("metric_name", FUNCTION_SIZE_METRIC_NAME.to_string()),
+            ]),
+            stable_parts([
+                ("file_key", self.source_file_key(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("line_count", fact.line_count.to_string()),
+                ("byte_count", fact.byte_count.to_string()),
+            ]),
+        )
+    }
+
+    fn complexity_metric_metadata(&self, fact: &ComplexityMetricFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::ComplexityMetric,
+            METRICS_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                (
+                    "function_key",
+                    self.function_key(fact.function, &fact.name, &fact.span),
+                ),
+                ("metric_name", CYCLOMATIC_COMPLEXITY_METRIC_NAME.to_string()),
+            ]),
+            stable_parts([
+                ("file_key", self.source_file_key(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "cyclomatic_complexity",
+                    fact.cyclomatic_complexity.to_string(),
+                ),
+            ]),
+        )
+    }
+
+    fn module_node_metadata(&self, node: &ModuleNode) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::ModuleNode,
+            MODULE_GRAPH_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::High,
+            stable_parts([
+                ("kind", module_node_kind_label(node.kind).to_string()),
+                ("label", node.label.clone()),
+                ("path", option_file_path(self, node.file)),
+                (
+                    "package_key",
+                    node.package
+                        .map(|package| self.fact_stable_key(FactFamily::Package, package.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "language",
+                    node.language
+                        .map(|language| language_label(language).to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+            stable_parts([("id", node.id.0.to_string())]),
+        )
+    }
+
+    fn resolved_import_metadata(&self, fact: &ResolvedImportFact) -> FactMeta {
+        let (precision, confidence) = resolution_metadata(fact.precision, fact.status);
+        fact_meta_from_parts(
+            FactFamily::ResolvedImport,
+            MODULE_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            stable_parts([
+                (
+                    "import_key",
+                    self.fact_stable_key(FactFamily::Import, fact.import.0),
+                ),
+                ("from_path", self.path_for(fact.from_file)),
+                (
+                    "target_node_key",
+                    fact.target_node
+                        .map(|node| self.fact_stable_key(FactFamily::ModuleNode, node.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("status", resolution_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    resolution_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "reason",
+                    fact.reason
+                        .map(|reason| unresolved_reason_label(reason).to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("import", fact.import.0.to_string()),
+                ("from_file", u64::from(fact.from_file.0).to_string()),
+                (
+                    "target_node",
+                    fact.target_node
+                        .map(|node| node.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn module_edge_metadata(&self, edge: &ModuleEdge) -> FactMeta {
+        let (precision, confidence) = resolution_status_metadata(edge.status);
+        fact_meta_from_parts(
+            FactFamily::ModuleEdge,
+            MODULE_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            stable_parts([
+                (
+                    "from_node_key",
+                    self.fact_stable_key(FactFamily::ModuleNode, edge.from.0),
+                ),
+                (
+                    "to_node_key",
+                    self.fact_stable_key(FactFamily::ModuleNode, edge.to.0),
+                ),
+                (
+                    "import_key",
+                    edge.import
+                        .map(|import| self.fact_stable_key(FactFamily::Import, import.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "resolved_import_key",
+                    edge.resolved_import
+                        .map(|resolved| {
+                            self.fact_stable_key(FactFamily::ResolvedImport, resolved.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                ("kind", module_edge_kind_label(edge.kind).to_string()),
+                ("status", resolution_status_label(edge.status).to_string()),
+            ]),
+            stable_parts([
+                ("id", edge.id.0.to_string()),
+                ("from", edge.from.0.to_string()),
+                ("to", edge.to.0.to_string()),
+            ]),
+        )
+    }
+
+    fn symbol_fact_metadata(&self, fact: &SymbolFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Symbol,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+            ]),
+        )
+    }
+
+    fn definition_fact_metadata(&self, fact: &DefinitionFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Definition,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("symbol", fact.symbol.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+            ]),
+        )
+    }
+
+    fn reference_fact_metadata(&self, fact: &ReferenceFact) -> FactMeta {
+        let (precision, confidence) = symbol_metadata(fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Reference,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("id", fact.id.0.to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("name", fact.name.clone()),
+                ("qualified_name", fact.qualified_name.clone()),
+                (
+                    "precision",
+                    symbol_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "status",
+                    symbol_resolution_status_label(fact.status).to_string(),
+                ),
+                ("path", option_file_path(self, fact.file)),
+                (
+                    "span",
+                    option_span_metadata_value(fact.primary_span.as_ref()),
+                ),
+                (
+                    "target",
+                    fact.target
+                        .map(|target| target.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
+        self.metadata_for(FactRef::new(family, run_id))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
+    }
+
+    fn source_file_key(&self, file: FileId) -> String {
+        self.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| self.path_for(file).replace('\\', "/"))
+    }
+
+    fn function_key(&self, function: FunctionId, name: &str, span: &Span) -> String {
+        self.metadata_for(FactRef::new(FactFamily::Function, function.0))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| {
+                stable_key_from_parts(
+                    FactFamily::Function,
+                    &[
+                        ("path", self.path_for(span.file)),
+                        ("name", name.to_string()),
+                        ("span", span_metadata_value(span)),
+                    ],
+                )
+            })
+    }
+
+    fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsComponent,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([("function", option_function_id(fact.function))]),
+        )
+    }
+
+    fn ts_class_metadata(&self, fact: &TsClassFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsClass,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("is_exported", fact.is_exported.to_string()),
+                ("is_component_like", fact.is_component_like.to_string()),
+            ]),
+        )
+    }
+
+    fn string_literal_metadata(&self, fact: &StringLiteralFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::StringLiteral,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("value", fact.value.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+
+    fn jsx_attribute_metadata(&self, fact: &JsxAttributeFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::JsxAttribute,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("value", option_string(fact.value.as_deref())),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+}
+
+fn source_file_metadata(relative_path: &str, language: Language, content_hash: &str) -> FactMeta {
+    fact_meta_from_parts(
+        FactFamily::SourceFile,
+        SOURCE_PROVIDER_ID,
+        FactPrecision::Exact,
+        FactConfidence::High,
+        stable_parts([
+            ("path", relative_path.to_string()),
+            ("content_hash", content_hash.to_string()),
+        ]),
+        stable_parts([("language", language_label(language).to_string())]),
+    )
+}
+
+fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
+    family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_parts: [(&'static str, String); STABLE],
+    payload_extra_parts: [(&'static str, String); EXTRA],
+) -> FactMeta {
+    let stable_key = stable_key_from_parts(family, &stable_parts);
+    let mut payload_parts = stable_parts.to_vec();
+    payload_parts.extend(payload_extra_parts);
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest,
+    }
+}
+
+fn fact_meta_from_stable_key<const EXTRA: usize>(
+    _family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    stable_key: String,
+    payload_extra_parts: [(&'static str, String); EXTRA],
+) -> FactMeta {
+    let payload_parts = payload_extra_parts.to_vec();
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation: ValidationStatus::NativeTrusted,
+        payload_digest,
+    }
+}
+
+fn stable_parts<const N: usize>(parts: [(&'static str, String); N]) -> [(&'static str, String); N] {
+    parts
+}
+
+fn metadata_payload_digest(stable_key: &str, parts: &[(&'static str, String)]) -> String {
+    let mut normalized = parts
+        .iter()
+        .map(|(label, value)| format!("{label}={}", metadata_value(value)))
+        .collect::<Vec<_>>();
+    normalized.sort();
+
+    let mut digest_parts = Vec::with_capacity(normalized.len() + 1);
+    digest_parts.push(stable_key.to_string());
+    digest_parts.extend(normalized);
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    fingerprint(&digest_refs)
+}
+
+fn metadata_value(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
+fn span_metadata_value(span: &Span) -> String {
+    format!(
+        "{}-{}:{}:{}-{}:{}",
+        span.start_byte,
+        span.end_byte,
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col
+    )
+}
+
+fn option_span_metadata_value(span: Option<&Span>) -> String {
+    span.map(span_metadata_value).unwrap_or_else(none_value)
+}
+
+fn language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn module_node_kind_label(kind: ModuleNodeKind) -> &'static str {
+    match kind {
+        ModuleNodeKind::File => "file",
+        ModuleNodeKind::Package => "package",
+        ModuleNodeKind::Module => "module",
+        ModuleNodeKind::External => "external",
+    }
+}
+
+fn module_edge_kind_label(kind: ModuleEdgeKind) -> &'static str {
+    match kind {
+        ModuleEdgeKind::Contains => "contains",
+        ModuleEdgeKind::Imports => "imports",
+        ModuleEdgeKind::DependsOn => "depends_on",
+    }
+}
+
+fn resolution_status_label(status: ResolutionStatus) -> &'static str {
+    match status {
+        ResolutionStatus::Resolved => "resolved",
+        ResolutionStatus::External => "external",
+        ResolutionStatus::Unresolved => "unresolved",
+        ResolutionStatus::SetupMissing => "setup_missing",
+        ResolutionStatus::Dynamic => "dynamic",
+        ResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn resolution_precision_label(precision: ResolutionPrecision) -> &'static str {
+    match precision {
+        ResolutionPrecision::ExactFile => "exact_file",
+        ResolutionPrecision::Package => "package",
+        ResolutionPrecision::ExternalPackage => "external_package",
+        ResolutionPrecision::Heuristic => "heuristic",
+        ResolutionPrecision::None => "none",
+    }
+}
+
+fn unresolved_reason_label(reason: UnresolvedReason) -> &'static str {
+    match reason {
+        UnresolvedReason::NotFound => "not_found",
+        UnresolvedReason::SetupMissing => "setup_missing",
+        UnresolvedReason::DynamicExpression => "dynamic_expression",
+        UnresolvedReason::UnsupportedLanguage => "unsupported_language",
+        UnresolvedReason::UnsupportedImport => "unsupported_import",
+        UnresolvedReason::ResolverError => "resolver_error",
+        UnresolvedReason::OutsideWorkspace => "outside_workspace",
+    }
+}
+
+fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+    match precision {
+        SymbolPrecision::ExactSemantic => "exact_semantic",
+        SymbolPrecision::ExactLocal => "exact_local",
+        SymbolPrecision::ModuleLinked => "module_linked",
+        SymbolPrecision::Heuristic => "heuristic",
+        SymbolPrecision::Unresolved => "unresolved",
+        SymbolPrecision::Ambiguous => "ambiguous",
+        SymbolPrecision::SetupMissing => "setup_missing",
+        SymbolPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static str {
+    match status {
+        SymbolResolutionStatus::Resolved => "resolved",
+        SymbolResolutionStatus::Unresolved => "unresolved",
+        SymbolResolutionStatus::Ambiguous => "ambiguous",
+        SymbolResolutionStatus::SetupMissing => "setup_missing",
+        SymbolResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn syntax_provider_for_language(language: Language) -> &'static str {
+    if language.is_ts_family() {
+        TS_SYNTAX_PROVIDER_ID
+    } else if language == Language::Go {
+        GO_SYNTAX_PROVIDER_ID
+    } else {
+        SOURCE_PROVIDER_ID
+    }
+}
+
+fn syntax_provider_for_file(file: Option<&SourceFile>) -> &'static str {
+    file.map(|file| syntax_provider_for_language(file.language))
+        .unwrap_or(GO_SYNTAX_PROVIDER_ID)
+}
+
+fn option_function_id(function: Option<FunctionId>) -> String {
+    function
+        .map(|function| function.0.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn option_file_path(db: &AnalysisDb, file: Option<FileId>) -> String {
+    file.map(|file| db.path_for(file))
+        .unwrap_or_else(none_value)
+}
+
+fn none_value() -> String {
+    "<none>".to_string()
+}
+
+fn option_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn option_string(value: Option<&str>) -> String {
+    value
+        .map(|value| format!("some:{value}"))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Static metadata for a rule as shown in diagnostics, config, and registries.
@@ -1688,6 +2710,9 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    };
     use crate::sdk::facts::{
         BranchObligations, FactView, Functions, GoTests, Imports, JsxAttributes, Packages,
         SourceFiles, StringLiterals, TsClasses, TsComponents,
@@ -1838,6 +2863,190 @@ mod tests {
             start_col: 1,
             end_line: line,
             end_col: 2,
+        }
+    }
+
+    #[test]
+    fn source_file_metadata_records_provider_and_stable_key_inputs() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src\\main.go"),
+            "src\\main.go".to_string(),
+            "package main\n".to_string(),
+        );
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .expect("source metadata should be recorded");
+
+        assert_eq!(metadata.producer_id, "polint.source");
+        assert_eq!(metadata.layer_id, "polint.source");
+        assert_eq!(metadata.precision, FactPrecision::Exact);
+        assert_eq!(metadata.confidence, FactConfidence::High);
+        assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
+        assert!(metadata.stable_key.contains("4:path=11:src/main.go"));
+        assert!(metadata.stable_key.contains("12:content_hash="));
+        assert!(
+            db.fact_meta_mut_for_test()
+                .get(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn syntax_metadata_uses_language_specific_producers() {
+        let mut db = AnalysisDb::new();
+        let go_file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nimport \"fmt\"\n".to_string(),
+        );
+        let ts_file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export class Button {}".to_string(),
+        );
+        let go_span = test_span(go_file, 1);
+        let ts_span = test_span(ts_file, 1);
+
+        let import = db.push_import(ImportFact {
+            id: ImportId(999),
+            file: go_file,
+            package: None,
+            path: "fmt".to_string(),
+            span: go_span,
+            language: Language::Go,
+        });
+        db.push_ts_class(TsClassFact {
+            file: ts_file,
+            name: "Button".to_string(),
+            span: ts_span,
+            is_exported: true,
+            is_component_like: true,
+        });
+
+        let import_meta = db
+            .metadata_for(FactRef::new(FactFamily::Import, import.0))
+            .expect("import metadata should be recorded");
+        let class_meta = db
+            .metadata_for(FactRef::new(FactFamily::TsClass, 0))
+            .expect("TS class metadata should be recorded");
+
+        assert_eq!(import_meta.producer_id, "polint.go.syntax");
+        assert_eq!(import_meta.precision, FactPrecision::Syntax);
+        assert_eq!(class_meta.producer_id, "polint.ts.syntax");
+        assert_eq!(class_meta.precision, FactPrecision::Syntax);
+    }
+
+    #[test]
+    fn restore_file_facts_recreates_metadata_for_cached_syntax_facts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export function Button() { return <button aria-label=\"Save\" /> }\n".to_string(),
+        );
+        let span = test_span(file, 1);
+
+        db.restore_file_facts(
+            file,
+            CachedFileFacts {
+                packages: vec![PackageFact {
+                    id: PackageId(99),
+                    file,
+                    name: "main".to_string(),
+                    span: span.clone(),
+                    language: Language::Go,
+                }],
+                functions: vec![FunctionFact {
+                    id: FunctionId(99),
+                    file,
+                    name: "Button".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                    is_test: false,
+                    is_exported: true,
+                    cyclomatic_complexity: 1,
+                    calls: vec!["render".to_string()],
+                }],
+                imports: vec![ImportFact {
+                    id: ImportId(99),
+                    file,
+                    package: Some("react".to_string()),
+                    path: "react".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                }],
+                branches: vec![BranchObligation {
+                    id: BranchId(99),
+                    function: Some(FunctionId(99)),
+                    file,
+                    decision_span: span.clone(),
+                    condition_text: "enabled".to_string(),
+                    edge_label: "true".to_string(),
+                    is_error_path: false,
+                    stable_fingerprint: "branch".to_string(),
+                }],
+                tests: vec![TestFact {
+                    file,
+                    function: Some(FunctionId(99)),
+                    name: "TestButton".to_string(),
+                    span: span.clone(),
+                    evidence_terms: vec!["render".to_string()],
+                    assertion_count: 1,
+                    subtest_count: 0,
+                    subtest_names: Vec::new(),
+                    table_rows: 0,
+                }],
+                coverage: vec![CoverageFact {
+                    branch: BranchId(99),
+                    covered: Some(true),
+                    source: "synthetic".to_string(),
+                }],
+                ts_components: vec![TsComponentFact {
+                    file,
+                    function: Some(FunctionId(99)),
+                    name: "Button".to_string(),
+                    span: span.clone(),
+                }],
+                ts_classes: vec![TsClassFact {
+                    file,
+                    name: "Dialog".to_string(),
+                    span: span.clone(),
+                    is_exported: true,
+                    is_component_like: false,
+                }],
+                string_literals: vec![StringLiteralFact {
+                    file,
+                    value: "Save".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                }],
+                jsx_attributes: vec![JsxAttributeFact {
+                    file,
+                    name: "aria-label".to_string(),
+                    value: Some("Save".to_string()),
+                    span,
+                }],
+            },
+        );
+
+        for family in [
+            FactFamily::Package,
+            FactFamily::Function,
+            FactFamily::Import,
+            FactFamily::BranchObligation,
+            FactFamily::Test,
+            FactFamily::Coverage,
+            FactFamily::TsComponent,
+            FactFamily::TsClass,
+            FactFamily::StringLiteral,
+            FactFamily::JsxAttribute,
+        ] {
+            assert!(
+                db.metadata_for(FactRef::new(family, 0)).is_some(),
+                "missing restored metadata for {family:?}"
+            );
         }
     }
 
@@ -2858,6 +4067,76 @@ mod tests {
         assert_eq!(
             db.module_edges()[1].resolved_import,
             Some(ResolvedImportId(1))
+        );
+    }
+
+    #[test]
+    fn module_relationship_core_contract_remaps_relationship_ids_when_normalizing_inputs() {
+        let mut db = AnalysisDb::new();
+        let from_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import { Button } from './button';\n".to_string(),
+        );
+        let target_file = db.add_file(
+            PathBuf::from("src/button.ts"),
+            "src/button.ts".to_string(),
+            "export function Button() {}\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from_file,
+            package: None,
+            path: "./button".to_string(),
+            span: test_span(from_file, 1),
+            language: Language::TypeScript,
+        });
+
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(40),
+                import,
+                from_file,
+                target_node: Some(ModuleNodeId(42)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(41),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(from_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(42),
+                    kind: ModuleNodeKind::File,
+                    label: "src/button.ts".to_string(),
+                    file: Some(target_file),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            vec![ModuleEdge {
+                id: ModuleEdgeId(43),
+                from: ModuleNodeId(41),
+                to: ModuleNodeId(42),
+                import: Some(import),
+                resolved_import: Some(ResolvedImportId(40)),
+                kind: ModuleEdgeKind::Imports,
+                status: ResolutionStatus::Resolved,
+            }],
+        );
+
+        assert_eq!(db.resolved_imports()[0].target_node, Some(ModuleNodeId(1)));
+        assert_eq!(db.module_edges()[0].from, ModuleNodeId(0));
+        assert_eq!(db.module_edges()[0].to, ModuleNodeId(1));
+        assert_eq!(
+            db.module_edges()[0].resolved_import,
+            Some(ResolvedImportId(0))
         );
     }
 
