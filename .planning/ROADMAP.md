@@ -24,7 +24,7 @@ The milestone should preserve public API discipline. New internals stay private 
 |-------|------|------|--------------|
 | 20 | Private Analysis Kernel Facade | Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers. | SAE-FND-01 |
 | 21 | 4/4 | Complete    | 2026-05-17 |
-| 22 | 1/6 | In Progress|  |
+| 22 | 2/6 | In Progress|  |
 | 23 | Input Snapshots and Cache-Key Vocabulary | Add snapshot and typed key vocabulary for source, config, lifecycle, rules, tools, and models. | SAE-FND-04 |
 | 24 | Persistent Layer Cache for Existing Cheap Facts | Persist existing cheap fact layers with conservative invalidation and hit/miss reporting. | SAE-FND-05 |
 | 25 | Rule Manifest, Inspect, and Test Skeleton | Generate rule manifests and add the first supported inspect/test authoring loop. | SAE-FND-06 |
@@ -88,11 +88,11 @@ Plans:
 **Goal:** Add a hidden/internal evaluation model with deterministic expected/observed JSON, generic matchers, metrics, and native fixtures.
 **Requirements:** SAE-FND-03
 **Research:** `research/evaluation-harness/FINAL-REPORT.md`, `research/evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`, `research/evaluation-harness/VALIDATION.md`
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 - [x] 22-01-PLAN.md - Internal evaluation model and deterministic report hashing
-- [ ] 22-02-PLAN.md - Generic matchers and unified metrics
+- [x] 22-02-PLAN.md - Generic matchers and unified metrics
 - [ ] 22-03-PLAN.md - Native fixture runner and real kernel observation
 - [ ] 22-04-PLAN.md - Provenance and current-cache native fixtures
 - [ ] 22-05-PLAN.md - Synthetic extension rejection and delta fixture

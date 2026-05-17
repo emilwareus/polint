@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-17T16:39:10.766Z"
+last_updated: "2026-05-17T16:57:35.649Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 22
   completed_phases: 2
   total_plans: 12
-  completed_plans: 7
-  percent: 58
+  completed_plans: 8
+  percent: 67
 ---
 
 # State: polint
@@ -40,7 +40,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 22 (internal-evaluation-harness-mvp) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Last activity: 2026-05-17
 
 ## Phase Progress
@@ -49,7 +49,7 @@ Last activity: 2026-05-17
 |-------|--------|-------|
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
-| 22 | Pending | Internal evaluation harness MVP; requirement SAE-FND-03 |
+| 22 | Executing | 2/6 plans complete; evaluation model/report hashing plus generic matchers and metrics done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
@@ -109,6 +109,10 @@ Last activity: 2026-05-17
 - [Phase 22-internal-evaluation-harness-mvp]: Normalize reports by sorting cases, expected items, observed items, and matches before serialization and hashing.
 - [Phase 22-internal-evaluation-harness-mvp]: Compute output hashes from canonical JSON with output_hash cleared and runtime durations removed, while preserving runtime pass/fail semantics.
 - [Phase 22-internal-evaluation-harness-mvp]: Use a scoped dead_code lint expectation on the eval module until later Phase 22 plans consume the foundation types.
+- [Phase 22-internal-evaluation-harness-mvp]: Keep matcher and metric logic crate-private and pure over normalized in-memory eval rows.
+- [Phase 22-internal-evaluation-harness-mvp]: Represent matcher outcomes as typed report data instead of outcome strings so metrics can aggregate deterministically.
+- [Phase 22-internal-evaluation-harness-mvp]: Clear observed runtime durations from match summaries before deterministic output hashing, preserving pass/fail semantics without wall-clock hash input.
+- [Phase 22-internal-evaluation-harness-mvp]: Extend the existing MetricSummary report type from Plan 22-01 instead of adding a duplicate metric report shape.
 
 ## Execution Metrics
 
@@ -120,14 +124,15 @@ Last activity: 2026-05-17
 | 21-provenance-precision-and-validation-metadata | 02 | 14m | 3 | 6 |
 | 21-provenance-precision-and-validation-metadata | 03 | 14m | 2 | 4 |
 | 21-provenance-precision-and-validation-metadata | 04 | 11m | 2 | 3 |
+| 22-internal-evaluation-harness-mvp | 02 | 15 min | 2 | 5 |
 
 ## Session
 
 - Last session: 2026-05-17
-- Stopped at: Completed 21-04-PLAN.md
+- Stopped at: Completed 22-02-PLAN.md
 
 ## Next Action
 
-Verify Phase 21 completion, then continue to Phase 22:
+Continue Phase 22 with Plan 03:
 
 `/gsd-execute-phase 22`
