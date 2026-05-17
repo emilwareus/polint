@@ -475,11 +475,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::Function,
-            fact.id.0,
-            "FunctionFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::Function,
+                run_id: fact.id.0,
+                field: "FunctionFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for fact in db.packages() {
@@ -487,11 +489,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::Package,
-            fact.id.0,
-            "PackageFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::Package,
+                run_id: fact.id.0,
+                field: "PackageFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for fact in db.imports() {
@@ -499,11 +503,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::Import,
-            fact.id.0,
-            "ImportFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::Import,
+                run_id: fact.id.0,
+                field: "ImportFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for fact in db.branches() {
@@ -511,11 +517,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::BranchObligation,
-            fact.id.0,
-            "BranchObligation.decision_span",
-            Some(fact.file),
-            &fact.decision_span,
+            SpanCheck {
+                family: FactFamily::BranchObligation,
+                run_id: fact.id.0,
+                field: "BranchObligation.decision_span",
+                owner_file: Some(fact.file),
+                span: &fact.decision_span,
+            },
         );
     }
     for (run_id, fact) in db.tests().iter().enumerate() {
@@ -523,11 +531,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::Test,
-            run_id as u64,
-            "TestFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::Test,
+                run_id: run_id as u64,
+                field: "TestFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.ts_components().iter().enumerate() {
@@ -535,11 +545,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::TsComponent,
-            run_id as u64,
-            "TsComponentFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::TsComponent,
+                run_id: run_id as u64,
+                field: "TsComponentFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.ts_classes().iter().enumerate() {
@@ -547,11 +559,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::TsClass,
-            run_id as u64,
-            "TsClassFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::TsClass,
+                run_id: run_id as u64,
+                field: "TsClassFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.string_literals().iter().enumerate() {
@@ -559,11 +573,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::StringLiteral,
-            run_id as u64,
-            "StringLiteralFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::StringLiteral,
+                run_id: run_id as u64,
+                field: "StringLiteralFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.jsx_attributes().iter().enumerate() {
@@ -571,11 +587,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::JsxAttribute,
-            run_id as u64,
-            "JsxAttributeFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::JsxAttribute,
+                run_id: run_id as u64,
+                field: "JsxAttributeFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.function_metrics().iter().enumerate() {
@@ -583,11 +601,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::FunctionMetric,
-            run_id as u64,
-            "FunctionMetricFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::FunctionMetric,
+                run_id: run_id as u64,
+                field: "FunctionMetricFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for (run_id, fact) in db.complexity_metrics().iter().enumerate() {
@@ -595,11 +615,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
             db,
             file_ids,
             diagnostics,
-            FactFamily::ComplexityMetric,
-            run_id as u64,
-            "ComplexityMetricFact.span",
-            Some(fact.file),
-            &fact.span,
+            SpanCheck {
+                family: FactFamily::ComplexityMetric,
+                run_id: run_id as u64,
+                field: "ComplexityMetricFact.span",
+                owner_file: Some(fact.file),
+                span: &fact.span,
+            },
         );
     }
     for symbol in db.symbols() {
@@ -608,11 +630,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
                 db,
                 file_ids,
                 diagnostics,
-                FactFamily::Symbol,
-                symbol.id.0,
-                "SymbolFact.primary_span",
-                symbol.file,
-                span,
+                SpanCheck {
+                    family: FactFamily::Symbol,
+                    run_id: symbol.id.0,
+                    field: "SymbolFact.primary_span",
+                    owner_file: symbol.file,
+                    span,
+                },
             );
         }
     }
@@ -622,11 +646,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
                 db,
                 file_ids,
                 diagnostics,
-                FactFamily::Definition,
-                definition.id.0,
-                "DefinitionFact.primary_span",
-                definition.file,
-                span,
+                SpanCheck {
+                    family: FactFamily::Definition,
+                    run_id: definition.id.0,
+                    field: "DefinitionFact.primary_span",
+                    owner_file: definition.file,
+                    span,
+                },
             );
         }
     }
@@ -636,11 +662,13 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
                 db,
                 file_ids,
                 diagnostics,
-                FactFamily::Reference,
-                reference.id.0,
-                "ReferenceFact.primary_span",
-                reference.file,
-                span,
+                SpanCheck {
+                    family: FactFamily::Reference,
+                    run_id: reference.id.0,
+                    field: "ReferenceFact.primary_span",
+                    owner_file: reference.file,
+                    span,
+                },
             );
         }
     }
@@ -721,33 +749,40 @@ fn reference_diagnostic<T: Debug>(
     .with_evidence("value", format!("{value:?}"))
 }
 
-fn check_span(
-    db: &AnalysisDb,
-    file_ids: &BTreeSet<FileId>,
-    diagnostics: &mut Vec<Diagnostic>,
+struct SpanCheck<'a> {
     family: FactFamily,
     run_id: u64,
     field: &'static str,
     owner_file: Option<FileId>,
-    span: &Span,
+    span: &'a Span,
+}
+
+fn check_span(
+    db: &AnalysisDb,
+    file_ids: &BTreeSet<FileId>,
+    diagnostics: &mut Vec<Diagnostic>,
+    check: SpanCheck<'_>,
 ) {
-    let Some(reason) = span_failure_reason(db, file_ids, owner_file, span) else {
+    let Some(reason) = span_failure_reason(db, file_ids, check.owner_file, check.span) else {
         return;
     };
     diagnostics.push(
         internal_diagnostic(format!(
             "Fact metadata span validation failed for {}#{}.",
-            family.label(),
-            run_id
+            check.family.label(),
+            check.run_id
         ))
-        .with_evidence("family", family.label())
-        .with_evidence("fact_ref", fact_ref_value(FactRef::new(family, run_id)))
-        .with_evidence("field", field)
+        .with_evidence("family", check.family.label())
+        .with_evidence(
+            "fact_ref",
+            fact_ref_value(FactRef::new(check.family, check.run_id)),
+        )
+        .with_evidence("field", check.field)
         .with_evidence("reason", reason)
-        .with_evidence("span_file", format!("{:?}", span.file))
-        .with_evidence("owner_file", owner_file_value(owner_file))
-        .with_evidence("start_byte", span.start_byte.to_string())
-        .with_evidence("end_byte", span.end_byte.to_string()),
+        .with_evidence("span_file", format!("{:?}", check.span.file))
+        .with_evidence("owner_file", owner_file_value(check.owner_file))
+        .with_evidence("start_byte", check.span.start_byte.to_string())
+        .with_evidence("end_byte", check.span.end_byte.to_string()),
     );
 }
 
