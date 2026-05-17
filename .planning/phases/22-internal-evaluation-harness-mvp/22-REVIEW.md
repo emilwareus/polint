@@ -1,6 +1,6 @@
 ---
 phase: 22-internal-evaluation-harness-mvp
-reviewed: 2026-05-17T18:04:00Z
+reviewed: 2026-05-17T19:05:35Z
 depth: standard
 files_reviewed: 23
 files_reviewed_list:
@@ -29,59 +29,39 @@ files_reviewed_list:
   - tests/eval-fixtures/provenance/metadata/repo/src/app.ts
 findings:
   critical: 0
-  warning: 1
+  warning: 0
   info: 0
-  total: 1
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 22: Code Review Report
 
-**Reviewed:** 2026-05-17T18:04:00Z
+**Reviewed:** 2026-05-17T19:05:35Z
 **Depth:** standard
 **Files Reviewed:** 23
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-Reviewed the internal eval model, matcher, metrics, fixture loader, observed-data collection, report normalization, crate visibility guard, CLI regression test, and native fixture manifests/repos. The eval module remains crate-private and the fixture path handling rejects absolute paths, parent traversal, and fixture symlinks. One determinism bug remains in report normalization.
+Reviewed the internal eval model, matcher, metrics, fixture loader, observed-data collection, report normalization and hashing, crate visibility guard, CLI regression test, and native fixture manifests/repos. The eval module remains crate-private, no public CLI/SDK/runner eval surface is exposed, fixture-owned paths reject absolute paths and parent traversal, fixture repo copies reject symlinks, and cache/hash comparisons strip runtime durations while preserving semantic budget pass/fail.
+
+The prior WR-01 normalization issue is closed. Commit `ae4b708` changed eval report normalization to use a full serialized-field tie-breaker for expected/observed item ordering and re-normalizes after stripping runtime durations for hashing. The regression test `eval_report_normalization_orders_equal_identity_items_by_serialized_fields` covers the equal-key ordering case.
+
+All reviewed files meet quality standards. No issues found.
 
 Verification run during review:
 
 ```bash
-cargo test -p polint eval_ -- --nocapture
+cargo test -p polint eval_
+cargo test -p polint eval_harness_stays_internal
 cargo clippy -p polint --all-targets --all-features --locked -- -D warnings
 ```
 
-Both commands passed.
-
-## Warnings
-
-### WR-01: Report Normalization Leaves Equal-Key Items In Caller Order
-
-**File:** `crates/polint/src/eval/report.rs:94`
-
-**Issue:** `normalize_run` sorts `case.expected` and `case.observed` with keys that omit fields still serialized into the eval JSON. Examples include `ExpectedDiagnostic.false_positive_trap`, `ExpectedFact.false_positive_trap`, and observed `provenance` across item kinds; observed diagnostics, graph edges, paths, and invariants also omit `precision`. Because `sort_by_key` is stable, two same-identity items that differ only in an omitted serialized field keep their input order. If a provider emits those rows in a different order, `to_deterministic_json_pretty` and `output_hash` can differ even though normalization is intended to make output order-independent.
-
-**Fix:** Add a full serialized-field tie-breaker, or include every serialized field in the item sort keys. Keep intentionally ignored runtime durations out of the hash path after normalization.
-
-```rust
-case.expected.sort_by(|left, right| {
-    expected_item_key(left)
-        .cmp(&expected_item_key(right))
-        .then_with(|| canonical_expected_item_key(left).cmp(&canonical_expected_item_key(right)))
-});
-case.observed.sort_by(|left, right| {
-    observed_item_key(left)
-        .cmp(&observed_item_key(right))
-        .then_with(|| canonical_observed_item_key(left).cmp(&canonical_observed_item_key(right)))
-});
-```
-
-Add a regression test that reverses two rows with the same current key but different `provenance`, `precision`, or `false_positive_trap`, then asserts normalized JSON and hash equality.
+All commands passed.
 
 ---
 
-_Reviewed: 2026-05-17T18:04:00Z_
+_Reviewed: 2026-05-17T19:05:35Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
