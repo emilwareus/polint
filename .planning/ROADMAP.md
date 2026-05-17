@@ -23,7 +23,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | Phase | Name | Goal | Requirements |
 |-------|------|------|--------------|
 | 20 | Private Analysis Kernel Facade | Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers. | SAE-FND-01 |
-| 21 | 3/4 | In Progress|  |
+| 21 | Provenance, Precision, and Validation Metadata | Complete | SAE-FND-02 |
 | 22 | Internal Evaluation Harness MVP | Add deterministic native fixture evaluation for facts, graphs, diagnostics, invariants, and budgets. | SAE-FND-03 |
 | 23 | Input Snapshots and Cache-Key Vocabulary | Add snapshot and typed key vocabulary for source, config, lifecycle, rules, tools, and models. | SAE-FND-04 |
 | 24 | Persistent Layer Cache for Existing Cheap Facts | Persist existing cheap fact layers with conservative invalidation and hit/miss reporting. | SAE-FND-05 |
@@ -69,13 +69,13 @@ Plans:
 **Goal:** Add shared internal metadata for fact origin, precision, confidence, validation, stable keys, and deterministic merge behavior.
 **Requirements:** SAE-FND-02
 **Research:** `research/analysis-kernel/FINAL-REPORT.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`, `research/semantic-index/FINAL-REPORT.md`
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 21-01-PLAN.md - Metadata vocabulary and source/syntax sidecar attachment
 - [x] 21-02-PLAN.md - Derived provider metadata coverage and missing-metadata detection
 - [x] 21-03-PLAN.md - Stable-key merge validation and kernel diagnostics
-- [ ] 21-04-PLAN.md - Internal provenance debug JSON and compatibility proof
+- [x] 21-04-PLAN.md - Internal provenance debug JSON and compatibility proof
 
 **Success criteria:**
 1. Kernel-produced existing facts have internal metadata.
