@@ -1688,6 +1688,9 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
+    };
     use crate::sdk::facts::{
         BranchObligations, FactView, Functions, GoTests, Imports, JsxAttributes, Packages,
         SourceFiles, StringLiterals, TsClasses, TsComponents,
@@ -1838,6 +1841,185 @@ mod tests {
             start_col: 1,
             end_line: line,
             end_col: 2,
+        }
+    }
+
+    #[test]
+    fn source_file_metadata_records_provider_and_stable_key_inputs() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src\\main.go"),
+            "src\\main.go".to_string(),
+            "package main\n".to_string(),
+        );
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .expect("source metadata should be recorded");
+
+        assert_eq!(metadata.producer_id, "polint.source");
+        assert_eq!(metadata.layer_id, "polint.source");
+        assert_eq!(metadata.precision, FactPrecision::Exact);
+        assert_eq!(metadata.confidence, FactConfidence::High);
+        assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
+        assert!(metadata.stable_key.contains("4:path=11:src/main.go"));
+        assert!(metadata.stable_key.contains("12:content_hash="));
+    }
+
+    #[test]
+    fn syntax_metadata_uses_language_specific_producers() {
+        let mut db = AnalysisDb::new();
+        let go_file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nimport \"fmt\"\n".to_string(),
+        );
+        let ts_file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export class Button {}".to_string(),
+        );
+        let go_span = test_span(go_file, 1);
+        let ts_span = test_span(ts_file, 1);
+
+        let import = db.push_import(ImportFact {
+            id: ImportId(999),
+            file: go_file,
+            package: None,
+            path: "fmt".to_string(),
+            span: go_span,
+            language: Language::Go,
+        });
+        db.push_ts_class(TsClassFact {
+            file: ts_file,
+            name: "Button".to_string(),
+            span: ts_span,
+            is_exported: true,
+            is_component_like: true,
+        });
+
+        let import_meta = db
+            .metadata_for(FactRef::new(FactFamily::Import, import.0))
+            .expect("import metadata should be recorded");
+        let class_meta = db
+            .metadata_for(FactRef::new(FactFamily::TsClass, 0))
+            .expect("TS class metadata should be recorded");
+
+        assert_eq!(import_meta.producer_id, "polint.go.syntax");
+        assert_eq!(import_meta.precision, FactPrecision::Syntax);
+        assert_eq!(class_meta.producer_id, "polint.ts.syntax");
+        assert_eq!(class_meta.precision, FactPrecision::Syntax);
+    }
+
+    #[test]
+    fn restore_file_facts_recreates_metadata_for_cached_syntax_facts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/component.tsx"),
+            "src/component.tsx".to_string(),
+            "export function Button() { return <button aria-label=\"Save\" /> }\n".to_string(),
+        );
+        let span = test_span(file, 1);
+
+        db.restore_file_facts(
+            file,
+            CachedFileFacts {
+                packages: vec![PackageFact {
+                    id: PackageId(99),
+                    file,
+                    name: "main".to_string(),
+                    span: span.clone(),
+                    language: Language::Go,
+                }],
+                functions: vec![FunctionFact {
+                    id: FunctionId(99),
+                    file,
+                    name: "Button".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                    is_test: false,
+                    is_exported: true,
+                    cyclomatic_complexity: 1,
+                    calls: vec!["render".to_string()],
+                }],
+                imports: vec![ImportFact {
+                    id: ImportId(99),
+                    file,
+                    package: Some("react".to_string()),
+                    path: "react".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                }],
+                branches: vec![BranchObligation {
+                    id: BranchId(99),
+                    function: Some(FunctionId(99)),
+                    file,
+                    decision_span: span.clone(),
+                    condition_text: "enabled".to_string(),
+                    edge_label: "true".to_string(),
+                    is_error_path: false,
+                    stable_fingerprint: "branch".to_string(),
+                }],
+                tests: vec![TestFact {
+                    file,
+                    function: Some(FunctionId(99)),
+                    name: "TestButton".to_string(),
+                    span: span.clone(),
+                    evidence_terms: vec!["render".to_string()],
+                    assertion_count: 1,
+                    subtest_count: 0,
+                    subtest_names: Vec::new(),
+                    table_rows: 0,
+                }],
+                coverage: vec![CoverageFact {
+                    branch: BranchId(99),
+                    covered: Some(true),
+                    source: "synthetic".to_string(),
+                }],
+                ts_components: vec![TsComponentFact {
+                    file,
+                    function: Some(FunctionId(99)),
+                    name: "Button".to_string(),
+                    span: span.clone(),
+                }],
+                ts_classes: vec![TsClassFact {
+                    file,
+                    name: "Dialog".to_string(),
+                    span: span.clone(),
+                    is_exported: true,
+                    is_component_like: false,
+                }],
+                string_literals: vec![StringLiteralFact {
+                    file,
+                    value: "Save".to_string(),
+                    span: span.clone(),
+                    language: Language::Tsx,
+                }],
+                jsx_attributes: vec![JsxAttributeFact {
+                    file,
+                    name: "aria-label".to_string(),
+                    value: Some("Save".to_string()),
+                    span,
+                }],
+            },
+        );
+
+        for family in [
+            FactFamily::Package,
+            FactFamily::Function,
+            FactFamily::Import,
+            FactFamily::BranchObligation,
+            FactFamily::Test,
+            FactFamily::Coverage,
+            FactFamily::TsComponent,
+            FactFamily::TsClass,
+            FactFamily::StringLiteral,
+            FactFamily::JsxAttribute,
+        ] {
+            assert!(
+                db.metadata_for(FactRef::new(family, 0)).is_some(),
+                "missing restored metadata for {family:?}"
+            );
         }
     }
 
