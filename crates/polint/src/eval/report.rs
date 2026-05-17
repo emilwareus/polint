@@ -1,3 +1,299 @@
+use serde::{Deserialize, Serialize};
+
+use crate::cache::stable_hash;
+use crate::eval::model::{
+    AssertionMode, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant, ExpectedItem, ExpectedPath,
+    ExpectedRuntimeBudget, FixtureArea, ObservedFact, ObservedGraphEdge, ObservedInvariant,
+    ObservedItem, ObservedPath, ObservedRuntimeBudget, ObservedStatus,
+};
+
+pub(crate) const EVALUATION_SCHEMA_VERSION: &str = "polint-eval-internal-1";
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct EvaluationRun {
+    pub(crate) schema_version: String,
+    pub(crate) suite_id: String,
+    pub(crate) cases: Vec<CaseResult>,
+    pub(crate) metrics: MetricSummary,
+    pub(crate) output_hash: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct CaseResult {
+    pub(crate) case_id: String,
+    pub(crate) area: FixtureArea,
+    pub(crate) expected: Vec<ExpectedItem>,
+    pub(crate) observed: Vec<ObservedItem>,
+    pub(crate) matches: Vec<MatchSummary>,
+    pub(crate) runtime: RuntimeObservation,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct RuntimeObservation {
+    pub(crate) budget_name: String,
+    pub(crate) budget_passed: bool,
+    pub(crate) observed_runtime_ms: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct MetricSummary {
+    pub(crate) true_positives: u64,
+    pub(crate) false_positives: u64,
+    pub(crate) false_negatives: u64,
+    pub(crate) true_negatives: u64,
+    pub(crate) unconfirmed: u64,
+    pub(crate) unknown: u64,
+    pub(crate) runtime_budget_passed: u64,
+    pub(crate) runtime_budget_failed: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct MatchSummary {
+    pub(crate) item_key: String,
+    pub(crate) outcome: String,
+}
+
+pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
+    let mut normalized = run.clone();
+    normalized.schema_version = EVALUATION_SCHEMA_VERSION.to_string();
+    normalized.cases.sort_by(|left, right| {
+        (left.area, left.case_id.as_str()).cmp(&(right.area, right.case_id.as_str()))
+    });
+    for case in &mut normalized.cases {
+        case.expected.sort_by_key(expected_item_key);
+        case.observed.sort_by_key(observed_item_key);
+        case.matches.sort_by(|left, right| {
+            (left.item_key.as_str(), left.outcome.as_str())
+                .cmp(&(right.item_key.as_str(), right.outcome.as_str()))
+        });
+    }
+    normalized
+}
+
+pub(crate) fn to_deterministic_json_pretty(run: &EvaluationRun) -> String {
+    let mut normalized = normalize_run(run);
+    normalized.output_hash = deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub(crate) fn deterministic_output_hash(run: &EvaluationRun) -> String {
+    let mut normalized = normalize_run(run);
+    normalized.output_hash.clear();
+    for case in &mut normalized.cases {
+        case.runtime.observed_runtime_ms = None;
+        for item in &mut case.observed {
+            if let ObservedItem::RuntimeBudget(budget) = item {
+                budget.observed_runtime_ms = None;
+            }
+        }
+    }
+    let canonical_json =
+        serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string());
+    stable_hash(&[canonical_json.as_str()])
+}
+
+fn expected_item_key(item: &ExpectedItem) -> String {
+    match item {
+        ExpectedItem::Diagnostic(diagnostic) => stable_key_parts(&[
+            "diagnostic",
+            &diagnostic.rule_id,
+            &diagnostic.relative_path,
+            &option_u32_key(diagnostic.line),
+            &option_str_key(diagnostic.fingerprint.as_deref()),
+            mode_key(diagnostic.mode),
+        ]),
+        ExpectedItem::Fact(fact) => expected_fact_key(fact),
+        ExpectedItem::GraphEdge(edge) => expected_graph_edge_key(edge),
+        ExpectedItem::Path(path) => expected_path_key(path),
+        ExpectedItem::Invariant(invariant) => expected_invariant_key(invariant),
+        ExpectedItem::RuntimeBudget(budget) => expected_runtime_budget_key(budget),
+    }
+}
+
+fn observed_item_key(item: &ObservedItem) -> String {
+    match item {
+        ObservedItem::Diagnostic(diagnostic) => stable_key_parts(&[
+            "diagnostic",
+            &diagnostic.rule_id,
+            &diagnostic.relative_path,
+            &option_u32_key(diagnostic.line),
+            &option_str_key(diagnostic.fingerprint.as_deref()),
+            mode_key(diagnostic.mode),
+            &option_str_key(diagnostic.producer_id.as_deref()),
+            &option_status_key(diagnostic.status),
+        ]),
+        ObservedItem::Fact(fact) => observed_fact_key(fact),
+        ObservedItem::GraphEdge(edge) => observed_graph_edge_key(edge),
+        ObservedItem::Path(path) => observed_path_key(path),
+        ObservedItem::Invariant(invariant) => observed_invariant_key(invariant),
+        ObservedItem::RuntimeBudget(budget) => observed_runtime_budget_key(budget),
+    }
+}
+
+fn expected_fact_key(fact: &ExpectedFact) -> String {
+    stable_key_parts(&[
+        "fact",
+        &fact.family,
+        &fact.stable_key,
+        mode_key(fact.mode),
+        &option_str_key(fact.producer_id.as_deref()),
+        &option_str_key(fact.precision.as_deref()),
+        &option_status_key(fact.status),
+    ])
+}
+
+fn observed_fact_key(fact: &ObservedFact) -> String {
+    stable_key_parts(&[
+        "fact",
+        &fact.family,
+        &fact.stable_key,
+        mode_key(fact.mode),
+        &option_str_key(fact.producer_id.as_deref()),
+        &option_str_key(fact.precision.as_deref()),
+        &option_status_key(fact.status),
+    ])
+}
+
+fn expected_graph_edge_key(edge: &ExpectedGraphEdge) -> String {
+    stable_key_parts(&[
+        "graph_edge",
+        &edge.graph,
+        &edge.from,
+        &edge.to,
+        mode_key(edge.mode),
+        bool_key(edge.partial_truth),
+    ])
+}
+
+fn observed_graph_edge_key(edge: &ObservedGraphEdge) -> String {
+    stable_key_parts(&[
+        "graph_edge",
+        &edge.graph,
+        &edge.from,
+        &edge.to,
+        mode_key(edge.mode),
+        bool_key(edge.partial_truth),
+        &option_str_key(edge.producer_id.as_deref()),
+        &option_status_key(edge.status),
+    ])
+}
+
+fn expected_path_key(path: &ExpectedPath) -> String {
+    stable_key_parts(&[
+        "path",
+        &path.path_id,
+        &list_key(&path.nodes),
+        mode_key(path.mode),
+        bool_key(path.partial_truth),
+    ])
+}
+
+fn observed_path_key(path: &ObservedPath) -> String {
+    stable_key_parts(&[
+        "path",
+        &path.path_id,
+        &list_key(&path.nodes),
+        mode_key(path.mode),
+        bool_key(path.partial_truth),
+        &option_str_key(path.producer_id.as_deref()),
+        &option_status_key(path.status),
+    ])
+}
+
+fn expected_invariant_key(invariant: &ExpectedInvariant) -> String {
+    stable_key_parts(&[
+        "invariant",
+        &invariant.name,
+        &invariant.value,
+        mode_key(invariant.mode),
+    ])
+}
+
+fn observed_invariant_key(invariant: &ObservedInvariant) -> String {
+    stable_key_parts(&[
+        "invariant",
+        &invariant.name,
+        &invariant.value,
+        mode_key(invariant.mode),
+        &option_str_key(invariant.producer_id.as_deref()),
+        &option_status_key(invariant.status),
+    ])
+}
+
+fn expected_runtime_budget_key(budget: &ExpectedRuntimeBudget) -> String {
+    stable_key_parts(&[
+        "runtime_budget",
+        &budget.name,
+        &budget.max_runtime_ms.to_string(),
+        mode_key(budget.mode),
+    ])
+}
+
+fn observed_runtime_budget_key(budget: &ObservedRuntimeBudget) -> String {
+    stable_key_parts(&[
+        "runtime_budget",
+        &budget.name,
+        bool_key(budget.budget_passed),
+    ])
+}
+
+fn stable_key_parts(parts: &[&str]) -> String {
+    let mut key = String::new();
+    for part in parts {
+        key.push_str(&part.len().to_string());
+        key.push(':');
+        key.push_str(part);
+        key.push('|');
+    }
+    key
+}
+
+fn list_key(parts: &[String]) -> String {
+    let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+    stable_key_parts(&refs)
+}
+
+fn option_str_key(value: Option<&str>) -> String {
+    value.unwrap_or("").to_string()
+}
+
+fn option_u32_key(value: Option<u32>) -> String {
+    value.map_or_else(String::new, |value| value.to_string())
+}
+
+fn option_status_key(value: Option<ObservedStatus>) -> String {
+    value.map_or("", status_key).to_string()
+}
+
+fn bool_key(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+fn mode_key(mode: AssertionMode) -> &'static str {
+    match mode {
+        AssertionMode::Exact => "exact",
+        AssertionMode::Tolerant => "tolerant",
+        AssertionMode::Partial => "partial",
+        AssertionMode::Forbidden => "forbidden",
+    }
+}
+
+fn status_key(status: ObservedStatus) -> &'static str {
+    match status {
+        ObservedStatus::Present => "present",
+        ObservedStatus::Unknown => "unknown",
+        ObservedStatus::SetupMissing => "setup_missing",
+        ObservedStatus::Unsupported => "unsupported",
+        ObservedStatus::Rejected => "rejected",
+        ObservedStatus::Accepted => "accepted",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,10 +350,7 @@ mod tests {
         let baseline_hash = deterministic_output_hash(&baseline);
 
         let mut diagnostic_changed = baseline.clone();
-        let ObservedItem::Diagnostic(diagnostic) = &mut diagnostic_changed.cases[0].observed[0]
-        else {
-            panic!("expected diagnostic item");
-        };
+        let diagnostic = observed_diagnostic_mut(&mut diagnostic_changed);
         diagnostic.fingerprint = Some("changed-fingerprint".to_string());
         assert_ne!(
             baseline_hash,
@@ -65,37 +358,27 @@ mod tests {
         );
 
         let mut fact_changed = baseline.clone();
-        let ObservedItem::Fact(fact) = &mut fact_changed.cases[0].observed[1] else {
-            panic!("expected fact item");
-        };
+        let fact = observed_fact_mut(&mut fact_changed);
         fact.stable_key = "fact:changed".to_string();
         assert_ne!(baseline_hash, deterministic_output_hash(&fact_changed));
 
         let mut graph_changed = baseline.clone();
-        let ObservedItem::GraphEdge(edge) = &mut graph_changed.cases[0].observed[2] else {
-            panic!("expected graph edge item");
-        };
+        let edge = observed_graph_edge_mut(&mut graph_changed);
         edge.to = "module:changed".to_string();
         assert_ne!(baseline_hash, deterministic_output_hash(&graph_changed));
 
         let mut path_changed = baseline.clone();
-        let ObservedItem::Path(path) = &mut path_changed.cases[0].observed[3] else {
-            panic!("expected path item");
-        };
+        let path = observed_path_mut(&mut path_changed);
         path.nodes[1] = "changed-node".to_string();
         assert_ne!(baseline_hash, deterministic_output_hash(&path_changed));
 
         let mut invariant_changed = baseline.clone();
-        let ObservedItem::Invariant(invariant) = &mut invariant_changed.cases[0].observed[4] else {
-            panic!("expected invariant item");
-        };
+        let invariant = observed_invariant_mut(&mut invariant_changed);
         invariant.value = "false".to_string();
         assert_ne!(baseline_hash, deterministic_output_hash(&invariant_changed));
 
         let mut budget_changed = baseline.clone();
-        let ObservedItem::RuntimeBudget(budget) = &mut budget_changed.cases[0].observed[5] else {
-            panic!("expected runtime budget item");
-        };
+        let budget = observed_runtime_budget_mut(&mut budget_changed);
         budget.budget_passed = false;
         budget_changed.cases[0].runtime.budget_passed = false;
         assert_ne!(baseline_hash, deterministic_output_hash(&budget_changed));
@@ -288,5 +571,71 @@ mod tests {
                 status: Some(ObservedStatus::Present),
             }),
         ]
+    }
+
+    fn observed_diagnostic_mut(run: &mut EvaluationRun) -> &mut ObservedDiagnostic {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::Diagnostic(diagnostic) => Some(diagnostic),
+                _ => None,
+            })
+            .expect("expected diagnostic item")
+    }
+
+    fn observed_fact_mut(run: &mut EvaluationRun) -> &mut ObservedFact {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::Fact(fact) => Some(fact),
+                _ => None,
+            })
+            .expect("expected fact item")
+    }
+
+    fn observed_graph_edge_mut(run: &mut EvaluationRun) -> &mut ObservedGraphEdge {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::GraphEdge(edge) => Some(edge),
+                _ => None,
+            })
+            .expect("expected graph edge item")
+    }
+
+    fn observed_path_mut(run: &mut EvaluationRun) -> &mut ObservedPath {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::Path(path) => Some(path),
+                _ => None,
+            })
+            .expect("expected path item")
+    }
+
+    fn observed_invariant_mut(run: &mut EvaluationRun) -> &mut ObservedInvariant {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::Invariant(invariant) => Some(invariant),
+                _ => None,
+            })
+            .expect("expected invariant item")
+    }
+
+    fn observed_runtime_budget_mut(run: &mut EvaluationRun) -> &mut ObservedRuntimeBudget {
+        run.cases[0]
+            .observed
+            .iter_mut()
+            .find_map(|item| match item {
+                ObservedItem::RuntimeBudget(budget) => Some(budget),
+                _ => None,
+            })
+            .expect("expected runtime budget item")
     }
 }
