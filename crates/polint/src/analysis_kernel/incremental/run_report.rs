@@ -1,10 +1,125 @@
+use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
+use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KernelRunReport {
+    pub(crate) input_snapshot: InputSnapshot,
+    pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
+    pub(crate) cache_stats: CacheStats,
+}
+
+impl KernelRunReport {
+    pub(crate) fn new(
+        input_snapshot: InputSnapshot,
+        provider_outputs: Vec<ProviderOutputMeta>,
+    ) -> Self {
+        let cache_stats = aggregate_cache_stats(&provider_outputs);
+
+        Self {
+            input_snapshot,
+            provider_outputs,
+            cache_stats,
+        }
+    }
+}
+
+pub(crate) fn provider_output_from_manifest(
+    manifest: &ProviderManifest,
+    output_digest: Digest,
+    cache_stats: CacheStats,
+) -> ProviderOutputMeta {
+    ProviderOutputMeta::new(
+        manifest.id,
+        manifest.provider_version(),
+        manifest.primary_schema_label(),
+        output_digest,
+        precision_tier(manifest.precision_ceiling),
+        "native_trusted",
+        dependency_inputs_from_manifest(manifest),
+        cache_stats,
+    )
+}
+
+pub(crate) fn provider_output_digest_from_manifest(
+    manifest: &ProviderManifest,
+    summary_parts: &[String],
+) -> Digest {
+    let schema_label = manifest.primary_schema_label();
+    let language_scope = manifest.language_scope_label();
+    let cache_policy = manifest.cache_policy_label();
+    let precision = precision_label(manifest.precision_ceiling);
+
+    let mut output_families = manifest
+        .outputs
+        .iter()
+        .map(|output| format!("output_family={output}"))
+        .collect::<Vec<_>>();
+    output_families.sort();
+
+    let mut metadata_fact_summary_parts = summary_parts.to_vec();
+    metadata_fact_summary_parts.sort();
+
+    let mut digest_parts = vec![
+        format!("provider_id={}", manifest.id),
+        format!("schema_version={schema_label}"),
+        format!("language_scope={language_scope}"),
+        format!("cache_policy={cache_policy}"),
+        format!("precision={precision}"),
+    ];
+    digest_parts.extend(output_families);
+    digest_parts.extend(metadata_fact_summary_parts);
+
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(DigestKind::ProviderOutput, "provider_output", &digest_refs)
+}
+
+fn dependency_inputs_from_manifest(manifest: &ProviderManifest) -> Vec<Digest> {
+    let mut inputs = manifest.inputs.to_vec();
+    inputs.sort();
+    inputs
+        .into_iter()
+        .map(|input| Digest::from_parts(DigestKind::DependencyLayer, "dependency_input", &[input]))
+        .collect()
+}
+
+fn precision_tier(precision: PrecisionCeiling) -> PrecisionTier {
+    match precision {
+        PrecisionCeiling::Exact => PrecisionTier::Exact,
+        PrecisionCeiling::Syntax => PrecisionTier::Syntax,
+        PrecisionCeiling::SetupAware => PrecisionTier::SetupAware,
+    }
+}
+
+fn precision_label(precision: PrecisionCeiling) -> &'static str {
+    match precision {
+        PrecisionCeiling::Exact => "exact",
+        PrecisionCeiling::Syntax => "syntax",
+        PrecisionCeiling::SetupAware => "setup_aware",
+    }
+}
+
+fn aggregate_cache_stats(provider_outputs: &[ProviderOutputMeta]) -> CacheStats {
+    let mut aggregate = CacheStats::default();
+    for output in provider_outputs {
+        aggregate.hits += output.cache_stats.hits;
+        aggregate.misses += output.cache_stats.misses;
+        aggregate.recomputes += output.cache_stats.recomputes;
+        aggregate.writes += output.cache_stats.writes;
+        aggregate.bypasses_disabled += output.cache_stats.bypasses_disabled;
+        aggregate.invalid_evicted_reads += output.cache_stats.invalid_evicted_reads;
+        aggregate.verified_reuse += output.cache_stats.verified_reuse;
+        aggregate.quarantines += output.cache_stats.quarantines;
+    }
+    aggregate
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::analysis_kernel::{
-        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest,
-        SchemaVersion,
-    };
+    use super::*;
     use crate::analysis_kernel::incremental::{CacheStats, DigestKind, PrecisionTier};
+    use crate::analysis_kernel::{
+        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+    };
 
     #[test]
     fn provider_outputs_are_constructed_in_manifest_order() {
@@ -43,8 +158,10 @@ mod tests {
         stats.record_write();
 
         for manifest in crate::analysis_kernel::AnalysisKernel::provider_manifests() {
-            let output_digest =
-                provider_output_digest_from_manifest(manifest, &[format!("provider={}", manifest.id)]);
+            let output_digest = provider_output_digest_from_manifest(
+                manifest,
+                &[format!("provider={}", manifest.id)],
+            );
             let row = provider_output_from_manifest(manifest, output_digest, stats.clone());
 
             assert_eq!(row.provider_id, manifest.id);

@@ -10,6 +10,41 @@ pub(crate) struct ProviderManifest {
     pub(crate) precision_ceiling: PrecisionCeiling,
 }
 
+impl ProviderManifest {
+    pub(crate) fn provider_version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
+
+    pub(crate) fn primary_schema_label(&self) -> String {
+        let mut labels = self
+            .schema_versions
+            .iter()
+            .map(|schema| format!("{}:{}", schema.name, schema.version))
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels.join(",")
+    }
+
+    pub(crate) fn language_scope_label(&self) -> &'static str {
+        match self.language_scope {
+            LanguageScope::Workspace => "workspace",
+            LanguageScope::Go => "go",
+            LanguageScope::TypeScriptJavaScript => "typescript_javascript",
+            LanguageScope::MultiLanguage => "multi_language",
+        }
+    }
+
+    pub(crate) fn cache_policy_label(&self) -> String {
+        match self.cache_policy {
+            CachePolicy::NoCache => "no_cache".to_string(),
+            CachePolicy::ExistingFileFactCache { schema } => {
+                format!("existing_file_fact_cache:{schema}")
+            }
+            CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderKind {
     SourceDiscovery,
