@@ -41,6 +41,57 @@ uses it. Otherwise, when package loading needs workspace mode for module roots
 below the repository root, polint creates a temporary internal `go.work`; it does
 not write another setup file into the repository.
 
+## Inspect and test local rules
+
+Use `polint inspect rule` to inspect registered repo-local rules before running
+analysis:
+
+```bash
+polint inspect rule --format json
+polint inspect rule --rule custom/no-raw-colors --format json
+```
+
+The JSON output is a stable public surface for rule manifests. It includes rule
+ids, descriptions, severities, macro-derived fact views, capabilities, resolved
+option metadata, and capability support rows. The schema is
+[`polint-rule-inspect-v1.json`](schemas/polint-rule-inspect-v1.json).
+
+Use `polint test` for fixture-based rule development:
+
+```bash
+polint test
+polint test --format json
+```
+
+Fixtures live under:
+
+```text
+.polint/tests/rules/<rule>/<case>/polint-test.toml
+```
+
+Initial fixture manifests support:
+
+```toml
+rule = "custom/no-raw-colors"
+paths = ["src/**"]
+
+[[expect.diagnostic]]
+rule_id = "custom/no-raw-colors"
+file = "src/example.ts"
+severity = "warn"
+message_contains = "Project-specific policy"
+range_start_line = 1
+range_start_column = 21
+```
+
+`message_contains`, `range_start_line`, and `range_start_column` are optional.
+The JSON report schema is
+[`polint-test-report-v1.json`](schemas/polint-test-report-v1.json).
+
+`polint inspect rule` and `polint test` are the supported public authoring loop
+in this phase. Broad facts/unknowns/model/provider/cache inspect commands are
+not supported yet.
+
 ## Environment variables
 
 | Variable | Effect |

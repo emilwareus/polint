@@ -577,6 +577,7 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
         &module_path,
         rule_module_template(&args.language, &rule_name),
     )?;
+    write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module)?;
     println!("Created rule module {}", module_path.display());
     Ok(())
 }
@@ -718,6 +719,74 @@ fn validate_rule_name(name: &str) -> Result<String> {
         );
     }
     Ok(sanitized)
+}
+
+fn write_rule_fixture_skeleton(
+    root: &Path,
+    language: &str,
+    rule_name: &str,
+    module: &str,
+) -> Result<()> {
+    let case_dir = root.join(".polint/tests/rules").join(module).join("basic");
+    if case_dir.exists() {
+        return Ok(());
+    }
+
+    let source_path = match language {
+        "go" => case_dir.join("src/example.go"),
+        _ => case_dir.join("src/example.ts"),
+    };
+    fs::create_dir_all(source_path.parent().unwrap_or(&case_dir))
+        .with_context(|| format!("failed to create {}", case_dir.display()))?;
+    let fixture_file = source_path
+        .strip_prefix(&case_dir)
+        .unwrap_or(&source_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    fs::write(
+        case_dir.join("polint-test.toml"),
+        rule_fixture_manifest_template(rule_name, &fixture_file),
+    )
+    .with_context(|| {
+        format!(
+            "failed to write {}",
+            case_dir.join("polint-test.toml").display()
+        )
+    })?;
+    fs::write(&source_path, rule_fixture_source_template(language))
+        .with_context(|| format!("failed to write {}", source_path.display()))?;
+    Ok(())
+}
+
+fn rule_fixture_manifest_template(rule_name: &str, fixture_file: &str) -> String {
+    format!(
+        r#"rule = "custom/{rule_name}"
+paths = ["src/**"]
+
+[expect]
+# Uncomment after the rule reports diagnostics:
+# [[expect.diagnostic]]
+# rule_id = "custom/{rule_name}"
+# file = "{fixture_file}"
+# severity = "warn"
+# message_contains = "Project-specific policy"
+"#
+    )
+}
+
+fn rule_fixture_source_template(language: &str) -> &'static str {
+    match language {
+        "go" => {
+            r#"package main
+
+func main() {}
+"#
+        }
+        _ => {
+            r#"export const example = "replace me";
+"#
+        }
+    }
 }
 
 fn rule_module_template(language: &str, rule_name: &str) -> String {
