@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-18T11:05:45.550Z"
+last_updated: "2026-05-18T11:25:53.419Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 22
   completed_phases: 4
   total_plans: 22
-  completed_plans: 19
-  percent: 86
+  completed_plans: 20
+  percent: 91
 ---
 
 # State: polint
@@ -41,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 24 (persistent-layer-cache-for-existing-cheap-facts) — EXECUTING
-Plan: 3 of 5
-Last activity: 2026-05-18 -- Completed 24-02-PLAN.md
+Plan: 4 of 5
+Last activity: 2026-05-18 -- Completed 24-03-PLAN.md
 
 ## Phase Progress
 
@@ -52,7 +52,7 @@ Last activity: 2026-05-18 -- Completed 24-02-PLAN.md
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
 | 22 | Complete | 6/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance/cache/extension fixtures, fixture category coverage, and public-boundary proof done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
-| 24 | In Progress | 1/5 plans complete; dependency index, invalidation vocabulary, layer cache manifest/store, and managed layers cache layout done; requirement SAE-FND-05 |
+| 24 | In Progress | 3/5 plans complete; dependency index/invalidation, syntax layer cache, and module graph layer cache done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Pending | Semantic index deepening; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
@@ -135,6 +135,10 @@ Last activity: 2026-05-18 -- Completed 24-02-PLAN.md
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Go and TS/JS syntax layer payloads store normalized facts and parser diagnostics, not raw source bodies or absolute temp roots.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Adapter provider-output metadata reuses validated layer read output digests on hits and computes output digests after recompute misses.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Cache hit/miss/reuse counters remain internal; CLI compatibility is guarded by public PolintReport parsing and no-leak assertions.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache identity includes provider/schema, import shape, source/package, config, Go lifecycle, TS/JS lifecycle, absent toolchain/extension slots, and upstream Go/TS syntax output digests.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache hits restore normalized facts through AnalysisDb::replace_module_graph_facts instead of bypassing metadata normalization.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Disabled module graph caching records bypasses_disabled and recomputes without reading or writing layer-cache files.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache stats remain internal to KernelRunReport and do not change public check JSON.
 
 ## Execution Metrics
 
@@ -153,14 +157,15 @@ Last activity: 2026-05-18 -- Completed 24-02-PLAN.md
 | 22-internal-evaluation-harness-mvp | 06 | 9 min | 1 | 4 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 01 | 13 min | 2 | 7 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 02 | 20 min | 3 | 10 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 03 | 16 min | 2 | 6 |
 
 ## Session
 
 - Last session: 2026-05-18
-- Stopped at: Completed 24-02-PLAN.md
+- Stopped at: Completed 24-03-PLAN.md
 
 ## Next Action
 
-Phase 24 Plan 03 is ready to execute:
+Phase 24 Plan 04 is ready to execute:
 
 `/gsd-execute-phase 24-persistent-layer-cache-for-existing-cheap-facts`
