@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use super::dependency_index::DependencyEdge;
+use super::dependency_index::{CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge};
 use super::digest::{Digest, DigestKind};
-use super::keys::{LayerKey, PrecisionTier};
+use super::keys::{LayerKey, LayerKind, PrecisionTier};
 use crate::cache::stable_hash;
 
 pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-1";
@@ -22,6 +22,7 @@ pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifes
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LayerCacheManifest {
     pub(crate) manifest_schema: String,
+    pub(crate) dependency_index_schema: String,
     pub(crate) key: LayerKey,
     pub(crate) output_digest: Digest,
     pub(crate) payload_digest: Digest,
@@ -49,6 +50,7 @@ impl LayerCacheManifest {
 
         Self {
             manifest_schema: LAYER_CACHE_MANIFEST_SCHEMA.to_string(),
+            dependency_index_schema: DEPENDENCY_INDEX_SCHEMA.to_string(),
             key,
             output_digest,
             payload_digest,
@@ -133,6 +135,11 @@ impl LayerCacheStore {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         }
 
+        let Some(manifest_path) = self.managed_existing_file(&manifest_path, &self.manifests_dir())
+        else {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
         let Ok(raw_manifest) = fs::read_to_string(&manifest_path) else {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         };
@@ -140,13 +147,18 @@ impl LayerCacheStore {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
-        if manifest.manifest_schema != LAYER_CACHE_MANIFEST_SCHEMA || manifest.key != *key {
+        if !self.manifest_metadata_is_supported(&manifest, key) {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         }
 
         let Some(blob_path) = self.blob_path(&manifest.payload_digest) else {
             evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        let Some(blob_path) = self.managed_existing_file(&blob_path, &self.blobs_dir()) else {
+            evict_file(&manifest_path);
+            evict_file(&blob_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
         let Ok(payload_bytes) = fs::read(&blob_path) else {
@@ -219,6 +231,8 @@ impl LayerCacheStore {
         let manifest_path = self.manifest_path(key)?;
         fs::create_dir_all(self.blobs_dir())?;
         fs::create_dir_all(self.manifests_dir())?;
+        self.ensure_managed_dir(&self.blobs_dir())?;
+        self.ensure_managed_dir(&self.manifests_dir())?;
 
         let payload = serde_json::to_vec(value)?;
         let payload_tmp = payload_path.with_extension("json.tmp");
@@ -277,6 +291,60 @@ impl LayerCacheStore {
         Ok(self
             .manifests_dir()
             .join(format!("{}.json", stable_hash(&[&key_json]))))
+    }
+
+    fn manifest_metadata_is_supported(
+        &self,
+        manifest: &LayerCacheManifest,
+        key: &LayerKey,
+    ) -> bool {
+        manifest.manifest_schema == LAYER_CACHE_MANIFEST_SCHEMA
+            && manifest.dependency_index_schema == DEPENDENCY_INDEX_SCHEMA
+            && manifest.key == *key
+            && manifest.output_digest.kind == DigestKind::ProviderOutput
+            && is_safe_digest_file_component(&manifest.output_digest.value)
+            && manifest.payload_digest.kind == DigestKind::LayerOutput
+            && is_safe_digest_file_component(&manifest.payload_digest.value)
+            && is_supported_validation_label(&manifest.validation)
+            && dependencies_match_layer_key(manifest)
+    }
+
+    fn managed_existing_file(&self, path: &Path, managed_dir: &Path) -> Option<PathBuf> {
+        let metadata = fs::symlink_metadata(path).ok()?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return None;
+        }
+        let canonical_root = self.root.canonicalize().ok()?;
+        let canonical_managed_dir = managed_dir.canonicalize().ok()?;
+        let canonical_path = path.canonicalize().ok()?;
+        if canonical_managed_dir.starts_with(&canonical_root)
+            && canonical_path.starts_with(&canonical_managed_dir)
+        {
+            Some(canonical_path)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_managed_dir(&self, dir: &Path) -> Result<()> {
+        let metadata = fs::symlink_metadata(dir)
+            .with_context(|| format!("failed to inspect layer cache dir {}", dir.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(anyhow!("layer cache dir escapes managed cache root"));
+        }
+        let canonical_root = self.root.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize layer cache root {}",
+                self.root.display()
+            )
+        })?;
+        let canonical_dir = dir
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize layer cache dir {}", dir.display()))?;
+        if !canonical_dir.starts_with(canonical_root) {
+            return Err(anyhow!("layer cache dir escapes managed cache root"));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -340,6 +408,26 @@ fn is_safe_digest_file_component(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn is_supported_validation_label(value: &str) -> bool {
+    value == "native_trusted"
+}
+
+fn dependencies_match_layer_key(manifest: &LayerCacheManifest) -> bool {
+    let requires_dependencies = matches!(
+        manifest.key.layer_kind,
+        LayerKind::ModuleGraph | LayerKind::SymbolGraph | LayerKind::Metrics
+    );
+    if requires_dependencies && manifest.dependencies.is_empty() {
+        return false;
+    }
+    manifest.dependencies.iter().all(|edge| {
+        matches!(
+            &edge.from,
+            CacheNode::Layer(layer_key) if layer_key == &manifest.key
+        )
+    })
+}
+
 fn evict_file(path: &Path) {
     let _ = fs::remove_file(path);
 }
@@ -377,6 +465,22 @@ mod tests {
         )
     }
 
+    fn derived_key() -> LayerKey {
+        LayerKey::new(
+            crate::analysis_kernel::incremental::keys::LayerKind::ModuleGraph,
+            "polint.module_graph",
+            "1",
+            "module-graph-v1",
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::ToolInvocation, "none"),
+            vec![digest(DigestKind::SourceText, "src/main.ts")],
+            vec![digest(DigestKind::DependencyLayer, "polint.ts.syntax")],
+            Vec::new(),
+        )
+    }
+
     fn dependency(layer_key: &LayerKey) -> DependencyEdge {
         DependencyEdge {
             from: CacheNode::Layer(layer_key.clone()),
@@ -400,6 +504,19 @@ mod tests {
             "native_trusted",
             Vec::new(),
         )
+    }
+
+    fn write_manifest_only(
+        store: &LayerCacheStore,
+        layer_key: &LayerKey,
+        manifest: &LayerCacheManifest,
+    ) {
+        std::fs::create_dir_all(store.manifests_dir()).unwrap();
+        std::fs::write(
+            store.manifest_path_for_test(layer_key),
+            serde_json::to_vec(manifest).expect("manifest serializes"),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -568,9 +685,7 @@ mod tests {
         let layer_key = key();
         let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
         manifest.payload_digest.value = "../outside".to_string();
-        store
-            .write_json_without_repair_for_test(&manifest, &payload)
-            .unwrap();
+        write_manifest_only(&store, &layer_key, &manifest);
 
         let outcome: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
 
@@ -613,7 +728,7 @@ mod tests {
         let payload = Payload {
             items: vec!["a".to_string()],
         };
-        let layer_key = key();
+        let layer_key = derived_key();
         let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
         manifest.dependency_index_schema = "old-dependency-index".to_string();
         store.write_json(&manifest, &payload).unwrap();
