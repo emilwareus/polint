@@ -171,6 +171,7 @@ pub(crate) fn cargo_cmd() -> Command {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
+    command.env("POLINT_RULES_PROFILE", "dev");
     command
 }
 
@@ -178,6 +179,7 @@ pub(crate) fn polint_cmd() -> Command {
     let mut command = Command::cargo_bin("polint").unwrap();
     command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
+    command.env("POLINT_RULES_PROFILE", "dev");
     command
 }
 

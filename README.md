@@ -156,7 +156,9 @@ polint cache clean
 
 Set `POLINT_CACHE_DIR` to move the whole cache root, or
 `POLINT_RULES_TARGET_DIR` to move only the repo-local rule-host Cargo target
-directory.
+directory. Repo-local rule hosts run with Cargo's `release` profile by default;
+set `POLINT_RULES_PROFILE=dev` for faster unoptimized local rule development, or
+to another Cargo profile name to use `cargo run --profile <name>`.
 
 ## Comment Ignores
 

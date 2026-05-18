@@ -157,7 +157,9 @@ fn analyze_and_run(
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
-    let plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    let mut plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
+    plan_inputs.retain_rule_pattern(args.only_rule.as_deref());
+    let exact_enabled = plan_inputs.exact_rule_ids();
     let options = plan_inputs.rule_options_from_config(&loaded);
     let rule_digest = plan_inputs.rule_digest(&options);
     let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
@@ -177,7 +179,7 @@ fn analyze_and_run(
         &output.db,
         rules,
         &options,
-        enabled.as_ref(),
+        Some(&exact_enabled),
         true,
         &output.capability_support,
     ));

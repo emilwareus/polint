@@ -32,6 +32,7 @@ mod rules_host_error;
 mod skill;
 
 const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json";
+const POLINT_RULES_PROFILE_ENV: &str = "POLINT_RULES_PROFILE";
 
 fn json_report_meta() -> JsonReportMeta<'static> {
     JsonReportMeta {
@@ -975,7 +976,7 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
     let db = load_analysis_files(&config)?;
     let mut diagnostics = Vec::new();
     for manifest in &local_rule_hosts {
-        diagnostics.extend(run_local_rule_host(root, manifest, &check_args)?);
+        diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
     }
     Ok(apply_ignores(&db, diagnostics, &config.config.ignores).report)
 }
@@ -1207,7 +1208,7 @@ fn collect_diagnostics_for_baseline(
         let loaded_db = load_analysis_files(&config)?;
         let mut diagnostics = Vec::new();
         for manifest in &local_rule_hosts {
-            diagnostics.extend(run_local_rule_host(root, manifest, &check_args)?);
+            diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
         }
         apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics
     };
@@ -1309,14 +1310,21 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     let config = load_config_for_check(root, &args.paths)?;
     selected_rule_patterns(&config, args.profile.as_deref())?;
 
+    let child_applies_ignores =
+        args.ignore_comments && manifests.len() == 1 && !should_render_check_stats(args);
     let mut diagnostics = Vec::new();
     for manifest in manifests {
-        diagnostics.extend(run_local_rule_host(root, manifest, args)?);
+        diagnostics.extend(run_local_rule_host(
+            root,
+            manifest,
+            args,
+            child_applies_ignores,
+        )?);
     }
 
     let mut db = None;
     let mut ignore_report = None;
-    if args.ignore_comments {
+    if args.ignore_comments && !child_applies_ignores {
         let loaded_db = load_analysis_files(&config)?;
         let ignore_application = apply_ignores(&loaded_db, diagnostics, &config.config.ignores);
         diagnostics = ignore_application.diagnostics;
@@ -1372,15 +1380,20 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     Ok(exit_code_for(&baseline.failure_diagnostics, args.fail_on))
 }
 
-fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result<Vec<Diagnostic>> {
+fn run_local_rule_host(
+    root: &Path,
+    manifest: &Path,
+    args: &CheckArgs,
+    apply_ignore_comments: bool,
+) -> Result<Vec<Diagnostic>> {
     let cargo = std::env::var("POLINT_CARGO")
         .or_else(|_| std::env::var("CARGO"))
         .unwrap_or_else(|_| "cargo".to_string());
     let cache_layout = CacheLayout::for_repo(root);
     let mut command = ProcessCommand::new(&cargo);
-    command.current_dir(root).args([
-        "run",
-        "--quiet",
+    command.current_dir(root).args(["run", "--quiet"]);
+    apply_local_rule_host_profile(&mut command);
+    command.args([
         "--manifest-path",
         manifest
             .to_str()
@@ -1392,7 +1405,11 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
         "--fail-on",
         "none",
         "--ignore-comments",
-        "false",
+        if apply_ignore_comments {
+            "true"
+        } else {
+            "false"
+        },
     ]);
     command
         .env(POLINT_CACHE_DIR_ENV, cache_layout.root())
@@ -1444,6 +1461,43 @@ fn run_local_rule_host(root: &Path, manifest: &Path, args: &CheckArgs) -> Result
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalRuleHostProfile {
+    Dev,
+    Release,
+    Custom(String),
+}
+
+impl LocalRuleHostProfile {
+    fn from_env() -> Self {
+        Self::from_env_value(std::env::var(POLINT_RULES_PROFILE_ENV).ok())
+    }
+
+    fn from_env_value(value: Option<String>) -> Self {
+        let Some(value) = value else {
+            return Self::Release;
+        };
+        let trimmed = value.trim();
+        match trimmed.to_ascii_lowercase().as_str() {
+            "" | "dev" | "debug" => Self::Dev,
+            "release" => Self::Release,
+            _ => Self::Custom(trimmed.to_string()),
+        }
+    }
+}
+
+fn apply_local_rule_host_profile(command: &mut ProcessCommand) {
+    match LocalRuleHostProfile::from_env() {
+        LocalRuleHostProfile::Dev => {}
+        LocalRuleHostProfile::Release => {
+            command.arg("--release");
+        }
+        LocalRuleHostProfile::Custom(profile) => {
+            command.args(["--profile", &profile]);
+        }
+    }
+}
+
 fn exit_code_for(diagnostics: &[crate::diagnostics::Diagnostic], fail_on: FailOn) -> u8 {
     let threshold = match fail_on {
         FailOn::Warn => Some(Severity::Warn),
@@ -1470,4 +1524,41 @@ fn sanitize_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LocalRuleHostProfile;
+
+    #[test]
+    fn local_rule_host_profile_defaults_to_release() {
+        assert_eq!(
+            LocalRuleHostProfile::from_env_value(None),
+            LocalRuleHostProfile::Release
+        );
+    }
+
+    #[test]
+    fn local_rule_host_profile_accepts_dev_aliases_for_fast_local_builds() {
+        assert_eq!(
+            LocalRuleHostProfile::from_env_value(Some("dev".to_string())),
+            LocalRuleHostProfile::Dev
+        );
+        assert_eq!(
+            LocalRuleHostProfile::from_env_value(Some("debug".to_string())),
+            LocalRuleHostProfile::Dev
+        );
+        assert_eq!(
+            LocalRuleHostProfile::from_env_value(Some(String::new())),
+            LocalRuleHostProfile::Dev
+        );
+    }
+
+    #[test]
+    fn local_rule_host_profile_accepts_custom_cargo_profiles() {
+        assert_eq!(
+            LocalRuleHostProfile::from_env_value(Some("profiling".to_string())),
+            LocalRuleHostProfile::Custom("profiling".to_string())
+        );
+    }
 }

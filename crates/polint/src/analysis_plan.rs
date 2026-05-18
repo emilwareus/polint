@@ -424,6 +424,21 @@ impl RulePlanInputs {
         }
     }
 
+    pub(crate) fn retain_rule_pattern(&mut self, pattern: Option<&str>) {
+        let Some(pattern) = pattern else {
+            return;
+        };
+        self.rules
+            .retain(|input| rule_id_matches(pattern, &input.meta.id));
+    }
+
+    pub(crate) fn exact_rule_ids(&self) -> BTreeSet<String> {
+        self.rules
+            .iter()
+            .map(|input| input.meta.id.clone())
+            .collect()
+    }
+
     pub(crate) fn rule_options_from_config(
         &self,
         loaded: &LoadedConfig,
@@ -937,6 +952,43 @@ mod tests {
         assert_eq!(plan.rules().len(), 1);
         assert_eq!(plan.rules()[0].id, "local/selected");
         assert!(plan.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn rule_plan_inputs_can_be_narrowed_by_only_rule_pattern() {
+        let rules = vec![
+            rule(
+                "local/selected",
+                "Selected rule",
+                Severity::Warn,
+                Capabilities::new().imports(),
+            ),
+            rule(
+                "local/skipped",
+                "Skipped rule",
+                Severity::Warn,
+                Capabilities::new().cfg(),
+            ),
+        ];
+        let enabled = BTreeSet::from(["local/*".to_string()]);
+        let mut inputs = RulePlanInputs::collect(&rules, Some(&enabled));
+
+        inputs.retain_rule_pattern(Some("local/selected"));
+
+        assert_eq!(
+            inputs.exact_rule_ids(),
+            BTreeSet::from(["local/selected".to_string()])
+        );
+        let plan = AnalysisPlan::from_inputs(&inputs, &BTreeMap::new());
+        assert_eq!(plan.rules().len(), 1);
+        assert_eq!(plan.rules()[0].id, "local/selected");
+        assert_eq!(
+            plan.capabilities()
+                .iter()
+                .map(|capability| capability.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["imports"]
+        );
     }
 
     #[test]
