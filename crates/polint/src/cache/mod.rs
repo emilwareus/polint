@@ -68,6 +68,26 @@ impl CacheKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheReadStatus {
+    Disabled,
+    Miss,
+    Hit,
+    InvalidEvicted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheReadOutcome<T> {
+    pub(crate) value: Option<T>,
+    pub(crate) status: CacheReadStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheWriteStatus {
+    Disabled,
+    Written,
+}
+
 /// Disk-backed JSON cache (used from adapters in-tree; `polint::_bench::cache` for `polint-bench`).
 #[allow(unreachable_pub)]
 #[derive(Debug, Clone)]
@@ -121,19 +141,43 @@ impl Cache {
     where
         T: for<'de> Deserialize<'de>,
     {
+        self.read_json_with_status(key).value
+    }
+
+    pub(crate) fn read_json_with_status<T>(&self, key: &CacheKey) -> CacheReadOutcome<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         if !self.enabled {
-            return None;
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Disabled,
+            };
         }
         let path = self.path_for(key);
         if !path.exists() {
-            return None;
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Miss,
+            };
         }
-        let raw = fs::read_to_string(&path).ok()?;
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Miss,
+            };
+        };
         match serde_json::from_str(&raw) {
-            Ok(value) => Some(value),
+            Ok(value) => CacheReadOutcome {
+                value: Some(value),
+                status: CacheReadStatus::Hit,
+            },
             Err(_) => {
                 let _ = fs::remove_file(path);
-                None
+                CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                }
             }
         }
     }
@@ -142,14 +186,26 @@ impl Cache {
     where
         T: Serialize,
     {
+        self.write_json_with_status(key, value)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_json_with_status<T>(
+        &self,
+        key: &CacheKey,
+        value: &T,
+    ) -> Result<CacheWriteStatus>
+    where
+        T: Serialize,
+    {
         if !self.enabled {
-            return Ok(());
+            return Ok(CacheWriteStatus::Disabled);
         }
         fs::create_dir_all(&self.root)?;
         let path = self.path_for(key);
         fs::write(&path, serde_json::to_vec(value)?)
             .with_context(|| format!("failed to write cache {}", path.display()))?;
-        Ok(())
+        Ok(CacheWriteStatus::Written)
     }
 
     fn path_for(&self, key: &CacheKey) -> PathBuf {
