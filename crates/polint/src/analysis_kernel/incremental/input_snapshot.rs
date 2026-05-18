@@ -532,3 +532,257 @@ mod source_config_rule_model_extension {
         );
     }
 }
+
+#[cfg(test)]
+mod lifecycle {
+    use super::*;
+    use crate::analysis_kernel::ProviderManifest;
+    use crate::config::{LoadedConfig, PolintConfig};
+    use crate::core::AnalysisDb;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn loaded_config(root: &Path, config: PolintConfig) -> LoadedConfig {
+        LoadedConfig {
+            root: root.to_path_buf(),
+            config,
+            missing: false,
+        }
+    }
+
+    fn default_loaded_config(root: &Path) -> LoadedConfig {
+        loaded_config(root, PolintConfig::default())
+    }
+
+    fn db_with_files(root: &Path, files: &[(&str, &str)]) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        for (relative_path, source) in files {
+            write_file(root, relative_path, source);
+            db.add_file(
+                root.join(relative_path),
+                (*relative_path).to_string(),
+                (*source).to_string(),
+            );
+        }
+        db
+    }
+
+    fn write_file(root: &Path, relative_path: &str, contents: &str) {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixture parent");
+        }
+        std::fs::write(path, contents).expect("write fixture file");
+    }
+
+    fn snapshot_for(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        provider_manifests: &[ProviderManifest],
+    ) -> InputSnapshot {
+        InputSnapshot::from_run_inputs(
+            loaded,
+            db,
+            "config-digest",
+            "rule-digest",
+            "plan-digest",
+            provider_manifests,
+        )
+    }
+
+    fn component<'a>(components: &'a [InputComponent], name: &str) -> &'a InputComponent {
+        components
+            .iter()
+            .find(|component| component.name == name)
+            .unwrap_or_else(|| panic!("missing component {name}"))
+    }
+
+    #[test]
+    fn go_lifecycle_records_module_files_and_configured_options() {
+        let temp = TempDir::new().expect("create temp repo");
+        write_file(
+            temp.path(),
+            "services/app/go.mod",
+            "module example.com/app\n\ngo 1.24\n",
+        );
+        write_file(
+            temp.path(),
+            "services/app/go.sum",
+            "example.com/dep v1.0.0 h1:abc\n",
+        );
+        write_file(temp.path(), "go.work", "go 1.24\n\nuse ./services/app\n");
+
+        let mut config = PolintConfig::default();
+        config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/app".to_string())]),
+        );
+        config.languages.go.insert(
+            "build_tags".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("prod".to_string()),
+                toml::Value::String("linux".to_string()),
+            ]),
+        );
+        config
+            .languages
+            .go
+            .insert("include_tests".to_string(), toml::Value::Boolean(false));
+        config.languages.go.insert(
+            "package_patterns".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("./internal/...".to_string()),
+                toml::Value::String("./cmd/...".to_string()),
+            ]),
+        );
+
+        let loaded = loaded_config(temp.path(), config);
+        let db = db_with_files(temp.path(), &[("services/app/main.go", "package main\n")]);
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let components = &snapshot.go_lifecycle.components;
+
+        assert_eq!(
+            component(components, "go.module_roots").detail,
+            vec!["services/app"]
+        );
+        assert_eq!(component(components, "go.mod").status, InputComponentStatus::Present);
+        assert_eq!(component(components, "go.sum").status, InputComponentStatus::Present);
+        assert_eq!(component(components, "go.work").status, InputComponentStatus::Present);
+        assert_eq!(
+            component(components, "go.build_tags").detail,
+            vec!["linux", "prod"]
+        );
+        assert_eq!(
+            component(components, "go.include_tests").detail,
+            vec!["false"]
+        );
+        assert_eq!(
+            component(components, "go.package_patterns").detail,
+            vec!["./cmd/...", "./internal/..."]
+        );
+        assert_eq!(
+            component(components, "go.environment_policy").status,
+            InputComponentStatus::Present
+        );
+    }
+
+    #[test]
+    fn ts_js_lifecycle_records_manifests_config_resolver_options_and_sources() {
+        let temp = TempDir::new().expect("create temp repo");
+        write_file(temp.path(), "package.json", "{\"type\":\"module\"}\n");
+        write_file(temp.path(), "package-lock.json", "{\"lockfileVersion\":3}\n");
+        write_file(temp.path(), "tsconfig.json", "{\"compilerOptions\":{}}\n");
+
+        let mut config = PolintConfig::default();
+        config.languages.ts.insert(
+            "module_resolution".to_string(),
+            toml::Value::String("node".to_string()),
+        );
+        config.languages.ts.insert(
+            "conditions".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("import".to_string()),
+                toml::Value::String("browser".to_string()),
+            ]),
+        );
+
+        let loaded = loaded_config(temp.path(), config);
+        let db = db_with_files(
+            temp.path(),
+            &[
+                ("src/app.ts", "export const app = 1;\n"),
+                ("src/view.tsx", "export function View() { return null; }\n"),
+            ],
+        );
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let components = &snapshot.ts_js_lifecycle.components;
+
+        assert_eq!(
+            component(components, "ts_js.package_manifests").detail,
+            vec!["package.json"]
+        );
+        assert_eq!(
+            component(components, "ts_js.lockfiles").detail,
+            vec!["package-lock.json"]
+        );
+        assert_eq!(
+            component(components, "ts_js.config_files").detail,
+            vec!["tsconfig.json"]
+        );
+        assert!(component(components, "ts_js.resolver_options")
+            .detail
+            .iter()
+            .any(|detail| detail.contains("module_resolution")));
+        assert_eq!(
+            component(components, "ts_js.source_set_membership").detail,
+            vec!["src/app.ts", "src/view.tsx"]
+        );
+    }
+
+    #[test]
+    fn official_tool_identity_components_are_unsupported_when_not_invoked() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = default_loaded_config(temp.path());
+        let db = db_with_files(
+            temp.path(),
+            &[
+                ("main.go", "package main\n"),
+                ("src/app.ts", "export const app = 1;\n"),
+            ],
+        );
+
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        assert_eq!(
+            component(&snapshot.go_lifecycle.components, "go.tool_invocation").status,
+            InputComponentStatus::Unsupported
+        );
+        assert_eq!(
+            component(
+                &snapshot.ts_js_lifecycle.components,
+                "ts_js.tool_invocation"
+            )
+            .status,
+            InputComponentStatus::Unsupported
+        );
+        assert!(snapshot.tool_invocations.iter().all(|component| {
+            component.status == InputComponentStatus::Unsupported
+                && component.digest.kind == DigestKind::ToolInvocation
+        }));
+    }
+
+    #[test]
+    fn go_files_outside_module_roots_are_setup_missing_root_relative_components() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = default_loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("cmd/tool/main.go", "package main\n")]);
+
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let gap = component(
+            &snapshot.go_lifecycle.components,
+            "go.files_without_module_root",
+        );
+
+        assert_eq!(gap.status, InputComponentStatus::SetupMissing);
+        assert_eq!(gap.detail, vec!["cmd/tool/main.go"]);
+        assert!(!serde_json::to_string_pretty(&snapshot)
+            .expect("serialize snapshot")
+            .contains(temp.path().to_string_lossy().as_ref()));
+    }
+}
