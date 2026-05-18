@@ -1,3 +1,144 @@
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Phase 24 establishes dependency-index vocabulary before provider dependency recording is wired in."
+    )
+)]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+
+use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey};
+
+pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-1";
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CacheNode {
+    Input(String),
+    Layer(LayerKey),
+    Query(QueryKey),
+    Summary(SummaryKey),
+    Diagnostic(DiagnosticKey),
+    Extension(String),
+    ToolInvocation(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DependencyKind {
+    Input,
+    Layer,
+    Lifecycle,
+    Config,
+    Toolchain,
+    Rule,
+    Extension,
+    Model,
+    Provider,
+    ToolInvocation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ShapeKind {
+    Content,
+    Syntax,
+    Import,
+    PublicApi,
+    ModuleTopology,
+    Lifecycle,
+    Toolchain,
+    RuleCode,
+    RuleOptions,
+    ExtensionCode,
+    ExtensionDeclaredInput,
+    Model,
+    ProviderVersion,
+    Output,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct DependencyEdge {
+    pub(crate) from: CacheNode,
+    pub(crate) to: CacheNode,
+    pub(crate) kind: DependencyKind,
+    pub(crate) required_shape: ShapeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DependencyIndex {
+    pub(crate) schema_version: String,
+    pub(crate) forward: BTreeMap<CacheNode, Vec<DependencyEdge>>,
+    pub(crate) reverse: BTreeMap<CacheNode, Vec<DependencyEdge>>,
+}
+
+impl DependencyIndex {
+    pub(crate) fn from_edges(mut edges: Vec<DependencyEdge>) -> Self {
+        edges.sort();
+        edges.dedup();
+
+        let mut forward: BTreeMap<CacheNode, Vec<DependencyEdge>> = BTreeMap::new();
+        let mut reverse: BTreeMap<CacheNode, Vec<DependencyEdge>> = BTreeMap::new();
+        for edge in edges {
+            forward
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.clone());
+            reverse.entry(edge.to.clone()).or_default().push(edge);
+        }
+        sort_and_dedup_edges(&mut forward);
+        sort_and_dedup_edges(&mut reverse);
+
+        Self {
+            schema_version: DEPENDENCY_INDEX_SCHEMA.to_string(),
+            forward,
+            reverse,
+        }
+    }
+
+    pub(crate) fn forward_edges(&self, node: &CacheNode) -> Option<&[DependencyEdge]> {
+        self.forward.get(node).map(Vec::as_slice)
+    }
+
+    pub(crate) fn reverse_edges(&self, node: &CacheNode) -> Option<&[DependencyEdge]> {
+        self.reverse.get(node).map(Vec::as_slice)
+    }
+
+    pub(crate) fn contains_node(&self, node: &CacheNode) -> bool {
+        self.forward.contains_key(node) || self.reverse.contains_key(node)
+    }
+
+    pub(crate) fn all_nodes(&self) -> BTreeSet<CacheNode> {
+        let mut nodes = BTreeSet::new();
+        for (node, edges) in &self.forward {
+            nodes.insert(node.clone());
+            for edge in edges {
+                nodes.insert(edge.from.clone());
+                nodes.insert(edge.to.clone());
+            }
+        }
+        for (node, edges) in &self.reverse {
+            nodes.insert(node.clone());
+            for edge in edges {
+                nodes.insert(edge.from.clone());
+                nodes.insert(edge.to.clone());
+            }
+        }
+        nodes
+    }
+}
+
+fn sort_and_dedup_edges(index: &mut BTreeMap<CacheNode, Vec<DependencyEdge>>) {
+    for edges in index.values_mut() {
+        edges.sort();
+        edges.dedup();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

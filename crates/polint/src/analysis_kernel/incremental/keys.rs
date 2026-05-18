@@ -31,7 +31,7 @@ pub(crate) enum PrecisionTier {
     Exact,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
     pub(crate) layer_kind: LayerKind,
     pub(crate) provider_id: String,
@@ -46,7 +46,7 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Vec<Digest>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct QueryKey {
     pub(crate) query_kind: String,
     pub(crate) query_version: String,
@@ -56,7 +56,7 @@ pub(crate) struct QueryKey {
     pub(crate) precision_tier: PrecisionTier,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
     pub(crate) callable_stable_key: String,
     pub(crate) summary_domain: String,
@@ -66,7 +66,7 @@ pub(crate) struct SummaryKey {
     pub(crate) extension_digest: Digest,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct DiagnosticKey {
     pub(crate) rule_id: String,
     pub(crate) rule_version: String,
