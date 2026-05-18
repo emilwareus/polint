@@ -611,7 +611,7 @@ mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyKind, Digest, DigestKind, LayerKey, ShapeKind,
+        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -660,6 +660,34 @@ mod tests {
         load_config(root).expect("default config loads")
     }
 
+    fn collect_files(root: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        collect_files_into(root, &mut files);
+        files.sort();
+        files
+    }
+
+    fn collect_files_into(root: &Path, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("read cache entry").path();
+            if path.is_dir() {
+                collect_files_into(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+
+    fn first_layer_file(cache_root: &Path, category: &str) -> PathBuf {
+        collect_files(&cache_root.join("layers").join(category))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("expected layer cache {category} file"))
+    }
+
     fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()
             .iter()
@@ -679,6 +707,44 @@ mod tests {
                 "go_syntax",
                 &["base"],
             )],
+        )
+    }
+
+    fn module_graph_input_snapshot(
+        loaded: &crate::config::LoadedConfig,
+        db: &AnalysisDb,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+    ) -> InputSnapshot {
+        InputSnapshot::from_run_inputs(
+            loaded,
+            db,
+            config_digest,
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        )
+    }
+
+    fn derive_module_graph_with_cache(
+        db: &mut AnalysisDb,
+        loaded: &crate::config::LoadedConfig,
+        cache: &crate::cache::Cache,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+    ) -> super::ModuleGraphDerivation {
+        let snapshot = module_graph_input_snapshot(loaded, db, plan, config_digest);
+        super::derive_requested_module_graph_with_cache_stats(
+            db,
+            loaded,
+            plan,
+            cache,
+            &snapshot,
+            module_graph_manifest(),
+            vec![
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["stable"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
+            ],
         )
     }
 
@@ -713,6 +779,206 @@ mod tests {
             span: span(file, start_byte),
             language: Language::TypeScript,
         })
+    }
+
+    #[test]
+    fn module_graph_layer_cache_cold_warm() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut first,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut first, app, "./tokens", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert!(first_result.diagnostics.is_empty());
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert_eq!(first_result.cache_stats.recomputes, 1);
+        assert_eq!(first_result.cache_stats.writes, 1);
+        assert!(first_result.output_digest.is_some());
+        assert_eq!(first.resolved_imports()[0].status, ResolutionStatus::Resolved);
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut second,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut second, app, "./tokens", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert!(second_result.diagnostics.is_empty());
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(second_result.cache_stats.verified_reuse, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 0);
+        assert_eq!(second_result.cache_stats.writes, 0);
+        assert_eq!(second_result.output_digest, first_result.output_digest);
+        assert_eq!(second.resolved_imports()[0].status, ResolutionStatus::Resolved);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_invalidates_on_import_or_lifecycle_change() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "tsconfig.json", r#"{"compilerOptions":{}}"#);
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut first,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut first, app, "./tokens", 0);
+        let loaded = loaded_config_for(temp.path());
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        let mut changed_import = AnalysisDb::new();
+        let app = add_file(
+            &mut changed_import,
+            temp.path(),
+            "src/app.ts",
+            "import other from './other';\n",
+        );
+        add_file(
+            &mut changed_import,
+            temp.path(),
+            "src/other.ts",
+            "export const other = {};\n",
+        );
+        push_ts_import(&mut changed_import, app, "./other", 0);
+        let changed_import_result =
+            derive_module_graph_with_cache(&mut changed_import, &loaded, &cache, &plan, "config");
+
+        assert_eq!(changed_import_result.cache_stats.misses, 1);
+        assert_eq!(changed_import_result.cache_stats.recomputes, 1);
+        assert_ne!(changed_import_result.output_digest, first_result.output_digest);
+
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        );
+        let reloaded = loaded_config_for(temp.path());
+        let mut changed_lifecycle = AnalysisDb::new();
+        let app = add_file(
+            &mut changed_lifecycle,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut changed_lifecycle,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut changed_lifecycle, app, "./tokens", 0);
+        let changed_lifecycle_result = derive_module_graph_with_cache(
+            &mut changed_lifecycle,
+            &reloaded,
+            &cache,
+            &plan,
+            "config",
+        );
+
+        assert_eq!(changed_lifecycle_result.cache_stats.misses, 1);
+        assert_eq!(changed_lifecycle_result.cache_stats.recomputes, 1);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_corrupt_recomputes_without_crashing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut first, app, "./missing", 0);
+        let loaded = loaded_config_for(temp.path());
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        assert!(first_result.diagnostics.is_empty());
+
+        let manifest = first_layer_file(&cache_root, "manifests");
+        fs::write(manifest, "{not-json").expect("corrupt manifest");
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut second, app, "./missing", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert!(second_result.diagnostics.is_empty());
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second_result.cache_stats.writes, 1);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_disabled_bypasses_without_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut db, app, "./missing", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let result = derive_module_graph_with_cache(&mut db, &loaded, &cache, &plan, "config");
+
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(result.cache_stats.bypasses_disabled, 1);
+        assert_eq!(result.cache_stats.recomputes, 1);
+        assert_eq!(result.cache_stats.writes, 0);
+        assert!(!cache_root.join("layers").exists());
     }
 
     #[test]
