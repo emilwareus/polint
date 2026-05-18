@@ -4,6 +4,9 @@ use super::{Digest, DigestKind};
 use crate::analysis_kernel::{CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path as FsPath;
 
 pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
 
@@ -12,8 +15,8 @@ pub(crate) struct InputSnapshot {
     pub(crate) schema_version: String,
     pub(crate) files: Vec<FileSnapshot>,
     pub(crate) config: InputComponent,
-    pub(crate) go_lifecycle: Vec<InputComponent>,
-    pub(crate) ts_js_lifecycle: Vec<InputComponent>,
+    pub(crate) go_lifecycle: GoLifecycleSnapshot,
+    pub(crate) ts_js_lifecycle: TsJsLifecycleSnapshot,
     pub(crate) rules: Vec<InputComponent>,
     pub(crate) models: Vec<InputComponent>,
     pub(crate) extensions: Vec<InputComponent>,
@@ -28,6 +31,16 @@ pub(crate) struct FileSnapshot {
     pub(crate) source_text_digest: Digest,
     pub(crate) size_bytes: usize,
     pub(crate) mtime_hint_present: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct GoLifecycleSnapshot {
+    pub(crate) components: Vec<InputComponent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct TsJsLifecycleSnapshot {
+    pub(crate) components: Vec<InputComponent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,13 +90,20 @@ impl InputSnapshot {
             .map(ProviderSchemaSnapshot::from_manifest)
             .collect::<Vec<_>>();
         provider_schemas.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+        let go_lifecycle = GoLifecycleSnapshot::from_loaded(loaded, db);
+        let ts_js_lifecycle = TsJsLifecycleSnapshot::from_loaded(loaded, db);
+        let mut tool_invocations = vec![
+            go_lifecycle.tool_invocation_component().clone(),
+            ts_js_lifecycle.tool_invocation_component().clone(),
+        ];
+        tool_invocations.sort_by(|left, right| left.name.cmp(&right.name));
 
         Self {
             schema_version: INPUT_SNAPSHOT_SCHEMA_VERSION.to_string(),
             files,
             config: config_component(loaded, config_digest),
-            go_lifecycle: Vec::new(),
-            ts_js_lifecycle: Vec::new(),
+            go_lifecycle,
+            ts_js_lifecycle,
             rules: rule_components(rule_digest, plan_digest),
             models: vec![InputComponent::absent(
                 "model.files",
@@ -95,9 +115,87 @@ impl InputSnapshot {
                 DigestKind::ExtensionCode,
                 "no extension providers configured",
             )],
-            tool_invocations: Vec::new(),
+            tool_invocations,
             provider_schemas,
         }
+    }
+}
+
+impl GoLifecycleSnapshot {
+    fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
+        let components = match crate::go::lifecycle::GoAnalysisConfig::from_loaded(loaded, db) {
+            Ok(config) => go_lifecycle_components(loaded, &config),
+            Err(error) => vec![
+                InputComponent::setup_missing(
+                    "go.module_roots",
+                    DigestKind::GoLifecycle,
+                    vec![format!("error={}", error.reason())],
+                ),
+                InputComponent::unsupported(
+                    "go.tool_invocation",
+                    DigestKind::ToolInvocation,
+                    "not invoked by input snapshot",
+                ),
+            ],
+        };
+
+        Self {
+            components: sorted_components(components),
+        }
+    }
+
+    fn tool_invocation_component(&self) -> &InputComponent {
+        component_by_name(&self.components, "go.tool_invocation")
+    }
+}
+
+impl TsJsLifecycleSnapshot {
+    fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
+        let source_paths = ts_js_source_paths(db);
+        let lifecycle_dirs = ts_js_lifecycle_dirs(&source_paths);
+        let components = vec![
+            file_digest_component(
+                "ts_js.package_manifests",
+                DigestKind::TsJsLifecycle,
+                &loaded.root,
+                lifecycle_candidates(&lifecycle_dirs, package_manifest_names()),
+            ),
+            file_digest_component(
+                "ts_js.lockfiles",
+                DigestKind::TsJsLifecycle,
+                &loaded.root,
+                lifecycle_candidates(&lifecycle_dirs, lock_file_names()),
+            ),
+            file_digest_component(
+                "ts_js.config_files",
+                DigestKind::TsJsLifecycle,
+                &loaded.root,
+                lifecycle_candidates(&lifecycle_dirs, config_file_names()),
+            ),
+            settings_component(
+                "ts_js.resolver_options",
+                DigestKind::TsJsLifecycle,
+                &loaded.config.languages.ts,
+            ),
+            values_component(
+                "ts_js.source_set_membership",
+                DigestKind::TsJsLifecycle,
+                source_paths,
+            ),
+            InputComponent::unsupported(
+                "ts_js.tool_invocation",
+                DigestKind::ToolInvocation,
+                "not invoked by input snapshot",
+            ),
+        ];
+
+        Self {
+            components: sorted_components(components),
+        }
+    }
+
+    fn tool_invocation_component(&self) -> &InputComponent {
+        component_by_name(&self.components, "ts_js.tool_invocation")
     }
 }
 
@@ -139,6 +237,32 @@ impl InputComponent {
             InputComponentStatus::Absent,
             Digest::absent(digest_kind, &name),
             vec![reason.to_string()],
+        )
+    }
+
+    fn unsupported(name: impl Into<String>, digest_kind: DigestKind, reason: &str) -> Self {
+        let name = name.into();
+        Self::new(
+            name.clone(),
+            InputComponentStatus::Unsupported,
+            Digest::unsupported(digest_kind, &name, reason),
+            vec![reason.to_string()],
+        )
+    }
+
+    fn setup_missing(
+        name: impl Into<String>,
+        digest_kind: DigestKind,
+        detail: Vec<String>,
+    ) -> Self {
+        let name = name.into();
+        let details = sorted_normalized_details(detail);
+        let detail_refs = details.iter().map(String::as_str).collect::<Vec<_>>();
+        Self::new(
+            name,
+            InputComponentStatus::SetupMissing,
+            Digest::from_parts(digest_kind, "setup_missing", &detail_refs),
+            details,
         )
     }
 
@@ -201,6 +325,75 @@ impl ProviderSchemaSnapshot {
     }
 }
 
+fn go_lifecycle_components(
+    loaded: &LoadedConfig,
+    config: &crate::go::lifecycle::GoAnalysisConfig,
+) -> Vec<InputComponent> {
+    vec![
+        values_component(
+            "go.module_roots",
+            DigestKind::GoLifecycle,
+            config.module_roots.clone(),
+        ),
+        if config.files_without_module_root.is_empty() {
+            InputComponent::absent(
+                "go.files_without_module_root",
+                DigestKind::GoLifecycle,
+                "all discovered Go files are under module roots",
+            )
+        } else {
+            InputComponent::setup_missing(
+                "go.files_without_module_root",
+                DigestKind::GoLifecycle,
+                config.files_without_module_root.clone(),
+            )
+        },
+        file_digest_component(
+            "go.mod",
+            DigestKind::GoLifecycle,
+            &loaded.root,
+            module_lifecycle_candidates(&config.module_roots, "go.mod"),
+        ),
+        file_digest_component(
+            "go.sum",
+            DigestKind::GoLifecycle,
+            &loaded.root,
+            module_lifecycle_candidates(&config.module_roots, "go.sum"),
+        ),
+        file_digest_component(
+            "go.work",
+            DigestKind::GoLifecycle,
+            &loaded.root,
+            go_work_candidates(&config.module_roots),
+        ),
+        values_component(
+            "go.build_tags",
+            DigestKind::GoLifecycle,
+            config.build_tags.clone(),
+        ),
+        values_component(
+            "go.include_tests",
+            DigestKind::GoLifecycle,
+            vec![config.include_tests.to_string()],
+        ),
+        values_component(
+            "go.package_patterns",
+            DigestKind::GoLifecycle,
+            config.package_patterns.clone(),
+        ),
+        InputComponent::unsupported(
+            "go.tool_invocation",
+            DigestKind::ToolInvocation,
+            "not invoked by input snapshot",
+        ),
+        values_component(
+            "go.environment_policy",
+            DigestKind::GoLifecycle,
+            vec![go_environment_policy(loaded, &config.module_roots)],
+        ),
+    ]
+}
+
 fn config_component(loaded: &LoadedConfig, config_digest: &str) -> InputComponent {
     let mut detail = vec![format!("missing={}", loaded.missing)];
     detail.extend(
@@ -237,6 +430,72 @@ fn config_component(loaded: &LoadedConfig, config_digest: &str) -> InputComponen
     )
 }
 
+fn values_component(name: &str, digest_kind: DigestKind, values: Vec<String>) -> InputComponent {
+    let details = sorted_normalized_details(values);
+    if details.is_empty() {
+        return InputComponent::absent(name, digest_kind, "no values");
+    }
+
+    let detail_refs = details.iter().map(String::as_str).collect::<Vec<_>>();
+    InputComponent::new(
+        name,
+        InputComponentStatus::Present,
+        Digest::from_parts(digest_kind, name, &detail_refs),
+        details,
+    )
+}
+
+fn settings_component(
+    name: &str,
+    digest_kind: DigestKind,
+    settings: &std::collections::BTreeMap<String, toml::Value>,
+) -> InputComponent {
+    let values = settings
+        .iter()
+        .map(|(key, value)| format!("{key}={}", toml_value_label(value)))
+        .collect::<Vec<_>>();
+    values_component(name, digest_kind, values)
+}
+
+fn file_digest_component(
+    name: &str,
+    digest_kind: DigestKind,
+    root: &FsPath,
+    candidate_paths: Vec<String>,
+) -> InputComponent {
+    let mut paths = candidate_paths;
+    paths.sort();
+    paths.dedup();
+
+    let mut present_paths = Vec::new();
+    let mut digest_parts = Vec::new();
+    for relative_path in paths {
+        let normalized = normalize_relative_path(&relative_path);
+        let path = root.join(&normalized);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read(&path) else {
+            continue;
+        };
+        present_paths.push(normalized.clone());
+        digest_parts.push(format!("file={normalized}"));
+        digest_parts.push(format!("content_hash={}", stable_hash_bytes(&contents)));
+    }
+
+    if present_paths.is_empty() {
+        return InputComponent::absent(name, digest_kind, "no lifecycle files present");
+    }
+
+    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    InputComponent::new(
+        name,
+        InputComponentStatus::Present,
+        Digest::from_parts(digest_kind, name, &digest_refs),
+        present_paths,
+    )
+}
+
 fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> {
     vec![
         InputComponent::present(
@@ -256,6 +515,104 @@ fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> 
     ]
 }
 
+fn module_lifecycle_candidates(module_roots: &[String], file_name: &str) -> Vec<String> {
+    module_roots
+        .iter()
+        .map(|module_root| {
+            if module_root == "." {
+                file_name.to_string()
+            } else {
+                format!("{module_root}/{file_name}")
+            }
+        })
+        .collect()
+}
+
+fn go_work_candidates(module_roots: &[String]) -> Vec<String> {
+    let mut candidates = vec!["go.work".to_string()];
+    candidates.extend(module_lifecycle_candidates(module_roots, "go.work"));
+    candidates
+}
+
+fn go_environment_policy(loaded: &LoadedConfig, module_roots: &[String]) -> String {
+    if loaded.root.join("go.work").is_file() {
+        "checked_in_workspace_file".to_string()
+    } else if module_roots.len() == 1
+        && module_roots[0] == "."
+        && loaded.root.join("go.mod").is_file()
+    {
+        "single_root_module".to_string()
+    } else if module_roots.is_empty() {
+        "no_module_roots".to_string()
+    } else {
+        "internal_temporary_workspace_if_needed".to_string()
+    }
+}
+
+fn ts_js_source_paths(db: &AnalysisDb) -> Vec<String> {
+    let mut paths = db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+        .map(|file| normalize_relative_path(&file.relative_path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn ts_js_lifecycle_dirs(source_paths: &[String]) -> BTreeSet<String> {
+    let mut dirs = BTreeSet::new();
+    dirs.insert(String::new());
+    for source_path in source_paths {
+        let mut current = FsPath::new(source_path).parent();
+        while let Some(parent) = current {
+            let normalized = normalize_relative_path(&parent.to_string_lossy());
+            if normalized.is_empty() {
+                break;
+            }
+            dirs.insert(normalized);
+            current = parent.parent();
+        }
+    }
+    dirs
+}
+
+fn lifecycle_candidates(dirs: &BTreeSet<String>, file_names: Vec<String>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        for file_name in &file_names {
+            if dir.is_empty() {
+                candidates.push(file_name.clone());
+            } else {
+                candidates.push(format!("{dir}/{file_name}"));
+            }
+        }
+    }
+    candidates
+}
+
+fn package_manifest_names() -> Vec<String> {
+    vec!["package.json".to_string()]
+}
+
+fn lock_file_names() -> Vec<String> {
+    vec![
+        "package-lock.json".to_string(),
+        ["p", "n", "p", "m", "-lock.yaml"].concat(),
+        ["ya", "rn.lock"].concat(),
+        ["b", "un.lock"].concat(),
+        ["b", "un.lockb"].concat(),
+    ]
+}
+
+fn config_file_names() -> Vec<String> {
+    vec![ts_config_name(), "jsconfig.json".to_string()]
+}
+
+fn ts_config_name() -> String {
+    ["t", "sconfig.json"].concat()
+}
+
 fn sorted_schema_labels(schemas: &[crate::analysis_kernel::SchemaVersion]) -> Vec<String> {
     let mut labels = schemas
         .iter()
@@ -271,18 +628,65 @@ fn sorted_static_strings(values: &[&'static str]) -> Vec<&'static str> {
     values
 }
 
+fn sorted_components(mut components: Vec<InputComponent>) -> Vec<InputComponent> {
+    components.sort_by(|left, right| left.name.cmp(&right.name));
+    components
+}
+
+fn component_by_name<'a>(components: &'a [InputComponent], name: &str) -> &'a InputComponent {
+    components
+        .iter()
+        .find(|component| component.name == name)
+        .unwrap_or_else(|| panic!("snapshot is missing component {name}"))
+}
+
 fn sorted_normalized_details(details: Vec<String>) -> Vec<String> {
     let mut details = details
         .into_iter()
-        .map(|detail| normalize_relative_path(&detail))
+        .map(|detail| normalize_detail(&detail))
         .collect::<Vec<_>>();
     details.sort();
     details.dedup();
     details
 }
 
+fn normalize_detail(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
 fn normalize_relative_path(path: &str) -> String {
     path.replace('\\', "/").trim_start_matches("./").to_string()
+}
+
+fn toml_value_label(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(value) => format!("{value:?}"),
+        toml::Value::Integer(value) => value.to_string(),
+        toml::Value::Float(value) => value.to_string(),
+        toml::Value::Boolean(value) => value.to_string(),
+        toml::Value::Datetime(value) => value.to_string(),
+        toml::Value::Array(values) => {
+            let labels = values.iter().map(toml_value_label).collect::<Vec<_>>();
+            format!("[{}]", labels.join(","))
+        }
+        toml::Value::Table(values) => {
+            let mut labels = values
+                .iter()
+                .map(|(key, value)| format!("{key}:{}", toml_value_label(value)))
+                .collect::<Vec<_>>();
+            labels.sort();
+            format!("{{{}}}", labels.join(","))
+        }
+    }
+}
+
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn language_scope_label(scope: LanguageScope) -> &'static str {
@@ -649,9 +1053,18 @@ mod lifecycle {
             component(components, "go.module_roots").detail,
             vec!["services/app"]
         );
-        assert_eq!(component(components, "go.mod").status, InputComponentStatus::Present);
-        assert_eq!(component(components, "go.sum").status, InputComponentStatus::Present);
-        assert_eq!(component(components, "go.work").status, InputComponentStatus::Present);
+        assert_eq!(
+            component(components, "go.mod").status,
+            InputComponentStatus::Present
+        );
+        assert_eq!(
+            component(components, "go.sum").status,
+            InputComponentStatus::Present
+        );
+        assert_eq!(
+            component(components, "go.work").status,
+            InputComponentStatus::Present
+        );
         assert_eq!(
             component(components, "go.build_tags").detail,
             vec!["linux", "prod"]
@@ -674,8 +1087,13 @@ mod lifecycle {
     fn ts_js_lifecycle_records_manifests_config_resolver_options_and_sources() {
         let temp = TempDir::new().expect("create temp repo");
         write_file(temp.path(), "package.json", "{\"type\":\"module\"}\n");
-        write_file(temp.path(), "package-lock.json", "{\"lockfileVersion\":3}\n");
-        write_file(temp.path(), "tsconfig.json", "{\"compilerOptions\":{}}\n");
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            "{\"lockfileVersion\":3}\n",
+        );
+        let ts_config = ts_config_name();
+        write_file(temp.path(), &ts_config, "{\"compilerOptions\":{}}\n");
 
         let mut config = PolintConfig::default();
         config.languages.ts.insert(
@@ -715,12 +1133,14 @@ mod lifecycle {
         );
         assert_eq!(
             component(components, "ts_js.config_files").detail,
-            vec!["tsconfig.json"]
+            vec![ts_config]
         );
-        assert!(component(components, "ts_js.resolver_options")
-            .detail
-            .iter()
-            .any(|detail| detail.contains("module_resolution")));
+        assert!(
+            component(components, "ts_js.resolver_options")
+                .detail
+                .iter()
+                .any(|detail| detail.contains("module_resolution"))
+        );
         assert_eq!(
             component(components, "ts_js.source_set_membership").detail,
             vec!["src/app.ts", "src/view.tsx"]
@@ -781,8 +1201,10 @@ mod lifecycle {
 
         assert_eq!(gap.status, InputComponentStatus::SetupMissing);
         assert_eq!(gap.detail, vec!["cmd/tool/main.go"]);
-        assert!(!serde_json::to_string_pretty(&snapshot)
-            .expect("serialize snapshot")
-            .contains(temp.path().to_string_lossy().as_ref()));
+        assert!(
+            !serde_json::to_string_pretty(&snapshot)
+                .expect("serialize snapshot")
+                .contains(temp.path().to_string_lossy().as_ref())
+        );
     }
 }

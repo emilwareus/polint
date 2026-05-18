@@ -9,8 +9,8 @@ pub(crate) use digest::{Digest, DigestKind};
     reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
 )]
 pub(crate) use input_snapshot::{
-    FileSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus,
-    InputSnapshot, ProviderSchemaSnapshot,
+    FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
+    InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };
 #[expect(
     unused_imports,
