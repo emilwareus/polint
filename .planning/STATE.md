@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-18T12:22:26.717Z"
+status: planning
+last_updated: "2026-05-18T12:48:01.554Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 22
@@ -17,11 +17,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-16)
+See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 24 — persistent-layer-cache-for-existing-cheap-facts
+**Current focus:** Phase 25 - Rule Manifest, Inspect, and Test Skeleton
 
 ## Current Status
 
@@ -39,9 +39,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 24 (persistent-layer-cache-for-existing-cheap-facts) — COMPLETE
-Plan: 5 of 5
+Status: Ready to plan
+Phase: 25
+Plan: Not started
 Last activity: 2026-05-18
 
 ## Phase Progress
@@ -172,8 +172,8 @@ Last activity: 2026-05-18
 ## Session
 
 - Last session: 2026-05-18
-- Stopped at: Completed 24-05-PLAN.md
+- Stopped at: Completed Phase 24 verification; Phase 25 ready for planning.
 
 ## Next Action
 
-Phase 24 is ready for verification.
+Phase 25 is ready for planning.
