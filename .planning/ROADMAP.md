@@ -25,7 +25,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 20 | Private Analysis Kernel Facade | Move current analysis orchestration behind an internal kernel boundary and add provider manifests for existing providers. | SAE-FND-01 |
 | 21 | 4/4 | Complete    | 2026-05-17 |
 | 22 | 6/6 | Complete    | 2026-05-17 |
-| 23 | 4/5 | In Progress|  |
+| 23 | 5/5 | Complete   | 2026-05-18 |
 | 24 | Persistent Layer Cache for Existing Cheap Facts | Persist existing cheap fact layers with conservative invalidation and hit/miss reporting. | SAE-FND-05 |
 | 25 | Rule Manifest, Inspect, and Test Skeleton | Generate rule manifests and add the first supported inspect/test authoring loop. | SAE-FND-06 |
 | 26 | Semantic Index Deepening | Add scopes, richer imports, resolution facts, aliases, generated symbols, unknowns, and stable exports. | SAE-SEM-01 |
@@ -109,14 +109,14 @@ Plans:
 **Goal:** Add the typed snapshot and key vocabulary required for correct layered cache invalidation.
 **Requirements:** SAE-FND-04
 **Research:** `research/incremental-query-engine/FINAL-REPORT.md`, `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/module-graph/RECOMMENDED_IMPLEMENTATION.md`
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 23-01-PLAN.md — Internal digest, cache-key, cache-stat, and provider-output vocabulary
 - [x] 23-02-PLAN.md — Deterministic input snapshots for source, config, lifecycle, rule, model, extension, provider, and tool inputs
 - [x] 23-03-PLAN.md — Current Go/TS file-fact cache stats instrumentation without layer-cache reuse
 - [x] 23-04-PLAN.md — Kernel run report with input snapshot and provider output metadata
-- [ ] 23-05-PLAN.md — Native eval fixture coverage and public-boundary proof
+- [x] 23-05-PLAN.md — Native eval fixture coverage and public-boundary proof
 
 **Success criteria:**
 1. `InputSnapshot`, `Digest`, `LayerKey`, `QueryKey`, `SummaryKey`, and `DiagnosticKey` exist internally.
