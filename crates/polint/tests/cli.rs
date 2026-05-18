@@ -44,6 +44,7 @@ fn top_level_help_only_lists_supported_public_commands() {
         "baseline",
         "cache",
         "inspect",
+        "test",
         "check",
         "ignores",
     ] {
@@ -239,6 +240,175 @@ fn main() -> ExitCode {
         r#"import value from "./value";
 export const answer = `${value}`;
 "#,
+    );
+}
+
+#[test]
+fn polint_test_runs_temp_repo_fixtures() {
+    let temp = tempfile::tempdir().unwrap();
+    write_polint_test_rule_repo(temp.path(), "design token");
+
+    let pass_stdout = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let pass_report: serde_json::Value = serde_json::from_str(&pass_stdout)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{pass_stdout}"));
+    assert_eq!(pass_report["summary"]["total"], 1);
+    assert_eq!(pass_report["summary"]["failed"], 0);
+    assert_eq!(pass_report["cases"][0]["rule"], "local/no-raw-colors");
+    assert_eq!(pass_report["cases"][0]["case"], "basic");
+    assert_eq!(pass_report["cases"][0]["status"], "passed");
+
+    assert_rule_test_json_is_public(&pass_stdout, temp.path());
+
+    write_polint_test_rule_repo(temp.path(), "does not match");
+    let fail_stdout = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .failure(),
+    );
+    let fail_report: serde_json::Value = serde_json::from_str(&fail_stdout)
+        .unwrap_or_else(|error| panic!("stdout was not failing test JSON: {error}\n{fail_stdout}"));
+    assert_eq!(fail_report["summary"]["total"], 1);
+    assert_eq!(fail_report["summary"]["failed"], 1);
+    assert_eq!(fail_report["cases"][0]["status"], "failed");
+    assert!(
+        fail_report["cases"][0]["failures"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("was not observed"),
+        "failing report should explain mismatch: {fail_stdout}"
+    );
+
+    assert_rule_test_json_is_public(&fail_stdout, temp.path());
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("polint::runner::run_cli"));
+    for forbidden in [
+        concat!("polint::", "core"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "test fixture rule must use only public authoring API `{forbidden}`:\n{source}"
+        );
+    }
+}
+
+fn assert_rule_test_json_is_public(json: &str, root: &Path) {
+    for marker in [
+        "AnalysisDb",
+        "KernelRunReport",
+        "ProviderOutputMeta",
+        "POLINT_RULES_TARGET_DIR",
+        "rules-target",
+        ".polint/cache",
+        "tempdir",
+        "source_text",
+    ] {
+        assert!(
+            !json.contains(marker),
+            "polint test JSON must not leak `{marker}`:\n{json}"
+        );
+    }
+    let root_marker = root.to_string_lossy().to_string();
+    assert!(
+        !json.contains(&root_marker),
+        "polint test JSON must not leak fixture repo root `{root_marker}`:\n{json}"
+    );
+}
+
+fn write_polint_test_rule_repo(root: &Path, message_contains: &str) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r##"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-raw-colors",
+    description = "Reject raw color literals.",
+    severity = "warn"
+)]
+fn no_raw_colors(ctx: &mut RuleCtx<'_>, literals: StringLiterals<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for literal in literals.iter() {
+        if literal.value.contains("#") {
+            let file = ctx.file_path(literal.file);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                file,
+                literal.span.diagnostic_range(),
+                "Use a design token instead of raw color literal.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![no_raw_colors()])
+}
+"##,
+    );
+    write_file(
+        &root.join(".polint/tests/rules/no_raw_colors/basic/polint-test.toml"),
+        &format!(
+            r#"
+rule = "local/no-raw-colors"
+paths = ["src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/no-raw-colors"
+file = "src/example.ts"
+severity = "warn"
+message_contains = "{message_contains}"
+"#
+        ),
+    );
+    write_file(
+        &root.join(".polint/tests/rules/no_raw_colors/basic/src/example.ts"),
+        r##"export const color = "#ff00aa";
+"##,
     );
 }
 

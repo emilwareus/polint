@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json",
+  "title": "polint test report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "schema", "tool", "summary", "cases"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "schema": {
+      "type": "string",
+      "const": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "failed", "total"],
+      "properties": {
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "case",
+        "status",
+        "expected_diagnostics",
+        "observed_diagnostics",
+        "failures"
+      ],
+      "properties": {
+        "rule": {
+          "type": "string"
+        },
+        "case": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed"]
+        },
+        "expected_diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/expected_diagnostic"
+          }
+        },
+        "observed_diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/observed_diagnostic"
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/failure"
+          }
+        }
+      }
+    },
+    "expected_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "file", "severity"],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "message_contains": {
+          "type": ["string", "null"]
+        },
+        "range_start_line": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "range_start_column": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "observed_diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "file",
+        "severity",
+        "message",
+        "range_start_line",
+        "range_start_column"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "message": {
+          "type": "string"
+        },
+        "range_start_line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "range_start_column": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

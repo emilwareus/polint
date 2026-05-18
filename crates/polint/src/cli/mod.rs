@@ -18,6 +18,7 @@ use crate::diagnostics::{
 use crate::fs::load_analysis_files;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
 use crate::rule_manifest::InspectRuleReport;
+use crate::rule_test::{RuleTestOptions, render_rule_test_human, run_rule_tests};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -159,6 +160,8 @@ enum Command {
     Cache(CacheArgs),
     /// Inspect polint configuration and repo-local rule manifests.
     Inspect(InspectArgs),
+    /// Run repo-local rule fixture tests.
+    Test(TestArgs),
     /// Run enabled rules.
     Check(CheckArgs),
     /// Inspect polint comment-ignore directives and suppression statistics.
@@ -205,6 +208,25 @@ struct InspectRuleArgs {
     /// Only include rules whose id matches this pattern.
     #[arg(long, value_name = "RULE_ID")]
     rule: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct TestArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = TestFormatArg::Human)]
+    format: TestFormatArg,
+    /// Only run fixture cases whose manifest rule id matches this pattern.
+    #[arg(long, value_name = "RULE_ID")]
+    rule: Option<String>,
+    /// Only run fixture cases with this case directory name.
+    #[arg(long, value_name = "CASE_NAME")]
+    case: Option<String>,
+    /// Disable analysis/fact cache reads and writes while running fixture checks.
+    #[arg(long)]
+    no_cache: bool,
+    /// Keep temporary fixture repositories on disk.
+    #[arg(long)]
+    keep_temp: bool,
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -384,6 +406,12 @@ enum InspectFormatArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum TestFormatArg {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CacheStatusFormatArg {
     Human,
     Json,
@@ -428,6 +456,7 @@ pub(crate) fn run() -> Result<u8> {
         Command::Baseline(args) => baseline(std::env::current_dir()?, &args),
         Command::Cache(args) => cache_command(std::env::current_dir()?, &args),
         Command::Inspect(args) => inspect(std::env::current_dir()?, &args),
+        Command::Test(args) => test(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
     }
@@ -828,6 +857,28 @@ fn inspect_rule(root: &Path, args: &InspectRuleArgs) -> Result<u8> {
         InspectFormatArg::Json => println!("{}", serde_json::to_string_pretty(&report)?),
     }
     Ok(0)
+}
+
+fn test(root: PathBuf, args: &TestArgs) -> Result<u8> {
+    let report = run_rule_tests(
+        &root,
+        RuleTestOptions {
+            rule: args.rule.clone(),
+            case: args.case.clone(),
+            no_cache: args.no_cache,
+            keep_temp: args.keep_temp,
+            rule_host_manifests: discover_local_rule_hosts(&root)?,
+        },
+    )?;
+    match args.format {
+        TestFormatArg::Human => print!("{}", render_rule_test_human(&report)),
+        TestFormatArg::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+    if report.summary.failed > 0 {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
 }
 
 fn render_inspect_rule_human(report: &InspectRuleReport) -> String {
