@@ -11,4 +11,9 @@ pub(crate) use digest::{Digest, DigestKind};
     unused_imports,
     reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
 )]
-pub(crate) use stats::CacheStats;
+pub(crate) use keys::{DiagnosticKey, LayerKey, PrecisionTier, QueryKey, SummaryKey};
+#[expect(
+    unused_imports,
+    reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
+)]
+pub(crate) use stats::{CacheStats, ProviderOutputMeta};

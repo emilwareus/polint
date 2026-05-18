@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use super::digest::Digest;
+use super::keys::PrecisionTier;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CacheStats {
     pub(crate) hits: u64,
@@ -46,11 +49,51 @@ impl CacheStats {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProviderOutputMeta {
+    pub(crate) provider_id: String,
+    pub(crate) provider_version: String,
+    pub(crate) schema_version: String,
+    pub(crate) output_digest: Digest,
+    pub(crate) precision: PrecisionTier,
+    pub(crate) validation: String,
+    pub(crate) dependency_inputs: Vec<Digest>,
+    pub(crate) cache_stats: CacheStats,
+}
+
+impl ProviderOutputMeta {
+    pub(crate) fn new(
+        provider_id: impl Into<String>,
+        provider_version: impl Into<String>,
+        schema_version: impl Into<String>,
+        output_digest: Digest,
+        precision: PrecisionTier,
+        validation: impl Into<String>,
+        dependency_inputs: Vec<Digest>,
+        cache_stats: CacheStats,
+    ) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            provider_version: provider_version.into(),
+            schema_version: schema_version.into(),
+            output_digest,
+            precision,
+            validation: validation.into(),
+            dependency_inputs: sorted_digests(dependency_inputs),
+            cache_stats,
+        }
+    }
+}
+
+fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
+    digests.sort();
+    digests
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::digest::{Digest, DigestKind};
-    use crate::analysis_kernel::incremental::keys::PrecisionTier;
 
     #[test]
     fn default_cache_stats_serialize_zero_counters() {

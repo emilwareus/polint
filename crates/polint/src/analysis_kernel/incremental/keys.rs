@@ -1,8 +1,214 @@
+use serde::{Deserialize, Serialize};
+
+use super::digest::{Digest, DigestKind};
+use crate::cache::{CACHE_VERSION, CacheKey};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LayerKind {
+    SourceFiles,
+    GoSyntax,
+    TsSyntax,
+    ModuleGraph,
+    SymbolGraph,
+    Metrics,
+    Extension,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrecisionTier {
+    Syntax,
+    SetupAware,
+    Exact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LayerKey {
+    pub(crate) layer_kind: LayerKind,
+    pub(crate) provider_id: String,
+    pub(crate) provider_version: String,
+    pub(crate) schema_version: String,
+    pub(crate) parameter_digest: Digest,
+    pub(crate) lifecycle_digest: Digest,
+    pub(crate) config_digest: Digest,
+    pub(crate) toolchain_digest: Digest,
+    pub(crate) input_digests: Vec<Digest>,
+    pub(crate) dependency_layer_digests: Vec<Digest>,
+    pub(crate) extension_digests: Vec<Digest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QueryKey {
+    pub(crate) query_kind: String,
+    pub(crate) query_version: String,
+    pub(crate) parameter_digest: Digest,
+    pub(crate) layer_digests: Vec<Digest>,
+    pub(crate) budget_digest: Digest,
+    pub(crate) precision_tier: PrecisionTier,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SummaryKey {
+    pub(crate) callable_stable_key: String,
+    pub(crate) summary_domain: String,
+    pub(crate) summary_version: String,
+    pub(crate) body_shape_digest: Digest,
+    pub(crate) dependency_summary_digests: Vec<Digest>,
+    pub(crate) extension_digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DiagnosticKey {
+    pub(crate) rule_id: String,
+    pub(crate) rule_version: String,
+    pub(crate) rule_code_digest: Digest,
+    pub(crate) options_digest: Digest,
+    pub(crate) requested_view_digests: Vec<Digest>,
+    pub(crate) evidence_digest: Digest,
+}
+
+impl LayerKey {
+    pub(crate) fn new(
+        layer_kind: LayerKind,
+        provider_id: impl Into<String>,
+        provider_version: impl Into<String>,
+        schema_version: impl Into<String>,
+        parameter_digest: Digest,
+        lifecycle_digest: Digest,
+        config_digest: Digest,
+        toolchain_digest: Digest,
+        input_digests: Vec<Digest>,
+        dependency_layer_digests: Vec<Digest>,
+        extension_digests: Vec<Digest>,
+    ) -> Self {
+        Self {
+            layer_kind,
+            provider_id: provider_id.into(),
+            provider_version: provider_version.into(),
+            schema_version: schema_version.into(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            toolchain_digest,
+            input_digests: sorted_digests(input_digests),
+            dependency_layer_digests: sorted_digests(dependency_layer_digests),
+            extension_digests: sorted_digests(extension_digests),
+        }
+    }
+
+    pub(crate) fn from_existing_file_cache(
+        layer_kind: LayerKind,
+        provider_id: impl Into<String>,
+        provider_version: impl Into<String>,
+        key: &CacheKey,
+    ) -> Self {
+        let version = if key.version.is_empty() {
+            CACHE_VERSION
+        } else {
+            key.version.as_str()
+        };
+        let compatibility_input_digests = vec![
+            Digest::from_parts(DigestKind::SourceText, "file_hash", &[&key.file_hash]),
+            Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
+            Digest::from_parts(DigestKind::RuleCode, "rule_hash", &[&key.rule_hash]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "plan_hash",
+                &[&key.plan_hash],
+            ),
+            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            Digest::from_parts(DigestKind::ProviderOutput, "schema", &[&key.schema]),
+        ];
+
+        Self::new(
+            layer_kind,
+            provider_id,
+            provider_version,
+            key.schema.clone(),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "existing_file_cache_parameters",
+                &[&key.rule_hash, &key.plan_hash],
+            ),
+            Digest::absent(DigestKind::DependencyLayer, "existing_file_cache_lifecycle"),
+            Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
+            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
+            compatibility_input_digests,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+}
+
+impl QueryKey {
+    pub(crate) fn new(
+        query_kind: impl Into<String>,
+        query_version: impl Into<String>,
+        parameter_digest: Digest,
+        layer_digests: Vec<Digest>,
+        budget_digest: Digest,
+        precision_tier: PrecisionTier,
+    ) -> Self {
+        Self {
+            query_kind: query_kind.into(),
+            query_version: query_version.into(),
+            parameter_digest,
+            layer_digests: sorted_digests(layer_digests),
+            budget_digest,
+            precision_tier,
+        }
+    }
+}
+
+impl SummaryKey {
+    pub(crate) fn new(
+        callable_stable_key: impl Into<String>,
+        summary_domain: impl Into<String>,
+        summary_version: impl Into<String>,
+        body_shape_digest: Digest,
+        dependency_summary_digests: Vec<Digest>,
+        extension_digest: Digest,
+    ) -> Self {
+        Self {
+            callable_stable_key: callable_stable_key.into(),
+            summary_domain: summary_domain.into(),
+            summary_version: summary_version.into(),
+            body_shape_digest,
+            dependency_summary_digests: sorted_digests(dependency_summary_digests),
+            extension_digest,
+        }
+    }
+}
+
+impl DiagnosticKey {
+    pub(crate) fn new(
+        rule_id: impl Into<String>,
+        rule_version: impl Into<String>,
+        rule_code_digest: Digest,
+        options_digest: Digest,
+        requested_view_digests: Vec<Digest>,
+        evidence_digest: Digest,
+    ) -> Self {
+        Self {
+            rule_id: rule_id.into(),
+            rule_version: rule_version.into(),
+            rule_code_digest,
+            options_digest,
+            requested_view_digests: sorted_digests(requested_view_digests),
+            evidence_digest,
+        }
+    }
+}
+
+fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
+    digests.sort();
+    digests
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::digest::{Digest, DigestKind};
-    use crate::cache::{CACHE_VERSION, CacheKey};
 
     fn digest(label: &str, value: &str) -> Digest {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
