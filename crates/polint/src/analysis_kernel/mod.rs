@@ -149,7 +149,10 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.symbol_graph"),
             module_dependency_output_digest,
-            vec![go_dependency_output_digest, ts_dependency_output_digest],
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
         );
         let capability_support = symbol_graph.support_view(&module_support);
         let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
@@ -162,11 +165,21 @@ impl AnalysisKernel {
             symbol_output_digest,
         ));
 
-        crate::metrics::derive_requested_metrics(&mut db, input.plan);
-        provider_outputs.push(Self::provider_output_for(
+        let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
+            &mut db,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.metrics"),
+            vec![go_dependency_output_digest, ts_dependency_output_digest],
+        );
+        let polint_metrics_cache_stats = metrics.cache_stats.clone();
+        let metrics_output_digest = metrics.output_digest.clone();
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.metrics",
             &db,
-            incremental::CacheStats::default(),
+            polint_metrics_cache_stats,
+            metrics_output_digest,
         ));
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());

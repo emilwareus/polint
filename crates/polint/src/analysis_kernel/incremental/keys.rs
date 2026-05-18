@@ -311,6 +311,49 @@ impl LayerKey {
             )],
         )
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Metrics layer identity must keep source, function, config, upstream, and provider inputs explicit."
+    )]
+    pub(crate) fn metrics_layer_key(
+        manifest: &ProviderManifest,
+        source_text_digests: Vec<Digest>,
+        function_fact_digests: Vec<Digest>,
+        config_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        metrics_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.metrics",
+            "metrics layer keys require the metrics provider manifest"
+        );
+
+        let mut input_digests =
+            Vec::with_capacity(source_text_digests.len() + function_fact_digests.len());
+        input_digests.extend(source_text_digests);
+        input_digests.extend(function_fact_digests);
+
+        Self::new(
+            LayerKind::Metrics,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            metrics_parameter_digest,
+            Digest::absent(DigestKind::ProviderParameters, "metrics_lifecycle"),
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain"),
+            input_digests,
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest)
+                .collect(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
 }
 
 impl QueryKey {
