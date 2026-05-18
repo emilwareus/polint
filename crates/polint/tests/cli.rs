@@ -43,6 +43,7 @@ fn top_level_help_only_lists_supported_public_commands() {
         "new-rule",
         "baseline",
         "cache",
+        "inspect",
         "check",
         "ignores",
     ] {
@@ -68,6 +69,176 @@ fn check_help_guides_ai_agents_to_compact_output() {
     assert!(
         help.contains(".polint/output/"),
         "check help should mention saved AI-friendly output path: {help}"
+    );
+}
+
+#[test]
+fn inspect_rule_manifest_json_is_stable_for_local_rules() {
+    let temp = tempfile::tempdir().unwrap();
+    write_inspect_rule_repo(temp.path());
+
+    let run_inspect = || {
+        stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["inspect", "rule", "--format", "json"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_inspect();
+    let second = run_inspect();
+
+    assert_eq!(
+        first, second,
+        "inspect JSON should be byte-identical across repeated runs"
+    );
+
+    let value: serde_json::Value = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{first}"));
+    assert_eq!(value["version"], 1);
+    assert_eq!(
+        value["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json"
+    );
+    assert_eq!(value["tool"]["name"], "polint");
+
+    let rules = value["rules"]
+        .as_array()
+        .unwrap_or_else(|| panic!("inspect rules should be an array: {value:#?}"));
+    assert_eq!(rules.len(), 1, "expected one inspected rule: {first}");
+    let rule = &rules[0];
+    assert_eq!(rule["rule_id"], "local/inspect-probe");
+    assert_eq!(rule["host_path"], ".polint/rules/Cargo.toml");
+    assert_eq!(rule["description"], "Inspect manifest probe.");
+
+    let fact_views = rule["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {rule:#?}"));
+    let fact_view_names = fact_views
+        .iter()
+        .map(|view| view["view_type"].as_str().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    assert!(fact_view_names.contains("Imports"));
+    assert!(fact_view_names.contains("StringLiterals"));
+    assert!(fact_views.iter().any(|view| {
+        view["canonical_path"] == "polint::sdk::facts::Imports<'_>"
+            && view["capability"] == "imports"
+            && view["parameter_name"] == "imports"
+    }));
+
+    let capabilities = rule["capabilities"]
+        .as_array()
+        .unwrap_or_else(|| panic!("capabilities should be an array: {rule:#?}"));
+    let capability_names = capabilities
+        .iter()
+        .map(|capability| capability["name"].as_str().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    assert!(capability_names.contains("imports"));
+    assert!(capability_names.contains("string_literals"));
+
+    assert_eq!(
+        rule["capability_support"][0]["status"], "supported",
+        "supported capability rows should be public strings: {rule:#?}"
+    );
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("polint::runner::run_cli"));
+    for forbidden in [
+        concat!("polint::", "core"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "inspect fixture must use only the public rule-authoring API `{forbidden}`:\n{source}"
+        );
+    }
+
+    for marker in [
+        "AnalysisKernel",
+        "LayerCache",
+        "ProviderOutputMeta",
+        "KernelRunReport",
+        "InputSnapshot",
+        "source_text",
+        "temp_root",
+    ] {
+        assert!(
+            !first.contains(marker),
+            "inspect JSON must not leak internal marker `{marker}`:\n{first}"
+        );
+    }
+    let temp_path_marker = temp.path().to_string_lossy().to_string();
+    assert!(
+        !first.contains(&temp_path_marker),
+        "inspect JSON must not leak temp root `{temp_path_marker}`:\n{first}"
+    );
+}
+
+fn write_inspect_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/inspect-probe",
+    description = "Inspect manifest probe.",
+    severity = "warn"
+)]
+fn inspect_probe(
+    _ctx: &mut RuleCtx<'_>,
+    imports: Imports<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
+    let _counts = (imports.iter().count(), literals.iter().count());
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![inspect_probe()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/app.ts"),
+        r#"import value from "./value";
+export const answer = `${value}`;
+"#,
     );
 }
 

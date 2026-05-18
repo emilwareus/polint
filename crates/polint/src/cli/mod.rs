@@ -9,7 +9,7 @@ use crate::cache::{
     CachePruneReport, CacheStatus, POLINT_CACHE_DIR_ENV,
 };
 use crate::config::{LoadedConfig, default_config_toml, load_config};
-use crate::core::{AnalysisDb, Language, Rule, RuleOptions, run_rules};
+use crate::core::{AnalysisDb, Language, Rule, RuleOptions, rule_id_matches, run_rules};
 use crate::diagnostics::{
     AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
     apply_report_filters, build_ai_friendly_report, diagnostics_from_json_report,
@@ -17,6 +17,7 @@ use crate::diagnostics::{
 };
 use crate::fs::load_analysis_files;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
+use crate::rule_manifest::InspectRuleReport;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -156,6 +157,8 @@ enum Command {
     Baseline(BaselineArgs),
     /// Inspect, prune, or clean polint caches.
     Cache(CacheArgs),
+    /// Inspect polint configuration and repo-local rule manifests.
+    Inspect(InspectArgs),
     /// Run enabled rules.
     Check(CheckArgs),
     /// Inspect polint comment-ignore directives and suppression statistics.
@@ -180,6 +183,28 @@ struct BaselineArgs {
 struct CacheArgs {
     #[command(subcommand)]
     command: CacheCommand,
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectArgs {
+    #[command(subcommand)]
+    command: InspectCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+enum InspectCommand {
+    /// Show registered repo-local rule manifests.
+    Rule(InspectRuleArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectRuleArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = InspectFormatArg::Human)]
+    format: InspectFormatArg,
+    /// Only include rules whose id matches this pattern.
+    #[arg(long, value_name = "RULE_ID")]
+    rule: Option<String>,
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -353,6 +378,12 @@ enum IgnoresFormatArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum InspectFormatArg {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CacheStatusFormatArg {
     Human,
     Json,
@@ -396,6 +427,7 @@ pub(crate) fn run() -> Result<u8> {
         }
         Command::Baseline(args) => baseline(std::env::current_dir()?, &args),
         Command::Cache(args) => cache_command(std::env::current_dir()?, &args),
+        Command::Inspect(args) => inspect(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
     }
@@ -762,6 +794,64 @@ fn cache_command(root: PathBuf, args: &CacheArgs) -> Result<u8> {
         CacheCommand::Prune(prune_args) => cache_prune(&layout, prune_args),
         CacheCommand::Clean(clean_args) => cache_clean(&layout, clean_args),
     }
+}
+
+fn inspect(root: PathBuf, args: &InspectArgs) -> Result<u8> {
+    match &args.command {
+        InspectCommand::Rule(rule_args) => inspect_rule(&root, rule_args),
+    }
+}
+
+fn inspect_rule(root: &Path, args: &InspectRuleArgs) -> Result<u8> {
+    let manifests = discover_local_rule_hosts(root)?;
+    let mut rules = Vec::new();
+    for manifest in &manifests {
+        let host_path = local_manifest_path(root, manifest);
+        let report = run_local_rule_host_inspect(root, manifest)?;
+        rules.extend(
+            report
+                .rules
+                .into_iter()
+                .map(|rule| rule.with_host_path(host_path.clone())),
+        );
+    }
+    if let Some(pattern) = &args.rule {
+        rules.retain(|rule| rule_id_matches(pattern, &rule.rule_id));
+        if rules.is_empty() {
+            anyhow::bail!("no registered rule matched `{pattern}`");
+        }
+    }
+
+    let report = InspectRuleReport::new("polint", env!("CARGO_PKG_VERSION"), rules);
+    match args.format {
+        InspectFormatArg::Human => print!("{}", render_inspect_rule_human(&report)),
+        InspectFormatArg::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+    Ok(0)
+}
+
+fn render_inspect_rule_human(report: &InspectRuleReport) -> String {
+    if report.rules.is_empty() {
+        return "No repo-local rules found.\n".to_string();
+    }
+    let mut out = String::new();
+    for rule in &report.rules {
+        let capabilities = if rule.capabilities.is_empty() {
+            "none".to_string()
+        } else {
+            rule.capabilities
+                .iter()
+                .map(|capability| capability.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let host = rule.host_path.as_deref().unwrap_or("<built-in>");
+        out.push_str(&format!(
+            "{} [{}] {}: {} (capabilities: {})\n",
+            rule.rule_id, rule.severity, host, rule.description, capabilities
+        ));
+    }
+    out
 }
 
 fn cache_status(layout: &CacheLayout, args: &CacheStatusArgs) -> Result<u8> {
@@ -1548,6 +1638,73 @@ fn run_local_rule_host(
             manifest.display()
         )
     })
+}
+
+fn run_local_rule_host_inspect(root: &Path, manifest: &Path) -> Result<InspectRuleReport> {
+    let cargo = std::env::var("POLINT_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
+    let cache_layout = CacheLayout::for_repo(root);
+    let mut command = ProcessCommand::new(&cargo);
+    command.current_dir(root).args(["run", "--quiet"]);
+    apply_local_rule_host_profile(&mut command);
+    command.args([
+        "--manifest-path",
+        manifest
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 manifest path: {}", manifest.display()))?,
+        "--",
+        "inspect",
+        "rule",
+        "--format",
+        "json",
+    ]);
+    command
+        .env(POLINT_CACHE_DIR_ENV, cache_layout.root())
+        .env("CARGO_TARGET_DIR", cache_layout.rules_target_dir());
+    if let Ok(toolchain) = std::env::var(rules_host_error::POLINT_RULES_TOOLCHAIN)
+        && !toolchain.is_empty()
+    {
+        command.env("RUSTUP_TOOLCHAIN", toolchain);
+    }
+
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to inspect local rule host {} with `{cargo}`",
+            manifest.display()
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(rules_host_error::rules_host_error_message(
+            &manifest.display().to_string(),
+            output.status,
+            stdout.as_ref(),
+            stderr.as_ref(),
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout).with_context(|| {
+        format!(
+            "local rule host emitted non-UTF-8 inspect output: {}",
+            manifest.display()
+        )
+    })?;
+    serde_json::from_str(&stdout).with_context(|| {
+        format!(
+            "local rule host did not emit polint inspect JSON: {}",
+            manifest.display()
+        )
+    })
+}
+
+fn local_manifest_path(root: &Path, manifest: &Path) -> String {
+    manifest
+        .strip_prefix(root)
+        .unwrap_or(manifest)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
