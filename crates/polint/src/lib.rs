@@ -22,6 +22,7 @@ pub(crate) mod cli;
 pub(crate) mod config;
 pub(crate) mod core;
 pub(crate) mod diagnostics;
+pub(crate) mod eval;
 pub(crate) mod fs;
 pub(crate) mod go;
 #[cfg(test)]

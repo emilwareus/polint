@@ -56,6 +56,152 @@ fn top_level_help_only_lists_supported_public_commands() {
     }
 }
 
+#[test]
+fn eval_harness_stays_internal() {
+    let temp = tempfile::tempdir().unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("eval")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'eval'"));
+
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export const answer = 42;
+"#,
+    );
+
+    let run_check = || {
+        stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_check();
+    let second = run_check();
+
+    assert_eq!(
+        first, second,
+        "public check JSON should stay byte-identical across repeated runs"
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{first}"));
+    assert!(
+        report.diagnostics.is_empty(),
+        "minimal public TS check should not emit diagnostics: {report:#?}"
+    );
+
+    for marker in INTERNAL_EVAL_PUBLIC_MARKERS {
+        assert!(
+            !first.contains(marker),
+            "public check JSON must not leak internal eval marker `{marker}`:\n{first}"
+        );
+    }
+
+    assert_eval_module_is_crate_private();
+    assert_eval_internals_are_absent_from_public_surfaces();
+}
+
+const INTERNAL_EVAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint-eval-internal-1",
+    "ExpectedItem",
+    "ObservedItem",
+    "MetricSummary",
+    "output_hash",
+    "provider_order.0",
+    "extension.synthetic_rejected_fact",
+];
+
+fn assert_eval_module_is_crate_private() {
+    let lib_rs_path = repo_root().join("crates/polint/src/lib.rs");
+    let lib_rs = fs::read_to_string(&lib_rs_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", lib_rs_path.display()));
+
+    assert!(
+        lib_rs.contains("pub(crate) mod eval;"),
+        "eval module should stay crate-private:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("pub mod eval"),
+        "eval module must not be promoted as a public crate-root module:\n{lib_rs}"
+    );
+}
+
+fn assert_eval_internals_are_absent_from_public_surfaces() {
+    let root = repo_root();
+    let mut public_surface = String::new();
+    for path in [
+        root.join("crates/polint/src/cli/mod.rs"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+    ] {
+        public_surface.push_str(&source_tree_text(&path));
+    }
+
+    for marker in [
+        "eval::",
+        "pub use crate::eval",
+        "pub mod eval",
+        "polint-eval-internal-1",
+        "ExpectedItem",
+        "ObservedItem",
+        "MetricSummary",
+        "output_hash",
+    ] {
+        assert!(
+            !public_surface.contains(marker),
+            "public CLI/SDK/runner surface must not expose eval marker `{marker}`"
+        );
+    }
+}
+
+fn source_tree_text(path: &Path) -> String {
+    if path.is_file() {
+        return fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read source file {}: {error}", path.display()));
+    }
+
+    let mut files = Vec::new();
+    collect_rust_files(path, &mut files);
+    files.sort();
+    files
+        .into_iter()
+        .map(|file| {
+            fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("read source file {}: {error}", file.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_rust_files(path: &Path, files: &mut Vec<PathBuf>) {
+    for entry in
+        fs::read_dir(path).unwrap_or_else(|error| panic!("read dir {}: {error}", path.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read dir entry under {}: {error}", path.display()))
+            .path();
+        if path.is_dir() {
+            collect_rust_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+}
+
 fn write_plan_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")

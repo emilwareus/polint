@@ -26,6 +26,8 @@ Phase 20 of v1.2 completed on 2026-05-16. Current source, Go syntax, TS/JS synta
 
 Phase 21 of v1.2 completed on 2026-05-17. Existing kernel-produced fact families now carry crate-private sidecar metadata for provenance, precision, confidence, validation status, stable keys, and deterministic merge validation, with internal debug JSON for files/imports/symbols/references and no public metadata surface.
 
+Phase 22 of v1.2 completed on 2026-05-17. polint now has a crate-private internal evaluation harness MVP with deterministic expected/observed JSON, total-order report normalization, output hashes that exclude transient runtime data, generic matchers, unified metrics, and native fixtures covering kernel, provenance, cache, and extension invariants, with no public CLI, SDK, runner, or check JSON surface.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -91,10 +93,10 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] Expose symbol/reference precision tiers and stable IDs suitable for diagnostics and cache restore. Validated in Phase 13: Symbols and References.
 - [x] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior. Validated in Phase 20: Private Analysis Kernel Facade.
 - [x] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation. Validated in Phase 21: Provenance, Precision, and Validation Metadata.
+- [x] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants. Validated in Phase 22: Internal Evaluation Harness MVP.
 
 ### Active
 
-- [ ] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
 - [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
 - [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
 - [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
@@ -154,6 +156,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - Static-analysis engine research and implementation sequencing live in `research/ROADMAP.md`.
 - Phase 20 completed on 2026-05-16 through GSD plan execution, code review, full workspace regression, and verification, closing the private analysis kernel facade and provider manifest foundation without promoting a public SDK or CLI provider surface.
 - Phase 21 completed on 2026-05-17 through GSD plan execution, code review, full workspace regression, and verification, closing provenance/precision/validation sidecar metadata and deterministic merge validation for current fact families without promoting a public metadata surface.
+- Phase 22 completed on 2026-05-17 through GSD plan execution, code review, post-review determinism fix, full workspace regression, and verification, closing the internal evaluation harness MVP without promoting a public eval CLI, SDK, runner, schema, or check JSON surface.
 
 ## Constraints
 
@@ -215,4 +218,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-17 after completing Phase 21 Provenance, Precision, and Validation Metadata*
+*Last updated: 2026-05-17 after completing Phase 22 Internal Evaluation Harness MVP*

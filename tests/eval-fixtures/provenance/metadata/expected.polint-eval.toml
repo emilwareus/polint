@@ -1,0 +1,18 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "provenance-metadata"
+area = "provenance"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 5000
+
+[[expected]]
+fact = { family = "SourceFile", stable_key = "src/app.ts", mode = "partial", producer_id = "polint.source", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "Import", stable_key = "./message", mode = "partial", producer_id = "polint.ts.syntax", precision = "syntax", status = "present" }
+
+[[expected]]
+runtime_budget = { name = "provenance.metadata", max_runtime_ms = 5000, mode = "exact" }

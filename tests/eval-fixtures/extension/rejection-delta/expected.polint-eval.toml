@@ -1,0 +1,64 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "extension-rejection-delta"
+area = "extension"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 5000
+
+[[expected]]
+diagnostic = { rule_id = "extension.synthetic.delta", relative_path = "src/app.ts", line = 4, mode = "tolerant" }
+
+[[expected]]
+diagnostic = { rule_id = "extension.synthetic.false_positive_trap", relative_path = "src/app.ts", line = 8, mode = "tolerant", false_positive_trap = true }
+
+[[expected]]
+fact = { family = "extension.synthetic", stable_key = "extension.synthetic_accepted_fact", mode = "exact", producer_id = "polint.extension.synthetic", precision = "synthetic", status = "accepted" }
+
+[[expected]]
+fact = { family = "extension.synthetic", stable_key = "extension.synthetic_rejected_fact", mode = "exact", producer_id = "polint.extension.synthetic", precision = "synthetic", status = "rejected" }
+
+[[expected]]
+graph_edge = { graph = "extension.delta", from = "default:fact", to = "extension:fact", mode = "exact", partial_truth = false }
+
+[[expected]]
+path = { path_id = "extension.synthetic_path", nodes = ["default:source", "extension:review", "extension:sink"], mode = "exact", partial_truth = false }
+
+[[expected]]
+invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "extension.real_sink_active", value = "false", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "extension.synthetic_delta", max_runtime_ms = 5000, mode = "exact" }
+
+[[observed]]
+diagnostic = { rule_id = "extension.synthetic.delta", relative_path = "src/app.ts", line = 5, fingerprint = "extension-delta", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "synthetic", status = "present" }
+
+[[observed]]
+diagnostic = { rule_id = "extension.synthetic.false_positive_trap", relative_path = "src/app.ts", line = 8, fingerprint = "extension-trap", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "synthetic", status = "present" }
+
+[[observed]]
+fact = { family = "extension.synthetic", stable_key = "extension.synthetic_accepted_fact", mode = "exact", producer_id = "polint.extension.synthetic", provenance = "synthetic_observed", precision = "synthetic", status = "accepted" }
+
+[[observed]]
+fact = { family = "extension.synthetic", stable_key = "extension.synthetic_rejected_fact", mode = "exact", producer_id = "polint.extension.synthetic", provenance = "synthetic_observed", precision = "synthetic", status = "rejected" }
+
+[[observed]]
+graph_edge = { graph = "extension.delta", from = "default:fact", to = "extension:fact", mode = "exact", partial_truth = false, producer_id = "polint.eval", provenance = "synthetic_observed", precision = "synthetic", status = "present" }
+
+[[observed]]
+path = { path_id = "extension.synthetic_path", nodes = ["default:source", "extension:review", "extension:sink"], mode = "exact", partial_truth = false, producer_id = "polint.eval", provenance = "synthetic_observed", precision = "synthetic", status = "present" }
+
+[[observed]]
+invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "extension.real_sink_active", value = "false", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+runtime_budget = { name = "extension.synthetic_delta", budget_passed = true, observed_runtime_ms = 7 }

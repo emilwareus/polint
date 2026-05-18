@@ -1,0 +1,24 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "provider-order"
+area = "kernel"
+
+[repo]
+path = "repo"
+
+[[expected]]
+invariant = { name = "provider_order.0", value = "polint.source", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.1", value = "polint.go.syntax", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.2", value = "polint.ts.syntax", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.3", value = "polint.module_graph", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.4", value = "polint.symbol_graph", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.5", value = "polint.metrics", mode = "exact" }
