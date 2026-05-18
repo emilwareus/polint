@@ -1,3 +1,349 @@
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Phase 24 establishes layer-cache persistence before providers read or write cached layers."
+    )
+)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, Serialize};
+
+use super::dependency_index::DependencyEdge;
+use super::digest::{Digest, DigestKind};
+use super::keys::{LayerKey, PrecisionTier};
+use crate::cache::stable_hash;
+
+pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-1";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct LayerCacheManifest {
+    pub(crate) manifest_schema: String,
+    pub(crate) key: LayerKey,
+    pub(crate) output_digest: Digest,
+    pub(crate) payload_digest: Digest,
+    pub(crate) created_by_polint: String,
+    pub(crate) dependencies: Vec<DependencyEdge>,
+    pub(crate) precision: PrecisionTier,
+    pub(crate) validation: String,
+    pub(crate) warnings: Vec<String>,
+}
+
+impl LayerCacheManifest {
+    pub(crate) fn new(
+        key: LayerKey,
+        output_digest: Digest,
+        payload_digest: Digest,
+        mut dependencies: Vec<DependencyEdge>,
+        precision: PrecisionTier,
+        validation: impl Into<String>,
+        mut warnings: Vec<String>,
+    ) -> Self {
+        dependencies.sort();
+        dependencies.dedup();
+        warnings.sort();
+        warnings.dedup();
+
+        Self {
+            manifest_schema: LAYER_CACHE_MANIFEST_SCHEMA.to_string(),
+            key,
+            output_digest,
+            payload_digest,
+            created_by_polint: env!("CARGO_PKG_VERSION").to_string(),
+            dependencies,
+            precision,
+            validation: validation.into(),
+            warnings,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LayerCacheStore {
+    root: PathBuf,
+    enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayerCacheReadStatus {
+    Hit,
+    Miss,
+    InvalidEvicted,
+    BypassedDisabled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LayerCacheReadOutcome<T> {
+    pub(crate) status: LayerCacheReadStatus,
+    pub(crate) manifest: Option<LayerCacheManifest>,
+    pub(crate) output_digest: Option<Digest>,
+    pub(crate) payload_digest: Option<Digest>,
+    pub(crate) value: Option<T>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayerCacheWriteStatus {
+    Written,
+    BypassedDisabled,
+}
+
+impl LayerCacheStore {
+    pub(crate) fn new(root: impl AsRef<Path>, enabled: bool) -> Self {
+        Self {
+            root: root.as_ref().to_path_buf(),
+            enabled,
+        }
+    }
+
+    pub(crate) fn payload_digest_for_json<T>(value: &T) -> Result<Digest>
+    where
+        T: Serialize,
+    {
+        let payload = serde_json::to_vec(value)?;
+        payload_digest_for_bytes(&payload)
+    }
+
+    pub(crate) fn read_json<T>(&self, key: &LayerKey) -> LayerCacheReadOutcome<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.read_json_validated(key, |_, _| true)
+    }
+
+    pub(crate) fn read_json_validated<T, F>(
+        &self,
+        key: &LayerKey,
+        validator: F,
+    ) -> LayerCacheReadOutcome<T>
+    where
+        T: for<'de> Deserialize<'de>,
+        F: FnOnce(&T, &LayerCacheManifest) -> bool,
+    {
+        if !self.enabled {
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::BypassedDisabled);
+        }
+
+        let Ok(manifest_path) = self.manifest_path(key) else {
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
+        };
+        if !manifest_path.exists() {
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
+        }
+
+        let Ok(raw_manifest) = fs::read_to_string(&manifest_path) else {
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
+        };
+        let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        if manifest.manifest_schema != LAYER_CACHE_MANIFEST_SCHEMA || manifest.key != *key {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        }
+
+        let Some(blob_path) = self.blob_path(&manifest.payload_digest) else {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        let Ok(payload_bytes) = fs::read(&blob_path) else {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        let Ok(payload_digest) = payload_digest_for_bytes(&payload_bytes) else {
+            evict_file(&manifest_path);
+            evict_file(&blob_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        if payload_digest != manifest.payload_digest {
+            evict_file(&manifest_path);
+            evict_file(&blob_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        }
+        let Ok(value) = serde_json::from_slice::<T>(&payload_bytes) else {
+            evict_file(&manifest_path);
+            evict_file(&blob_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        };
+        if !validator(&value, &manifest) {
+            evict_file(&manifest_path);
+            return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
+        }
+
+        LayerCacheReadOutcome {
+            status: LayerCacheReadStatus::Hit,
+            output_digest: Some(manifest.output_digest.clone()),
+            payload_digest: Some(payload_digest),
+            manifest: Some(manifest),
+            value: Some(value),
+        }
+    }
+
+    pub(crate) fn write_json<T>(
+        &self,
+        manifest: &LayerCacheManifest,
+        value: &T,
+    ) -> Result<LayerCacheWriteStatus>
+    where
+        T: Serialize,
+    {
+        if manifest.manifest_schema != LAYER_CACHE_MANIFEST_SCHEMA {
+            return Err(anyhow!("unsupported layer cache manifest schema"));
+        }
+        let payload_digest = Self::payload_digest_for_json(value)?;
+        if payload_digest != manifest.payload_digest {
+            return Err(anyhow!("layer cache payload digest mismatch"));
+        }
+        self.write_json_inner(&manifest.key, manifest, value)
+    }
+
+    fn write_json_inner<T>(
+        &self,
+        key: &LayerKey,
+        manifest: &LayerCacheManifest,
+        value: &T,
+    ) -> Result<LayerCacheWriteStatus>
+    where
+        T: Serialize,
+    {
+        if !self.enabled {
+            return Ok(LayerCacheWriteStatus::BypassedDisabled);
+        }
+
+        let payload_path = self
+            .blob_path(&manifest.payload_digest)
+            .ok_or_else(|| anyhow!("invalid layer cache payload digest path"))?;
+        let manifest_path = self.manifest_path(key)?;
+        fs::create_dir_all(self.blobs_dir())?;
+        fs::create_dir_all(self.manifests_dir())?;
+
+        let payload = serde_json::to_vec(value)?;
+        let payload_tmp = payload_path.with_extension("json.tmp");
+        fs::write(&payload_tmp, payload)
+            .with_context(|| format!("failed to write layer payload {}", payload_tmp.display()))?;
+        fs::rename(&payload_tmp, &payload_path).with_context(|| {
+            format!("failed to rename layer payload {}", payload_path.display())
+        })?;
+
+        self.write_manifest_last(&manifest_path, manifest)?;
+        Ok(LayerCacheWriteStatus::Written)
+    }
+
+    fn write_manifest_last(
+        &self,
+        manifest_path: &Path,
+        manifest: &LayerCacheManifest,
+    ) -> Result<()> {
+        let mut normalized = manifest.clone();
+        normalized.dependencies.sort();
+        normalized.dependencies.dedup();
+        normalized.warnings.sort();
+        normalized.warnings.dedup();
+
+        let manifest_tmp = manifest_path.with_extension("json.tmp");
+        fs::write(&manifest_tmp, serde_json::to_vec(&normalized)?).with_context(|| {
+            format!("failed to write layer manifest {}", manifest_tmp.display())
+        })?;
+        fs::rename(&manifest_tmp, manifest_path).with_context(|| {
+            format!(
+                "failed to rename layer manifest {}",
+                manifest_path.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn blobs_dir(&self) -> PathBuf {
+        self.root.join("blobs")
+    }
+
+    fn manifests_dir(&self) -> PathBuf {
+        self.root.join("manifests")
+    }
+
+    fn blob_path(&self, digest: &Digest) -> Option<PathBuf> {
+        if is_safe_digest_file_component(&digest.value) {
+            Some(self.blobs_dir().join(format!("{}.json", digest.value)))
+        } else {
+            None
+        }
+    }
+
+    fn manifest_path(&self, key: &LayerKey) -> Result<PathBuf> {
+        let key_json = serde_json::to_string(key)?;
+        Ok(self
+            .manifests_dir()
+            .join(format!("{}.json", stable_hash(&[&key_json]))))
+    }
+
+    #[cfg(test)]
+    fn blobs_dir_for_test(&self) -> PathBuf {
+        self.blobs_dir()
+    }
+
+    #[cfg(test)]
+    fn manifest_path_for_test(&self, key: &LayerKey) -> PathBuf {
+        self.manifest_path(key).expect("manifest path")
+    }
+
+    #[cfg(test)]
+    fn write_json_for_key_without_repair_for_test<T>(
+        &self,
+        key: &LayerKey,
+        manifest: &LayerCacheManifest,
+        value: &T,
+    ) -> Result<LayerCacheWriteStatus>
+    where
+        T: Serialize,
+    {
+        self.write_json_inner(key, manifest, value)
+    }
+
+    #[cfg(test)]
+    fn write_json_without_repair_for_test<T>(
+        &self,
+        manifest: &LayerCacheManifest,
+        value: &T,
+    ) -> Result<LayerCacheWriteStatus>
+    where
+        T: Serialize,
+    {
+        self.write_json_inner(&manifest.key, manifest, value)
+    }
+}
+
+impl<T> LayerCacheReadOutcome<T> {
+    fn without_value(status: LayerCacheReadStatus) -> Self {
+        Self {
+            status,
+            manifest: None,
+            output_digest: None,
+            payload_digest: None,
+            value: None,
+        }
+    }
+}
+
+fn payload_digest_for_bytes(payload: &[u8]) -> Result<Digest> {
+    let payload = std::str::from_utf8(payload).context("layer cache payload was not UTF-8")?;
+    Ok(Digest::from_parts(
+        DigestKind::LayerOutput,
+        "layer_cache_payload",
+        &[payload],
+    ))
+}
+
+fn is_safe_digest_file_component(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn evict_file(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,6 +386,10 @@ mod tests {
         }
     }
 
+    fn scratch_dir() -> tempfile::TempDir {
+        tempfile::TempDir::new().expect("scratch directory")
+    }
+
     fn manifest_for_payload(layer_key: LayerKey, payload: &Payload) -> LayerCacheManifest {
         LayerCacheManifest::new(
             layer_key.clone(),
@@ -54,8 +404,8 @@ mod tests {
 
     #[test]
     fn write_json_publishes_payload_before_manifest_and_read_returns_output_digest() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = LayerCacheStore::new(temp.path().join("layers"), true);
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
         let payload = Payload {
             items: vec!["a".to_string(), "b".to_string()],
         };
@@ -80,8 +430,8 @@ mod tests {
 
     #[test]
     fn corrupt_payload_manifest_and_mismatches_return_controlled_invalid_reads() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = LayerCacheStore::new(temp.path().join("layers"), true);
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
         let payload = Payload {
             items: vec!["a".to_string()],
         };
@@ -114,8 +464,8 @@ mod tests {
 
     #[test]
     fn mismatched_manifest_key_schema_payload_digest_and_validator_do_not_hit() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = LayerCacheStore::new(temp.path().join("layers"), true);
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
         let payload = Payload {
             items: vec!["a".to_string()],
         };
@@ -133,7 +483,7 @@ mod tests {
         let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
         manifest.key.provider_id = "other.provider".to_string();
         store
-            .write_json_without_repair_for_test(&manifest, &payload)
+            .write_json_for_key_without_repair_for_test(&layer_key, &manifest, &payload)
             .unwrap();
 
         let key_mismatch: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
@@ -191,8 +541,8 @@ mod tests {
 
     #[test]
     fn disabled_store_bypasses_reads_and_writes_without_filesystem_access() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("layers");
+        let scratch = scratch_dir();
+        let root = scratch.path().join("layers");
         let store = LayerCacheStore::new(&root, false);
         let payload = Payload {
             items: vec!["a".to_string()],

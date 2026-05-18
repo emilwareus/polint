@@ -254,11 +254,16 @@ impl CacheLayout {
         self.root.join("derived")
     }
 
+    pub(crate) fn layer_cache_dir(&self) -> PathBuf {
+        self.root.join("layers")
+    }
+
     pub(crate) fn status(&self) -> Result<CacheStatus> {
         let categories = vec![
             self.status_for("analysis", self.analysis_dir())?,
             self.status_for("rules-target", self.rules_target_dir())?,
             self.status_for("derived", self.derived_dir())?,
+            self.status_for("layers", self.layer_cache_dir())?,
         ];
         let total_bytes = categories.iter().map(|category| category.bytes).sum();
         let total_files = categories.iter().map(|category| category.files).sum();
@@ -288,6 +293,7 @@ impl CacheLayout {
                 CacheManagedCategory::Analysis,
                 CacheManagedCategory::RulesTarget,
                 CacheManagedCategory::Derived,
+                CacheManagedCategory::Layers,
             ],
             CacheCleanSelection::Category(category) => vec![category],
         };
@@ -318,6 +324,7 @@ impl CacheLayout {
                 CacheManagedCategory::Analysis,
                 CacheManagedCategory::RulesTarget,
                 CacheManagedCategory::Derived,
+                CacheManagedCategory::Layers,
             ]
         } else {
             options.categories.clone()
@@ -408,6 +415,7 @@ impl CacheLayout {
             CacheManagedCategory::Analysis => self.analysis_dir(),
             CacheManagedCategory::RulesTarget => self.rules_target_dir(),
             CacheManagedCategory::Derived => self.derived_dir(),
+            CacheManagedCategory::Layers => self.layer_cache_dir(),
         }
     }
 }
@@ -439,6 +447,7 @@ pub(crate) enum CacheManagedCategory {
     Analysis,
     RulesTarget,
     Derived,
+    Layers,
 }
 
 impl CacheManagedCategory {
@@ -447,6 +456,7 @@ impl CacheManagedCategory {
             Self::Analysis => "analysis",
             Self::RulesTarget => "rules-target",
             Self::Derived => "derived",
+            Self::Layers => "layers",
         }
     }
 }
