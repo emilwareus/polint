@@ -151,6 +151,49 @@ impl LayerKey {
             Vec::new(),
         )
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Syntax layer identity must keep parser inputs explicit and separate from downstream rule inputs."
+    )]
+    pub(crate) fn syntax_layer_key(
+        layer_kind: LayerKind,
+        provider_id: impl Into<String>,
+        provider_version: impl Into<String>,
+        schema_version: impl Into<String>,
+        source_text_digests: Vec<Digest>,
+        config_digest: Digest,
+        lifecycle_digest: Digest,
+        toolchain_digest: Digest,
+        parser_parameter_digest: Digest,
+    ) -> Self {
+        let provider_id = provider_id.into();
+        debug_assert!(
+            matches!(
+                (layer_kind, provider_id.as_str()),
+                (LayerKind::GoSyntax, "polint.go.syntax")
+                    | (LayerKind::TsSyntax, "polint.ts.syntax")
+            ),
+            "syntax layer keys are only defined for Go and TS/JS syntax providers"
+        );
+
+        Self::new(
+            layer_kind,
+            provider_id,
+            provider_version,
+            schema_version,
+            parser_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            toolchain_digest,
+            source_text_digests,
+            Vec::new(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
 }
 
 impl QueryKey {
@@ -282,10 +325,7 @@ mod tests {
         let rule_b = Digest::from_parts(DigestKind::RuleCode, "rule", &["b"]);
 
         assert_ne!(rule_a, rule_b);
-        assert_eq!(
-            syntax_key(vec![source.clone()]),
-            syntax_key(vec![source])
-        );
+        assert_eq!(syntax_key(vec![source.clone()]), syntax_key(vec![source]));
     }
 
     #[test]
