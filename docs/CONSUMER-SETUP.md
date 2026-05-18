@@ -48,6 +48,7 @@ not write another setup file into the repository.
 | `POLINT_CARGO` | Executable used to spawn repo-local rule hosts (default: `cargo` or `CARGO`). |
 | `POLINT_CACHE_DIR` | Optional cache root. Defaults to `.polint/cache` relative to the checked repository. |
 | `POLINT_GO_SYMBOLS` | Optional path to a `polint-go-symbols` binary or sidecar source directory. A binary can avoid requiring Go on `PATH`; a source directory still needs Go. |
+| `POLINT_RULES_PROFILE` | Cargo profile used for repo-local rule hosts. Defaults to `release`; set `dev` or `debug` for unoptimized rule-pack development, or any custom Cargo profile name. |
 | `POLINT_RULES_TARGET_DIR` | Optional Cargo target directory for repo-local rule hosts. Defaults to `$POLINT_CACHE_DIR/rules-target`. |
 | `POLINT_RULES_TOOLCHAIN` | When set to a non-empty value, forwarded as `RUSTUP_TOOLCHAIN` for the rules-host `cargo run` subprocess (parent `polint check` only). |
 | `NO_COLOR` | Disables ANSI colors when `--color auto`. |
@@ -91,6 +92,10 @@ polint cache clean
 analysis/fact cache reads and writes for that run. It does not disable the
 repo-local rule-host Cargo target cache; use `polint cache clean --category
 rules-target` when you need a fresh rule-host build.
+Repo-local rule hosts run optimized by default (`POLINT_RULES_PROFILE=release`)
+because rule execution can dominate large-repo scans. Use
+`POLINT_RULES_PROFILE=dev` when iterating on rule-pack code and compile latency
+matters more than scan latency.
 
 In GitHub Actions, prefer the official action, which installs polint and
 restores/saves `.polint/cache` by default:
