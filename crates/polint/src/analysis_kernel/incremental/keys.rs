@@ -226,6 +226,20 @@ mod tests {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
     }
 
+    fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
+        LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            source_text_digests,
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        )
+    }
+
     #[test]
     fn layer_key_constructor_sorts_variable_digest_lists() {
         let a = digest("file", "a");
@@ -259,6 +273,140 @@ mod tests {
         );
 
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn syntax_layer_key_ignores_rule_digest_changes() {
+        let source = digest("file", "src/main.go");
+        let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
+        let rule_b = Digest::from_parts(DigestKind::RuleCode, "rule", &["b"]);
+
+        assert_ne!(rule_a, rule_b);
+        assert_eq!(
+            syntax_key(vec![source.clone()]),
+            syntax_key(vec![source])
+        );
+    }
+
+    #[test]
+    fn syntax_layer_key_changes_when_parser_inputs_change() {
+        let source = digest("file", "src/main.go");
+        let base = syntax_key(vec![source.clone()]);
+
+        let changed_source = syntax_key(vec![digest("file", "src/other.go")]);
+        let changed_config = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_lifecycle = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["changed"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_toolchain = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_parser_params = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["changed"]),
+        );
+        let changed_provider_version = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "2",
+            "go-facts-v2",
+            base.input_digests.clone(),
+            base.config_digest.clone(),
+            base.lifecycle_digest.clone(),
+            base.toolchain_digest.clone(),
+            base.parameter_digest.clone(),
+        );
+        let changed_schema_version = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v3",
+            base.input_digests.clone(),
+            base.config_digest.clone(),
+            base.lifecycle_digest.clone(),
+            base.toolchain_digest.clone(),
+            base.parameter_digest.clone(),
+        );
+
+        for changed in [
+            changed_source,
+            changed_config,
+            changed_lifecycle,
+            changed_toolchain,
+            changed_parser_params,
+            changed_provider_version,
+            changed_schema_version,
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn syntax_layer_key_sorts_source_digest_inputs() {
+        let a = digest("file", "a");
+        let b = digest("file", "b");
+
+        let left = LayerKey::syntax_layer_key(
+            LayerKind::TsSyntax,
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            vec![b.clone(), a.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let right = LayerKey::syntax_layer_key(
+            LayerKind::TsSyntax,
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            vec![a, b],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+
+        assert_eq!(left, right);
+        assert!(left.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
     }
 
     #[test]
