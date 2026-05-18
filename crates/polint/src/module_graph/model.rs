@@ -1,14 +1,28 @@
 use crate::core::{
-    AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind,
-    ModuleNode, ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision,
-    ResolutionStatus, ResolvedImportFact, ResolvedImportId, UnresolvedReason,
+    AnalysisDb, CapabilitySupport, FileId, ImportFact, ImportId, Language, ModuleEdge,
+    ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, PackageFact, PackageId,
+    ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId, UnresolvedReason,
 };
+use crate::diagnostics::Diagnostic;
 use crate::module_graph::paths::normalize_repo_relative;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v1";
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphOutput {
+    pub(crate) nodes: Vec<ModuleNode>,
+    pub(crate) edges: Vec<ModuleEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ModuleGraphLayerPayload {
+    pub(crate) schema: String,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) resolved_imports: Vec<ResolvedImportFact>,
     pub(crate) nodes: Vec<ModuleNode>,
     pub(crate) edges: Vec<ModuleEdge>,
 }

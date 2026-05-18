@@ -55,9 +55,19 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
     repo_root: &Path,
     cache_enabled: bool,
 ) -> anyhow::Result<Vec<ObservedItem>> {
+    let plan = AnalysisPlan::empty();
+    observe_kernel_fixture_repo_with_plan_for_test(fixture, repo_root, cache_enabled, &plan)
+}
+
+#[cfg(test)]
+pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
+    fixture: &NativeFixture,
+    repo_root: &Path,
+    cache_enabled: bool,
+    plan: &AnalysisPlan,
+) -> anyhow::Result<Vec<ObservedItem>> {
     let started = Instant::now();
     let loaded = load_config(repo_root)?;
-    let plan = AnalysisPlan::empty();
     let config_digest = config_hash(&loaded);
     let rule_digest = rule_hash(&[], None, &BTreeMap::new());
     let cache = Cache::default_for_repo(repo_root, cache_enabled);
@@ -66,7 +76,7 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
         cache: &cache,
         config_digest: &config_digest,
         rule_digest: &rule_digest,
-        plan: &plan,
+        plan,
         parallel: true,
     })?;
     let elapsed = started.elapsed();
@@ -80,6 +90,7 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
     observed.extend(snapshot_invariants(&output.run_report));
     observed.extend(layer_key_invariants(&output.run_report));
     observed.extend(provider_output_invariants(&output.run_report));
+    observed.extend(layer_cache_invariants(&output.run_report));
     if let Some(budget) = &fixture.manifest.budget {
         observed.push(ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
             name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
@@ -278,6 +289,62 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
     }
 
     invariants
+}
+
+#[cfg(test)]
+fn layer_cache_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
+    let mut invariants = Vec::new();
+    for output in &run_report.provider_outputs {
+        if !is_layer_cache_provider(&output.provider_id) {
+            continue;
+        }
+        let prefix = format!("layer_cache.provider.{}", output.provider_id);
+        invariants.extend(layer_cache_stat_invariants(
+            &prefix,
+            &output.cache_stats,
+            "kernel.run_report.layer_cache.provider_outputs",
+        ));
+    }
+    invariants.extend(layer_cache_stat_invariants(
+        "layer_cache.aggregate",
+        &run_report.cache_stats,
+        "kernel.run_report.layer_cache.aggregate",
+    ));
+    invariants
+}
+
+#[cfg(test)]
+fn is_layer_cache_provider(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        "polint.go.syntax"
+            | "polint.ts.syntax"
+            | "polint.module_graph"
+            | "polint.symbol_graph"
+            | "polint.metrics"
+    )
+}
+
+#[cfg(test)]
+fn layer_cache_stat_invariants(
+    prefix: &str,
+    stats: &CacheStats,
+    provenance: &'static str,
+) -> Vec<ObservedItem> {
+    [
+        ("hits", stats.hits),
+        ("misses", stats.misses),
+        ("recomputes", stats.recomputes),
+        ("writes", stats.writes),
+        ("bypasses_disabled", stats.bypasses_disabled),
+        ("invalid_evicted_reads", stats.invalid_evicted_reads),
+        ("verified_reuse", stats.verified_reuse),
+    ]
+    .into_iter()
+    .map(|(counter, value)| {
+        observed_invariant(format!("{prefix}.{counter}"), value.to_string(), provenance)
+    })
+    .collect()
 }
 
 #[cfg(test)]

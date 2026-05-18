@@ -4,14 +4,24 @@ pub(crate) mod paths;
 pub(crate) mod query;
 pub(crate) mod ts;
 
+use crate::analysis_kernel::ProviderManifest;
+use crate::analysis_kernel::incremental::{
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
+    InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
+    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+};
 use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
     ImportFact, Language, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
-use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
+use model::{
+    MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
+    sort_packages,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +33,8 @@ const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
 pub(crate) struct ModuleGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
 }
 
 impl ModuleGraphDerivation {
@@ -42,7 +54,295 @@ impl ModuleGraphDerivation {
     }
 }
 
+pub(crate) fn module_graph_layer_key(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> LayerKey {
+    LayerKey::module_graph_layer_key(
+        manifest,
+        module_graph_import_shape_digests(db),
+        module_graph_source_package_digests(db),
+        config_digest,
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
+        upstream_syntax_output_digests,
+        module_graph_parameter_digest(),
+    )
+}
+
+pub(crate) fn module_graph_layer_dependency_edges(
+    db: &AnalysisDb,
+    key: &LayerKey,
+    manifest: &ProviderManifest,
+    upstream_syntax_output_digests: &[Digest],
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(key.clone());
+    let mut edges = Vec::new();
+
+    for file in sorted_files(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "source:{}:{}",
+                normalized_file_path(file),
+                file.content_hash
+            )),
+            DependencyKind::SourceText,
+            ShapeKind::Content,
+        ));
+    }
+
+    for package in sort_packages(db.packages(), db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "package:{}:{}:{}",
+                db.path_for(package.file),
+                language_cache_label(package.language),
+                package.name
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for import in sorted_imports(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "import:{}:{}:{}:{}",
+                db.path_for(import.file),
+                import.path,
+                import.span.start_byte,
+                language_cache_label(import.language)
+            )),
+            DependencyKind::ImportShape,
+            ShapeKind::Import,
+        ));
+    }
+
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("config:{}", config_digest)),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "provider_schema:{}:{}",
+            manifest.id,
+            manifest.primary_schema_label()
+        )),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input("toolchain:module_graph:absent".to_string()),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+
+    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Layer(upstream_syntax_layer_key(index, output_digest)),
+            DependencyKind::UpstreamLayer,
+            ShapeKind::Output,
+        ));
+    }
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+pub(crate) fn module_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
+    sorted_imports(db)
+        .into_iter()
+        .map(|import| {
+            let parts = [
+                db.path_for(import.file),
+                import.path.clone(),
+                import.package.clone().unwrap_or_default(),
+                import.span.start_byte.to_string(),
+                import.span.end_byte.to_string(),
+                language_cache_label(import.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &refs)
+        })
+        .collect()
+}
+
+pub(crate) fn module_graph_source_package_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let mut digests = sorted_files(db)
+        .into_iter()
+        .map(|file| {
+            let parts = [
+                normalized_file_path(file),
+                file.content_hash.clone(),
+                language_cache_label(file.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::SourceText, "source_package", &refs)
+        })
+        .collect::<Vec<_>>();
+    digests.extend(sort_packages(db.packages(), db).into_iter().map(|package| {
+        let parts = [
+            db.path_for(package.file),
+            package.name.clone(),
+            language_cache_label(package.language).to_string(),
+        ];
+        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        Digest::from_parts(DigestKind::ProviderParameters, "package_context", &refs)
+    }));
+    digests.sort();
+    digests
+}
+
+pub(crate) fn module_graph_parameter_digest() -> Digest {
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "module_graph_parameters",
+        &[
+            "resolver=go+ts",
+            "output=resolved_imports",
+            "output=module_nodes",
+            "output=module_edges",
+        ],
+    )
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Compatibility wrapper remains for direct in-crate module graph derivation callers while the kernel uses the stats-returning cache path."
+    )
+)]
 pub(crate) fn derive_requested_module_graph(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+) -> ModuleGraphDerivation {
+    derive_requested_module_graph_uncached(db, loaded, plan)
+}
+
+pub(crate) fn derive_requested_module_graph_with_cache_stats(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> ModuleGraphDerivation {
+    if !plan.requests_any_capability(MODULE_GRAPH_TRIGGER_CAPABILITIES) {
+        return ModuleGraphDerivation::default();
+    }
+
+    let config_digest = input_snapshot.config.digest.clone();
+    let go_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::GoLifecycle,
+        "module_graph_go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
+    let ts_js_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::TsJsLifecycle,
+        "module_graph_ts_js_lifecycle",
+        &input_snapshot.ts_js_lifecycle.components,
+    );
+    let layer_key = module_graph_layer_key(
+        db,
+        manifest,
+        config_digest.clone(),
+        go_lifecycle_digest.clone(),
+        ts_js_lifecycle_digest.clone(),
+        upstream_syntax_output_digests.clone(),
+    );
+    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let mut cache_stats = CacheStats::default();
+    let read = store
+        .read_json_validated::<ModuleGraphLayerPayload, _>(&layer_key, |payload, manifest| {
+            validate_module_graph_layer_payload(payload, manifest)
+        });
+
+    match read.status {
+        LayerCacheReadStatus::Hit => {
+            cache_stats.record_hit();
+            cache_stats.record_verified_reuse();
+            let payload = read
+                .value
+                .expect("layer cache hit should include module graph payload");
+            restore_module_graph_layer_payload(db, &payload);
+            ModuleGraphDerivation {
+                diagnostics: payload.diagnostics,
+                capability_support: payload.capability_support,
+                cache_stats,
+                output_digest: read.output_digest,
+            }
+        }
+        LayerCacheReadStatus::BypassedDisabled => {
+            cache_stats.record_disabled_bypass();
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
+            if read.status == LayerCacheReadStatus::Miss {
+                cache_stats.record_miss();
+            } else {
+                cache_stats.record_invalid_evicted_read();
+            }
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
+            let payload = module_graph_layer_payload(db, &derivation);
+            let dependencies = module_graph_layer_dependency_edges(
+                db,
+                &layer_key,
+                manifest,
+                &upstream_syntax_output_digests,
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+            );
+            derivation.output_digest = write_module_graph_layer_payload(
+                &store,
+                layer_key,
+                &payload,
+                dependencies,
+                &mut cache_stats,
+                &mut derivation.diagnostics,
+            );
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+    }
+}
+
+fn derive_requested_module_graph_uncached(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
@@ -180,10 +480,155 @@ pub(crate) fn derive_requested_module_graph(
     let capability_support =
         setup_missing_support(plan, saw_setup_missing, setup_missing_reason.as_deref());
     let diagnostics = setup_missing_diagnostics(&capability_support);
+    let output_digest = Some(module_graph_output_digest_for_payload(
+        &module_graph_layer_payload_parts(
+            &diagnostics,
+            &capability_support,
+            db.resolved_imports(),
+            db.module_nodes(),
+            db.module_edges(),
+        ),
+        None,
+    ));
     ModuleGraphDerivation {
         diagnostics,
         capability_support,
+        cache_stats: CacheStats::default(),
+        output_digest,
     }
+}
+
+fn lifecycle_component_digest(
+    kind: DigestKind,
+    label: &str,
+    components: &[InputComponent],
+) -> Digest {
+    Digest::from_unordered(
+        kind,
+        label,
+        components
+            .iter()
+            .map(|component| component.digest.clone())
+            .collect(),
+    )
+}
+
+fn module_graph_layer_payload(
+    db: &AnalysisDb,
+    derivation: &ModuleGraphDerivation,
+) -> ModuleGraphLayerPayload {
+    ModuleGraphLayerPayload {
+        schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        diagnostics: derivation.diagnostics.clone(),
+        capability_support: derivation.capability_support.clone(),
+        resolved_imports: db.resolved_imports().to_vec(),
+        nodes: db.module_nodes().to_vec(),
+        edges: db.module_edges().to_vec(),
+    }
+}
+
+fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraphLayerPayload) {
+    db.replace_module_graph_facts(
+        payload.resolved_imports.clone(),
+        payload.nodes.clone(),
+        payload.edges.clone(),
+    );
+}
+
+fn validate_module_graph_layer_payload(
+    payload: &ModuleGraphLayerPayload,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    payload.schema == MODULE_GRAPH_LAYER_SCHEMA
+        && manifest.output_digest
+            == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn write_module_graph_layer_payload(
+    store: &LayerCacheStore,
+    layer_key: LayerKey,
+    payload: &ModuleGraphLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Digest> {
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module graph layer", error));
+            return None;
+        }
+    };
+    let output_digest = module_graph_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest.clone(),
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        "native_trusted",
+        Vec::new(),
+    );
+
+    match store.write_json(&manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module graph layer", error)),
+    }
+    Some(output_digest)
+}
+
+fn module_graph_output_digest_for_payload(
+    payload: &ModuleGraphLayerPayload,
+    layer_key: Option<&LayerKey>,
+) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "module_graph", "json"));
+    if let Some(layer_key) = layer_key {
+        module_graph_output_digest(layer_key, &payload_digest)
+    } else {
+        Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "module_graph_layer_output",
+            &[&payload_digest.to_string()],
+        )
+    }
+}
+
+fn module_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
+    let layer_key_json =
+        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "module_graph_layer_output",
+        &[&payload_digest.to_string(), &layer_key_json],
+    )
+}
+
+fn module_graph_layer_payload_parts(
+    diagnostics: &[Diagnostic],
+    capability_support: &[CapabilitySupport],
+    resolved_imports: &[crate::core::ResolvedImportFact],
+    nodes: &[crate::core::ModuleNode],
+    edges: &[crate::core::ModuleEdge],
+) -> ModuleGraphLayerPayload {
+    ModuleGraphLayerPayload {
+        schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        diagnostics: diagnostics.to_vec(),
+        capability_support: capability_support.to_vec(),
+        resolved_imports: resolved_imports.to_vec(),
+        nodes: nodes.to_vec(),
+        edges: edges.to_vec(),
+    }
+}
+
+fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
+    Diagnostic::warning(
+        "internal/cache",
+        path,
+        TextRange::point(1, 1),
+        format!("cache write failed: {error}"),
+    )
 }
 
 fn setup_missing_reason_for_import(
@@ -217,6 +662,71 @@ fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::
             right.path.as_str(),
             right.id,
         ))
+}
+
+fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
+    let mut files = db.files().iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    files
+}
+
+fn sorted_imports(db: &AnalysisDb) -> Vec<&ImportFact> {
+    let mut imports = db.imports().iter().collect::<Vec<_>>();
+    imports.sort_by(|left, right| import_order(left, right, db));
+    imports
+}
+
+fn normalized_file_path(file: &SourceFile) -> String {
+    paths::normalize_repo_relative(&file.relative_path)
+        .unwrap_or_else(|| file.relative_path.clone())
+}
+
+fn dependency_edge(
+    from: &CacheNode,
+    to: CacheNode,
+    kind: DependencyKind,
+    required_shape: ShapeKind,
+) -> DependencyEdge {
+    DependencyEdge {
+        from: from.clone(),
+        to,
+        kind,
+        required_shape,
+    }
+}
+
+fn upstream_syntax_layer_key(index: usize, output_digest: Digest) -> LayerKey {
+    let (layer_kind, provider_id) = match index {
+        0 => (LayerKind::GoSyntax, "polint.go.syntax"),
+        1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
+        _ => (LayerKind::Extension, "polint.unknown_upstream"),
+    };
+    let output_dependency = dependency_layer_digest(output_digest);
+
+    LayerKey::new(
+        layer_kind,
+        provider_id,
+        "output-digest",
+        "output-digest",
+        output_dependency.clone(),
+        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
+        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
+        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
+        vec![output_dependency],
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn language_cache_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
 }
 
 fn seed_ts_project_module_nodes(
@@ -358,6 +868,9 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
+    use crate::analysis_kernel::incremental::{
+        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
+    };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -405,6 +918,94 @@ mod tests {
         load_config(root).expect("default config loads")
     }
 
+    fn collect_files(root: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        collect_files_into(root, &mut files);
+        files.sort();
+        files
+    }
+
+    fn collect_files_into(root: &Path, files: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("read cache entry").path();
+            if path.is_dir() {
+                collect_files_into(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+
+    fn first_layer_file(cache_root: &Path, category: &str) -> PathBuf {
+        collect_files(&cache_root.join("layers").join(category))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("expected layer cache {category} file"))
+    }
+
+    fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph provider manifest exists")
+    }
+
+    fn module_graph_key(db: &AnalysisDb) -> LayerKey {
+        super::module_graph_layer_key(
+            db,
+            module_graph_manifest(),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "go_syntax",
+                &["base"],
+            )],
+        )
+    }
+
+    fn module_graph_input_snapshot(
+        loaded: &crate::config::LoadedConfig,
+        db: &AnalysisDb,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+    ) -> InputSnapshot {
+        InputSnapshot::from_run_inputs(
+            loaded,
+            db,
+            config_digest,
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        )
+    }
+
+    fn derive_module_graph_with_cache(
+        db: &mut AnalysisDb,
+        loaded: &crate::config::LoadedConfig,
+        cache: &crate::cache::Cache,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+    ) -> super::ModuleGraphDerivation {
+        let snapshot = module_graph_input_snapshot(loaded, db, plan, config_digest);
+        super::derive_requested_module_graph_with_cache_stats(
+            db,
+            loaded,
+            plan,
+            cache,
+            &snapshot,
+            module_graph_manifest(),
+            vec![
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["stable"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
+            ],
+        )
+    }
+
     fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
         let path = root.join(relative_path);
         fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
@@ -436,6 +1037,263 @@ mod tests {
             span: span(file, start_byte),
             language: Language::TypeScript,
         })
+    }
+
+    #[test]
+    fn module_graph_layer_cache_cold_warm() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut first,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut first, app, "./tokens", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert!(first_result.diagnostics.is_empty());
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert_eq!(first_result.cache_stats.recomputes, 1);
+        assert_eq!(first_result.cache_stats.writes, 1);
+        assert!(first_result.output_digest.is_some());
+        assert_eq!(
+            first.resolved_imports()[0].status,
+            ResolutionStatus::Resolved
+        );
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut second,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut second, app, "./tokens", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert!(second_result.diagnostics.is_empty());
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(second_result.cache_stats.verified_reuse, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 0);
+        assert_eq!(second_result.cache_stats.writes, 0);
+        assert_eq!(second_result.output_digest, first_result.output_digest);
+        assert_eq!(
+            second.resolved_imports()[0].status,
+            ResolutionStatus::Resolved
+        );
+    }
+
+    #[test]
+    fn module_graph_layer_cache_invalidates_on_import_or_lifecycle_change() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "tsconfig.json", r#"{"compilerOptions":{}}"#);
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut first,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut first, app, "./tokens", 0);
+        let loaded = loaded_config_for(temp.path());
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        let mut changed_import = AnalysisDb::new();
+        let app = add_file(
+            &mut changed_import,
+            temp.path(),
+            "src/app.ts",
+            "import other from './other';\n",
+        );
+        add_file(
+            &mut changed_import,
+            temp.path(),
+            "src/other.ts",
+            "export const other = {};\n",
+        );
+        push_ts_import(&mut changed_import, app, "./other", 0);
+        let changed_import_result =
+            derive_module_graph_with_cache(&mut changed_import, &loaded, &cache, &plan, "config");
+
+        assert_eq!(changed_import_result.cache_stats.misses, 1);
+        assert_eq!(changed_import_result.cache_stats.recomputes, 1);
+        assert_ne!(
+            changed_import_result.output_digest,
+            first_result.output_digest
+        );
+
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        );
+        let reloaded = loaded_config_for(temp.path());
+        let mut changed_lifecycle = AnalysisDb::new();
+        let app = add_file(
+            &mut changed_lifecycle,
+            temp.path(),
+            "src/app.ts",
+            "import tokens from './tokens';\n",
+        );
+        add_file(
+            &mut changed_lifecycle,
+            temp.path(),
+            "src/tokens.ts",
+            "export const tokens = {};\n",
+        );
+        push_ts_import(&mut changed_lifecycle, app, "./tokens", 0);
+        let changed_lifecycle_result = derive_module_graph_with_cache(
+            &mut changed_lifecycle,
+            &reloaded,
+            &cache,
+            &plan,
+            "config",
+        );
+
+        assert_eq!(changed_lifecycle_result.cache_stats.misses, 1);
+        assert_eq!(changed_lifecycle_result.cache_stats.recomputes, 1);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_corrupt_recomputes_without_crashing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut first, app, "./missing", 0);
+        let loaded = loaded_config_for(temp.path());
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        assert!(first_result.diagnostics.is_empty());
+
+        let manifest = first_layer_file(&cache_root, "manifests");
+        fs::write(manifest, "{not-json").expect("corrupt manifest");
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut second, app, "./missing", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert!(second_result.diagnostics.is_empty());
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second_result.cache_stats.writes, 1);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_disabled_bypasses_without_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut db, app, "./missing", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let result = derive_module_graph_with_cache(&mut db, &loaded, &cache, &plan, "config");
+
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(result.cache_stats.bypasses_disabled, 1);
+        assert_eq!(result.cache_stats.recomputes, 1);
+        assert_eq!(result.cache_stats.writes, 0);
+        assert!(!cache_root.join("layers").exists());
+    }
+
+    #[test]
+    fn module_graph_dependency_edges_include_inputs_schema_lifecycle_and_upstream_layers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let file = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, file, "react", 0);
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file,
+            name: "app".to_string(),
+            span: span(file, 0),
+            language: Language::TypeScript,
+        });
+        let key = module_graph_key(&db);
+        let go_syntax_output =
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]);
+        let ts_syntax_output =
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]);
+
+        let edges = super::module_graph_layer_dependency_edges(
+            &db,
+            &key,
+            module_graph_manifest(),
+            &[go_syntax_output, ts_syntax_output],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+        );
+
+        let edge_kinds = edges.iter().map(|edge| edge.kind).collect::<Vec<_>>();
+        assert!(edge_kinds.contains(&DependencyKind::SourceText));
+        assert!(edge_kinds.contains(&DependencyKind::ImportShape));
+        assert!(edge_kinds.contains(&DependencyKind::Config));
+        assert!(edge_kinds.contains(&DependencyKind::Lifecycle));
+        assert!(edge_kinds.contains(&DependencyKind::ProviderSchema));
+        assert!(edge_kinds.contains(&DependencyKind::UpstreamLayer));
+        assert!(edges.iter().any(|edge| matches!(
+            (&edge.from, &edge.to, edge.required_shape),
+            (CacheNode::Layer(layer), CacheNode::Input(input), ShapeKind::Import)
+                if layer == &key && input.contains("import:src/app.ts:react")
+        )));
     }
 
     fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
@@ -520,6 +1378,7 @@ mod tests {
                 hint: None,
                 docs_path: None,
             }],
+            ..Default::default()
         };
         let base = CapabilitySupportView::new(vec![CapabilitySupport {
             capability: "module_graph".to_string(),

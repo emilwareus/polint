@@ -4,8 +4,11 @@ use crate::core::{AnalysisDb, BranchObligation, Language};
 use crate::diagnostics::TextRange;
 use crate::graph::ImportGraph;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CACHE_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
     let mut db = AnalysisDb::new();
@@ -18,11 +21,65 @@ fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
 }
 
 fn unique_cache_root() -> PathBuf {
+    let sequence = CACHE_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("polint-go-cache-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "polint-go-cache-{}-{nanos}-{sequence}",
+        std::process::id()
+    ))
+}
+
+fn collect_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_files_into(root, &mut files);
+    files.sort();
+    files
+}
+
+fn collect_files_into(root: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries {
+        let entry = entry.expect("read cache entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_into(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+fn first_layer_file(cache_root: &Path, category: &str) -> PathBuf {
+    collect_files(&cache_root.join("layers").join(category))
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("expected layer cache {category} file"))
+}
+
+fn layer_cache_text(cache_root: &Path) -> String {
+    collect_files(&cache_root.join("layers"))
+        .into_iter()
+        .map(|path| fs::read_to_string(path).expect("read layer cache file"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn corrupt_first_manifest_output_digest(cache_root: &Path) {
+    let manifest_path = first_layer_file(cache_root, "manifests");
+    let mut manifest_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("read manifest"))
+            .expect("manifest json");
+    manifest_json["output_digest"]["value"] = serde_json::json!("deadbeef");
+    fs::write(
+        manifest_path,
+        serde_json::to_vec(&manifest_json).expect("manifest serializes"),
+    )
+    .expect("write manifest");
 }
 
 #[test]
@@ -75,9 +132,9 @@ return nil
 }
 
 #[test]
-fn cache_stats_record_go_miss_write_and_hit() {
+fn go_syntax_layer_cache_cold_warm() {
     let cache_root = unique_cache_root();
-    let cache = crate::cache::Cache::new(&cache_root, true);
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
     let plan = AnalysisPlan::empty();
     let source = r#"
 package payment
@@ -96,6 +153,7 @@ func Authorize() {}
     assert_eq!(first_result.cache_stats.writes, 1);
     assert_eq!(first_result.cache_stats.verified_reuse, 0);
     assert_eq!(first_result.cache_stats.quarantines, 0);
+    assert!(cache_root.join("layers").exists());
 
     let mut second = db_with_go_file("payment.go", source);
     let second_result = analyze_with_plan_options_and_cache_stats(
@@ -109,6 +167,7 @@ func Authorize() {}
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.hits, 1);
+    assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
 
@@ -116,8 +175,75 @@ func Authorize() {}
 }
 
 #[test]
-fn cache_stats_record_go_disabled_bypasses_and_recomputes() {
-    let cache = crate::cache::Cache::new("", false);
+fn go_syntax_layer_cache_corrupt() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let source = "package main\nfunc main() {}\n";
+    let mut first = db_with_go_file("main.go", source);
+
+    let first_result = analyze_with_plan_options_and_cache_stats(
+        &mut first, &cache, "config", "rule", &plan, false,
+    );
+    assert!(first_result.diagnostics.is_empty());
+
+    let manifest = first_layer_file(&cache_root, "manifests");
+    fs::write(manifest, "{not-json").expect("corrupt manifest");
+
+    let mut second = db_with_go_file("main.go", source);
+    let second_result = analyze_with_plan_options_and_cache_stats(
+        &mut second,
+        &cache,
+        "config",
+        "changed-rule",
+        &plan,
+        false,
+    );
+
+    assert!(second_result.diagnostics.is_empty());
+    assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+    assert_eq!(second_result.cache_stats.recomputes, 1);
+    assert_eq!(second_result.cache_stats.writes, 1);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn go_syntax_layer_cache_output_digest_mismatch_recomputes() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let source = "package main\nfunc main() {}\n";
+    let mut first = db_with_go_file("main.go", source);
+
+    let first_result = analyze_with_plan_options_and_cache_stats(
+        &mut first, &cache, "config", "rule", &plan, false,
+    );
+    assert!(first_result.diagnostics.is_empty());
+    corrupt_first_manifest_output_digest(&cache_root);
+
+    let mut second = db_with_go_file("main.go", source);
+    let second_result = analyze_with_plan_options_and_cache_stats(
+        &mut second,
+        &cache,
+        "config",
+        "rule",
+        &plan,
+        false,
+    );
+
+    assert!(second_result.diagnostics.is_empty());
+    assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+    assert_eq!(second_result.cache_stats.recomputes, 1);
+    assert_eq!(second_result.cache_stats.writes, 1);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn go_syntax_layer_cache_disabled_bypass() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), false);
     let plan = AnalysisPlan::empty();
     let mut db = AnalysisDb::new();
     db.add_file(
@@ -135,9 +261,33 @@ fn cache_stats_record_go_disabled_bypasses_and_recomputes() {
         analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
 
     assert!(result.diagnostics.is_empty());
-    assert_eq!(result.cache_stats.bypasses_disabled, 2);
-    assert_eq!(result.cache_stats.recomputes, 2);
+    assert_eq!(result.cache_stats.bypasses_disabled, 1);
+    assert_eq!(result.cache_stats.recomputes, 1);
     assert_eq!(result.cache_stats.writes, 0);
+    assert!(!cache_root.join("layers").exists());
+}
+
+#[test]
+fn go_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let source = "package main\nfunc main() {}\n";
+    let mut db = db_with_go_file("main.go", source);
+
+    let result =
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+
+    assert!(result.diagnostics.is_empty());
+    assert!(
+        !collect_files(&cache_root.join("layers")).is_empty(),
+        "expected syntax layer cache files"
+    );
+    let cache_text = layer_cache_text(&cache_root);
+    assert!(!cache_text.contains("func main"));
+    assert!(!cache_text.contains(cache_root.to_string_lossy().as_ref()));
+
+    fs::remove_dir_all(cache_root).ok();
 }
 
 #[test]

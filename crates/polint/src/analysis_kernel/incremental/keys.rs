@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::digest::{Digest, DigestKind};
+use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -31,7 +32,7 @@ pub(crate) enum PrecisionTier {
     Exact,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
     pub(crate) layer_kind: LayerKind,
     pub(crate) provider_id: String,
@@ -46,7 +47,7 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Vec<Digest>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct QueryKey {
     pub(crate) query_kind: String,
     pub(crate) query_version: String,
@@ -56,7 +57,7 @@ pub(crate) struct QueryKey {
     pub(crate) precision_tier: PrecisionTier,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct SummaryKey {
     pub(crate) callable_stable_key: String,
     pub(crate) summary_domain: String,
@@ -66,7 +67,7 @@ pub(crate) struct SummaryKey {
     pub(crate) extension_digest: Digest,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct DiagnosticKey {
     pub(crate) rule_id: String,
     pub(crate) rule_version: String,
@@ -151,6 +152,204 @@ impl LayerKey {
             Vec::new(),
         )
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Syntax layer identity must keep parser inputs explicit and separate from downstream rule inputs."
+    )]
+    pub(crate) fn syntax_layer_key(
+        layer_kind: LayerKind,
+        provider_id: impl Into<String>,
+        provider_version: impl Into<String>,
+        schema_version: impl Into<String>,
+        source_text_digests: Vec<Digest>,
+        config_digest: Digest,
+        lifecycle_digest: Digest,
+        toolchain_digest: Digest,
+        parser_parameter_digest: Digest,
+    ) -> Self {
+        let provider_id = provider_id.into();
+        debug_assert!(
+            matches!(
+                (layer_kind, provider_id.as_str()),
+                (LayerKind::GoSyntax, "polint.go.syntax")
+                    | (LayerKind::TsSyntax, "polint.ts.syntax")
+            ),
+            "syntax layer keys are only defined for Go and TS/JS syntax providers"
+        );
+
+        Self::new(
+            layer_kind,
+            provider_id,
+            provider_version,
+            schema_version,
+            parser_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            toolchain_digest,
+            source_text_digests,
+            Vec::new(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Module graph layer identity must keep import, lifecycle, config, upstream, and provider parameters explicit."
+    )]
+    pub(crate) fn module_graph_layer_key(
+        manifest: &ProviderManifest,
+        import_shape_digests: Vec<Digest>,
+        source_package_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        module_graph_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.module_graph",
+            "module graph layer keys require the module graph provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_graph_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let mut input_digests =
+            Vec::with_capacity(2 + import_shape_digests.len() + source_package_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.extend(import_shape_digests);
+        input_digests.extend(source_package_digests);
+
+        Self::new(
+            LayerKind::ModuleGraph,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            module_graph_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "module_graph_toolchain"),
+            input_digests,
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest)
+                .collect(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Symbol graph layer identity must keep source, import, lifecycle, upstream, and provider inputs explicit."
+    )]
+    pub(crate) fn symbol_graph_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        package_context_digests: Vec<Digest>,
+        import_shape_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        symbol_graph_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.symbol_graph",
+            "symbol graph layer keys require the symbol graph provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "symbol_graph_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(
+            2 + source_function_digests.len()
+                + package_context_digests.len()
+                + import_shape_digests.len(),
+        );
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.extend(source_function_digests);
+        input_digests.extend(package_context_digests);
+        input_digests.extend(import_shape_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(1 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.push(dependency_layer_digest(module_graph_output_digest));
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+
+        Self::new(
+            LayerKind::SymbolGraph,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            symbol_graph_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "symbol_graph_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
+
+    pub(crate) fn metrics_layer_key(
+        manifest: &ProviderManifest,
+        source_text_digests: Vec<Digest>,
+        function_fact_digests: Vec<Digest>,
+        config_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        metrics_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.metrics",
+            "metrics layer keys require the metrics provider manifest"
+        );
+
+        let mut input_digests =
+            Vec::with_capacity(source_text_digests.len() + function_fact_digests.len());
+        input_digests.extend(source_text_digests);
+        input_digests.extend(function_fact_digests);
+
+        Self::new(
+            LayerKind::Metrics,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            metrics_parameter_digest,
+            Digest::absent(DigestKind::ProviderParameters, "metrics_lifecycle"),
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain"),
+            input_digests,
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest)
+                .collect(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
 }
 
 impl QueryKey {
@@ -218,12 +417,435 @@ fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
     digests
 }
 
+pub(crate) fn dependency_layer_digest(output_digest: Digest) -> Digest {
+    Digest::from_parts(
+        DigestKind::DependencyLayer,
+        "upstream_layer_output",
+        &[&output_digest.to_string()],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn digest(label: &str, value: &str) -> Digest {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
+    }
+
+    fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph provider manifest exists")
+    }
+
+    fn module_graph_key(
+        import_shape_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        config_digest: Digest,
+        upstream_syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::module_graph_layer_key(
+            module_graph_manifest(),
+            vec![import_shape_digest],
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_package",
+                &["src/app.ts", "hash", "pkg"],
+            )],
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+            vec![upstream_syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "module_graph_parameters",
+                &["resolver=default"],
+            ),
+        )
+    }
+
+    fn symbol_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn symbol_graph_key(
+        source_function_digest: Digest,
+        import_shape_digest: Digest,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::symbol_graph_layer_key(
+            symbol_graph_manifest(),
+            vec![source_function_digest],
+            vec![Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "package_context",
+                &["src/app.ts", "pkg"],
+            )],
+            vec![import_shape_digest],
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+            module_graph_output_digest,
+            vec![syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "symbol_graph_parameters",
+                &["symbols", "references"],
+            ),
+        )
+    }
+
+    fn metrics_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.metrics")
+            .expect("metrics provider manifest exists")
+    }
+
+    fn metrics_key(
+        source_digest: Digest,
+        function_digest: Digest,
+        config_digest: Digest,
+        syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::metrics_layer_key(
+            metrics_manifest(),
+            vec![source_digest],
+            vec![function_digest],
+            config_digest,
+            vec![syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "metrics_parameters",
+                &["file_metrics", "function_metrics", "complexity_metrics"],
+            ),
+        )
+    }
+
+    fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
+        LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            source_text_digests,
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        )
+    }
+
+    #[test]
+    fn module_graph_layer_key_changes_on_import_lifecycle_config_or_upstream_digest() {
+        let base = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_import = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["lodash"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_go_lifecycle = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_ts_lifecycle = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["changed"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_config = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_upstream = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "module-graph-facts-2:2".to_string();
+
+        for changed in [
+            changed_import,
+            changed_go_lifecycle,
+            changed_ts_lifecycle,
+            changed_config,
+            changed_upstream,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn module_graph_layer_key_ignores_rule_digest_changes() {
+        let base = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
+        let rule_b = Digest::from_parts(DigestKind::RuleOptions, "rule", &["b"]);
+
+        assert_ne!(rule_a, rule_b);
+        assert_eq!(
+            base,
+            module_graph_key(
+                Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+            )
+        );
+    }
+
+    #[test]
+    fn symbol_graph_layer_key_changes_on_source_import_lifecycle_config_or_upstream_digest() {
+        let base = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_source = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "changed"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_import = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["./other"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_config = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_go_lifecycle = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_module_output = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_syntax_output = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "symbol-graph-facts-2:2".to_string();
+
+        for changed in [
+            changed_source,
+            changed_import,
+            changed_config,
+            changed_go_lifecycle,
+            changed_module_output,
+            changed_syntax_output,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+        assert_eq!(base.layer_kind, LayerKind::SymbolGraph);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+    }
+
+    #[test]
+    fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
+        let base = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_source = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "changed"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_function = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "changed"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_config = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_syntax = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "metrics-facts-2:2".to_string();
+
+        for changed in [
+            changed_source,
+            changed_function,
+            changed_config,
+            changed_syntax,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+        assert_eq!(base.layer_kind, LayerKind::Metrics);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
     }
 
     #[test]
@@ -259,6 +881,137 @@ mod tests {
         );
 
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn syntax_layer_key_ignores_rule_digest_changes() {
+        let source = digest("file", "src/main.go");
+        let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
+        let rule_b = Digest::from_parts(DigestKind::RuleCode, "rule", &["b"]);
+
+        assert_ne!(rule_a, rule_b);
+        assert_eq!(syntax_key(vec![source.clone()]), syntax_key(vec![source]));
+    }
+
+    #[test]
+    fn syntax_layer_key_changes_when_parser_inputs_change() {
+        let source = digest("file", "src/main.go");
+        let base = syntax_key(vec![source.clone()]);
+
+        let changed_source = syntax_key(vec![digest("file", "src/other.go")]);
+        let changed_config = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_lifecycle = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["changed"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_toolchain = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let changed_parser_params = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v2",
+            vec![source],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["changed"]),
+        );
+        let changed_provider_version = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "2",
+            "go-facts-v2",
+            base.input_digests.clone(),
+            base.config_digest.clone(),
+            base.lifecycle_digest.clone(),
+            base.toolchain_digest.clone(),
+            base.parameter_digest.clone(),
+        );
+        let changed_schema_version = LayerKey::syntax_layer_key(
+            LayerKind::GoSyntax,
+            "polint.go.syntax",
+            "1",
+            "go-facts-v3",
+            base.input_digests.clone(),
+            base.config_digest.clone(),
+            base.lifecycle_digest.clone(),
+            base.toolchain_digest.clone(),
+            base.parameter_digest.clone(),
+        );
+
+        for changed in [
+            changed_source,
+            changed_config,
+            changed_lifecycle,
+            changed_toolchain,
+            changed_parser_params,
+            changed_provider_version,
+            changed_schema_version,
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn syntax_layer_key_sorts_source_digest_inputs() {
+        let a = digest("file", "a");
+        let b = digest("file", "b");
+
+        let left = LayerKey::syntax_layer_key(
+            LayerKind::TsSyntax,
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            vec![b.clone(), a.clone()],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+        let right = LayerKey::syntax_layer_key(
+            LayerKind::TsSyntax,
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            vec![a, b],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
+            Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
+        );
+
+        assert_eq!(left, right);
+        assert!(left.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
     }
 
     #[test]

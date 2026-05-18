@@ -281,6 +281,401 @@ fn assert_incremental_vocabulary_absent_from_public_surfaces() {
     }
 }
 
+#[test]
+fn syntax_cache_ignores_unrelated_rule_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    write_syntax_cache_rule_repo(temp.path(), "v1");
+
+    let cold = run_syntax_cache_check(temp.path(), cache.path());
+    let warm = run_syntax_cache_check(temp.path(), cache.path());
+    let warm_signatures = syntax_layer_manifest_signatures(cache.path());
+
+    assert!(
+        warm_signatures
+            .iter()
+            .any(|signature| signature.contains("polint.go.syntax")),
+        "expected Go syntax layer manifest: {warm_signatures:#?}"
+    );
+    assert!(
+        warm_signatures
+            .iter()
+            .any(|signature| signature.contains("polint.ts.syntax")),
+        "expected TS syntax layer manifest: {warm_signatures:#?}"
+    );
+
+    write_syntax_cache_rule_repo(temp.path(), "v2");
+    let after_rule_edit = run_syntax_cache_check(temp.path(), cache.path());
+    let after_rule_edit_signatures = syntax_layer_manifest_signatures(cache.path());
+
+    assert_eq!(warm, cold);
+    assert_eq!(after_rule_edit, cold);
+    assert_eq!(after_rule_edit_signatures, warm_signatures);
+
+    for public_json in [&cold, &warm, &after_rule_edit] {
+        assert_layer_cache_vocabulary_is_internal(public_json);
+        let report: polint::sdk::prelude::PolintReport = serde_json::from_str(public_json)
+            .unwrap_or_else(|error| {
+                panic!("stdout was not public check JSON: {error}\n{public_json}")
+            });
+        assert!(
+            report.diagnostics.is_empty(),
+            "syntax cache fixture should not emit diagnostics: {report:#?}"
+        );
+    }
+
+    let rule_source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(rule_source.contains("use polint::sdk::prelude::*;"));
+    assert!(rule_source.contains("polint::runner::run_cli"));
+}
+
+fn write_syntax_cache_rule_repo(root: &Path, marker: &str) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    let rule_source = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/syntax-cache-probe",
+    description = "Syntax cache probe __MARKER__.",
+    severity = "warn"
+)]
+fn syntax_cache_probe(_ctx: &mut RuleCtx<'_>, imports: Imports<'_>) -> RuleResult {
+    let _marker = "__MARKER__";
+    let _import_count = imports.iter().count();
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![syntax_cache_probe()])
+}
+"#
+    .replace("__MARKER__", marker);
+    write_file(&root.join(".polint/rules/src/main.rs"), &rule_source);
+    write_file(
+        &root.join("src/main.go"),
+        r#"package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("ok")
+}
+"#,
+    );
+    write_file(
+        &root.join("src/app.ts"),
+        r#"export function app() {
+  return "ok";
+}
+"#,
+    );
+}
+
+fn run_syntax_cache_check(root: &Path, cache_root: &Path) -> String {
+    let mut command = polint_cmd();
+    command.env("POLINT_CACHE_DIR", cache_root);
+    stdout_string(
+        command
+            .current_dir(root)
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    )
+}
+
+fn syntax_layer_manifest_signatures(cache_root: &Path) -> BTreeSet<String> {
+    let manifests_dir = cache_root.join("layers/manifests");
+    let mut paths = Vec::new();
+    collect_cache_json_paths(&manifests_dir, &mut paths);
+    paths
+        .into_iter()
+        .filter_map(|path| syntax_layer_manifest_signature(&path))
+        .collect()
+}
+
+fn syntax_layer_manifest_signature(path: &Path) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let provider_id = json.pointer("/key/provider_id")?.as_str()?;
+    if !matches!(provider_id, "polint.go.syntax" | "polint.ts.syntax") {
+        return None;
+    }
+    let output_kind = json.pointer("/output_digest/kind")?.as_str()?;
+    let output_value = json.pointer("/output_digest/value")?.as_str()?;
+    let file_name = path.file_name()?.to_string_lossy();
+    Some(format!(
+        "{provider_id}|{file_name}|{output_kind}:{output_value}"
+    ))
+}
+
+fn assert_layer_cache_vocabulary_is_internal(public_json: &str) {
+    for marker in [
+        "LayerCacheManifest",
+        "LayerCacheStore",
+        "LayerKey",
+        "provider_output.polint",
+        "verified_reuse",
+    ] {
+        assert!(
+            !public_json.contains(marker),
+            "public check JSON must not leak layer cache marker `{marker}`:\n{public_json}"
+        );
+    }
+}
+
+const INTERNAL_LAYER_CACHE_PUBLIC_MARKERS: &[&str] = &[
+    "LayerCacheManifest",
+    "LayerCacheStore",
+    "DependencyIndex",
+    "ChangeSet",
+    "InvalidationPlan",
+    "LayerKey",
+    "KernelRunReport",
+    "provider_output.polint",
+    "verified_reuse",
+    "invalid_evicted_reads",
+    "layer_cache",
+];
+
+#[test]
+fn layer_cache_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    write_layer_cache_public_rule_repo(temp.path());
+
+    let run_check = || {
+        let mut command = polint_cmd();
+        command.env("POLINT_CACHE_DIR", cache.path());
+        stdout_string(
+            command
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_check();
+    let second = run_check();
+
+    assert_eq!(
+        first, second,
+        "public check JSON should stay byte-identical across warm layer-cache runs"
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{first}"));
+    assert!(
+        report.diagnostics.is_empty(),
+        "layer-cache public fixture should not emit diagnostics: {report:#?}"
+    );
+
+    assert_layer_cache_public_json_is_private(&first);
+    assert_layer_cache_public_json_is_private(&second);
+    assert_layer_cache_public_surfaces_are_private();
+    assert_layer_cache_cli_help_is_private();
+
+    let rule_source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(rule_source.contains("use polint::sdk::prelude::*;"));
+    assert!(rule_source.contains("polint::runner::run_cli"));
+    for forbidden in [
+        concat!("polint::", "core"),
+        concat!("polint::", "analysis_kernel"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        "LayerCache",
+        "KernelRunReport",
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !rule_source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{rule_source}"
+        );
+    }
+}
+
+fn write_layer_cache_public_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/layer-cache-public-probe",
+    description = "Reads cached fact views without exposing cache internals.",
+    severity = "warn"
+)]
+fn layer_cache_public_probe(
+    _ctx: &mut RuleCtx<'_>,
+    imports: Imports<'_>,
+    module_graph: ModuleGraphFacts<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+    file_metrics: FileMetrics<'_>,
+    function_metrics: FunctionMetrics<'_>,
+    complexity_metrics: ComplexityMetrics<'_>,
+) -> RuleResult {
+    let _observed_counts = (
+        imports.iter().count(),
+        module_graph.nodes().len(),
+        module_graph.edges().len(),
+        symbols.iter().count(),
+        references.iter().count(),
+        file_metrics.iter().count(),
+        function_metrics.iter().count(),
+        complexity_metrics.iter().count(),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![layer_cache_public_probe()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/token.ts"),
+        r#"export const token = "ok";
+"#,
+    );
+    write_file(
+        &root.join("src/app.ts"),
+        r#"import { token } from "./token";
+
+export function answer(input: number) {
+  const localValue = token;
+  return `${localValue}:${input + 1}`;
+}
+
+export const value = answer(41);
+"#,
+    );
+}
+
+fn assert_layer_cache_public_json_is_private(public_json: &str) {
+    for marker in INTERNAL_LAYER_CACHE_PUBLIC_MARKERS {
+        assert!(
+            !public_json.contains(marker),
+            "public check JSON must not leak layer-cache marker `{marker}`:\n{public_json}"
+        );
+    }
+}
+
+fn assert_layer_cache_public_surfaces_are_private() {
+    let root = repo_root();
+    let mut public_surface = String::new();
+    for path in [
+        root.join("crates/polint/src/lib.rs"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&source_tree_text(&path));
+    }
+
+    for marker in INTERNAL_LAYER_CACHE_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public crate-root/CLI/SDK/runner source must not expose layer-cache marker `{marker}`"
+        );
+    }
+}
+
+fn assert_layer_cache_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["cache", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["cache", "status", "--help"])
+                .assert()
+                .success(),
+        ),
+    ];
+
+    for help in help_outputs {
+        let normalized = help.to_lowercase();
+        for marker in [
+            "layer cache",
+            "cache stats",
+            "provider output",
+            "provider outputs",
+            "dependency index",
+            "invalidation",
+            "verified reuse",
+            "invalid evicted",
+        ] {
+            assert!(
+                !normalized.contains(marker),
+                "public CLI help must not expose layer-cache internals `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
 fn source_tree_text(path: &Path) -> String {
     if path.is_file() {
         return fs::read_to_string(path)
@@ -4994,8 +5389,11 @@ go 1.24
         fs::write(
             &rule_path,
             rule_source
-                .replace("literals: StringLiterals<'_>", "jsx: JsxAttributes<'_>")
-                .replace("literals.iter().count()", "jsx.iter().count()"),
+                .replace(
+                    "literals: StringLiterals<'_>",
+                    "module_graph: ModuleGraphFacts<'_>",
+                )
+                .replace("literals.iter().count()", "module_graph.nodes().len()"),
         )
         .unwrap();
 
@@ -5396,7 +5794,7 @@ fn cache_status_reports_structured_cache_layout() {
     let categories = json["categories"].as_array().unwrap();
     assert_eq!(
         categories.len(),
-        3,
+        4,
         "unexpected cache categories: {json:#?}"
     );
     assert!(categories.iter().any(|category| {
@@ -5410,6 +5808,12 @@ fn cache_status_reports_structured_cache_layout() {
         categories
             .iter()
             .any(|category| { category["name"] == "rules-target" && category["files"] == 1 })
+    );
+    assert!(
+        categories.iter().any(|category| {
+            category["name"] == "layers" && category["exists"] == false && category["files"] == 0
+        }),
+        "cache status should report the managed layers category without requiring it to exist: {json:#?}"
     );
 }
 

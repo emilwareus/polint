@@ -40,13 +40,6 @@ impl CacheStats {
         self.invalid_evicted_reads += 1;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Verified reuse is a Phase 24+ cache counter; Phase 23 records it as an explicit zero unless tests exercise it."
-        )
-    )]
     pub(crate) fn record_verified_reuse(&mut self) {
         self.verified_reuse += 1;
     }

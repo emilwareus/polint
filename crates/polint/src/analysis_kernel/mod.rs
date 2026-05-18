@@ -79,11 +79,13 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let go_output_digest = go_output.output_digest.clone();
         diagnostics.extend(go_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.go.syntax",
             &db,
             go_output.cache_stats,
+            go_output_digest.clone(),
         ));
 
         let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
@@ -94,38 +96,91 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let ts_output_digest = ts_output.output_digest.clone();
         diagnostics.extend(ts_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.ts.syntax",
             &db,
             ts_output.cache_stats,
+            ts_output_digest.clone(),
         ));
 
-        let module_graph =
-            crate::module_graph::derive_requested_module_graph(&mut db, input.loaded, input.plan);
+        let go_dependency_output_digest = go_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.go.syntax")
+        });
+        let ts_dependency_output_digest = ts_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.ts.syntax")
+        });
+        let module_graph = crate::module_graph::derive_requested_module_graph_with_cache_stats(
+            &mut db,
+            input.loaded,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.module_graph"),
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
         let module_support = module_graph.support_view(input.plan.support_view());
+        // Keep polint.module_graph cache_stats internal to KernelRunReport.
+        let polint_module_graph_cache_stats = module_graph.cache_stats.clone();
+        let module_output_digest = module_graph.output_digest.clone();
         diagnostics.extend(module_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.module_graph",
             &db,
-            incremental::CacheStats::default(),
+            polint_module_graph_cache_stats,
+            module_output_digest.clone(),
         ));
 
-        let symbol_graph =
-            crate::symbol_graph::derive_requested_symbols(&mut db, input.loaded, input.plan);
+        let module_dependency_output_digest = module_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.module_graph",
+            )
+        });
+        let symbol_graph = crate::symbol_graph::derive_requested_symbols_with_cache_stats(
+            &mut db,
+            input.loaded,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.symbol_graph"),
+            module_dependency_output_digest,
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
         let capability_support = symbol_graph.support_view(&module_support);
+        let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
+        let symbol_output_digest = symbol_graph.output_digest.clone();
         diagnostics.extend(symbol_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.symbol_graph",
             &db,
-            incremental::CacheStats::default(),
+            polint_symbol_graph_cache_stats,
+            symbol_output_digest,
         ));
 
-        crate::metrics::derive_requested_metrics(&mut db, input.plan);
-        provider_outputs.push(Self::provider_output_for(
+        let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
+            &mut db,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.metrics"),
+            vec![go_dependency_output_digest, ts_dependency_output_digest],
+        );
+        let polint_metrics_cache_stats = metrics.cache_stats.clone();
+        let metrics_output_digest = metrics.output_digest;
+        diagnostics.extend(metrics.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.metrics",
             &db,
-            incremental::CacheStats::default(),
+            polint_metrics_cache_stats,
+            metrics_output_digest,
         ));
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
@@ -168,11 +223,22 @@ impl AnalysisKernel {
         db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
     ) -> incremental::ProviderOutputMeta {
+        Self::provider_output_for_with_optional_digest(provider_id, db, cache_stats, None)
+    }
+
+    fn provider_output_for_with_optional_digest(
+        provider_id: &'static str,
+        db: &AnalysisDb,
+        cache_stats: incremental::CacheStats,
+        output_digest: Option<incremental::Digest>,
+    ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
-        let output_digest = incremental::provider_output_digest_from_manifest(
-            manifest,
-            &provider_output_summary_parts(db, manifest),
-        );
+        let output_digest = output_digest.unwrap_or_else(|| {
+            incremental::provider_output_digest_from_manifest(
+                manifest,
+                &provider_output_summary_parts(db, manifest),
+            )
+        });
         incremental::provider_output_from_manifest(manifest, output_digest, cache_stats)
     }
 
@@ -535,6 +601,184 @@ mod tests {
         assert!(go.cache_stats.recomputes > 0);
         assert!(ts.cache_stats.bypasses_disabled > 0);
         assert!(ts.cache_stats.recomputes > 0);
+    }
+
+    #[test]
+    fn kernel_run_report_module_graph_row_carries_layer_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "import tokens from './tokens';\n",
+        )
+        .expect("write app");
+        std::fs::write(
+            temp.path().join("src/tokens.ts"),
+            "export const tokens = {};\n",
+        )
+        .expect("write tokens");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+
+        let first_module_graph = provider_output(&first, "polint.module_graph");
+        let second_module_graph = provider_output(&second, "polint.module_graph");
+
+        assert_eq!(first_module_graph.cache_stats.misses, 1);
+        assert_eq!(first_module_graph.cache_stats.recomputes, 1);
+        assert_eq!(first_module_graph.cache_stats.writes, 1);
+        assert_eq!(second_module_graph.cache_stats.hits, 1);
+        assert_eq!(second_module_graph.cache_stats.verified_reuse, 1);
+        assert_eq!(second_module_graph.cache_stats.recomputes, 0);
+        assert_eq!(
+            first_module_graph.output_digest,
+            second_module_graph.output_digest
+        );
+    }
+
+    #[test]
+    fn kernel_run_report_symbol_graph_row_carries_layer_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "export function answer() { return 42; }\nexport const value = answer();\n",
+        )
+        .expect("write app");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+
+        let first_symbol_graph = provider_output(&first, "polint.symbol_graph");
+        let second_symbol_graph = provider_output(&second, "polint.symbol_graph");
+
+        assert_eq!(first_symbol_graph.cache_stats.misses, 1);
+        assert_eq!(first_symbol_graph.cache_stats.recomputes, 1);
+        assert_eq!(first_symbol_graph.cache_stats.writes, 1);
+        assert_eq!(second_symbol_graph.cache_stats.hits, 1);
+        assert_eq!(second_symbol_graph.cache_stats.verified_reuse, 1);
+        assert_eq!(second_symbol_graph.cache_stats.recomputes, 0);
+        assert_eq!(
+            first_symbol_graph.output_digest,
+            second_symbol_graph.output_digest
+        );
+    }
+
+    #[test]
+    fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "export function answer() { return 42; }\n",
+        )
+        .expect("write app");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            "file_metrics",
+            "function_metrics",
+            "complexity_metrics",
+        ]);
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+
+        let first_metrics = provider_output(&first, "polint.metrics");
+        let second_metrics = provider_output(&second, "polint.metrics");
+
+        assert_eq!(first_metrics.cache_stats.misses, 1);
+        assert_eq!(first_metrics.cache_stats.recomputes, 1);
+        assert_eq!(first_metrics.cache_stats.writes, 1);
+        assert_eq!(second_metrics.cache_stats.hits, 1);
+        assert_eq!(second_metrics.cache_stats.verified_reuse, 1);
+        assert_eq!(second_metrics.cache_stats.recomputes, 0);
+        assert_eq!(first_metrics.output_digest, second_metrics.output_digest);
+    }
+
+    #[test]
+    fn kernel_surfaces_metrics_layer_cache_write_diagnostics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache_root = temp.path().join("cache");
+        std::fs::create_dir_all(&cache_root).expect("cache root");
+        std::fs::write(cache_root.join("layers"), "not a directory").expect("layer root file");
+        let cache = Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let metrics = provider_output(&output, "polint.metrics");
+
+        assert_eq!(metrics.cache_stats.misses, 1);
+        assert_eq!(metrics.cache_stats.recomputes, 1);
+        assert_eq!(metrics.cache_stats.writes, 0);
+        assert!(output.diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == "internal/cache"
+                && diagnostic.file == "metrics layer"
+                && diagnostic.message.contains("cache write failed")
+        }));
     }
 
     #[test]

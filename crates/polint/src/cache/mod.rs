@@ -110,7 +110,6 @@ impl Cache {
         Self::new(CacheLayout::for_repo(repo).analysis_dir(), enabled)
     }
 
-    #[cfg(test)]
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -118,6 +117,15 @@ impl Cache {
     #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn layer_cache_dir(&self) -> PathBuf {
+        if self.root.file_name().and_then(|name| name.to_str()) == Some("analysis")
+            && let Some(parent) = self.root.parent()
+        {
+            return parent.join("layers");
+        }
+        self.root.join("layers")
     }
 
     #[cfg(test)]
@@ -254,11 +262,16 @@ impl CacheLayout {
         self.root.join("derived")
     }
 
+    pub(crate) fn layer_cache_dir(&self) -> PathBuf {
+        self.root.join("layers")
+    }
+
     pub(crate) fn status(&self) -> Result<CacheStatus> {
         let categories = vec![
             self.status_for("analysis", self.analysis_dir())?,
             self.status_for("rules-target", self.rules_target_dir())?,
             self.status_for("derived", self.derived_dir())?,
+            self.status_for("layers", self.layer_cache_dir())?,
         ];
         let total_bytes = categories.iter().map(|category| category.bytes).sum();
         let total_files = categories.iter().map(|category| category.files).sum();
@@ -288,6 +301,7 @@ impl CacheLayout {
                 CacheManagedCategory::Analysis,
                 CacheManagedCategory::RulesTarget,
                 CacheManagedCategory::Derived,
+                CacheManagedCategory::Layers,
             ],
             CacheCleanSelection::Category(category) => vec![category],
         };
@@ -318,6 +332,7 @@ impl CacheLayout {
                 CacheManagedCategory::Analysis,
                 CacheManagedCategory::RulesTarget,
                 CacheManagedCategory::Derived,
+                CacheManagedCategory::Layers,
             ]
         } else {
             options.categories.clone()
@@ -408,6 +423,7 @@ impl CacheLayout {
             CacheManagedCategory::Analysis => self.analysis_dir(),
             CacheManagedCategory::RulesTarget => self.rules_target_dir(),
             CacheManagedCategory::Derived => self.derived_dir(),
+            CacheManagedCategory::Layers => self.layer_cache_dir(),
         }
     }
 }
@@ -439,6 +455,7 @@ pub(crate) enum CacheManagedCategory {
     Analysis,
     RulesTarget,
     Derived,
+    Layers,
 }
 
 impl CacheManagedCategory {
@@ -447,6 +464,7 @@ impl CacheManagedCategory {
             Self::Analysis => "analysis",
             Self::RulesTarget => "rules-target",
             Self::Derived => "derived",
+            Self::Layers => "layers",
         }
     }
 }
@@ -919,6 +937,12 @@ mod tests {
 
         assert_eq!(status.total_files, 2);
         assert_eq!(status.total_bytes, 8);
+        assert!(
+            status
+                .categories
+                .iter()
+                .any(|category| category.name == "layers")
+        );
     }
 
     #[test]
@@ -938,6 +962,23 @@ mod tests {
         assert_eq!(report.removed_files, 1);
         assert!(!layout.analysis_dir().exists());
         assert!(layout.root().join("unmanaged.json").exists());
+    }
+
+    #[test]
+    fn cache_layout_manages_layer_cache_category() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = CacheLayout::from_root(temp.path().join("cache"));
+        fs::create_dir_all(layout.layer_cache_dir()).unwrap();
+        fs::write(layout.layer_cache_dir().join("manifest.json"), "{}").unwrap();
+
+        let report = layout
+            .clean(CacheCleanSelection::Category(CacheManagedCategory::Layers))
+            .unwrap();
+
+        assert_eq!(layout.layer_cache_dir(), layout.root().join("layers"));
+        assert_eq!(CacheManagedCategory::Layers.name(), "layers");
+        assert_eq!(report.removed_files, 1);
+        assert!(!layout.layer_cache_dir().exists());
     }
 
     proptest! {

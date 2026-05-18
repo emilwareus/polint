@@ -2,26 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-18T06:01:08.819Z"
-last_activity: 2026-05-18 -- Phase 23 execution started
+status: planning
+last_updated: "2026-05-18T14:24:42.907Z"
+last_activity: 2026-05-18
 progress:
   total_phases: 22
-  completed_phases: 3
-  total_plans: 17
-  completed_plans: 12
-  percent: 71
+  completed_phases: 5
+  total_plans: 22
+  completed_plans: 22
+  percent: 100
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-16)
+See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 23 — Input Snapshots and Cache-Key Vocabulary
+**Current focus:** Phase 25 - Rule Manifest, Inspect, and Test Skeleton
 
 ## Current Status
 
@@ -33,16 +33,17 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 - v1.2 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.2 roadmap is defined in `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
+- Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Each v1.2 research PR maps to one GSD phase, in order, from Phase 20 through Phase 41.
 - New broad research is not needed by default. Use the relevant research documents referenced by each phase; do additional research only for a concrete implementation gap.
 
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 23
-Phase: 23 (Input Snapshots and Cache-Key Vocabulary) — EXECUTING
-Plan: 1 of 5
-Last activity: 2026-05-18 -- Phase 23 execution started
+Status: Ready to plan
+Phase: 25
+Plan: Not started
+Last activity: 2026-05-18
 
 ## Phase Progress
 
@@ -52,7 +53,7 @@ Last activity: 2026-05-18 -- Phase 23 execution started
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
 | 22 | Complete | 6/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance/cache/extension fixtures, fixture category coverage, and public-boundary proof done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
-| 24 | Pending | Persistent layer cache for existing cheap facts; requirement SAE-FND-05 |
+| 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Pending | Semantic index deepening; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
@@ -127,6 +128,26 @@ Last activity: 2026-05-18 -- Phase 23 execution started
 - [Phase 22-internal-evaluation-harness-mvp]: 22-06 keeps Phase 22 eval proof entirely test-facing with no public eval CLI, SDK export, runner entrypoint, or documented schema.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-06 proves suite category coverage by executing every native fixture manifest and requiring passing kernel, provenance, cache, and extension areas.
 - [Phase 22-internal-evaluation-harness-mvp]: 22-06 uses repeated minimal public check JSON output as the no-leak and determinism guard.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache persistence remains crate-private under analysis_kernel::incremental with no SDK, runner, CLI, or public JSON surface.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer payloads use digest-derived blob paths and manifests are published last under .polint/cache/layers.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Invalidation planning fails closed for unknown, schema, provider, lifecycle, toolchain, model, extension, and missing dependency cases.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Existing key structs derive ordering so CacheNode can support deterministic BTreeMap indexes.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Syntax layer identity excludes rule code, rule options, and downstream diagnostic identity; parser reuse is keyed by parser/source/config/lifecycle/provider inputs.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Go and TS/JS syntax layer payloads store normalized facts and parser diagnostics, not raw source bodies or absolute temp roots.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Adapter provider-output metadata reuses validated layer read output digests on hits and computes output digests after recompute misses.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Cache hit/miss/reuse counters remain internal; CLI compatibility is guarded by public PolintReport parsing and no-leak assertions.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache identity includes provider/schema, import shape, source/package, config, Go lifecycle, TS/JS lifecycle, absent toolchain/extension slots, and upstream Go/TS syntax output digests.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache hits restore normalized facts through AnalysisDb::replace_module_graph_facts instead of bypassing metadata normalization.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Disabled module graph caching records bypasses_disabled and recomputes without reading or writing layer-cache files.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Module graph cache stats remain internal to KernelRunReport and do not change public check JSON.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Symbol graph cache identity includes source/function/package/import inputs, lifecycle/config digests, module graph output digest, syntax output digests, provider/schema identity, and absent extension/toolchain slots.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Symbol graph and metrics cache hits restore normalized facts through existing AnalysisDb::replace_* paths so metadata and public SDK behavior stay compatible.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Metrics cache identity includes source/function inputs, upstream syntax output digests, provider/schema identity, config digest, and absent extension/toolchain slots.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Derived provider cache stats remain internal to KernelRunReport; public check JSON and SDK surfaces are unchanged.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache eval uses an explicit capability-requesting AnalysisPlan so all Phase 24 providers run through real cache paths.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: LayerCacheStore rejects invalid manifests before payload reads, including dependency-index schema drift and derived-layer manifests without dependency rows.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache internals remain test/eval-facing only; public JSON, CLI help, SDK, runner, and crate-root surfaces are guarded by integration tests.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: The public cache status contract includes the managed layers category but still does not expose layer-cache internals or provider stats.
 
 ## Execution Metrics
 
@@ -143,14 +164,17 @@ Last activity: 2026-05-18 -- Phase 23 execution started
 | 22-internal-evaluation-harness-mvp | 04 | 11 min | 2 | 12 |
 | 22-internal-evaluation-harness-mvp | 05 | 8 min | 1 | 9 |
 | 22-internal-evaluation-harness-mvp | 06 | 9 min | 1 | 4 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 01 | 13 min | 2 | 7 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 02 | 20 min | 3 | 10 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 03 | 16 min | 2 | 6 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 04 | 19 min | 2 | 7 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 05 | 28 min | 3 | 17 |
 
 ## Session
 
-- Last session: 2026-05-17
-- Stopped at: Completed 22-06-PLAN.md
+- Last session: 2026-05-18
+- Stopped at: Completed Phase 24 verification; Phase 25 ready for planning.
 
 ## Next Action
 
-Phase 22 is ready for verification:
-
-`/gsd-verify-work 22`
+Phase 25 is ready for planning.

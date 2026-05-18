@@ -28,6 +28,10 @@ Phase 21 of v1.2 completed on 2026-05-17. Existing kernel-produced fact families
 
 Phase 22 of v1.2 completed on 2026-05-17. polint now has a crate-private internal evaluation harness MVP with deterministic expected/observed JSON, total-order report normalization, output hashes that exclude transient runtime data, generic matchers, unified metrics, and native fixtures covering kernel, provenance, cache, and extension invariants, with no public CLI, SDK, runner, or check JSON surface.
 
+Phase 23 of v1.2 completed on 2026-05-18. polint now records internal input snapshots, typed cache/query/summary/diagnostic keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation, with no new public surface.
+
+Phase 24 of v1.2 completed on 2026-05-18. Existing cheap fact layers now persist through a crate-private layer cache for Go and TS/JS syntax, imports, module graph, symbol/reference, and metrics providers, with dependency indexes, change sets, deterministic hit/miss reporting, stale-reuse safeguards, and public no-leak proof.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -94,11 +98,11 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] **SAE-FND-01**: polint has a private analysis kernel facade with provider manifests for existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers, preserving current behavior. Validated in Phase 20: Private Analysis Kernel Facade.
 - [x] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation. Validated in Phase 21: Provenance, Precision, and Validation Metadata.
 - [x] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants. Validated in Phase 22: Internal Evaluation Harness MVP.
+- [x] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation. Validated in Phase 23: Input Snapshot and Cache Identity.
+- [x] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards. Validated in Phase 24: Persistent Layer Cache for Existing Cheap Facts.
 
 ### Active
 
-- [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
-- [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
 - [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
 - [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
 - [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.

@@ -1,0 +1,102 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "layer-cache"
+area = "cache"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 90000
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.go.syntax.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.ts.syntax.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.metrics.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.misses", value = "cold=5", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.writes", value = "cold=5", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.go.syntax.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.ts.syntax.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.metrics.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.hits", value = "warm=5", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.verified_reuse", value = "warm=5", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.go.syntax.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.ts.syntax.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.metrics.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.bypasses_disabled", value = "disabled=5", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.writes", value = "disabled=0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.disabled.no_new_files", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.go.syntax.hits", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.ts.syntax.misses", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.misses", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.misses", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.metrics.misses", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.hits", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.misses", value = "import_edit=4", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.invalid_evicted_reads", value = "import_edit=0", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "layer-cache", max_runtime_ms = 90000, mode = "exact" }
