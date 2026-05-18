@@ -179,6 +179,7 @@ mod tests {
         Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
         SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
+    use crate::analysis_kernel::incremental::{CacheStats, INPUT_SNAPSHOT_SCHEMA_VERSION};
     use std::path::PathBuf;
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
@@ -422,6 +423,133 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_records_input_snapshot_and_provider_outputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("main.go"), "package main\n").expect("write go");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "export const answer = 42;\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        assert_eq!(
+            output.run_report.input_snapshot.schema_version,
+            INPUT_SNAPSHOT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            output
+                .run_report
+                .provider_outputs
+                .iter()
+                .map(|row| row.provider_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ]
+        );
+    }
+
+    #[test]
+    fn syntax_provider_rows_carry_adapter_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("main.go"), "package main\n").expect("write go");
+        std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let go = provider_output(&output, "polint.go.syntax");
+        let ts = provider_output(&output, "polint.ts.syntax");
+
+        assert!(go.cache_stats.bypasses_disabled > 0);
+        assert!(go.cache_stats.recomputes > 0);
+        assert!(ts.cache_stats.bypasses_disabled > 0);
+        assert!(ts.cache_stats.recomputes > 0);
+    }
+
+    #[test]
+    fn source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        for provider_id in [
+            "polint.source",
+            "polint.module_graph",
+            "polint.symbol_graph",
+            "polint.metrics",
+        ] {
+            let row = provider_output(&output, provider_id);
+            assert_eq!(row.cache_stats, CacheStats::default());
+            assert!(!row.output_digest.value.is_empty());
+        }
+    }
+
+    #[test]
+    fn synthetic_manifest_consumption_helpers_are_removed_from_kernel() {
+        let source = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/analysis_kernel/mod.rs"),
+        )
+        .expect("read analysis kernel source");
+
+        for forbidden in [
+            "provider_manifest_metadata_token",
+            "provider_manifest_metadata_weight",
+            "provider_kind_weight",
+            "language_scope_weight",
+            "cache_policy_weight",
+            "precision_ceiling_weight",
+            "schema_version_weight",
+            "_manifest_metadata_token",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "synthetic manifest helper remains in kernel: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn run_propagates_file_loading_errors() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut loaded = load_config(temp.path()).expect("default config loads");
@@ -497,5 +625,17 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn provider_output<'a>(
+        output: &'a KernelOutput,
+        provider_id: &str,
+    ) -> &'a crate::analysis_kernel::incremental::ProviderOutputMeta {
+        output
+            .run_report
+            .provider_outputs
+            .iter()
+            .find(|row| row.provider_id == provider_id)
+            .unwrap_or_else(|| panic!("missing provider output row {provider_id}"))
     }
 }
