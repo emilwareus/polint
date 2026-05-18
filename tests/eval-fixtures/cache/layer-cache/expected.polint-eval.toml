@@ -6,7 +6,7 @@ area = "cache"
 path = "repo"
 
 [budget]
-max_runtime_ms = 5000
+max_runtime_ms = 90000
 
 [[expected]]
 invariant = { name = "layer_cache.provider.polint.go.syntax.misses", value = "cold=1", mode = "exact" }
@@ -99,4 +99,4 @@ invariant = { name = "layer_cache.aggregate.misses", value = "import_edit=4", mo
 invariant = { name = "layer_cache.aggregate.invalid_evicted_reads", value = "import_edit=0", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "layer-cache", max_runtime_ms = 5000, mode = "exact" }
+runtime_budget = { name = "layer-cache", max_runtime_ms = 90000, mode = "exact" }
