@@ -557,4 +557,137 @@ mod tests {
         assert_eq!(read.status, LayerCacheReadStatus::BypassedDisabled);
         assert!(!root.exists());
     }
+
+    #[test]
+    fn rejects_path_traversal_payload_digest() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+        manifest.payload_digest.value = "../outside".to_string();
+        store
+            .write_json_without_repair_for_test(&manifest, &payload)
+            .unwrap();
+
+        let outcome: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(outcome.status, LayerCacheReadStatus::InvalidEvicted);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_payload() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let manifest = manifest_for_payload(layer_key.clone(), &payload);
+        store.write_json(&manifest, &payload).unwrap();
+        let blob_path = store
+            .blobs_dir_for_test()
+            .join(format!("{}.json", manifest.payload_digest.value));
+        let outside_payload = scratch.path().join("outside-payload.json");
+        std::fs::write(
+            &outside_payload,
+            serde_json::to_vec(&payload).expect("payload serializes"),
+        )
+        .unwrap();
+        std::fs::remove_file(&blob_path).unwrap();
+        std::os::unix::fs::symlink(&outside_payload, &blob_path).unwrap();
+
+        let outcome: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(outcome.status, LayerCacheReadStatus::InvalidEvicted);
+    }
+
+    #[test]
+    fn schema_mismatch_output_digest_mismatch_dependency_index_schema_mismatch_and_missing_dependency_return_invalid()
+     {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+        manifest.dependency_index_schema = "old-dependency-index".to_string();
+        store.write_json(&manifest, &payload).unwrap();
+
+        let dependency_index_schema_mismatch: LayerCacheReadOutcome<Payload> =
+            store.read_json(&layer_key);
+
+        assert_eq!(
+            dependency_index_schema_mismatch.status,
+            LayerCacheReadStatus::InvalidEvicted
+        );
+
+        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+        manifest.output_digest = digest(DigestKind::ProviderOutput, "wrong-output");
+        store
+            .write_json_without_repair_for_test(&manifest, &payload)
+            .unwrap();
+
+        let output_digest_mismatch: LayerCacheReadOutcome<Payload> = store
+            .read_json_validated(&layer_key, |_, manifest| {
+                manifest.output_digest == digest(DigestKind::ProviderOutput, "output")
+            });
+
+        assert_eq!(
+            output_digest_mismatch.status,
+            LayerCacheReadStatus::InvalidEvicted
+        );
+
+        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+        manifest.dependencies.clear();
+        store.write_json(&manifest, &payload).unwrap();
+
+        let missing_dependency: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(
+            missing_dependency.status,
+            LayerCacheReadStatus::InvalidEvicted
+        );
+    }
+
+    #[test]
+    fn deserialization_wrong_shape_and_corrupt_payload_return_invalid() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let manifest = manifest_for_payload(layer_key.clone(), &payload);
+        store.write_json(&manifest, &payload).unwrap();
+        std::fs::write(
+            store
+                .blobs_dir_for_test()
+                .join(format!("{}.json", manifest.payload_digest.value)),
+            r#"{"items":"not-a-list"}"#,
+        )
+        .unwrap();
+
+        let wrong_shape: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(wrong_shape.status, LayerCacheReadStatus::InvalidEvicted);
+
+        let manifest = manifest_for_payload(layer_key.clone(), &payload);
+        store.write_json(&manifest, &payload).unwrap();
+        std::fs::write(
+            store
+                .blobs_dir_for_test()
+                .join(format!("{}.json", manifest.payload_digest.value)),
+            b"\xff\xfe\xfd",
+        )
+        .unwrap();
+
+        let corrupt_payload: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(corrupt_payload.status, LayerCacheReadStatus::InvalidEvicted);
+    }
 }
