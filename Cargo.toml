@@ -27,7 +27,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/emilwareus/polint"
 rust-version = "1.95"
-version = "0.1.12"
+version = "0.1.13"
 description = "polint workspace crate: multi-language repo-local static analysis (Go and TypeScript/JavaScript today)"
 
 [workspace.dependencies]
@@ -63,7 +63,7 @@ tree-sitter = "0.26.8"
 tree-sitter-go = "0.25.0"
 
 # Rule packs and tooling depend on the unified `polint` crate (path + version for publish).
-polint = { path = "crates/polint", version = "0.1.12" }
+polint = { path = "crates/polint", version = "0.1.13" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
