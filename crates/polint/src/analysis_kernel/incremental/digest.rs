@@ -1,3 +1,110 @@
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct Digest {
+    pub(crate) kind: DigestKind,
+    pub(crate) value: String,
+}
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DigestKind {
+    SourceText,
+    Config,
+    GoLifecycle,
+    TsJsLifecycle,
+    RuleCode,
+    RuleOptions,
+    ModelFile,
+    ExtensionCode,
+    ToolInvocation,
+    ProviderParameters,
+    ProviderOutput,
+    LayerOutput,
+    DependencyLayer,
+    QueryParameters,
+    Budget,
+    Evidence,
+    SummaryBody,
+    SummaryDependency,
+}
+
+impl Digest {
+    pub(crate) fn from_parts(kind: DigestKind, label: &str, parts: &[&str]) -> Self {
+        let kind_label = kind.as_str();
+        let mut encoded_parts = Vec::with_capacity(parts.len() + 1);
+        encoded_parts.push(length_prefixed_part("kind", kind_label));
+        encoded_parts.extend(parts.iter().map(|part| length_prefixed_part(label, part)));
+        let hash_parts = encoded_parts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+
+        Self {
+            kind,
+            value: crate::cache::stable_hash(&hash_parts),
+        }
+    }
+
+    pub(crate) fn from_unordered(
+        kind: DigestKind,
+        label: &str,
+        mut digests: Vec<Digest>,
+    ) -> Self {
+        digests.sort();
+        let digest_parts = digests.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let hash_parts = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+
+        Self::from_parts(kind, label, &hash_parts)
+    }
+
+    pub(crate) fn absent(kind: DigestKind, label: &str) -> Self {
+        Self::from_parts(kind, "absent", &[label])
+    }
+
+    pub(crate) fn unsupported(kind: DigestKind, label: &str, reason: &str) -> Self {
+        Self::from_parts(kind, "unsupported", &[label, reason])
+    }
+}
+
+impl DigestKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SourceText => "source_text",
+            Self::Config => "config",
+            Self::GoLifecycle => "go_lifecycle",
+            Self::TsJsLifecycle => "ts_js_lifecycle",
+            Self::RuleCode => "rule_code",
+            Self::RuleOptions => "rule_options",
+            Self::ModelFile => "model_file",
+            Self::ExtensionCode => "extension_code",
+            Self::ToolInvocation => "tool_invocation",
+            Self::ProviderParameters => "provider_parameters",
+            Self::ProviderOutput => "provider_output",
+            Self::LayerOutput => "layer_output",
+            Self::DependencyLayer => "dependency_layer",
+            Self::QueryParameters => "query_parameters",
+            Self::Budget => "budget",
+            Self::Evidence => "evidence",
+            Self::SummaryBody => "summary_body",
+            Self::SummaryDependency => "summary_dependency",
+        }
+    }
+}
+
+impl fmt::Display for Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.kind.as_str(), self.value)
+    }
+}
+
+fn length_prefixed_part(label: &str, value: &str) -> String {
+    format!("{}:{}={}:{}", label.len(), label, value.len(), value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31,5 +138,13 @@ mod tests {
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"value\""));
         assert_eq!(digest.to_string(), format!("source_text:{}", digest.value));
+    }
+
+    #[test]
+    fn absent_and_unsupported_helpers_are_explicit() {
+        assert_ne!(
+            Digest::absent(DigestKind::ToolInvocation, "go"),
+            Digest::unsupported(DigestKind::ToolInvocation, "go", "not on path")
+        );
     }
 }
