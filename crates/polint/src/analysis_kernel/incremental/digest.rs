@@ -7,9 +7,7 @@ pub(crate) struct Digest {
     pub(crate) value: String,
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DigestKind {
     SourceText,
@@ -38,10 +36,7 @@ impl Digest {
         let mut encoded_parts = Vec::with_capacity(parts.len() + 1);
         encoded_parts.push(length_prefixed_part("kind", kind_label));
         encoded_parts.extend(parts.iter().map(|part| length_prefixed_part(label, part)));
-        let hash_parts = encoded_parts
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
+        let hash_parts = encoded_parts.iter().map(String::as_str).collect::<Vec<_>>();
 
         Self {
             kind,
@@ -49,11 +44,7 @@ impl Digest {
         }
     }
 
-    pub(crate) fn from_unordered(
-        kind: DigestKind,
-        label: &str,
-        mut digests: Vec<Digest>,
-    ) -> Self {
+    pub(crate) fn from_unordered(kind: DigestKind, label: &str, mut digests: Vec<Digest>) -> Self {
         digests.sort();
         let digest_parts = digests.iter().map(ToString::to_string).collect::<Vec<_>>();
         let hash_parts = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();

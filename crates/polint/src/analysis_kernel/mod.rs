@@ -6,8 +6,8 @@ use crate::diagnostics::Diagnostic;
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
-mod metadata;
 pub(crate) mod incremental;
+mod metadata;
 mod provider;
 mod validation;
 

@@ -147,7 +147,11 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderOutput, "output", &["facts"]),
             PrecisionTier::Syntax,
             "native_trusted",
-            vec![Digest::from_parts(DigestKind::SourceText, "file", &["src/main.ts"])],
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "file",
+                &["src/main.ts"],
+            )],
             CacheStats::default(),
         );
         let json = serde_json::to_value(meta).expect("provider output metadata should serialize");

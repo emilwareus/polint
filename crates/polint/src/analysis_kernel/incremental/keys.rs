@@ -266,12 +266,35 @@ mod tests {
             &cache_key,
         );
 
-        assert_eq!(key.config_digest, Digest::from_parts(DigestKind::Config, "config_hash", &["config-hash"]));
-        assert!(key.input_digests.contains(&Digest::from_parts(DigestKind::SourceText, "file_hash", &["file-hash"])));
-        assert!(key.input_digests.contains(&Digest::from_parts(DigestKind::RuleCode, "rule_hash", &["rule-hash"])));
-        assert!(key.input_digests.contains(&Digest::from_parts(DigestKind::ProviderParameters, "plan_hash", &["plan-hash"])));
-        assert!(key.input_digests.contains(&Digest::from_parts(DigestKind::ToolInvocation, "version", &[CACHE_VERSION])));
-        assert!(key.input_digests.contains(&Digest::from_parts(DigestKind::ProviderOutput, "schema", &["ts-facts-v1"])));
+        assert_eq!(
+            key.config_digest,
+            Digest::from_parts(DigestKind::Config, "config_hash", &["config-hash"])
+        );
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::SourceText,
+            "file_hash",
+            &["file-hash"]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::RuleCode,
+            "rule_hash",
+            &["rule-hash"]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "plan_hash",
+            &["plan-hash"]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::ToolInvocation,
+            "version",
+            &[CACHE_VERSION]
+        )));
+        assert!(key.input_digests.contains(&Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "schema",
+            &["ts-facts-v1"]
+        )));
     }
 
     #[test]
@@ -311,8 +334,16 @@ mod tests {
         assert!(query_json.get("query_kind").is_some());
         assert!(summary_json.get("callable_stable_key").is_some());
         assert!(diagnostic_json.get("requested_view_digests").is_some());
-        assert!(query_json["layer_digests"][0].to_string() < query_json["layer_digests"][1].to_string());
-        assert!(summary_json["dependency_summary_digests"][0].to_string() < summary_json["dependency_summary_digests"][1].to_string());
-        assert!(diagnostic_json["requested_view_digests"][0].to_string() < diagnostic_json["requested_view_digests"][1].to_string());
+        assert!(
+            query_json["layer_digests"][0].to_string() < query_json["layer_digests"][1].to_string()
+        );
+        assert!(
+            summary_json["dependency_summary_digests"][0].to_string()
+                < summary_json["dependency_summary_digests"][1].to_string()
+        );
+        assert!(
+            diagnostic_json["requested_view_digests"][0].to_string()
+                < diagnostic_json["requested_view_digests"][1].to_string()
+        );
     }
 }
