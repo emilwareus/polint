@@ -466,6 +466,33 @@ mod tests {
         )
     }
 
+    fn metrics_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.metrics")
+            .expect("metrics provider manifest exists")
+    }
+
+    fn metrics_key(
+        source_digest: Digest,
+        function_digest: Digest,
+        config_digest: Digest,
+        syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::metrics_layer_key(
+            metrics_manifest(),
+            vec![source_digest],
+            vec![function_digest],
+            config_digest,
+            vec![syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "metrics_parameters",
+                &["file_metrics", "function_metrics", "complexity_metrics"],
+            ),
+        )
+    }
+
     fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
         LayerKey::syntax_layer_key(
             LayerKind::GoSyntax,
@@ -702,6 +729,80 @@ mod tests {
             assert_ne!(base, changed);
         }
         assert_eq!(base.layer_kind, LayerKind::SymbolGraph);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+    }
+
+    #[test]
+    fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
+        let base = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_source = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "changed"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_function = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "changed"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_config = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_syntax = metrics_key(
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "function_fact",
+                &["handler", "base"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "metrics-facts-2:2".to_string();
+
+        for changed in [
+            changed_source,
+            changed_function,
+            changed_config,
+            changed_syntax,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+        assert_eq!(base.layer_kind, LayerKind::Metrics);
         assert!(base.extension_digests.contains(&Digest::absent(
             DigestKind::ExtensionCode,
             "extension_digest_absent"
