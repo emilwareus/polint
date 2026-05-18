@@ -168,6 +168,51 @@ fn assert_eval_internals_are_absent_from_public_surfaces() {
     }
 }
 
+#[test]
+fn input_snapshots_stay_internal() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export const amount = 42;\n",
+    );
+
+    let run_check = || {
+        stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_check();
+    let second = run_check();
+
+    assert_eq!(
+        first, second,
+        "public check JSON should stay byte-identical across repeated runs"
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{first}"));
+    assert!(
+        report.diagnostics.is_empty(),
+        "minimal public TS check should not emit diagnostics: {report:#?}"
+    );
+    assert_input_snapshot_vocabulary_is_internal(&first);
+}
+
+fn assert_input_snapshot_vocabulary_is_internal(_public_json: &str) {
+    todo!("assert Phase 23 snapshot/cache-key vocabulary stays internal");
+}
+
 fn source_tree_text(path: &Path) -> String {
     if path.is_file() {
         return fs::read_to_string(path)
