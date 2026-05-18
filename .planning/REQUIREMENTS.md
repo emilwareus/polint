@@ -14,7 +14,7 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 - [x] **SAE-FND-02**: Existing fact families carry internal provenance, precision, confidence, validation status, stable-key metadata, and deterministic merge validation.
 - [x] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants.
 - [ ] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation.
-- [ ] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
+- [x] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards.
 - [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
 
 ### Semantic Backbone
@@ -71,7 +71,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-FND-02 | Phase 21 | Complete |
 | SAE-FND-03 | Phase 22 | Complete |
 | SAE-FND-04 | Phase 23 | Pending |
-| SAE-FND-05 | Phase 24 | Pending |
+| SAE-FND-05 | Phase 24 | Complete |
 | SAE-FND-06 | Phase 25 | Pending |
 | SAE-SEM-01 | Phase 26 | Pending |
 | SAE-SEM-02 | Phase 27 | Pending |
