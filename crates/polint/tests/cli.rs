@@ -3033,6 +3033,18 @@ pub(crate) fn no_todo_literals(
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "jq '[.diagnostics[] | select(.rule_id==\"custom/no-todo-literals\")][0:20]' .polint/output/latest.json"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "jq '.diagnostics[] | select(.file==\"src/component.ts\") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000"
+        ),
+        "{stdout}"
+    );
+    assert!(
         !stdout.contains("\"diagnostics\""),
         "stdout should stay compact: {stdout}"
     );

@@ -600,13 +600,28 @@ pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &s
     );
     out.push_str("Do not read the whole file into an AI prompt. Query it with bounded commands:\n");
     out.push_str(&format!("  jq '.summary.by_rule' {json_path}\n"));
-    out.push_str(&format!(
-        "  jq '[.diagnostics[] | select(.rule_id==\"local/no-raw-colors\")][0:20]' {json_path}\n"
-    ));
-    out.push_str(&format!(
-        "  jq '.diagnostics[] | select(.file==\"src/Button.tsx\") | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
-    ));
+    if let Some(example) = report.examples.first() {
+        let rule_id = jq_string_literal(&example.rule_id);
+        let file = jq_string_literal(&example.file);
+        out.push_str(&format!(
+            "  jq '[.diagnostics[] | select(.rule_id=={rule_id})][0:20]' {json_path}\n"
+        ));
+        out.push_str(&format!(
+            "  jq '.diagnostics[] | select(.file=={file}) | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "  jq '[.diagnostics[] | select(.rule_id==\"local/example\")][0:20]' {json_path}\n"
+        ));
+        out.push_str(&format!(
+            "  jq '.diagnostics[] | select(.file==\"src/example.ts\") | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
+        ));
+    }
     out
+}
+
+fn jq_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn push_ai_friendly_example(out: &mut String, example: &AiFriendlyExample) {
@@ -1781,6 +1796,18 @@ mod tests {
         assert!(rendered.contains("fix: Replace unsafe_api"));
         assert!(rendered.contains("help: Use the safe wrapper before crossing this boundary."));
         assert!(rendered.contains("jq '.summary.by_rule' .polint/output/latest.json"));
+        assert!(
+            rendered.contains(
+                "jq '[.diagnostics[] | select(.rule_id==\"project/rule\")][0:20]' .polint/output/latest.json"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "jq '.diagnostics[] | select(.file==\"src/lib.rs\") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000"
+            ),
+            "{rendered}"
+        );
         assert!(rendered.contains("Do not read the whole file into an AI prompt"));
         assert!(!rendered.contains("stable_fingerprint"));
     }
