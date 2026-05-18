@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -113,7 +114,10 @@ pub(crate) fn discover_cases(
     case_filter: Option<&str>,
 ) -> Result<Vec<RuleTestCase>> {
     let tests_root = root.join(".polint/tests/rules");
-    if !tests_root.is_dir() {
+    let Some(tests_root_type) = fixture_path_type(&tests_root)? else {
+        return Ok(Vec::new());
+    };
+    if !tests_root_type.is_dir() {
         return Ok(Vec::new());
     }
 
@@ -123,7 +127,8 @@ pub(crate) fn discover_cases(
     {
         let rule_entry = rule_entry?;
         let rule_dir = rule_entry.path();
-        if !rule_dir.is_dir() {
+        let rule_type = fixture_entry_type(&rule_entry)?;
+        if !rule_type.is_dir() {
             continue;
         }
         for case_entry in fs::read_dir(&rule_dir)
@@ -131,11 +136,15 @@ pub(crate) fn discover_cases(
         {
             let case_entry = case_entry?;
             let case_dir = case_entry.path();
-            if !case_dir.is_dir() {
+            let case_type = fixture_entry_type(&case_entry)?;
+            if !case_type.is_dir() {
                 continue;
             }
             let manifest_path = case_dir.join("polint-test.toml");
-            if !manifest_path.is_file() {
+            let Some(manifest_type) = fixture_path_type(&manifest_path)? else {
+                continue;
+            };
+            if !manifest_type.is_file() {
                 continue;
             }
             let raw = fs::read_to_string(&manifest_path)
@@ -361,6 +370,15 @@ fn run_rule_host_check(
 }
 
 fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()> {
+    let Some(source_type) = fixture_path_type(source)? else {
+        anyhow::bail!("missing rule test fixture path: {}", source.display());
+    };
+    if !source_type.is_dir() {
+        anyhow::bail!(
+            "rule test fixture path is not a directory: {}",
+            source.display()
+        );
+    }
     for entry in
         fs::read_dir(source).with_context(|| format!("failed to read {}", source.display()))?
     {
@@ -371,11 +389,12 @@ fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()> {
             continue;
         }
         let target = destination.join(&file_name);
-        if path.is_dir() {
+        let file_type = fixture_entry_type(&entry)?;
+        if file_type.is_dir() {
             fs::create_dir_all(&target)
                 .with_context(|| format!("failed to create {}", target.display()))?;
             copy_fixture_tree(&path, &target)?;
-        } else if path.is_file() {
+        } else if file_type.is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -383,7 +402,40 @@ fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()> {
             fs::copy(&path, &target).with_context(|| {
                 format!("failed to copy {} to {}", path.display(), target.display())
             })?;
+        } else {
+            anyhow::bail!("unsupported rule test fixture path: {}", path.display());
         }
+    }
+    Ok(())
+}
+
+fn fixture_entry_type(entry: &fs::DirEntry) -> Result<fs::FileType> {
+    let path = entry.path();
+    let file_type = entry
+        .file_type()
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    reject_symlink_fixture_path(&path, file_type)?;
+    Ok(file_type)
+}
+
+fn fixture_path_type(path: &Path) -> Result<Option<fs::FileType>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let file_type = metadata.file_type();
+            reject_symlink_fixture_path(path, file_type)?;
+            Ok(Some(file_type))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+fn reject_symlink_fixture_path(path: &Path, file_type: fs::FileType) -> Result<()> {
+    if file_type.is_symlink() {
+        anyhow::bail!(
+            "rule test fixture paths may not be symlinks: {}",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -627,6 +679,52 @@ paths = ["src/**"]
                 observed_index: Some(0),
                 matched: true,
             }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_fixture_tree_rejects_symlink_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("case");
+        let destination = temp.path().join("repo");
+        write(
+            &source.join("polint-test.toml"),
+            r#"rule = "local/example""#,
+        );
+        write(&temp.path().join("outside.ts"), "const leaked = true;\n");
+        std::os::unix::fs::symlink(temp.path().join("outside.ts"), source.join("src.ts")).unwrap();
+
+        let error = copy_fixture_tree(&source, &destination).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("rule test fixture paths may not be symlinks"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_cases_rejects_symlink_case_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let external_case = temp.path().join("external-case");
+        write(
+            &external_case.join("polint-test.toml"),
+            r#"rule = "local/example""#,
+        );
+        let rule_dir = temp.path().join(".polint/tests/rules/example");
+        fs::create_dir_all(&rule_dir).unwrap();
+        std::os::unix::fs::symlink(&external_case, rule_dir.join("escape")).unwrap();
+
+        let error = discover_cases(temp.path(), None, None).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("rule test fixture paths may not be symlinks"),
+            "{error:#}"
         );
     }
 
