@@ -91,7 +91,7 @@ pub(crate) use invalidation::{
         reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
     )
 )]
-pub(crate) use keys::{DiagnosticKey, LayerKey, PrecisionTier, QueryKey, SummaryKey};
+pub(crate) use keys::{DiagnosticKey, LayerKey, LayerKind, PrecisionTier, QueryKey, SummaryKey};
 #[cfg_attr(
     test,
     allow(

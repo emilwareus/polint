@@ -167,7 +167,7 @@ fn ts_syntax_layer_cache_corrupt() {
     let cache_root = unique_cache_root();
     let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
     let plan = AnalysisPlan::empty();
-    let source = "export function main() { console.log('ok'); }\n";
+    let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut first = db_with_ts_file("main.ts", source);
 
     let first_result = analyze_with_plan_options_and_cache_stats(
@@ -228,7 +228,7 @@ fn ts_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
     let cache_root = unique_cache_root();
     let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
     let plan = AnalysisPlan::empty();
-    let source = "export function main() { console.log('ok'); }\n";
+    let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut db = db_with_ts_file("main.ts", source);
 
     let result =

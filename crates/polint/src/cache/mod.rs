@@ -110,7 +110,6 @@ impl Cache {
         Self::new(CacheLayout::for_repo(repo).analysis_dir(), enabled)
     }
 
-    #[cfg(test)]
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -118,6 +117,15 @@ impl Cache {
     #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn layer_cache_dir(&self) -> PathBuf {
+        if self.root.file_name().and_then(|name| name.to_str()) == Some("analysis")
+            && let Some(parent) = self.root.parent()
+        {
+            return parent.join("layers");
+        }
+        self.root.join("layers")
     }
 
     #[cfg(test)]

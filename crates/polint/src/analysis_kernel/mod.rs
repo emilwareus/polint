@@ -80,10 +80,11 @@ impl AnalysisKernel {
             input.parallel,
         );
         diagnostics.extend(go_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.go.syntax",
             &db,
             go_output.cache_stats,
+            go_output.output_digest,
         ));
 
         let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
@@ -95,10 +96,11 @@ impl AnalysisKernel {
             input.parallel,
         );
         diagnostics.extend(ts_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.ts.syntax",
             &db,
             ts_output.cache_stats,
+            ts_output.output_digest,
         ));
 
         let module_graph =
@@ -168,11 +170,22 @@ impl AnalysisKernel {
         db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
     ) -> incremental::ProviderOutputMeta {
+        Self::provider_output_for_with_optional_digest(provider_id, db, cache_stats, None)
+    }
+
+    fn provider_output_for_with_optional_digest(
+        provider_id: &'static str,
+        db: &AnalysisDb,
+        cache_stats: incremental::CacheStats,
+        output_digest: Option<incremental::Digest>,
+    ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
-        let output_digest = incremental::provider_output_digest_from_manifest(
-            manifest,
-            &provider_output_summary_parts(db, manifest),
-        );
+        let output_digest = output_digest.unwrap_or_else(|| {
+            incremental::provider_output_digest_from_manifest(
+                manifest,
+                &provider_output_summary_parts(db, manifest),
+            )
+        });
         incremental::provider_output_from_manifest(manifest, output_digest, cache_stats)
     }
 
