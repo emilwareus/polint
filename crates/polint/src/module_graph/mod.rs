@@ -6,17 +6,22 @@ pub(crate) mod ts;
 
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheNode, DependencyEdge, DependencyKind, Digest, DigestKind, LayerKey, LayerKind, ShapeKind,
-    dependency_layer_digest,
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
+    InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
+    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
     ImportFact, Language, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
-use model::{ModuleGraphBuilder, ResolverInput, sort_packages};
+use model::{
+    MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
+    sort_packages,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,6 +33,8 @@ const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
 pub(crate) struct ModuleGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
 }
 
 impl ModuleGraphDerivation {
@@ -156,9 +163,7 @@ pub(crate) fn module_graph_layer_dependency_edges(
         ShapeKind::Toolchain,
     ));
 
-    let mut upstream_digests = upstream_syntax_output_digests.to_vec();
-    upstream_digests.sort();
-    for (index, output_digest) in upstream_digests.into_iter().enumerate() {
+    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
         edges.push(dependency_edge(
             &from,
             CacheNode::Layer(upstream_syntax_layer_key(index, output_digest)),
@@ -230,6 +235,111 @@ pub(crate) fn module_graph_parameter_digest() -> Digest {
 }
 
 pub(crate) fn derive_requested_module_graph(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+) -> ModuleGraphDerivation {
+    derive_requested_module_graph_uncached(db, loaded, plan)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Module graph cache identity consumes cache, snapshot, provider manifest, and upstream syntax outputs explicitly."
+)]
+pub(crate) fn derive_requested_module_graph_with_cache_stats(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> ModuleGraphDerivation {
+    if !plan.requests_any_capability(MODULE_GRAPH_TRIGGER_CAPABILITIES) {
+        return ModuleGraphDerivation::default();
+    }
+
+    let config_digest = input_snapshot.config.digest.clone();
+    let go_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::GoLifecycle,
+        "module_graph_go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
+    let ts_js_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::TsJsLifecycle,
+        "module_graph_ts_js_lifecycle",
+        &input_snapshot.ts_js_lifecycle.components,
+    );
+    let layer_key = module_graph_layer_key(
+        db,
+        manifest,
+        config_digest.clone(),
+        go_lifecycle_digest.clone(),
+        ts_js_lifecycle_digest.clone(),
+        upstream_syntax_output_digests.clone(),
+    );
+    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let mut cache_stats = CacheStats::default();
+    let read = store
+        .read_json_validated::<ModuleGraphLayerPayload, _>(&layer_key, |payload, manifest| {
+            validate_module_graph_layer_payload(payload, manifest)
+        });
+
+    match read.status {
+        LayerCacheReadStatus::Hit => {
+            cache_stats.record_hit();
+            cache_stats.record_verified_reuse();
+            let payload = read
+                .value
+                .expect("layer cache hit should include module graph payload");
+            restore_module_graph_layer_payload(db, &payload);
+            ModuleGraphDerivation {
+                diagnostics: payload.diagnostics,
+                capability_support: payload.capability_support,
+                cache_stats,
+                output_digest: read.output_digest,
+            }
+        }
+        LayerCacheReadStatus::BypassedDisabled => {
+            cache_stats.record_disabled_bypass();
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
+            if read.status == LayerCacheReadStatus::Miss {
+                cache_stats.record_miss();
+            } else {
+                cache_stats.record_invalid_evicted_read();
+            }
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
+            let payload = module_graph_layer_payload(db, &derivation);
+            let dependencies = module_graph_layer_dependency_edges(
+                db,
+                &layer_key,
+                manifest,
+                &upstream_syntax_output_digests,
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+            );
+            derivation.output_digest = write_module_graph_layer_payload(
+                &store,
+                layer_key,
+                &payload,
+                dependencies,
+                &mut cache_stats,
+                &mut derivation.diagnostics,
+            );
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+    }
+}
+
+fn derive_requested_module_graph_uncached(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
@@ -367,10 +477,155 @@ pub(crate) fn derive_requested_module_graph(
     let capability_support =
         setup_missing_support(plan, saw_setup_missing, setup_missing_reason.as_deref());
     let diagnostics = setup_missing_diagnostics(&capability_support);
+    let output_digest = Some(module_graph_output_digest_for_payload(
+        &module_graph_layer_payload_parts(
+            &diagnostics,
+            &capability_support,
+            db.resolved_imports(),
+            db.module_nodes(),
+            db.module_edges(),
+        ),
+        None,
+    ));
     ModuleGraphDerivation {
         diagnostics,
         capability_support,
+        cache_stats: CacheStats::default(),
+        output_digest,
     }
+}
+
+fn lifecycle_component_digest(
+    kind: DigestKind,
+    label: &str,
+    components: &[InputComponent],
+) -> Digest {
+    Digest::from_unordered(
+        kind,
+        label,
+        components
+            .iter()
+            .map(|component| component.digest.clone())
+            .collect(),
+    )
+}
+
+fn module_graph_layer_payload(
+    db: &AnalysisDb,
+    derivation: &ModuleGraphDerivation,
+) -> ModuleGraphLayerPayload {
+    ModuleGraphLayerPayload {
+        schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        diagnostics: derivation.diagnostics.clone(),
+        capability_support: derivation.capability_support.clone(),
+        resolved_imports: db.resolved_imports().to_vec(),
+        nodes: db.module_nodes().to_vec(),
+        edges: db.module_edges().to_vec(),
+    }
+}
+
+fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraphLayerPayload) {
+    db.replace_module_graph_facts(
+        payload.resolved_imports.clone(),
+        payload.nodes.clone(),
+        payload.edges.clone(),
+    );
+}
+
+fn validate_module_graph_layer_payload(
+    payload: &ModuleGraphLayerPayload,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    payload.schema == MODULE_GRAPH_LAYER_SCHEMA
+        && manifest.output_digest
+            == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn write_module_graph_layer_payload(
+    store: &LayerCacheStore,
+    layer_key: LayerKey,
+    payload: &ModuleGraphLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Digest> {
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module graph layer", error));
+            return None;
+        }
+    };
+    let output_digest = module_graph_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest.clone(),
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        "native_trusted",
+        Vec::new(),
+    );
+
+    match store.write_json(&manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module graph layer", error)),
+    }
+    Some(output_digest)
+}
+
+fn module_graph_output_digest_for_payload(
+    payload: &ModuleGraphLayerPayload,
+    layer_key: Option<&LayerKey>,
+) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "module_graph", "json"));
+    if let Some(layer_key) = layer_key {
+        module_graph_output_digest(layer_key, &payload_digest)
+    } else {
+        Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "module_graph_layer_output",
+            &[&payload_digest.to_string()],
+        )
+    }
+}
+
+fn module_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
+    let layer_key_json =
+        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "module_graph_layer_output",
+        &[&payload_digest.to_string(), &layer_key_json],
+    )
+}
+
+fn module_graph_layer_payload_parts(
+    diagnostics: &[Diagnostic],
+    capability_support: &[CapabilitySupport],
+    resolved_imports: &[crate::core::ResolvedImportFact],
+    nodes: &[crate::core::ModuleNode],
+    edges: &[crate::core::ModuleEdge],
+) -> ModuleGraphLayerPayload {
+    ModuleGraphLayerPayload {
+        schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        diagnostics: diagnostics.to_vec(),
+        capability_support: capability_support.to_vec(),
+        resolved_imports: resolved_imports.to_vec(),
+        nodes: nodes.to_vec(),
+        edges: edges.to_vec(),
+    }
+}
+
+fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
+    Diagnostic::warning(
+        "internal/cache",
+        path,
+        TextRange::point(1, 1),
+        format!("cache write failed: {error}"),
+    )
 }
 
 fn setup_missing_reason_for_import(
@@ -811,7 +1066,10 @@ mod tests {
         assert_eq!(first_result.cache_stats.recomputes, 1);
         assert_eq!(first_result.cache_stats.writes, 1);
         assert!(first_result.output_digest.is_some());
-        assert_eq!(first.resolved_imports()[0].status, ResolutionStatus::Resolved);
+        assert_eq!(
+            first.resolved_imports()[0].status,
+            ResolutionStatus::Resolved
+        );
 
         let mut second = AnalysisDb::new();
         let app = add_file(
@@ -836,7 +1094,10 @@ mod tests {
         assert_eq!(second_result.cache_stats.recomputes, 0);
         assert_eq!(second_result.cache_stats.writes, 0);
         assert_eq!(second_result.output_digest, first_result.output_digest);
-        assert_eq!(second.resolved_imports()[0].status, ResolutionStatus::Resolved);
+        assert_eq!(
+            second.resolved_imports()[0].status,
+            ResolutionStatus::Resolved
+        );
     }
 
     #[test]
@@ -883,7 +1144,10 @@ mod tests {
 
         assert_eq!(changed_import_result.cache_stats.misses, 1);
         assert_eq!(changed_import_result.cache_stats.recomputes, 1);
-        assert_ne!(changed_import_result.output_digest, first_result.output_digest);
+        assert_ne!(
+            changed_import_result.output_digest,
+            first_result.output_digest
+        );
 
         write_file(
             temp.path(),
@@ -1111,6 +1375,7 @@ mod tests {
                 hint: None,
                 docs_path: None,
             }],
+            ..Default::default()
         };
         let base = CapabilitySupportView::new(vec![CapabilitySupport {
             capability: "module_graph".to_string(),

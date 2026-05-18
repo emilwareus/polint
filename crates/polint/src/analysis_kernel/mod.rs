@@ -79,12 +79,13 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let go_output_digest = go_output.output_digest.clone();
         diagnostics.extend(go_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.go.syntax",
             &db,
             go_output.cache_stats,
-            go_output.output_digest,
+            go_output_digest.clone(),
         ));
 
         let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
@@ -95,22 +96,47 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let ts_output_digest = ts_output.output_digest.clone();
         diagnostics.extend(ts_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.ts.syntax",
             &db,
             ts_output.cache_stats,
-            ts_output.output_digest,
+            ts_output_digest.clone(),
         ));
 
-        let module_graph =
-            crate::module_graph::derive_requested_module_graph(&mut db, input.loaded, input.plan);
+        let module_graph = crate::module_graph::derive_requested_module_graph_with_cache_stats(
+            &mut db,
+            input.loaded,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.module_graph"),
+            vec![
+                go_output_digest.unwrap_or_else(|| {
+                    incremental::Digest::absent(
+                        incremental::DigestKind::ProviderOutput,
+                        "polint.go.syntax",
+                    )
+                }),
+                ts_output_digest.unwrap_or_else(|| {
+                    incremental::Digest::absent(
+                        incremental::DigestKind::ProviderOutput,
+                        "polint.ts.syntax",
+                    )
+                }),
+            ],
+        );
         let module_support = module_graph.support_view(input.plan.support_view());
+        // Keep polint.module_graph cache_stats internal to KernelRunReport.
+        let polint_module_graph_cache_stats = module_graph.cache_stats.clone();
+        let module_output_digest = module_graph.output_digest.clone();
         diagnostics.extend(module_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.module_graph",
             &db,
-            incremental::CacheStats::default(),
+            polint_module_graph_cache_stats,
+            module_output_digest,
         ));
 
         let symbol_graph =
