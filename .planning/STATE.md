@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: planning
-last_updated: "2026-05-18T12:48:01.554Z"
+last_updated: "2026-05-18T14:24:42.907Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 22
@@ -33,6 +33,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 - v1.2 requirements are defined in `.planning/REQUIREMENTS.md`.
 - v1.2 roadmap is defined in `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
+- Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Each v1.2 research PR maps to one GSD phase, in order, from Phase 20 through Phase 41.
 - New broad research is not needed by default. Use the relevant research documents referenced by each phase; do additional research only for a concrete implementation gap.
 
