@@ -4,14 +4,20 @@ use crate::config::{LoadedConfig, load_config};
 use crate::core::{Rule, run_rules_with_capability_support};
 use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
-    limit_report_diagnostics, render_with_sarif_help,
+    build_ai_friendly_report, limit_report_diagnostics, render_ai_friendly_stdout,
+    render_with_sarif_help,
 };
 use crate::ignores::apply_ignores;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const AI_FRIENDLY_OUTPUT_DIR: &str = ".polint/output";
+const AI_FRIENDLY_LATEST_OUTPUT: &str = ".polint/output/latest.json";
 
 #[derive(Debug, Parser)]
 #[command(name = "polint-local-rules")]
@@ -28,6 +34,9 @@ enum Command {
 }
 
 #[derive(Debug, Args, Clone)]
+#[command(
+    after_help = "AI agents: use `--format ai-friendly` to print a compact summary and save queryable JSON under `.polint/output/`."
+)]
 struct CheckArgs {
     /// Files or directories to check. Defaults to the workspace include config.
     #[arg(value_name = "PATH")]
@@ -71,6 +80,7 @@ enum FormatArg {
     Github,
     Json,
     Sarif,
+    AiFriendly,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -114,6 +124,7 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
         FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
+        FormatArg::AiFriendly => OutputFormat::AiFriendly,
     };
     let sources = match args.format {
         FormatArg::Human => Some(&source_map),
@@ -136,12 +147,97 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
         },
         sources,
     };
-    print!(
-        "{}",
-        render_with_sarif_help(format, &rendered_diagnostics, opts, sarif_map)
-    );
+    if matches!(args.format, FormatArg::AiFriendly) {
+        let report = write_ai_friendly_report(&root, &diagnostics, &rendered_diagnostics)?;
+        print!(
+            "{}",
+            render_ai_friendly_stdout(&report, AI_FRIENDLY_LATEST_OUTPUT)
+        );
+    } else {
+        print!(
+            "{}",
+            render_with_sarif_help(format, &rendered_diagnostics, opts, sarif_map)
+        );
+    }
 
     Ok(exit_code_for(&diagnostics, args.fail_on))
+}
+
+fn write_ai_friendly_report(
+    root: &Path,
+    diagnostics: &[crate::diagnostics::Diagnostic],
+    persisted_diagnostics: &[crate::diagnostics::Diagnostic],
+) -> Result<crate::diagnostics::AiFriendlyReport> {
+    let polint_dir = root.join(".polint");
+    fs::create_dir_all(polint_dir.join("output"))
+        .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
+    ensure_polint_nested_gitignore(&polint_dir)?;
+    let generated_at = generated_at_label();
+    let report = build_ai_friendly_report(
+        diagnostics,
+        persisted_diagnostics,
+        JsonReportMeta {
+            tool_name: "polint-local-rules",
+            tool_version: env!("CARGO_PKG_VERSION"),
+        },
+        generated_at.clone(),
+    );
+    let json = serde_json::to_string_pretty(&report)?;
+    let hash = crate::cache::stable_hash(&[&json]);
+    let run_name = format!("check-{generated_at}-{}.json", &hash[..12]);
+    let run_path = root.join(AI_FRIENDLY_OUTPUT_DIR).join(run_name);
+    let latest_path = root.join(AI_FRIENDLY_LATEST_OUTPUT);
+    fs::write(&run_path, &json)
+        .with_context(|| format!("failed to write {}", run_path.display()))?;
+    fs::write(&latest_path, json)
+        .with_context(|| format!("failed to write {}", latest_path.display()))?;
+    Ok(report)
+}
+
+fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
+    let path = polint_dir.join(".gitignore");
+    const ENTRIES: &[&str] = &["cache/", "output/"];
+    if path.is_file() {
+        let existing = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+        if ENTRIES.iter().all(|entry| {
+            existing
+                .lines()
+                .any(|line| gitignore_line_covers(line, entry))
+        }) {
+            return Ok(());
+        }
+        let mut out = existing;
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        for entry in ENTRIES {
+            if !out.lines().any(|line| gitignore_line_covers(line, entry)) {
+                out.push_str(entry);
+                out.push('\n');
+            }
+        }
+        fs::write(&path, out).with_context(|| format!("failed to update {}", path.display()))?;
+    } else {
+        let content = "# polint: local cache and agent output (not shared between checkouts)\ncache/\noutput/\n";
+        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn gitignore_line_covers(line: &str, entry: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return false;
+    }
+    t.trim_end_matches('/') == entry.trim_end_matches('/')
+}
+
+fn generated_at_label() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    secs.to_string()
 }
 
 fn analyze_and_run(

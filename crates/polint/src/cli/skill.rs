@@ -204,17 +204,29 @@ policy rules; every policy belongs to the repository that needs it.
 polint init
 polint new-rule go require-error-branch-tests
 polint new-rule ts no-raw-colors
-polint check --fail-on none
+polint check --format ai-friendly --fail-on none
 ```
 
-Use `polint check --format json` when you need machine-readable diagnostics. JSON
-is a versioned report object with a `diagnostics` array (not a bare array at the
-root); the schema lives in `docs/schemas/polint-report-v1.json` in the polint repo.
-Human output uses ANSI colors on a TTY unless `NO_COLOR` is set; use `--color never`
-for plain text. Use `polint check --format sarif` for CI upload paths. Use
-	`--fail-on warn`, `error`, or `none` to control the exit status. Use `polint check
-	--shortstat` or `polint check --stat` for human scan summaries; these flags do
-	not add prose to JSON or SARIF output.
+Use `polint check --format ai-friendly --fail-on none` when you are an AI agent
+or when a repository may have many findings. It prints counts by rule and at
+most 10 example diagnostics, then saves full JSON under `.polint/output/`
+(`.polint/output/latest.json` is the stable path). Do not `cat` the whole file
+into your prompt; query it with bounded commands:
+
+```bash
+jq '.summary.by_rule' .polint/output/latest.json
+jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
+jq '.diagnostics[] | select(.file=="src/Button.tsx") | {{rule_id, range, message}}' .polint/output/latest.json | head -c 12000
+```
+
+Use `polint check --format json` when another program needs the full report on
+stdout. JSON is a versioned report object with a `diagnostics` array (not a bare
+array at the root); the schema lives in `docs/schemas/polint-report-v1.json` in
+the polint repo. Human output uses ANSI colors on a TTY unless `NO_COLOR` is set;
+use `--color never` for plain text. Use `polint check --format sarif` for CI
+upload paths. Use `--fail-on warn`, `error`, or `none` to control the exit
+status. Use `polint check --shortstat` or `polint check --stat` for human scan
+summaries; these flags do not add prose to JSON or SARIF output.
 
 Use a compact YAML baseline at `.polint/baseline.yaml` when existing findings
 should not block new work:

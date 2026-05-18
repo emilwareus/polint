@@ -7,6 +7,10 @@ use std::sync::Arc;
 /// Public URL of [`crate::diagnostics::PolintReport`] JSON Schema (v1); embedded in `--format json` when present.
 pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
     "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json";
+/// Public URL of [`crate::diagnostics::AiFriendlyReport`] JSON Schema (v1); embedded in `--format ai-friendly` files.
+pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json";
+
+pub(crate) const AI_FRIENDLY_EXAMPLE_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -247,6 +251,7 @@ pub enum OutputFormat {
     Github,
     Json,
     Sarif,
+    AiFriendly,
 }
 
 /// Metadata embedded in `--format json` output (`PolintReport.tool`).
@@ -300,6 +305,57 @@ pub struct PolintReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AiFriendlyReport {
+    pub(crate) version: u32,
+    pub(crate) schema: String,
+    pub(crate) tool: PolintToolInfo,
+    pub(crate) generated_at: String,
+    pub(crate) summary: AiFriendlySummary,
+    pub(crate) examples: Vec<AiFriendlyExample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncation: Option<AiFriendlyTruncation>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AiFriendlySummary {
+    pub(crate) total_diagnostics: usize,
+    pub(crate) rules_triggered: usize,
+    pub(crate) by_severity: BTreeMap<String, usize>,
+    pub(crate) by_rule: Vec<AiFriendlyRuleSummary>,
+    pub(crate) examples_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AiFriendlyRuleSummary {
+    pub(crate) rule_id: String,
+    pub(crate) total: usize,
+    pub(crate) by_severity: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AiFriendlyExample {
+    pub(crate) rule_id: String,
+    pub(crate) severity: Severity,
+    pub(crate) file: String,
+    pub(crate) range: TextRange,
+    pub(crate) message: String,
+    pub(crate) labels: Vec<Label>,
+    pub(crate) help: Option<String>,
+    pub(crate) evidence: Vec<Evidence>,
+    pub(crate) suggestions: Vec<Suggestion>,
+    pub(crate) fix: Option<Fix>,
+    pub(crate) stable_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AiFriendlyTruncation {
+    pub(crate) total_diagnostics: usize,
+    pub(crate) included_diagnostics: usize,
+    pub(crate) reason: String,
+}
+
 #[derive(Serialize)]
 struct PolintReportWire<'a> {
     version: u32,
@@ -318,6 +374,316 @@ struct PolintToolWire<'a> {
 pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_json::Error> {
     let report: PolintReport = serde_json::from_str(s)?;
     Ok(report.diagnostics)
+}
+
+pub(crate) fn build_ai_friendly_report(
+    diagnostics: &[Diagnostic],
+    persisted_diagnostics: &[Diagnostic],
+    json_meta: JsonReportMeta<'_>,
+    generated_at: impl Into<String>,
+) -> AiFriendlyReport {
+    let summary = ai_friendly_summary(diagnostics);
+    let examples = ai_friendly_examples(diagnostics, &summary.by_rule);
+    let truncation = if persisted_diagnostics.len() < diagnostics.len() {
+        Some(AiFriendlyTruncation {
+            total_diagnostics: diagnostics.len(),
+            included_diagnostics: persisted_diagnostics.len(),
+            reason: "--max-diagnostics limited persisted diagnostics".to_string(),
+        })
+    } else {
+        None
+    };
+    AiFriendlyReport {
+        version: 1,
+        schema: POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL.to_string(),
+        tool: PolintToolInfo {
+            name: json_meta.tool_name.to_string(),
+            version: json_meta.tool_version.to_string(),
+        },
+        generated_at: generated_at.into(),
+        summary,
+        examples,
+        truncation,
+        diagnostics: persisted_diagnostics.to_vec(),
+    }
+}
+
+fn ai_friendly_summary(diagnostics: &[Diagnostic]) -> AiFriendlySummary {
+    let mut by_severity = empty_severity_counts();
+    let mut by_rule: BTreeMap<String, RuleSummaryDraft> = BTreeMap::new();
+    for diagnostic in diagnostics {
+        increment_severity(&mut by_severity, diagnostic.severity);
+        let draft = by_rule
+            .entry(diagnostic.rule_id.clone())
+            .or_insert_with(|| RuleSummaryDraft::new(diagnostic.rule_id.clone()));
+        draft.total += 1;
+        increment_severity(&mut draft.by_severity, diagnostic.severity);
+        draft.highest_severity = draft
+            .highest_severity
+            .min(severity_sort_rank(diagnostic.severity));
+    }
+
+    let mut by_rule: Vec<RuleSummaryDraft> = by_rule.into_values().collect();
+    by_rule.sort_by(|left, right| {
+        (
+            left.highest_severity,
+            std::cmp::Reverse(left.total),
+            left.rule_id.as_str(),
+        )
+            .cmp(&(
+                right.highest_severity,
+                std::cmp::Reverse(right.total),
+                right.rule_id.as_str(),
+            ))
+    });
+
+    AiFriendlySummary {
+        total_diagnostics: diagnostics.len(),
+        rules_triggered: by_rule.len(),
+        by_severity,
+        by_rule: by_rule
+            .into_iter()
+            .map(|draft| AiFriendlyRuleSummary {
+                rule_id: draft.rule_id,
+                total: draft.total,
+                by_severity: draft.by_severity,
+            })
+            .collect(),
+        examples_limit: AI_FRIENDLY_EXAMPLE_LIMIT,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuleSummaryDraft {
+    rule_id: String,
+    total: usize,
+    by_severity: BTreeMap<String, usize>,
+    highest_severity: u8,
+}
+
+impl RuleSummaryDraft {
+    fn new(rule_id: String) -> Self {
+        Self {
+            rule_id,
+            total: 0,
+            by_severity: empty_severity_counts(),
+            highest_severity: u8::MAX,
+        }
+    }
+}
+
+fn ai_friendly_examples(
+    diagnostics: &[Diagnostic],
+    by_rule: &[AiFriendlyRuleSummary],
+) -> Vec<AiFriendlyExample> {
+    let mut examples = BTreeMap::<String, &Diagnostic>::new();
+    for diagnostic in diagnostics {
+        examples
+            .entry(diagnostic.rule_id.clone())
+            .and_modify(|current| {
+                if example_sort_key(diagnostic) < example_sort_key(current) {
+                    *current = diagnostic;
+                }
+            })
+            .or_insert(diagnostic);
+    }
+
+    by_rule
+        .iter()
+        .filter_map(|summary| examples.get(&summary.rule_id).copied())
+        .take(AI_FRIENDLY_EXAMPLE_LIMIT)
+        .map(AiFriendlyExample::from)
+        .collect()
+}
+
+fn example_sort_key(diagnostic: &Diagnostic) -> (u8, &str, u32, u32, &str, &str) {
+    (
+        severity_sort_rank(diagnostic.severity),
+        diagnostic.file.as_str(),
+        diagnostic.range.start_line,
+        diagnostic.range.start_col,
+        diagnostic.message.as_str(),
+        diagnostic.stable_fingerprint.as_str(),
+    )
+}
+
+impl From<&Diagnostic> for AiFriendlyExample {
+    fn from(diagnostic: &Diagnostic) -> Self {
+        Self {
+            rule_id: diagnostic.rule_id.clone(),
+            severity: diagnostic.severity,
+            file: diagnostic.file.clone(),
+            range: diagnostic.range,
+            message: diagnostic.message.clone(),
+            labels: diagnostic.labels.clone(),
+            help: diagnostic.help.clone(),
+            evidence: diagnostic.evidence.clone(),
+            suggestions: diagnostic.suggestions.clone(),
+            fix: diagnostic.fix.clone(),
+            stable_fingerprint: diagnostic.stable_fingerprint.clone(),
+        }
+    }
+}
+
+fn empty_severity_counts() -> BTreeMap<String, usize> {
+    BTreeMap::from([
+        ("error".to_string(), 0),
+        ("warn".to_string(), 0),
+        ("info".to_string(), 0),
+    ])
+}
+
+fn increment_severity(counts: &mut BTreeMap<String, usize>, severity: Severity) {
+    *counts
+        .entry(severity_count_key(severity).to_string())
+        .or_default() += 1;
+}
+
+fn severity_count_key(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warn",
+        Severity::Info => "info",
+    }
+}
+
+fn severity_sort_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Error => 0,
+        Severity::Warn => 1,
+        Severity::Info => 2,
+    }
+}
+
+pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &str) -> String {
+    let total = report.summary.total_diagnostics;
+    let rules = report.summary.rules_triggered;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "polint: {total} {} across {rules} {}. Full JSON: {json_path}\n",
+        plural(total, "diagnostic", "diagnostics"),
+        plural(rules, "rule", "rules")
+    ));
+
+    if let Some(truncation) = &report.truncation {
+        out.push_str(&format!(
+            "Persisted diagnostics were limited: {} of {} included ({})\n",
+            truncation.included_diagnostics, truncation.total_diagnostics, truncation.reason
+        ));
+    }
+
+    out.push_str("\nBy rule\n");
+    if report.summary.by_rule.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for rule in &report.summary.by_rule {
+            out.push_str(&format!(
+                "  {} {}: {}\n",
+                dominant_rule_severity(rule),
+                rule.rule_id,
+                rule.total
+            ));
+        }
+    }
+
+    out.push_str("\nExamples, max 10\n");
+    if report.examples.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for example in &report.examples {
+            push_ai_friendly_example(&mut out, example);
+        }
+    }
+
+    out.push_str(
+        "\nJSON format: versioned object with `summary`, `examples`, and `diagnostics`.\n",
+    );
+    out.push_str("Do not read the whole file into an AI prompt. Query it with bounded commands:\n");
+    out.push_str(&format!("  jq '.summary.by_rule' {json_path}\n"));
+    if let Some(example) = report.examples.first() {
+        let rule_id = jq_string_literal(&example.rule_id);
+        let file = jq_string_literal(&example.file);
+        out.push_str(&format!(
+            "  jq '[.diagnostics[] | select(.rule_id=={rule_id})][0:20]' {json_path}\n"
+        ));
+        out.push_str(&format!(
+            "  jq '.diagnostics[] | select(.file=={file}) | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "  jq '[.diagnostics[] | select(.rule_id==\"local/example\")][0:20]' {json_path}\n"
+        ));
+        out.push_str(&format!(
+            "  jq '.diagnostics[] | select(.file==\"src/example.ts\") | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
+        ));
+    }
+    out
+}
+
+fn jq_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn push_ai_friendly_example(out: &mut String, example: &AiFriendlyExample) {
+    out.push_str(&format!(
+        "  {}[{}]: {}\n    --> {}:{}\n",
+        severity_label(example.severity),
+        example.rule_id,
+        example.message,
+        example.file,
+        format_range(example.range)
+    ));
+    for label in &example.labels {
+        out.push_str(&format!(
+            "    label {}: {}\n",
+            format_range(label.range),
+            label.message
+        ));
+    }
+    for evidence in &example.evidence {
+        out.push_str(&format!(
+            "    evidence {}: {}\n",
+            evidence.label, evidence.value
+        ));
+    }
+    for suggestion in &example.suggestions {
+        out.push_str(&format!("    suggestion: {}\n", suggestion.message));
+    }
+    if let Some(fix) = &example.fix {
+        out.push_str(&format!("    fix: {}\n", fix.message));
+        if let Some(replacement) = &fix.replacement {
+            out.push_str(&format!("      replacement: {replacement}\n"));
+        }
+    }
+    if let Some(help) = &example.help {
+        out.push_str(&format!("    help: {help}\n"));
+    }
+    out.push_str(&format!(
+        "    fingerprint: {}\n\n",
+        example.stable_fingerprint
+    ));
+}
+
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warn",
+        Severity::Info => "info",
+    }
+}
+
+fn dominant_rule_severity(rule: &AiFriendlyRuleSummary) -> &'static str {
+    if rule.by_severity.get("error").copied().unwrap_or(0) > 0 {
+        "error"
+    } else if rule.by_severity.get("warn").copied().unwrap_or(0) > 0 {
+        "warn"
+    } else {
+        "info"
+    }
+}
+
+fn plural(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
 }
 
 pub(crate) fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
@@ -423,6 +789,10 @@ pub(crate) fn render_with_sarif_help(
         OutputFormat::Github => render_github(diagnostics),
         OutputFormat::Json => render_json(diagnostics, opts.json),
         OutputFormat::Sarif => render_sarif(diagnostics, sarif_rule_help_uri),
+        OutputFormat::AiFriendly => {
+            let report = build_ai_friendly_report(diagnostics, diagnostics, opts.json, "unknown");
+            render_ai_friendly_stdout(&report, ".polint/output/latest.json")
+        }
     }
 }
 
@@ -1369,6 +1739,77 @@ mod tests {
           ]
         }
         "###);
+    }
+
+    #[test]
+    fn ai_friendly_report_counts_rules_and_caps_examples() {
+        let mut diagnostics = Vec::new();
+        for index in 0..12 {
+            diagnostics.push(Diagnostic::warning(
+                format!("local/rule-{index:02}"),
+                format!("src/{index:02}.ts"),
+                TextRange::point(index + 1, 1),
+                "policy failed",
+            ));
+        }
+        diagnostics.push(Diagnostic::error(
+            "local/rule-05",
+            "src/error.ts",
+            TextRange::point(1, 1),
+            "more important",
+        ));
+        sort_diagnostics(&mut diagnostics);
+
+        let persisted = diagnostics[..3].to_vec();
+        let report = build_ai_friendly_report(&diagnostics, &persisted, test_opts().json, "123456");
+
+        assert_eq!(report.version, 1);
+        assert_eq!(report.schema, POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL);
+        assert_eq!(report.summary.total_diagnostics, 13);
+        assert_eq!(report.summary.rules_triggered, 12);
+        assert_eq!(report.summary.by_severity["error"], 1);
+        assert_eq!(report.summary.by_severity["warn"], 12);
+        assert_eq!(report.summary.by_rule[0].rule_id, "local/rule-05");
+        assert_eq!(report.summary.by_rule[0].total, 2);
+        assert_eq!(report.examples.len(), AI_FRIENDLY_EXAMPLE_LIMIT);
+        assert_eq!(report.examples[0].message, "more important");
+        assert!(report.examples[0].labels.is_empty());
+        assert!(report.examples[0].evidence.is_empty());
+        assert_eq!(report.diagnostics.len(), 3);
+        assert_eq!(report.truncation.as_ref().unwrap().total_diagnostics, 13);
+    }
+
+    #[test]
+    fn render_ai_friendly_stdout_is_compact_and_query_oriented() {
+        let diagnostics = vec![contract_diagnostic()];
+        let report =
+            build_ai_friendly_report(&diagnostics, &diagnostics, test_opts().json, "123456");
+        let rendered = render_ai_friendly_stdout(&report, ".polint/output/latest.json");
+
+        assert!(rendered.contains("polint: 1 diagnostic across 1 rule"));
+        assert!(rendered.contains("Full JSON: .polint/output/latest.json"));
+        assert!(rendered.contains("error[project/rule]: policy failed"));
+        assert!(rendered.contains("--> src/lib.rs:10:4-10:12"));
+        assert!(rendered.contains("label 11:2-11:8: related expression"));
+        assert!(rendered.contains("evidence symbol: unsafe_api"));
+        assert!(rendered.contains("suggestion: Prefer safe_api here"));
+        assert!(rendered.contains("fix: Replace unsafe_api"));
+        assert!(rendered.contains("help: Use the safe wrapper before crossing this boundary."));
+        assert!(rendered.contains("jq '.summary.by_rule' .polint/output/latest.json"));
+        assert!(
+            rendered.contains(
+                "jq '[.diagnostics[] | select(.rule_id==\"project/rule\")][0:20]' .polint/output/latest.json"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "jq '.diagnostics[] | select(.file==\"src/lib.rs\") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000"
+            ),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Do not read the whole file into an AI prompt"));
+        assert!(!rendered.contains("stable_fingerprint"));
     }
 
     #[test]
