@@ -1,6 +1,7 @@
 mod digest;
 mod input_snapshot;
 mod keys;
+mod run_report;
 mod stats;
 
 pub(crate) use digest::{Digest, DigestKind};
@@ -17,6 +18,11 @@ pub(crate) use input_snapshot::{
     reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
 )]
 pub(crate) use keys::{DiagnosticKey, LayerKey, PrecisionTier, QueryKey, SummaryKey};
+#[expect(
+    unused_imports,
+    reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
+)]
+pub(crate) use run_report::{KernelRunReport, provider_output_from_manifest};
 #[expect(
     unused_imports,
     reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
