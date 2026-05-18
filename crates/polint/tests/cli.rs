@@ -454,6 +454,47 @@ fn assert_layer_cache_vocabulary_is_internal(public_json: &str) {
     }
 }
 
+#[test]
+fn layer_cache_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    write_layer_cache_public_rule_repo(temp.path());
+
+    let run_check = || {
+        let mut command = polint_cmd();
+        command.env("POLINT_CACHE_DIR", cache.path());
+        stdout_string(
+            command
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_check();
+    let second = run_check();
+
+    assert_eq!(
+        first, second,
+        "public check JSON should stay byte-identical across warm layer-cache runs"
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{first}"));
+    assert!(
+        report.diagnostics.is_empty(),
+        "layer-cache public fixture should not emit diagnostics: {report:#?}"
+    );
+
+    assert_layer_cache_public_json_is_private(&first);
+    assert_layer_cache_public_json_is_private(&second);
+    assert_layer_cache_public_surfaces_are_private();
+    assert_layer_cache_cli_help_is_private();
+
+    let rule_source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(rule_source.contains("use polint::sdk::prelude::*;"));
+    assert!(rule_source.contains("polint::runner::run_cli"));
+}
+
 fn source_tree_text(path: &Path) -> String {
     if path.is_file() {
         return fs::read_to_string(path)
