@@ -44,6 +44,13 @@ impl Digest {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Future cache-key consumers will need unordered digest construction; Phase 23 verifies it in unit tests."
+        )
+    )]
     pub(crate) fn from_unordered(kind: DigestKind, label: &str, mut digests: Vec<Digest>) -> Self {
         digests.sort();
         let digest_parts = digests.iter().map(ToString::to_string).collect::<Vec<_>>();

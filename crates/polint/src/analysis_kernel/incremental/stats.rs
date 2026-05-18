@@ -40,10 +40,24 @@ impl CacheStats {
         self.invalid_evicted_reads += 1;
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Verified reuse is a Phase 24+ cache counter; Phase 23 records it as an explicit zero unless tests exercise it."
+        )
+    )]
     pub(crate) fn record_verified_reuse(&mut self) {
         self.verified_reuse += 1;
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Cache quarantine is a Phase 34+ counter; Phase 23 records it as an explicit zero unless tests exercise it."
+        )
+    )]
     pub(crate) fn record_quarantine(&mut self) {
         self.quarantines += 1;
     }
@@ -62,6 +76,10 @@ pub(crate) struct ProviderOutputMeta {
 }
 
 impl ProviderOutputMeta {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Provider output metadata construction keeps every identity and status field explicit."
+    )]
     pub(crate) fn new(
         provider_id: impl Into<String>,
         provider_version: impl Into<String>,

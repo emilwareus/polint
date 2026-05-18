@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Phase 23 establishes query, summary, diagnostic, and layer key vocabulary before later cache consumers use every type."
+    )
+)]
+
 use serde::{Deserialize, Serialize};
 
 use super::digest::{Digest, DigestKind};
@@ -69,6 +77,10 @@ pub(crate) struct DiagnosticKey {
 }
 
 impl LayerKey {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Layer cache identity is intentionally explicit so every digest input remains visible at construction."
+    )]
     pub(crate) fn new(
         layer_kind: LayerKind,
         provider_id: impl Into<String>,
@@ -335,15 +347,22 @@ mod tests {
         assert!(summary_json.get("callable_stable_key").is_some());
         assert!(diagnostic_json.get("requested_view_digests").is_some());
         assert!(
-            query_json["layer_digests"][0].to_string() < query_json["layer_digests"][1].to_string()
+            digest_value(&query_json["layer_digests"][0])
+                < digest_value(&query_json["layer_digests"][1])
         );
         assert!(
-            summary_json["dependency_summary_digests"][0].to_string()
-                < summary_json["dependency_summary_digests"][1].to_string()
+            digest_value(&summary_json["dependency_summary_digests"][0])
+                < digest_value(&summary_json["dependency_summary_digests"][1])
         );
         assert!(
-            diagnostic_json["requested_view_digests"][0].to_string()
-                < diagnostic_json["requested_view_digests"][1].to_string()
+            digest_value(&diagnostic_json["requested_view_digests"][0])
+                < digest_value(&diagnostic_json["requested_view_digests"][1])
         );
+    }
+
+    fn digest_value(value: &serde_json::Value) -> &str {
+        value["value"]
+            .as_str()
+            .expect("serialized digest should have a string value")
     }
 }
