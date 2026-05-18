@@ -62,6 +62,33 @@ pub mod __private {
     use crate::core::{Rule, RuleCtx};
     use crate::rule_error::RuleResult;
 
+    /// Hidden generated-code carrier for fact-view manifest metadata.
+    #[doc(hidden)]
+    pub struct FactViewRequirement {
+        view_type: &'static str,
+        canonical_path: &'static str,
+        capability: &'static str,
+        parameter_name: &'static str,
+    }
+
+    impl FactViewRequirement {
+        /// Creates hidden fact-view metadata for generated `#[polint::rule]` code.
+        #[doc(hidden)]
+        pub fn generated(
+            view_type: &'static str,
+            canonical_path: &'static str,
+            capability: &'static str,
+            parameter_name: &'static str,
+        ) -> Self {
+            Self {
+                view_type,
+                canonical_path,
+                capability,
+                parameter_name,
+            }
+        }
+    }
+
     /// Constructs an opaque rule for generated `#[polint::rule]` code.
     #[doc(hidden)]
     pub fn make_rule<M, C, R>(meta: M, capabilities: C, run: R) -> Rule
@@ -71,6 +98,33 @@ pub mod __private {
         R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
     {
         Rule::from_parts(meta, capabilities, run)
+    }
+
+    /// Constructs an opaque rule with manifest metadata for generated `#[polint::rule]` code.
+    #[doc(hidden)]
+    pub fn make_rule_with_manifest<M, C, R>(
+        meta: M,
+        capabilities: C,
+        fact_views: Vec<FactViewRequirement>,
+        run: R,
+    ) -> Rule
+    where
+        M: Fn() -> RuleMeta + Send + Sync + 'static,
+        C: Fn() -> Capabilities + Send + Sync + 'static,
+        R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
+    {
+        let fact_views = fact_views
+            .into_iter()
+            .map(|view| {
+                crate::rule_manifest::FactViewRequirement::generated(
+                    view.view_type,
+                    view.canonical_path,
+                    view.capability,
+                    view.parameter_name,
+                )
+            })
+            .collect();
+        Rule::from_parts_with_fact_views(meta, capabilities, fact_views, run)
     }
 }
 
@@ -160,6 +214,16 @@ mod tests {
         assert!(capabilities.imports);
         assert!(capabilities.string_literals);
         assert!(capabilities.jsx_attributes);
+        let manifest = rule.manifest(None);
+        assert_eq!(manifest.id, "examples/prelude-smoke");
+        assert_eq!(
+            manifest
+                .fact_views
+                .iter()
+                .map(|view| view.view_type.as_str())
+                .collect::<Vec<_>>(),
+            ["Imports", "JsxAttributes", "SourceFiles", "StringLiterals"]
+        );
         let metric_capabilities = metric_prelude_smoke().capabilities();
         assert!(metric_capabilities.file_metrics);
         assert!(metric_capabilities.function_metrics);
