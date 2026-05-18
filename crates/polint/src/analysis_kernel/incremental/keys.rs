@@ -247,6 +247,70 @@ impl LayerKey {
             )],
         )
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Symbol graph layer identity must keep source, import, lifecycle, upstream, and provider inputs explicit."
+    )]
+    pub(crate) fn symbol_graph_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        package_context_digests: Vec<Digest>,
+        import_shape_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        symbol_graph_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.symbol_graph",
+            "symbol graph layer keys require the symbol graph provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "symbol_graph_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(
+            2 + source_function_digests.len()
+                + package_context_digests.len()
+                + import_shape_digests.len(),
+        );
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.extend(source_function_digests);
+        input_digests.extend(package_context_digests);
+        input_digests.extend(import_shape_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(1 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.push(dependency_layer_digest(module_graph_output_digest));
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+
+        Self::new(
+            LayerKind::SymbolGraph,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            symbol_graph_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "symbol_graph_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
 }
 
 impl QueryKey {

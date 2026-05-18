@@ -4,13 +4,21 @@ pub(crate) mod query;
 pub(crate) mod stable_id;
 pub(crate) mod ts;
 
+use crate::analysis_kernel::ProviderManifest;
+use crate::analysis_kernel::incremental::{
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
+    InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
+    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+};
 use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{
-    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, Language,
+    AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, DefinitionFact,
+    FunctionFact, ImportFact, Language, PackageFact, ReferenceFact, SourceFile, Span, SymbolFact,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
-use model::SymbolGraphBuilder;
+use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
 
 const SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -19,6 +27,8 @@ const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
 pub(crate) struct SymbolGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
 }
 
 impl SymbolGraphDerivation {
@@ -44,7 +54,145 @@ pub(crate) struct LanguageSymbolOutput {
     pub(crate) capability_support: Vec<CapabilitySupport>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Compatibility wrapper remains for direct in-crate symbol derivation callers while the kernel uses the stats-returning cache path."
+    )
+)]
 pub(crate) fn derive_requested_symbols(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+) -> SymbolGraphDerivation {
+    derive_requested_symbols_uncached(db, loaded, plan)
+}
+
+pub(crate) fn symbol_graph_layer_key(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+    module_graph_output_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> LayerKey {
+    LayerKey::symbol_graph_layer_key(
+        manifest,
+        symbol_graph_source_function_digests(db),
+        symbol_graph_package_context_digests(db),
+        symbol_graph_import_shape_digests(db),
+        config_digest,
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
+        module_graph_output_digest,
+        upstream_syntax_output_digests,
+        symbol_graph_parameter_digest(),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Symbol graph cache identity consumes cache, snapshot, provider manifest, module graph output, and upstream syntax outputs explicitly."
+)]
+pub(crate) fn derive_requested_symbols_with_cache_stats(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> SymbolGraphDerivation {
+    if !plan.requests_any_capability(SYMBOL_GRAPH_CAPABILITIES) {
+        return SymbolGraphDerivation::default();
+    }
+
+    let config_digest = input_snapshot.config.digest.clone();
+    let go_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::GoLifecycle,
+        "symbol_graph_go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
+    let ts_js_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::TsJsLifecycle,
+        "symbol_graph_ts_js_lifecycle",
+        &input_snapshot.ts_js_lifecycle.components,
+    );
+    let layer_key = symbol_graph_layer_key(
+        db,
+        manifest,
+        config_digest.clone(),
+        go_lifecycle_digest.clone(),
+        ts_js_lifecycle_digest.clone(),
+        module_graph_output_digest.clone(),
+        upstream_syntax_output_digests.clone(),
+    );
+    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let mut cache_stats = CacheStats::default();
+    let read = store
+        .read_json_validated::<SymbolGraphLayerPayload, _>(&layer_key, |payload, manifest| {
+            validate_symbol_graph_layer_payload(payload, manifest)
+        });
+
+    match read.status {
+        LayerCacheReadStatus::Hit => {
+            cache_stats.record_hit();
+            cache_stats.record_verified_reuse();
+            let payload = read
+                .value
+                .expect("layer cache hit should include symbol graph payload");
+            restore_symbol_graph_layer_payload(db, &payload);
+            SymbolGraphDerivation {
+                diagnostics: payload.diagnostics,
+                capability_support: payload.capability_support,
+                cache_stats,
+                output_digest: read.output_digest,
+            }
+        }
+        LayerCacheReadStatus::BypassedDisabled => {
+            cache_stats.record_disabled_bypass();
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_symbols_uncached(db, loaded, plan);
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
+            if read.status == LayerCacheReadStatus::Miss {
+                cache_stats.record_miss();
+            } else {
+                cache_stats.record_invalid_evicted_read();
+            }
+            cache_stats.record_recompute();
+            let mut derivation = derive_requested_symbols_uncached(db, loaded, plan);
+            let payload = symbol_graph_layer_payload(db, &derivation);
+            let dependencies = symbol_graph_layer_dependency_edges(
+                db,
+                &layer_key,
+                manifest,
+                &module_graph_output_digest,
+                &upstream_syntax_output_digests,
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+            );
+            derivation.output_digest = write_symbol_graph_layer_payload(
+                &store,
+                layer_key,
+                &payload,
+                dependencies,
+                &mut cache_stats,
+                &mut derivation.diagnostics,
+            );
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+    }
+}
+
+fn derive_requested_symbols_uncached(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
@@ -72,7 +220,523 @@ pub(crate) fn derive_requested_symbols(
         .diagnostics
         .extend(capability_diagnostics(&derivation.capability_support));
     sort_symbol_derivation(&mut derivation);
+    derivation.output_digest = Some(symbol_graph_output_digest_for_payload(
+        &symbol_graph_layer_payload(db, &derivation),
+        None,
+    ));
     derivation
+}
+
+fn symbol_graph_layer_dependency_edges(
+    db: &AnalysisDb,
+    key: &LayerKey,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: &Digest,
+    upstream_syntax_output_digests: &[Digest],
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(key.clone());
+    let mut edges = Vec::new();
+
+    for file in sorted_files(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "source:{}:{}",
+                normalized_file_path(file),
+                file.content_hash
+            )),
+            DependencyKind::SourceText,
+            ShapeKind::Content,
+        ));
+    }
+
+    for function in sorted_functions(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "function:{}:{}:{}:{}:{}",
+                db.path_for(function.file),
+                function.name,
+                function.span.start_byte,
+                function.span.end_byte,
+                language_cache_label(function.language)
+            )),
+            DependencyKind::Input,
+            ShapeKind::Syntax,
+        ));
+    }
+
+    for package in sorted_packages(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "package:{}:{}:{}",
+                db.path_for(package.file),
+                language_cache_label(package.language),
+                package.name
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for import in sorted_imports(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "import:{}:{}:{}:{}",
+                db.path_for(import.file),
+                import.path,
+                import.span.start_byte,
+                language_cache_label(import.language)
+            )),
+            DependencyKind::ImportShape,
+            ShapeKind::Import,
+        ));
+    }
+
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("config:{}", config_digest)),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "provider_schema:{}:{}",
+            manifest.id,
+            manifest.primary_schema_label()
+        )),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input("toolchain:symbol_graph:absent".to_string()),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Layer(upstream_layer_key(
+            LayerKind::ModuleGraph,
+            "polint.module_graph",
+            module_graph_output_digest.clone(),
+        )),
+        DependencyKind::UpstreamLayer,
+        ShapeKind::Output,
+    ));
+
+    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
+        let (layer_kind, provider_id) = match index {
+            0 => (LayerKind::GoSyntax, "polint.go.syntax"),
+            1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
+            _ => (LayerKind::Extension, "polint.unknown_upstream"),
+        };
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Layer(upstream_layer_key(layer_kind, provider_id, output_digest)),
+            DependencyKind::UpstreamLayer,
+            ShapeKind::Output,
+        ));
+    }
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+fn symbol_graph_source_function_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let mut digests = sorted_files(db)
+        .into_iter()
+        .map(|file| {
+            let parts = [
+                normalized_file_path(file),
+                file.content_hash.clone(),
+                language_cache_label(file.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::SourceText, "source_text", &refs)
+        })
+        .collect::<Vec<_>>();
+    digests.extend(sorted_functions(db).into_iter().map(|function| {
+        let mut calls = function.calls.clone();
+        calls.sort();
+        calls.dedup();
+        let parts = [
+            db.path_for(function.file),
+            function.name.clone(),
+            function.span.start_byte.to_string(),
+            function.span.end_byte.to_string(),
+            function.is_test.to_string(),
+            function.is_exported.to_string(),
+            function.cyclomatic_complexity.to_string(),
+            language_cache_label(function.language).to_string(),
+            calls.join("\n"),
+        ];
+        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        Digest::from_parts(DigestKind::ProviderParameters, "function_fact", &refs)
+    }));
+    digests.sort();
+    digests
+}
+
+fn symbol_graph_package_context_digests(db: &AnalysisDb) -> Vec<Digest> {
+    sorted_packages(db)
+        .into_iter()
+        .map(|package| {
+            let parts = [
+                db.path_for(package.file),
+                package.name.clone(),
+                language_cache_label(package.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::ProviderParameters, "package_context", &refs)
+        })
+        .collect()
+}
+
+fn symbol_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
+    sorted_imports(db)
+        .into_iter()
+        .map(|import| {
+            let parts = [
+                db.path_for(import.file),
+                import.path.clone(),
+                import.package.clone().unwrap_or_default(),
+                import.span.start_byte.to_string(),
+                import.span.end_byte.to_string(),
+                language_cache_label(import.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &refs)
+        })
+        .collect()
+}
+
+fn symbol_graph_parameter_digest() -> Digest {
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "symbol_graph_parameters",
+        &["output=symbols", "output=definitions", "output=references"],
+    )
+}
+
+fn symbol_graph_layer_payload(
+    db: &AnalysisDb,
+    derivation: &SymbolGraphDerivation,
+) -> SymbolGraphLayerPayload {
+    let mut symbols = db.symbols().to_vec();
+    let mut definitions = db.definitions().to_vec();
+    let mut references = db.references().to_vec();
+    sort_symbol_facts(&mut symbols);
+    sort_definition_facts(&mut definitions);
+    sort_reference_facts(&mut references);
+
+    SymbolGraphLayerPayload {
+        schema: SYMBOL_GRAPH_LAYER_SCHEMA.to_string(),
+        diagnostics: derivation.diagnostics.clone(),
+        capability_support: derivation.capability_support.clone(),
+        symbols,
+        definitions,
+        references,
+    }
+}
+
+fn restore_symbol_graph_layer_payload(db: &mut AnalysisDb, payload: &SymbolGraphLayerPayload) {
+    let mut symbols = payload.symbols.clone();
+    let mut definitions = payload.definitions.clone();
+    let mut references = payload.references.clone();
+    sort_symbol_facts(&mut symbols);
+    sort_definition_facts(&mut definitions);
+    sort_reference_facts(&mut references);
+    db.replace_symbol_graph_facts(symbols, definitions, references);
+}
+
+fn validate_symbol_graph_layer_payload(
+    payload: &SymbolGraphLayerPayload,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    payload.schema == SYMBOL_GRAPH_LAYER_SCHEMA
+        && manifest.output_digest
+            == symbol_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn write_symbol_graph_layer_payload(
+    store: &LayerCacheStore,
+    layer_key: LayerKey,
+    payload: &SymbolGraphLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Digest> {
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("symbol graph layer", error));
+            return None;
+        }
+    };
+    let output_digest = symbol_graph_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest.clone(),
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        "native_trusted",
+        Vec::new(),
+    );
+
+    match store.write_json(&manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("symbol graph layer", error)),
+    }
+    Some(output_digest)
+}
+
+fn symbol_graph_output_digest_for_payload(
+    payload: &SymbolGraphLayerPayload,
+    layer_key: Option<&LayerKey>,
+) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "symbol_graph", "json"));
+    if let Some(layer_key) = layer_key {
+        symbol_graph_output_digest(layer_key, &payload_digest)
+    } else {
+        Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "symbol_graph_layer_output",
+            &[&payload_digest.to_string()],
+        )
+    }
+}
+
+fn symbol_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
+    let layer_key_json =
+        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "symbol_graph_layer_output",
+        &[&payload_digest.to_string(), &layer_key_json],
+    )
+}
+
+fn lifecycle_component_digest(
+    kind: DigestKind,
+    label: &str,
+    components: &[InputComponent],
+) -> Digest {
+    Digest::from_unordered(
+        kind,
+        label,
+        components
+            .iter()
+            .map(|component| component.digest.clone())
+            .collect(),
+    )
+}
+
+fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
+    Diagnostic::warning(
+        "internal/cache",
+        path,
+        TextRange::point(1, 1),
+        format!("cache write failed: {error}"),
+    )
+}
+
+fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
+    let mut files = db.files().iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    files
+}
+
+fn sorted_functions(db: &AnalysisDb) -> Vec<&FunctionFact> {
+    let mut functions = db.functions().iter().collect::<Vec<_>>();
+    functions.sort_by(|left, right| {
+        (
+            db.path_for(left.file),
+            left.span.start_byte,
+            left.span.end_byte,
+            left.name.as_str(),
+            left.id,
+        )
+            .cmp(&(
+                db.path_for(right.file),
+                right.span.start_byte,
+                right.span.end_byte,
+                right.name.as_str(),
+                right.id,
+            ))
+    });
+    functions
+}
+
+fn sorted_packages(db: &AnalysisDb) -> Vec<&PackageFact> {
+    let mut packages = db.packages().iter().collect::<Vec<_>>();
+    packages.sort_by(|left, right| {
+        (
+            db.path_for(left.file),
+            left.language,
+            left.name.as_str(),
+            left.id,
+        )
+            .cmp(&(
+                db.path_for(right.file),
+                right.language,
+                right.name.as_str(),
+                right.id,
+            ))
+    });
+    packages
+}
+
+fn sorted_imports(db: &AnalysisDb) -> Vec<&ImportFact> {
+    let mut imports = db.imports().iter().collect::<Vec<_>>();
+    imports.sort_by(|left, right| {
+        (
+            db.path_for(left.file),
+            left.span.start_byte,
+            left.path.as_str(),
+            left.id,
+        )
+            .cmp(&(
+                db.path_for(right.file),
+                right.span.start_byte,
+                right.path.as_str(),
+                right.id,
+            ))
+    });
+    imports
+}
+
+fn normalized_file_path(file: &SourceFile) -> String {
+    crate::module_graph::paths::normalize_repo_relative(&file.relative_path)
+        .unwrap_or_else(|| file.relative_path.clone())
+}
+
+fn dependency_edge(
+    from: &CacheNode,
+    to: CacheNode,
+    kind: DependencyKind,
+    required_shape: ShapeKind,
+) -> DependencyEdge {
+    DependencyEdge {
+        from: from.clone(),
+        to,
+        kind,
+        required_shape,
+    }
+}
+
+fn upstream_layer_key(layer_kind: LayerKind, provider_id: &str, output_digest: Digest) -> LayerKey {
+    let output_dependency = dependency_layer_digest(output_digest);
+
+    LayerKey::new(
+        layer_kind,
+        provider_id,
+        "output-digest",
+        "output-digest",
+        output_dependency.clone(),
+        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
+        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
+        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
+        vec![output_dependency],
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn language_cache_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
+}
+
+fn sort_symbol_facts(symbols: &mut [SymbolFact]) {
+    symbols.sort_by(|left, right| {
+        fact_order_key(
+            &left.stable_key,
+            left.file,
+            left.primary_span.as_ref(),
+            &left.name,
+        )
+        .cmp(&fact_order_key(
+            &right.stable_key,
+            right.file,
+            right.primary_span.as_ref(),
+            &right.name,
+        ))
+    });
+}
+
+fn sort_definition_facts(definitions: &mut [DefinitionFact]) {
+    definitions.sort_by(|left, right| {
+        fact_order_key(
+            &left.stable_key,
+            left.file,
+            left.primary_span.as_ref(),
+            &left.name,
+        )
+        .cmp(&fact_order_key(
+            &right.stable_key,
+            right.file,
+            right.primary_span.as_ref(),
+            &right.name,
+        ))
+    });
+}
+
+fn sort_reference_facts(references: &mut [ReferenceFact]) {
+    references.sort_by(|left, right| {
+        fact_order_key(
+            &left.stable_key,
+            left.file,
+            left.primary_span.as_ref(),
+            &left.name,
+        )
+        .cmp(&fact_order_key(
+            &right.stable_key,
+            right.file,
+            right.primary_span.as_ref(),
+            &right.name,
+        ))
+    });
+}
+
+fn fact_order_key<'a>(
+    stable_key: &'a str,
+    file: Option<crate::core::FileId>,
+    span: Option<&Span>,
+    name: &'a str,
+) -> (&'a str, Option<crate::core::FileId>, u32, u32, &'a str) {
+    let (start_byte, end_byte) = span
+        .map(|span| (span.start_byte, span.end_byte))
+        .unwrap_or((u32::MAX, u32::MAX));
+    (stable_key, file, start_byte, end_byte, name)
 }
 
 fn merge_language_output(derivation: &mut SymbolGraphDerivation, output: LanguageSymbolOutput) {
@@ -614,6 +1278,7 @@ export function answer() {{
                     docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
                 },
             ],
+            ..SymbolGraphDerivation::default()
         };
         let base = CapabilitySupportView::new(vec![CapabilitySupport {
             capability: "symbols".to_string(),
@@ -720,100 +1385,122 @@ export function answer() {{
         assert!(first.1.iter().all(|(_, name, _, _)| name != "stale"));
     }
 
-    #[test]
-    fn symbol_graph_layer_reuses_warm_cache() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let loaded = loaded_config_for(temp.path());
-        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
-        let plan = requested_symbol_plan();
-        let mut first_db = fixture_db(temp.path(), "./target");
-        let mut second_db = fixture_db(temp.path(), "./target");
+    mod symbol_graph_layer_cache {
+        use super::*;
 
-        let first =
+        #[test]
+        fn symbol_graph_layer_reuses_warm_cache() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = loaded_config_for(temp.path());
+            let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+            let plan = requested_symbol_plan();
+            let mut first_db = fixture_db(temp.path(), "./target");
+            let mut second_db = fixture_db(temp.path(), "./target");
+
+            let first = derive_symbols_with_cache(
+                &mut first_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+            let second = derive_symbols_with_cache(
+                &mut second_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+
+            assert_eq!(first.cache_stats.misses, 1);
+            assert_eq!(first.cache_stats.recomputes, 1);
+            assert_eq!(first.cache_stats.writes, 1);
+            assert_eq!(second.cache_stats.hits, 1);
+            assert_eq!(second.cache_stats.verified_reuse, 1);
+            assert_eq!(second.cache_stats.recomputes, 0);
+            assert_eq!(first.output_digest, second.output_digest);
+            assert_eq!(symbol_rows(&first_db), symbol_rows(&second_db));
+            assert_eq!(reference_rows(&first_db), reference_rows(&second_db));
+        }
+
+        #[test]
+        fn symbol_graph_layer_invalidates_on_import_or_module_digest_change() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = loaded_config_for(temp.path());
+            let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+            let plan = requested_symbol_plan();
+            let mut base_db = fixture_db(temp.path(), "./target");
+            derive_symbols_with_cache(&mut base_db, &loaded, &cache, &plan, "config", "stable");
+
+            let mut import_changed_db = fixture_db(temp.path(), "./other");
+            let import_changed = derive_symbols_with_cache(
+                &mut import_changed_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+            let mut module_changed_db = fixture_db(temp.path(), "./target");
+            let module_changed = derive_symbols_with_cache(
+                &mut module_changed_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "changed",
+            );
+
+            assert_eq!(import_changed.cache_stats.misses, 1);
+            assert_eq!(import_changed.cache_stats.recomputes, 1);
+            assert_eq!(module_changed.cache_stats.misses, 1);
+            assert_eq!(module_changed.cache_stats.recomputes, 1);
+        }
+
+        #[test]
+        fn symbol_graph_layer_corrupt_cache_recomputes() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = loaded_config_for(temp.path());
+            let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+            let plan = requested_symbol_plan();
+            let mut first_db = fixture_db(temp.path(), "./target");
             derive_symbols_with_cache(&mut first_db, &loaded, &cache, &plan, "config", "stable");
-        let second =
-            derive_symbols_with_cache(&mut second_db, &loaded, &cache, &plan, "config", "stable");
+            let manifest = first_layer_file(temp.path().join("cache").as_path(), "manifests");
+            fs::write(manifest, "{broken").expect("corrupt symbol graph manifest");
+            let mut second_db = fixture_db(temp.path(), "./target");
 
-        assert_eq!(first.cache_stats.misses, 1);
-        assert_eq!(first.cache_stats.recomputes, 1);
-        assert_eq!(first.cache_stats.writes, 1);
-        assert_eq!(second.cache_stats.hits, 1);
-        assert_eq!(second.cache_stats.verified_reuse, 1);
-        assert_eq!(second.cache_stats.recomputes, 0);
-        assert_eq!(first.output_digest, second.output_digest);
-        assert_eq!(symbol_rows(&first_db), symbol_rows(&second_db));
-        assert_eq!(reference_rows(&first_db), reference_rows(&second_db));
-    }
+            let second = derive_symbols_with_cache(
+                &mut second_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
 
-    #[test]
-    fn symbol_graph_layer_invalidates_on_import_or_module_digest_change() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let loaded = loaded_config_for(temp.path());
-        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
-        let plan = requested_symbol_plan();
-        let mut base_db = fixture_db(temp.path(), "./target");
-        derive_symbols_with_cache(&mut base_db, &loaded, &cache, &plan, "config", "stable");
+            assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
+            assert_eq!(second.cache_stats.recomputes, 1);
+        }
 
-        let mut import_changed_db = fixture_db(temp.path(), "./other");
-        let import_changed = derive_symbols_with_cache(
-            &mut import_changed_db,
-            &loaded,
-            &cache,
-            &plan,
-            "config",
-            "stable",
-        );
-        let mut module_changed_db = fixture_db(temp.path(), "./target");
-        let module_changed = derive_symbols_with_cache(
-            &mut module_changed_db,
-            &loaded,
-            &cache,
-            &plan,
-            "config",
-            "changed",
-        );
+        #[test]
+        fn symbol_graph_layer_disabled_cache_records_bypass_without_layer_files() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = loaded_config_for(temp.path());
+            let cache_root = temp.path().join("cache").join("analysis");
+            let cache = Cache::new(&cache_root, false);
+            let plan = requested_symbol_plan();
+            let mut db = fixture_db(temp.path(), "./target");
 
-        assert_eq!(import_changed.cache_stats.misses, 1);
-        assert_eq!(import_changed.cache_stats.recomputes, 1);
-        assert_eq!(module_changed.cache_stats.misses, 1);
-        assert_eq!(module_changed.cache_stats.recomputes, 1);
-    }
+            let derivation =
+                derive_symbols_with_cache(&mut db, &loaded, &cache, &plan, "config", "stable");
 
-    #[test]
-    fn symbol_graph_layer_corrupt_cache_recomputes() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let loaded = loaded_config_for(temp.path());
-        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
-        let plan = requested_symbol_plan();
-        let mut first_db = fixture_db(temp.path(), "./target");
-        derive_symbols_with_cache(&mut first_db, &loaded, &cache, &plan, "config", "stable");
-        let manifest = first_layer_file(temp.path().join("cache").as_path(), "manifests");
-        fs::write(manifest, "{broken").expect("corrupt symbol graph manifest");
-        let mut second_db = fixture_db(temp.path(), "./target");
-
-        let second =
-            derive_symbols_with_cache(&mut second_db, &loaded, &cache, &plan, "config", "stable");
-
-        assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
-        assert_eq!(second.cache_stats.recomputes, 1);
-    }
-
-    #[test]
-    fn symbol_graph_layer_disabled_cache_records_bypass_without_layer_files() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let loaded = loaded_config_for(temp.path());
-        let cache_root = temp.path().join("cache").join("analysis");
-        let cache = Cache::new(&cache_root, false);
-        let plan = requested_symbol_plan();
-        let mut db = fixture_db(temp.path(), "./target");
-
-        let derivation =
-            derive_symbols_with_cache(&mut db, &loaded, &cache, &plan, "config", "stable");
-
-        assert_eq!(derivation.cache_stats.bypasses_disabled, 1);
-        assert_eq!(derivation.cache_stats.recomputes, 1);
-        assert!(!temp.path().join("cache").join("layers").exists());
-        assert!(!db.symbols().is_empty());
+            assert_eq!(derivation.cache_stats.bypasses_disabled, 1);
+            assert_eq!(derivation.cache_stats.recomputes, 1);
+            assert!(!temp.path().join("cache").join("layers").exists());
+            assert!(!db.symbols().is_empty());
+        }
     }
 
     fn symbol_rows(db: &AnalysisDb) -> Vec<(String, String, SymbolKind, SymbolPrecision)> {

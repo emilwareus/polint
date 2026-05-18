@@ -234,6 +234,13 @@ pub(crate) fn module_graph_parameter_digest() -> Digest {
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Compatibility wrapper remains for direct in-crate module graph derivation callers while the kernel uses the stats-returning cache path."
+    )
+)]
 pub(crate) fn derive_requested_module_graph(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,

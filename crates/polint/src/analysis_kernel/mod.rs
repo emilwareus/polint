@@ -105,6 +105,12 @@ impl AnalysisKernel {
             ts_output_digest.clone(),
         ));
 
+        let go_dependency_output_digest = go_output_digest.clone().unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.go.syntax")
+        });
+        let ts_dependency_output_digest = ts_output_digest.clone().unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.ts.syntax")
+        });
         let module_graph = crate::module_graph::derive_requested_module_graph_with_cache_stats(
             &mut db,
             input.loaded,
@@ -113,18 +119,8 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.module_graph"),
             vec![
-                go_output_digest.unwrap_or_else(|| {
-                    incremental::Digest::absent(
-                        incremental::DigestKind::ProviderOutput,
-                        "polint.go.syntax",
-                    )
-                }),
-                ts_output_digest.unwrap_or_else(|| {
-                    incremental::Digest::absent(
-                        incremental::DigestKind::ProviderOutput,
-                        "polint.ts.syntax",
-                    )
-                }),
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
             ],
         );
         let module_support = module_graph.support_view(input.plan.support_view());
@@ -136,17 +132,34 @@ impl AnalysisKernel {
             "polint.module_graph",
             &db,
             polint_module_graph_cache_stats,
-            module_output_digest,
+            module_output_digest.clone(),
         ));
 
-        let symbol_graph =
-            crate::symbol_graph::derive_requested_symbols(&mut db, input.loaded, input.plan);
+        let module_dependency_output_digest = module_output_digest.clone().unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.module_graph",
+            )
+        });
+        let symbol_graph = crate::symbol_graph::derive_requested_symbols_with_cache_stats(
+            &mut db,
+            input.loaded,
+            input.plan,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.symbol_graph"),
+            module_dependency_output_digest,
+            vec![go_dependency_output_digest, ts_dependency_output_digest],
+        );
         let capability_support = symbol_graph.support_view(&module_support);
+        let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
+        let symbol_output_digest = symbol_graph.output_digest.clone();
         diagnostics.extend(symbol_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.symbol_graph",
             &db,
-            incremental::CacheStats::default(),
+            polint_symbol_graph_cache_stats,
+            symbol_output_digest,
         ));
 
         crate::metrics::derive_requested_metrics(&mut db, input.plan);
