@@ -763,6 +763,90 @@ mod tests {
         assert!(!cache.path_for(&key).exists());
     }
 
+    mod cache_read_status {
+        use super::*;
+
+        fn key() -> CacheKey {
+            CacheKey::for_file(
+                "src/main.go",
+                "content",
+                "config",
+                "rule",
+                "plan",
+                "go-facts-v1",
+            )
+        }
+
+        #[test]
+        fn read_json_with_status_returns_disabled_when_cache_is_disabled() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), false);
+            let key = key();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Disabled);
+            assert!(outcome.value.is_none());
+            assert!(!cache.root().exists());
+        }
+
+        #[test]
+        fn read_json_with_status_returns_miss_when_entry_is_absent() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Miss);
+            assert!(outcome.value.is_none());
+        }
+
+        #[test]
+        fn read_json_with_status_returns_hit_when_entry_is_valid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1", "items": [1, 2] });
+
+            cache.write_json(&key, &value).unwrap();
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Hit);
+            assert_eq!(outcome.value, Some(value));
+        }
+
+        #[test]
+        fn read_json_with_status_evicts_invalid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            fs::create_dir_all(cache.root()).unwrap();
+            fs::write(cache.path_for(&key), "{not-json").unwrap();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
+            assert!(outcome.value.is_none());
+            assert!(!cache.path_for(&key).exists());
+        }
+
+        #[test]
+        fn write_json_preserves_existing_success_contract() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1" });
+
+            let status = cache.write_json_with_status(&key, &value).unwrap();
+            cache.write_json(&key, &value).unwrap();
+            let restored: serde_json::Value = cache.read_json(&key).unwrap().unwrap();
+
+            assert_eq!(status, CacheWriteStatus::Written);
+            assert_eq!(restored, value);
+        }
+    }
+
     #[test]
     fn cache_status_counts_managed_categories() {
         let temp = tempfile::tempdir().unwrap();
