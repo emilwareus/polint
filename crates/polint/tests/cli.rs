@@ -5389,8 +5389,11 @@ go 1.24
         fs::write(
             &rule_path,
             rule_source
-                .replace("literals: StringLiterals<'_>", "jsx: JsxAttributes<'_>")
-                .replace("literals.iter().count()", "jsx.iter().count()"),
+                .replace(
+                    "literals: StringLiterals<'_>",
+                    "module_graph: ModuleGraphFacts<'_>",
+                )
+                .replace("literals.iter().count()", "module_graph.nodes().len()"),
         )
         .unwrap();
 
@@ -5791,7 +5794,7 @@ fn cache_status_reports_structured_cache_layout() {
     let categories = json["categories"].as_array().unwrap();
     assert_eq!(
         categories.len(),
-        3,
+        4,
         "unexpected cache categories: {json:#?}"
     );
     assert!(categories.iter().any(|category| {
@@ -5805,6 +5808,12 @@ fn cache_status_reports_structured_cache_layout() {
         categories
             .iter()
             .any(|category| { category["name"] == "rules-target" && category["files"] == 1 })
+    );
+    assert!(
+        categories.iter().any(|category| {
+            category["name"] == "layers" && category["exists"] == false && category["files"] == 0
+        }),
+        "cache status should report the managed layers category without requiring it to exist: {json:#?}"
     );
 }
 
