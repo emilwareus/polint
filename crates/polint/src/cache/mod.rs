@@ -919,6 +919,12 @@ mod tests {
 
         assert_eq!(status.total_files, 2);
         assert_eq!(status.total_bytes, 8);
+        assert!(
+            status
+                .categories
+                .iter()
+                .any(|category| category.name == "layers")
+        );
     }
 
     #[test]
@@ -938,6 +944,23 @@ mod tests {
         assert_eq!(report.removed_files, 1);
         assert!(!layout.analysis_dir().exists());
         assert!(layout.root().join("unmanaged.json").exists());
+    }
+
+    #[test]
+    fn cache_layout_manages_layer_cache_category() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = CacheLayout::from_root(temp.path().join("cache"));
+        fs::create_dir_all(layout.layer_cache_dir()).unwrap();
+        fs::write(layout.layer_cache_dir().join("manifest.json"), "{}").unwrap();
+
+        let report = layout
+            .clean(CacheCleanSelection::Category(CacheManagedCategory::Layers))
+            .unwrap();
+
+        assert_eq!(layout.layer_cache_dir(), layout.root().join("layers"));
+        assert_eq!(CacheManagedCategory::Layers.name(), "layers");
+        assert_eq!(report.removed_files, 1);
+        assert!(!layout.layer_cache_dir().exists());
     }
 
     proptest! {

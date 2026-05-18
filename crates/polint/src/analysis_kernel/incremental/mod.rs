@@ -4,6 +4,7 @@ mod digest;
 mod input_snapshot;
 mod invalidation;
 mod keys;
+mod layer_cache;
 mod run_report;
 mod stats;
 
@@ -91,6 +92,24 @@ pub(crate) use invalidation::{
     )
 )]
 pub(crate) use keys::{DiagnosticKey, LayerKey, PrecisionTier, QueryKey, SummaryKey};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported cache vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Phase 24 establishes layer-cache persistence before providers consume every helper."
+    )
+)]
+pub(crate) use layer_cache::{
+    LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
+    LayerCacheStore, LayerCacheWriteStatus,
+};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
 };
