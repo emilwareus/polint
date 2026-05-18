@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-18T17:52:28.148Z"
-last_activity: 2026-05-18 -- Phase 25 planning complete
+last_updated: "2026-05-18T17:53:11.986Z"
+last_activity: 2026-05-18 -- Phase 25 execution started
 progress:
   total_phases: 22
   completed_phases: 5
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 25 - Rule Manifest, Inspect, and Test Skeleton
+**Current focus:** Phase 25 — Rule Manifest, Inspect, and Test Skeleton
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 25
-Plan: Not started
-Last activity: 2026-05-18 -- Phase 25 planning complete
+Status: Executing Phase 25
+Phase: 25 (Rule Manifest, Inspect, and Test Skeleton) — EXECUTING
+Plan: 1 of 4
+Last activity: 2026-05-18 -- Phase 25 execution started
 
 ## Phase Progress
 
