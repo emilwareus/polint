@@ -26,29 +26,6 @@ pub(crate) enum FactFamily {
     ComplexityMetric,
 }
 
-const FACT_FAMILY_VOCABULARY: &[FactFamily] = &[
-    FactFamily::SourceFile,
-    FactFamily::Package,
-    FactFamily::Function,
-    FactFamily::Import,
-    FactFamily::BranchObligation,
-    FactFamily::Test,
-    FactFamily::Coverage,
-    FactFamily::TsComponent,
-    FactFamily::TsClass,
-    FactFamily::StringLiteral,
-    FactFamily::JsxAttribute,
-    FactFamily::ResolvedImport,
-    FactFamily::ModuleNode,
-    FactFamily::ModuleEdge,
-    FactFamily::Symbol,
-    FactFamily::Definition,
-    FactFamily::Reference,
-    FactFamily::FileMetric,
-    FactFamily::FunctionMetric,
-    FactFamily::ComplexityMetric,
-];
-
 impl FactFamily {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -117,17 +94,6 @@ pub(crate) enum FactPrecision {
     Unsupported,
 }
 
-const FACT_PRECISION_VOCABULARY: &[FactPrecision] = &[
-    FactPrecision::Exact,
-    FactPrecision::Syntax,
-    FactPrecision::SetupAware,
-    FactPrecision::Heuristic,
-    FactPrecision::Unresolved,
-    FactPrecision::Ambiguous,
-    FactPrecision::SetupMissing,
-    FactPrecision::Unsupported,
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FactConfidence {
     High,
@@ -135,13 +101,11 @@ pub(crate) enum FactConfidence {
     Low,
 }
 
-const FACT_CONFIDENCE_VOCABULARY: &[FactConfidence] = &[
-    FactConfidence::High,
-    FactConfidence::Medium,
-    FactConfidence::Low,
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    dead_code,
+    reason = "The validation vocabulary is broader than the native trusted path used before extension providers land."
+)]
 pub(crate) enum ValidationStatus {
     NativeTrusted,
     SchemaValidated,
@@ -150,15 +114,6 @@ pub(crate) enum ValidationStatus {
     StableKeyValidated,
     ConflictRejected,
 }
-
-const VALIDATION_STATUS_VOCABULARY: &[ValidationStatus] = &[
-    ValidationStatus::NativeTrusted,
-    ValidationStatus::SchemaValidated,
-    ValidationStatus::ReferentiallyValidated,
-    ValidationStatus::SpanValidated,
-    ValidationStatus::StableKeyValidated,
-    ValidationStatus::ConflictRejected,
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StableKeyOwner {
@@ -332,16 +287,6 @@ pub(crate) fn symbol_metadata(precision: SymbolPrecision) -> (FactPrecision, Fac
 
 fn length_prefixed(value: &str) -> String {
     format!("{}:{value}", value.len())
-}
-
-pub(super) fn metadata_vocabulary_weight() -> usize {
-    FACT_FAMILY_VOCABULARY
-        .iter()
-        .map(|family| family.label().len())
-        .sum::<usize>()
-        + FACT_PRECISION_VOCABULARY.len()
-        + FACT_CONFIDENCE_VOCABULARY.len()
-        + VALIDATION_STATUS_VOCABULARY.len()
 }
 
 #[cfg(test)]

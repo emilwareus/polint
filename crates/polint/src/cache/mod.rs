@@ -68,6 +68,26 @@ impl CacheKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheReadStatus {
+    Disabled,
+    Miss,
+    Hit,
+    InvalidEvicted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheReadOutcome<T> {
+    pub(crate) value: Option<T>,
+    pub(crate) status: CacheReadStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheWriteStatus {
+    Disabled,
+    Written,
+}
+
 /// Disk-backed JSON cache (used from adapters in-tree; `polint::_bench::cache` for `polint-bench`).
 #[allow(unreachable_pub)]
 #[derive(Debug, Clone)]
@@ -117,39 +137,77 @@ impl Cache {
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn read_json_or_miss<T>(&self, key: &CacheKey) -> Option<T>
     where
         T: for<'de> Deserialize<'de>,
     {
+        self.read_json_with_status(key).value
+    }
+
+    pub(crate) fn read_json_with_status<T>(&self, key: &CacheKey) -> CacheReadOutcome<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         if !self.enabled {
-            return None;
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Disabled,
+            };
         }
         let path = self.path_for(key);
         if !path.exists() {
-            return None;
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Miss,
+            };
         }
-        let raw = fs::read_to_string(&path).ok()?;
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return CacheReadOutcome {
+                value: None,
+                status: CacheReadStatus::Miss,
+            };
+        };
         match serde_json::from_str(&raw) {
-            Ok(value) => Some(value),
+            Ok(value) => CacheReadOutcome {
+                value: Some(value),
+                status: CacheReadStatus::Hit,
+            },
             Err(_) => {
                 let _ = fs::remove_file(path);
-                None
+                CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                }
             }
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
     where
         T: Serialize,
     {
+        self.write_json_with_status(key, value)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_json_with_status<T>(
+        &self,
+        key: &CacheKey,
+        value: &T,
+    ) -> Result<CacheWriteStatus>
+    where
+        T: Serialize,
+    {
         if !self.enabled {
-            return Ok(());
+            return Ok(CacheWriteStatus::Disabled);
         }
         fs::create_dir_all(&self.root)?;
         let path = self.path_for(key);
         fs::write(&path, serde_json::to_vec(value)?)
             .with_context(|| format!("failed to write cache {}", path.display()))?;
-        Ok(())
+        Ok(CacheWriteStatus::Written)
     }
 
     fn path_for(&self, key: &CacheKey) -> PathBuf {
@@ -761,6 +819,90 @@ mod tests {
 
         assert!(restored.is_none());
         assert!(!cache.path_for(&key).exists());
+    }
+
+    mod cache_read_status {
+        use super::*;
+
+        fn key() -> CacheKey {
+            CacheKey::for_file(
+                "src/main.go",
+                "content",
+                "config",
+                "rule",
+                "plan",
+                "go-facts-v1",
+            )
+        }
+
+        #[test]
+        fn read_json_with_status_returns_disabled_when_cache_is_disabled() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), false);
+            let key = key();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Disabled);
+            assert!(outcome.value.is_none());
+            assert!(!cache.root().exists());
+        }
+
+        #[test]
+        fn read_json_with_status_returns_miss_when_entry_is_absent() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Miss);
+            assert!(outcome.value.is_none());
+        }
+
+        #[test]
+        fn read_json_with_status_returns_hit_when_entry_is_valid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1", "items": [1, 2] });
+
+            cache.write_json(&key, &value).unwrap();
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::Hit);
+            assert_eq!(outcome.value, Some(value));
+        }
+
+        #[test]
+        fn read_json_with_status_evicts_invalid_json() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            fs::create_dir_all(cache.root()).unwrap();
+            fs::write(cache.path_for(&key), "{not-json").unwrap();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
+            assert!(outcome.value.is_none());
+            assert!(!cache.path_for(&key).exists());
+        }
+
+        #[test]
+        fn write_json_preserves_existing_success_contract() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            let value = json!({ "schema": "go-facts-v1" });
+
+            let status = cache.write_json_with_status(&key, &value).unwrap();
+            cache.write_json(&key, &value).unwrap();
+            let restored: serde_json::Value = cache.read_json(&key).unwrap().unwrap();
+
+            assert_eq!(status, CacheWriteStatus::Written);
+            assert_eq!(restored, value);
+        }
     }
 
     #[test]

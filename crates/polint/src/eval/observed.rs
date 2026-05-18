@@ -13,6 +13,10 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 #[cfg(test)]
+use crate::analysis_kernel::incremental::{
+    CacheStats, InputComponent, InputComponentStatus, KernelRunReport,
+};
+#[cfg(test)]
 use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 #[cfg(test)]
 use crate::analysis_plan::AnalysisPlan;
@@ -73,6 +77,9 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
     observed.extend(metadata_debug_facts(
         &AnalysisKernel::metadata_debug_json_for_test(&output.db),
     ));
+    observed.extend(snapshot_invariants(&output.run_report));
+    observed.extend(layer_key_invariants(&output.run_report));
+    observed.extend(provider_output_invariants(&output.run_report));
     if let Some(budget) = &fixture.manifest.budget {
         observed.push(ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
             name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
@@ -162,6 +169,173 @@ fn provider_order_invariants() -> Vec<ObservedItem> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+fn snapshot_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
+    let snapshot = &run_report.input_snapshot;
+
+    vec![
+        observed_invariant(
+            "snapshot.schema_version",
+            snapshot.schema_version.as_str(),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.source_text_digest.present",
+            bool_string(
+                !snapshot.files.is_empty()
+                    && snapshot
+                        .files
+                        .iter()
+                        .all(|file| !file.source_text_digest.value.is_empty()),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.config_digest.present",
+            bool_string(component_present(&snapshot.config)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.go_lifecycle.present",
+            bool_string(any_component_present(&snapshot.go_lifecycle.components)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.ts_js_lifecycle.present",
+            bool_string(any_component_present(&snapshot.ts_js_lifecycle.components)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.rule_digest.present",
+            bool_string(snapshot.rules.iter().any(component_present)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.model_digest.absent",
+            bool_string(
+                snapshot
+                    .models
+                    .iter()
+                    .any(|component| component.status == InputComponentStatus::Absent),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.tool_invocation.unsupported",
+            bool_string(
+                snapshot
+                    .tool_invocations
+                    .iter()
+                    .any(|component| component.status == InputComponentStatus::Unsupported),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+    ]
+}
+
+#[cfg(test)]
+fn layer_key_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
+    let has_ts_output = run_report
+        .provider_outputs
+        .iter()
+        .any(|output| output.provider_id == "polint.ts.syntax");
+    vec![observed_invariant(
+        "layer_key.polint.ts.syntax.has_config_digest",
+        bool_string(has_ts_output && component_present(&run_report.input_snapshot.config)),
+        "kernel.run_report.layer_key_inputs",
+    )]
+}
+
+#[cfg(test)]
+fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
+    let mut invariants = Vec::new();
+    let source_present = run_report
+        .provider_outputs
+        .iter()
+        .any(|output| output.provider_id == "polint.source");
+    invariants.push(observed_invariant(
+        "provider_output.polint.source.present",
+        bool_string(source_present),
+        "kernel.run_report.provider_outputs",
+    ));
+
+    for output in &run_report.provider_outputs {
+        if !matches!(
+            output.provider_id.as_str(),
+            "polint.go.syntax" | "polint.ts.syntax"
+        ) {
+            continue;
+        }
+        let prefix = format!("provider_output.{}", output.provider_id);
+        invariants.push(observed_invariant(
+            format!("{prefix}.cache_stats.recorded"),
+            "true",
+            "kernel.run_report.provider_outputs",
+        ));
+        invariants.extend(cache_stat_invariants(&prefix, &output.cache_stats));
+    }
+
+    invariants
+}
+
+#[cfg(test)]
+fn cache_stat_invariants(prefix: &str, stats: &CacheStats) -> Vec<ObservedItem> {
+    [
+        ("cache_stats.hits", stats.hits),
+        ("cache_stats.misses", stats.misses),
+        ("cache_stats.recomputes", stats.recomputes),
+        ("cache_stats.writes", stats.writes),
+        ("cache_stats.bypasses_disabled", stats.bypasses_disabled),
+        (
+            "cache_stats.invalid_evicted_reads",
+            stats.invalid_evicted_reads,
+        ),
+        ("cache_stats.verified_reuse", stats.verified_reuse),
+        ("cache_stats.quarantines", stats.quarantines),
+    ]
+    .into_iter()
+    .map(|(counter, value)| {
+        observed_invariant(
+            format!("{prefix}.{counter}"),
+            value.to_string(),
+            "kernel.run_report.provider_outputs",
+        )
+    })
+    .collect()
+}
+
+#[cfg(test)]
+fn any_component_present(components: &[InputComponent]) -> bool {
+    components.iter().any(component_present)
+}
+
+#[cfg(test)]
+fn component_present(component: &InputComponent) -> bool {
+    component.status == InputComponentStatus::Present && !component.digest.value.is_empty()
+}
+
+#[cfg(test)]
+fn observed_invariant(
+    name: impl Into<String>,
+    value: impl Into<String>,
+    provenance: &'static str,
+) -> ObservedItem {
+    ObservedItem::Invariant(ObservedInvariant {
+        name: name.into(),
+        value: value.into(),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some(provenance.to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn bool_string(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 #[cfg(test)]
@@ -331,6 +505,218 @@ path = "repo"
         let (temp, fixture) = native_fixture(source, budget);
         let observed = observe_kernel_fixture(&fixture).unwrap();
         (temp, observed)
+    }
+
+    mod observed_phase23_cache_counter_invariants {
+        use std::collections::BTreeMap;
+
+        use super::*;
+
+        fn write_mixed_fixture(root: &Path) {
+            fs::create_dir_all(root.join("repo/goapp")).unwrap();
+            fs::create_dir_all(root.join("repo/web/src")).unwrap();
+            fs::write(
+                root.join("repo/.polint.toml"),
+                r#"
+[workspace]
+include = ["goapp/**", "web/**"]
+exclude = []
+
+[languages.go]
+module_roots = ["goapp"]
+package_patterns = ["./..."]
+build_tags = ["integration"]
+include_tests = false
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"
+"#,
+            )
+            .unwrap();
+            fs::write(
+                root.join("repo/goapp/go.mod"),
+                "module example.com/payment\n\ngo 1.24\n",
+            )
+            .unwrap();
+            fs::write(root.join("repo/goapp/payment.go"), "package payment\n").unwrap();
+            fs::write(
+                root.join("repo/web/package.json"),
+                r#"{"name":"web","version":"1.0.0","type":"module"}"#,
+            )
+            .unwrap();
+            fs::write(
+                root.join("repo/web/package-lock.json"),
+                r#"{"name":"web","lockfileVersion":3,"packages":{}}"#,
+            )
+            .unwrap();
+            fs::write(
+                root.join("repo/web/tsconfig.json"),
+                r#"{"compilerOptions":{"module":"esnext","target":"es2022"}}"#,
+            )
+            .unwrap();
+            fs::write(
+                root.join("repo/web/src/app.ts"),
+                "export const amount = 42;\n",
+            )
+            .unwrap();
+            fs::write(
+                root.join("expected.polint-eval.toml"),
+                r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "input-snapshots"
+area = "cache"
+
+[repo]
+path = "repo"
+"#,
+            )
+            .unwrap();
+        }
+
+        fn observed_for_mixed_fixture() -> (tempfile::TempDir, Vec<ObservedItem>) {
+            let temp = tempfile::tempdir().unwrap();
+            let fixture_dir = temp
+                .path()
+                .join("tests/eval-fixtures/cache/input-snapshots");
+            write_mixed_fixture(&fixture_dir);
+            let fixture = load_native_fixture(&fixture_dir).unwrap();
+            let observed = observe_kernel_fixture(&fixture).unwrap();
+            (temp, observed)
+        }
+
+        fn invariant_values(observed: &[ObservedItem]) -> BTreeMap<&str, &str> {
+            observed
+                .iter()
+                .filter_map(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        Some((invariant.name.as_str(), invariant.value.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn snapshot_invariants_emit_required_phase23_inputs() {
+            let (_temp, observed) = observed_for_mixed_fixture();
+            let invariants = invariant_values(&observed);
+
+            assert_eq!(
+                invariants.get("snapshot.schema_version").copied(),
+                Some("polint-input-snapshot-1")
+            );
+            assert_eq!(
+                invariants
+                    .get("snapshot.source_text_digest.present")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.config_digest.present").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.go_lifecycle.present").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.ts_js_lifecycle.present").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.rule_digest.present").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.model_digest.absent").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("snapshot.tool_invocation.unsupported")
+                    .copied(),
+                Some("true")
+            );
+        }
+
+        #[test]
+        fn provider_and_layer_key_invariants_emit_required_phase23_rows() {
+            let (_temp, observed) = observed_for_mixed_fixture();
+            let invariants = invariant_values(&observed);
+
+            assert_eq!(
+                invariants
+                    .get("provider_output.polint.source.present")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("provider_output.polint.go.syntax.cache_stats.recorded")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("provider_output.polint.ts.syntax.cache_stats.recorded")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("layer_key.polint.ts.syntax.has_config_digest")
+                    .copied(),
+                Some("true")
+            );
+        }
+
+        #[test]
+        fn provider_cache_counter_invariants_emit_first_run_current_cache_values() {
+            let (_temp, observed) = observed_for_mixed_fixture();
+            let invariants = invariant_values(&observed);
+
+            for provider_id in ["go", "ts"] {
+                let prefix = format!("provider_output.polint.{provider_id}.syntax.cache_stats");
+                for (counter, expected) in [
+                    ("hits", "0"),
+                    ("misses", "1"),
+                    ("recomputes", "1"),
+                    ("writes", "1"),
+                    ("bypasses_disabled", "0"),
+                    ("invalid_evicted_reads", "0"),
+                    ("verified_reuse", "0"),
+                    ("quarantines", "0"),
+                ] {
+                    let name = format!("{prefix}.{counter}");
+                    assert_eq!(
+                        invariants.get(name.as_str()).copied(),
+                        Some(expected),
+                        "missing or wrong invariant {name}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn observed_invariants_do_not_claim_future_cache_layer_semantics() {
+            let (_temp, observed) = observed_for_mixed_fixture();
+            let rendered = serde_json::to_string(&observed).unwrap();
+
+            for forbidden in [
+                ["Layer", "Cache"].concat(),
+                ["Dependency", "Index"].concat(),
+                ["Invalidation", "Plan"].concat(),
+                ["stale", " reuse"].concat(),
+                ["verified", " reuse success"].concat(),
+                ["quarantine", " event"].concat(),
+            ] {
+                assert!(
+                    !rendered.contains(forbidden.as_str()),
+                    "unexpected {forbidden}"
+                );
+            }
+        }
     }
 
     #[test]

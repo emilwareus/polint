@@ -1,0 +1,96 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "input-snapshots"
+area = "cache"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 5000
+
+[[expected]]
+invariant = { name = "snapshot.schema_version", value = "polint-input-snapshot-1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.source_text_digest.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.config_digest.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.go_lifecycle.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.ts_js_lifecycle.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.rule_digest.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.model_digest.absent", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.tool_invocation.unsupported", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_key.polint.ts.syntax.has_config_digest", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.source.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.recorded", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.recorded", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.hits", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.misses", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.recomputes", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.writes", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.bypasses_disabled", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.invalid_evicted_reads", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.verified_reuse", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.go.syntax.cache_stats.quarantines", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.hits", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.misses", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.recomputes", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.writes", value = "1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.bypasses_disabled", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.invalid_evicted_reads", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.verified_reuse", value = "0", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.ts.syntax.cache_stats.quarantines", value = "0", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "input-snapshots", max_runtime_ms = 5000, mode = "exact" }

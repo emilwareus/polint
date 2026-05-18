@@ -1,4 +1,5 @@
 use super::*;
+use crate::analysis_plan::AnalysisPlan;
 use crate::core::{AnalysisDb, BranchObligation, Language};
 use crate::diagnostics::TextRange;
 use crate::graph::ImportGraph;
@@ -71,6 +72,72 @@ return nil
     );
 
     fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn cache_stats_record_go_miss_write_and_hit() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(&cache_root, true);
+    let plan = AnalysisPlan::empty();
+    let source = r#"
+package payment
+
+func Authorize() {}
+"#;
+    let mut first = db_with_go_file("payment.go", source);
+
+    let first_result = analyze_with_plan_options_and_cache_stats(
+        &mut first, &cache, "config", "rule", &plan, false,
+    );
+
+    assert!(first_result.diagnostics.is_empty());
+    assert_eq!(first_result.cache_stats.misses, 1);
+    assert_eq!(first_result.cache_stats.recomputes, 1);
+    assert_eq!(first_result.cache_stats.writes, 1);
+    assert_eq!(first_result.cache_stats.verified_reuse, 0);
+    assert_eq!(first_result.cache_stats.quarantines, 0);
+
+    let mut second = db_with_go_file("payment.go", source);
+    let second_result = analyze_with_plan_options_and_cache_stats(
+        &mut second,
+        &cache,
+        "config",
+        "rule",
+        &plan,
+        false,
+    );
+
+    assert!(second_result.diagnostics.is_empty());
+    assert_eq!(second_result.cache_stats.hits, 1);
+    assert_eq!(second_result.cache_stats.recomputes, 0);
+    assert_eq!(second_result.cache_stats.writes, 0);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn cache_stats_record_go_disabled_bypasses_and_recomputes() {
+    let cache = crate::cache::Cache::new("", false);
+    let plan = AnalysisPlan::empty();
+    let mut db = AnalysisDb::new();
+    db.add_file(
+        PathBuf::from("first.go"),
+        "first.go".to_string(),
+        "package first\nfunc One() {}\n".to_string(),
+    );
+    db.add_file(
+        PathBuf::from("second.go"),
+        "second.go".to_string(),
+        "package second\nfunc Two() {}\n".to_string(),
+    );
+
+    let result =
+        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+
+    assert!(result.diagnostics.is_empty());
+    assert_eq!(result.cache_stats.bypasses_disabled, 2);
+    assert_eq!(result.cache_stats.recomputes, 2);
+    assert_eq!(result.cache_stats.writes, 0);
 }
 
 #[test]

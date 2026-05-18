@@ -168,6 +168,119 @@ fn assert_eval_internals_are_absent_from_public_surfaces() {
     }
 }
 
+#[test]
+fn input_snapshots_stay_internal() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export const amount = 42;\n",
+    );
+
+    let run_check = || {
+        stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run_check();
+    let second = run_check();
+
+    assert_eq!(
+        first, second,
+        "public check JSON should stay byte-identical across repeated runs"
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{first}"));
+    assert!(
+        report.diagnostics.is_empty(),
+        "minimal public TS check should not emit diagnostics: {report:#?}"
+    );
+    assert_input_snapshot_vocabulary_is_internal(&first);
+}
+
+fn assert_input_snapshot_vocabulary_is_internal(public_json: &str) {
+    for marker in INTERNAL_INPUT_SNAPSHOT_PUBLIC_MARKERS {
+        assert!(
+            !public_json.contains(marker),
+            "public check JSON must not leak internal snapshot/cache marker `{marker}`:\n{public_json}"
+        );
+    }
+    assert_analysis_kernel_module_is_crate_private();
+    assert_incremental_vocabulary_absent_from_public_surfaces();
+}
+
+const INTERNAL_INPUT_SNAPSHOT_PUBLIC_MARKERS: &[&str] = &[
+    "InputSnapshot",
+    "LayerKey",
+    "QueryKey",
+    "SummaryKey",
+    "DiagnosticKey",
+    "ProviderOutputMeta",
+    "CacheStats",
+    "KernelRunReport",
+    "snapshot.schema_version",
+    "provider_output.polint",
+    "layer_key.polint",
+    "polint-input-snapshot-1",
+    "go.tool_invocation",
+    "ts_js.tool_invocation",
+];
+
+fn assert_analysis_kernel_module_is_crate_private() {
+    let lib_rs_path = repo_root().join("crates/polint/src/lib.rs");
+    let lib_rs = fs::read_to_string(&lib_rs_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", lib_rs_path.display()));
+
+    assert!(
+        lib_rs.contains("pub(crate) mod analysis_kernel;"),
+        "analysis_kernel module should stay crate-private:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("pub mod analysis_kernel"),
+        "analysis_kernel must not be promoted as a public crate-root module:\n{lib_rs}"
+    );
+}
+
+fn assert_incremental_vocabulary_absent_from_public_surfaces() {
+    let root = repo_root();
+    let mut public_surface = String::new();
+    for path in [
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&source_tree_text(&path));
+    }
+
+    for marker in [
+        "analysis_kernel::incremental",
+        "InputSnapshot",
+        "LayerKey",
+        "QueryKey",
+        "SummaryKey",
+        "DiagnosticKey",
+        "ProviderOutputMeta",
+        "CacheStats",
+        "KernelRunReport",
+    ] {
+        assert!(
+            !public_surface.contains(marker),
+            "public CLI/SDK/runner surface must not expose incremental marker `{marker}`"
+        );
+    }
+}
+
 fn source_tree_text(path: &Path) -> String {
     if path.is_file() {
         return fs::read_to_string(path)

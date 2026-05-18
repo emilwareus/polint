@@ -321,7 +321,11 @@ fn needs_synthetic_workspace(root: &Path, module_roots: &[String]) -> bool {
     !root.join("go.mod").is_file()
 }
 
-fn go_work_covers_module_roots(root: &Path, go_work: &Path, module_roots: &[String]) -> bool {
+pub(crate) fn go_work_covers_module_roots(
+    root: &Path,
+    go_work: &Path,
+    module_roots: &[String],
+) -> bool {
     let Ok(contents) = fs::read_to_string(go_work) else {
         return false;
     };
