@@ -18,9 +18,9 @@ gaps:
 
 # Phase 23: Input Snapshots and Cache-Key Vocabulary Verification Report
 
-**Phase Goal:** Add the typed snapshot and key vocabulary required for correct layered cache invalidation.  
-**Verified:** 2026-05-18T07:25:19Z  
-**Status:** gaps_found  
+**Phase Goal:** Add the typed snapshot and key vocabulary required for correct layered cache invalidation.
+**Verified:** 2026-05-18T07:25:19Z
+**Status:** gaps_found
 **Re-verification:** No - initial verification
 
 ## Goal Achievement
@@ -127,5 +127,5 @@ The blocking gap is the lifecycle read-error path. `file_digest_component` disti
 
 ---
 
-_Verified: 2026-05-18T07:25:19Z_  
+_Verified: 2026-05-18T07:25:19Z_
 _Verifier: Claude (gsd-verifier)_
