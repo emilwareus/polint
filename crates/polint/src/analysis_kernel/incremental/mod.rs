@@ -18,9 +18,7 @@ pub(crate) use input_snapshot::{
     reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
 )]
 pub(crate) use keys::{DiagnosticKey, LayerKey, PrecisionTier, QueryKey, SummaryKey};
-#[expect(
-    unused_imports,
-    reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
-)]
-pub(crate) use run_report::{KernelRunReport, provider_output_from_manifest};
+pub(crate) use run_report::{
+    KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+};
 pub(crate) use stats::{CacheStats, ProviderOutputMeta};

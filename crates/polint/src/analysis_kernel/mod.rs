@@ -16,8 +16,10 @@ pub(crate) use metadata::{
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
     symbol_metadata,
 };
+#[cfg(test)]
+pub(crate) use provider::ProviderKind;
 pub(crate) use provider::{
-    CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+    CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, SchemaVersion,
 };
 
 pub(crate) struct AnalysisKernel;
@@ -35,6 +37,14 @@ pub(crate) struct KernelOutput {
     pub(crate) db: AnalysisDb,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: CapabilitySupportView,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The crate-private run report is consumed by internal tests and eval fixtures before a public surface exists."
+        )
+    )]
+    pub(crate) run_report: incremental::KernelRunReport,
 }
 
 impl AnalysisKernel {
@@ -43,46 +53,90 @@ impl AnalysisKernel {
     }
 
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
-        let _manifest_metadata_token = Self::provider_manifest_metadata_token();
         let mut db = crate::fs::load_analysis_files(input.loaded)?;
+        let input_snapshot = incremental::InputSnapshot::from_run_inputs(
+            input.loaded,
+            &db,
+            input.config_digest,
+            input.rule_digest,
+            input.plan.digest(),
+            Self::provider_manifests(),
+        );
         let mut diagnostics = Vec::new();
+        let mut provider_outputs = Vec::new();
 
-        diagnostics.extend(crate::go::analyze_with_plan_options(
-            &mut db,
-            input.cache,
-            input.config_digest,
-            input.rule_digest,
-            input.plan,
-            input.parallel,
+        provider_outputs.push(Self::provider_output_for(
+            "polint.source",
+            &db,
+            incremental::CacheStats::default(),
         ));
-        diagnostics.extend(crate::ts::analyze_with_plan_options(
+
+        let go_output = crate::go::analyze_with_plan_options_and_cache_stats(
             &mut db,
             input.cache,
             input.config_digest,
             input.rule_digest,
             input.plan,
             input.parallel,
+        );
+        diagnostics.extend(go_output.diagnostics);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.go.syntax",
+            &db,
+            go_output.cache_stats,
+        ));
+
+        let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
+            &mut db,
+            input.cache,
+            input.config_digest,
+            input.rule_digest,
+            input.plan,
+            input.parallel,
+        );
+        diagnostics.extend(ts_output.diagnostics);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.ts.syntax",
+            &db,
+            ts_output.cache_stats,
         ));
 
         let module_graph =
             crate::module_graph::derive_requested_module_graph(&mut db, input.loaded, input.plan);
         let module_support = module_graph.support_view(input.plan.support_view());
         diagnostics.extend(module_graph.diagnostics);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.module_graph",
+            &db,
+            incremental::CacheStats::default(),
+        ));
 
         let symbol_graph =
             crate::symbol_graph::derive_requested_symbols(&mut db, input.loaded, input.plan);
         let capability_support = symbol_graph.support_view(&module_support);
         diagnostics.extend(symbol_graph.diagnostics);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.symbol_graph",
+            &db,
+            incremental::CacheStats::default(),
+        ));
 
         crate::metrics::derive_requested_metrics(&mut db, input.plan);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.metrics",
+            &db,
+            incremental::CacheStats::default(),
+        ));
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
+        let run_report = incremental::KernelRunReport::new(input_snapshot, provider_outputs);
 
         Ok(KernelOutput {
             db,
             diagnostics,
             capability_support,
+            run_report,
         })
     }
 
@@ -96,79 +150,70 @@ impl AnalysisKernel {
         debug::metadata_debug_json_for_test(db)
     }
 
-    fn provider_manifest_metadata_token() -> usize {
-        metadata::metadata_vocabulary_weight()
-            + Self::provider_manifests()
-                .iter()
-                .map(provider_manifest_metadata_weight)
-                .sum::<usize>()
+    #[cfg(test)]
+    pub(crate) fn input_snapshot_json_for_test(output: &KernelOutput) -> serde_json::Value {
+        serde_json::to_value(&output.run_report.input_snapshot)
+            .expect("input snapshot should serialize")
     }
-}
 
-fn provider_manifest_metadata_weight(manifest: &ProviderManifest) -> usize {
-    manifest.id.len()
-        + provider_kind_weight(manifest.kind)
-        + language_scope_weight(manifest.language_scope)
-        + cache_policy_weight(manifest.cache_policy)
-        + precision_ceiling_weight(manifest.precision_ceiling)
-        + manifest
-            .inputs
+    #[cfg(test)]
+    pub(crate) fn provider_output_report_for_test(
+        output: &KernelOutput,
+    ) -> Vec<incremental::ProviderOutputMeta> {
+        output.run_report.provider_outputs.clone()
+    }
+
+    fn provider_output_for(
+        provider_id: &'static str,
+        db: &AnalysisDb,
+        cache_stats: incremental::CacheStats,
+    ) -> incremental::ProviderOutputMeta {
+        let manifest = Self::provider_manifest(provider_id);
+        let output_digest = incremental::provider_output_digest_from_manifest(
+            manifest,
+            &provider_output_summary_parts(db, manifest),
+        );
+        incremental::provider_output_from_manifest(manifest, output_digest, cache_stats)
+    }
+
+    fn provider_manifest(provider_id: &str) -> &'static ProviderManifest {
+        Self::provider_manifests()
             .iter()
-            .map(|input| input.len())
-            .sum::<usize>()
-        + manifest
-            .outputs
-            .iter()
-            .map(|output| output.len())
-            .sum::<usize>()
-        + manifest
-            .schema_versions
-            .iter()
-            .map(schema_version_weight)
-            .sum::<usize>()
-}
-
-fn provider_kind_weight(kind: ProviderKind) -> usize {
-    match kind {
-        ProviderKind::SourceDiscovery => 1,
-        ProviderKind::LanguageSyntax => 2,
-        ProviderKind::WholeRepoDerived => 3,
-        ProviderKind::MetricsDerived => 4,
+            .find(|manifest| manifest.id == provider_id)
+            .unwrap_or_else(|| panic!("missing provider manifest {provider_id}"))
     }
 }
 
-fn language_scope_weight(scope: LanguageScope) -> usize {
-    match scope {
-        LanguageScope::Workspace => 1,
-        LanguageScope::Go => 2,
-        LanguageScope::TypeScriptJavaScript => 3,
-        LanguageScope::MultiLanguage => 4,
-    }
-}
+fn provider_output_summary_parts(db: &AnalysisDb, manifest: &ProviderManifest) -> Vec<String> {
+    let mut parts = db
+        .fact_meta()
+        .rows()
+        .filter(|(_reference, metadata)| {
+            metadata.producer_id == manifest.id || metadata.layer_id == manifest.id
+        })
+        .flat_map(|(reference, metadata)| {
+            [
+                format!("fact_family={}", reference.family.label()),
+                format!("run_id={}", reference.run_id),
+                format!("stable_key={}", metadata.stable_key),
+                format!("payload_digest={}", metadata.payload_digest),
+                format!("precision={:?}", metadata.precision),
+                format!("validation={:?}", metadata.validation),
+            ]
+        })
+        .collect::<Vec<_>>();
 
-fn cache_policy_weight(policy: CachePolicy) -> usize {
-    match policy {
-        CachePolicy::NoCache => 1,
-        CachePolicy::ExistingFileFactCache { schema } => schema.len(),
-        CachePolicy::InMemoryDerived => 2,
+    if parts.is_empty() {
+        parts.push("fact_summary=empty".to_string());
     }
-}
-
-fn precision_ceiling_weight(precision: PrecisionCeiling) -> usize {
-    match precision {
-        PrecisionCeiling::Exact => 1,
-        PrecisionCeiling::Syntax => 2,
-        PrecisionCeiling::SetupAware => 3,
-    }
-}
-
-fn schema_version_weight(schema: &SchemaVersion) -> usize {
-    schema.name.len() + schema.version as usize
+    parts.sort();
+    parts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::incremental::{CacheStats, INPUT_SNAPSHOT_SCHEMA_VERSION};
     use crate::config::load_config;
     use crate::core::{
         BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
@@ -179,7 +224,6 @@ mod tests {
         Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
         SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
-    use crate::analysis_kernel::incremental::{CacheStats, INPUT_SNAPSHOT_SCHEMA_VERSION};
     use std::path::PathBuf;
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
@@ -446,14 +490,12 @@ mod tests {
         })
         .expect("kernel should run");
 
+        let snapshot = AnalysisKernel::input_snapshot_json_for_test(&output);
+        let provider_outputs = AnalysisKernel::provider_output_report_for_test(&output);
+
+        assert_eq!(snapshot["schema_version"], INPUT_SNAPSHOT_SCHEMA_VERSION);
         assert_eq!(
-            output.run_report.input_snapshot.schema_version,
-            INPUT_SNAPSHOT_SCHEMA_VERSION
-        );
-        assert_eq!(
-            output
-                .run_report
-                .provider_outputs
+            provider_outputs
                 .iter()
                 .map(|row| row.provider_id.as_str())
                 .collect::<Vec<_>>(),
@@ -469,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn syntax_provider_rows_carry_adapter_cache_stats() {
+    fn kernel_run_report_syntax_provider_rows_carry_adapter_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("main.go"), "package main\n").expect("write go");
         std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
@@ -496,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
+    fn kernel_run_report_source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
@@ -526,24 +568,26 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_manifest_consumption_helpers_are_removed_from_kernel() {
+    fn kernel_run_report_synthetic_manifest_consumption_helpers_are_removed_from_kernel() {
         let source = std::fs::read_to_string(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/analysis_kernel/mod.rs"),
         )
         .expect("read analysis kernel source");
 
-        for forbidden in [
-            "provider_manifest_metadata_token",
-            "provider_manifest_metadata_weight",
-            "provider_kind_weight",
-            "language_scope_weight",
-            "cache_policy_weight",
-            "precision_ceiling_weight",
-            "schema_version_weight",
-            "_manifest_metadata_token",
-        ] {
+        let forbidden_terms = [
+            ["provider", "manifest", "metadata", "token"].join("_"),
+            ["provider", "manifest", "metadata", "weight"].join("_"),
+            ["provider", "kind", "weight"].join("_"),
+            ["language", "scope", "weight"].join("_"),
+            ["cache", "policy", "weight"].join("_"),
+            ["precision", "ceiling", "weight"].join("_"),
+            ["schema", "version", "weight"].join("_"),
+            ["", "manifest", "metadata", "token"].join("_"),
+        ];
+
+        for forbidden in forbidden_terms {
             assert!(
-                !source.contains(forbidden),
+                !source.contains(&forbidden),
                 "synthetic manifest helper remains in kernel: {forbidden}"
             );
         }
