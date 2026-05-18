@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-18T11:50:23.910Z"
+status: verifying
+last_updated: "2026-05-18T12:22:26.717Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 22
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 22
-  completed_plans: 21
-  percent: 95
+  completed_plans: 22
+  percent: 100
 ---
 
 # State: polint
@@ -39,8 +39,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 24 (persistent-layer-cache-for-existing-cheap-facts) — EXECUTING
+Status: Phase complete — ready for verification
+Phase: 24 (persistent-layer-cache-for-existing-cheap-facts) — COMPLETE
 Plan: 5 of 5
 Last activity: 2026-05-18
 
@@ -52,7 +52,7 @@ Last activity: 2026-05-18
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
 | 22 | Complete | 6/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance/cache/extension fixtures, fixture category coverage, and public-boundary proof done; requirement SAE-FND-03 |
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
-| 24 | In Progress | 4/5 plans complete; dependency index/invalidation, syntax layer cache, module graph layer cache, and symbol/metrics layer cache done; requirement SAE-FND-05 |
+| 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Pending | Semantic index deepening; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
@@ -143,6 +143,10 @@ Last activity: 2026-05-18
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Symbol graph and metrics cache hits restore normalized facts through existing AnalysisDb::replace_* paths so metadata and public SDK behavior stay compatible.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Metrics cache identity includes source/function inputs, upstream syntax output digests, provider/schema identity, config digest, and absent extension/toolchain slots.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Derived provider cache stats remain internal to KernelRunReport; public check JSON and SDK surfaces are unchanged.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache eval uses an explicit capability-requesting AnalysisPlan so all Phase 24 providers run through real cache paths.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: LayerCacheStore rejects invalid manifests before payload reads, including dependency-index schema drift and derived-layer manifests without dependency rows.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache internals remain test/eval-facing only; public JSON, CLI help, SDK, runner, and crate-root surfaces are guarded by integration tests.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: The public cache status contract includes the managed layers category but still does not expose layer-cache internals or provider stats.
 
 ## Execution Metrics
 
@@ -163,14 +167,13 @@ Last activity: 2026-05-18
 | 24-persistent-layer-cache-for-existing-cheap-facts | 02 | 20 min | 3 | 10 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 03 | 16 min | 2 | 6 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 04 | 19 min | 2 | 7 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 05 | 28 min | 3 | 17 |
 
 ## Session
 
 - Last session: 2026-05-18
-- Stopped at: Completed 24-04-PLAN.md
+- Stopped at: Completed 24-05-PLAN.md
 
 ## Next Action
 
-Phase 24 Plan 05 is ready to execute:
-
-`/gsd-execute-phase 24-persistent-layer-cache-for-existing-cheap-facts`
+Phase 24 is ready for verification.
