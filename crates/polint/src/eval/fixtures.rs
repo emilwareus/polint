@@ -551,6 +551,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/cache/current-determinism")
     }
 
+    fn cache_input_snapshots_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/cache/input-snapshots")
+    }
+
     fn extension_rejection_delta_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/extension/rejection-delta")
     }
@@ -756,6 +760,23 @@ mod eval_native_fixture_runner_tests {
             deterministic_output_hash(&first),
             deterministic_output_hash(&second)
         );
+    }
+
+    #[test]
+    fn eval_input_snapshot_fixture_passes() {
+        let run = run_native_fixture_for_test(&cache_input_snapshots_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("input snapshot case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "input-snapshots");
+        assert_eq!(case.area, FixtureArea::Cache);
+        assert_eq!(run.metrics.false_negatives, 0);
+        assert_eq!(run.metrics.forbidden_hits, 0);
+        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("package payment"));
+        assert!(!rendered.contains("export const amount"));
+        assert!(!rendered.contains("mtime_hint"));
     }
 
     #[test]
