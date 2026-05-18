@@ -269,6 +269,40 @@ mod tests {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
     }
 
+    fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph provider manifest exists")
+    }
+
+    fn module_graph_key(
+        import_shape_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        config_digest: Digest,
+        upstream_syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::module_graph_layer_key(
+            module_graph_manifest(),
+            vec![import_shape_digest],
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_package",
+                &["src/app.ts", "hash", "pkg"],
+            )],
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+            vec![upstream_syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "module_graph_parameters",
+                &["resolver=default"],
+            ),
+        )
+    }
+
     fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
         LayerKey::syntax_layer_key(
             LayerKind::GoSyntax,
@@ -281,6 +315,93 @@ mod tests {
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
         )
+    }
+
+    #[test]
+    fn module_graph_layer_key_changes_on_import_lifecycle_config_or_upstream_digest() {
+        let base = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_import = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["lodash"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_go_lifecycle = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_ts_lifecycle = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["changed"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_config = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let changed_upstream = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "module-graph-facts-2:2".to_string();
+
+        for changed in [
+            changed_import,
+            changed_go_lifecycle,
+            changed_ts_lifecycle,
+            changed_config,
+            changed_upstream,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn module_graph_layer_key_ignores_rule_digest_changes() {
+        let base = module_graph_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+        );
+        let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
+        let rule_b = Digest::from_parts(DigestKind::RuleOptions, "rule", &["b"]);
+
+        assert_ne!(rule_a, rule_b);
+        assert_eq!(
+            base,
+            module_graph_key(
+                Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+            )
+        );
     }
 
     #[test]

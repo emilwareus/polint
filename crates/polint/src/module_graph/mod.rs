@@ -358,6 +358,9 @@ fn setup_missing_diagnostic(entry: &CapabilitySupport, rule_id: &str) -> Diagnos
 mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
+    use crate::analysis_kernel::incremental::{
+        CacheNode, DependencyKind, Digest, DigestKind, LayerKey, ShapeKind,
+    };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -405,6 +408,42 @@ mod tests {
         load_config(root).expect("default config loads")
     }
 
+    fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph provider manifest exists")
+    }
+
+    fn module_graph_key() -> LayerKey {
+        LayerKey::module_graph_layer_key(
+            module_graph_manifest(),
+            vec![Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["src/app.ts", "react"],
+            )],
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_package",
+                &["src/app.ts", "hash", "pkg"],
+            )],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "go_syntax",
+                &["base"],
+            )],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "module_graph_parameters",
+                &["resolver=default"],
+            ),
+        )
+    }
+
     fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
         let path = root.join(relative_path);
         fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
@@ -436,6 +475,54 @@ mod tests {
             span: span(file, start_byte),
             language: Language::TypeScript,
         })
+    }
+
+    #[test]
+    fn module_graph_dependency_edges_include_inputs_schema_lifecycle_and_upstream_layers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut db = AnalysisDb::new();
+        let file = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, file, "react", 0);
+        db.push_package(PackageFact {
+            id: PackageId(99),
+            file,
+            name: "app".to_string(),
+            span: span(file, 0),
+            language: Language::TypeScript,
+        });
+        let key = module_graph_key();
+        let go_syntax_output =
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]);
+        let ts_syntax_output =
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]);
+
+        let edges = super::module_graph_layer_dependency_edges(
+            &db,
+            &key,
+            module_graph_manifest(),
+            &[go_syntax_output, ts_syntax_output],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+        );
+
+        let edge_kinds = edges.iter().map(|edge| edge.kind).collect::<Vec<_>>();
+        assert!(edge_kinds.contains(&DependencyKind::SourceText));
+        assert!(edge_kinds.contains(&DependencyKind::ImportShape));
+        assert!(edge_kinds.contains(&DependencyKind::Config));
+        assert!(edge_kinds.contains(&DependencyKind::Lifecycle));
+        assert!(edge_kinds.contains(&DependencyKind::ProviderSchema));
+        assert!(edge_kinds.contains(&DependencyKind::UpstreamLayer));
+        assert!(edges.iter().any(|edge| matches!(
+            (&edge.from, &edge.to, edge.required_shape),
+            (CacheNode::Layer(layer), CacheNode::Input(input), ShapeKind::Import)
+                if *layer == key && input.contains("import:src/app.ts:react")
+        )));
     }
 
     fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
