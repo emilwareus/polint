@@ -151,7 +151,7 @@ runs:
     - name: Restore polint cache
       id: cache-restore
       if: ${{ inputs.cache == 'true' }}
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: ${{ inputs.working-directory }}/.polint/cache
         key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ steps.install.outputs.version }}-${{ hashFiles(format('{0}/.polint.toml', inputs.working-directory), format('{0}/Cargo.lock', inputs.working-directory), format('{0}/rust-toolchain.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.toml', inputs.working-directory), format('{0}/.polint/rules/Cargo.lock', inputs.working-directory), format('{0}/.polint/rules/src/**/*.rs', inputs.working-directory)) }}
@@ -179,7 +179,7 @@ runs:
 
     - name: Save polint cache
       if: ${{ always() && inputs.cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: ${{ inputs.working-directory }}/.polint/cache
         key: ${{ steps.cache-restore.outputs.cache-primary-key }}
