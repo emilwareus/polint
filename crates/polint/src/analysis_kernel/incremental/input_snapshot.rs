@@ -125,18 +125,7 @@ impl GoLifecycleSnapshot {
     fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
         let components = match crate::go::lifecycle::GoAnalysisConfig::from_loaded(loaded, db) {
             Ok(config) => go_lifecycle_components(loaded, &config),
-            Err(error) => vec![
-                InputComponent::setup_missing(
-                    "go.module_roots",
-                    DigestKind::GoLifecycle,
-                    vec![format!("error={}", error.reason())],
-                ),
-                InputComponent::unsupported(
-                    "go.tool_invocation",
-                    DigestKind::ToolInvocation,
-                    "not invoked by input snapshot",
-                ),
-            ],
+            Err(error) => go_lifecycle_error_components(loaded, error.reason()),
         };
 
         Self {
@@ -262,6 +251,25 @@ impl InputComponent {
             name,
             InputComponentStatus::SetupMissing,
             Digest::from_parts(digest_kind, "setup_missing", &detail_refs),
+            details,
+        )
+    }
+
+    fn setup_missing_with_digest_parts(
+        name: impl Into<String>,
+        digest_kind: DigestKind,
+        detail: Vec<String>,
+        digest_parts: Vec<String>,
+    ) -> Self {
+        let name = name.into();
+        let details = sorted_normalized_details(detail);
+        let mut digest_inputs = sorted_normalized_details(digest_parts);
+        digest_inputs.insert(0, format!("component={name}"));
+        let digest_refs = digest_inputs.iter().map(String::as_str).collect::<Vec<_>>();
+        Self::new(
+            name,
+            InputComponentStatus::SetupMissing,
+            Digest::from_parts(digest_kind, "setup_missing", &digest_refs),
             details,
         )
     }
@@ -394,6 +402,70 @@ fn go_lifecycle_components(
     ]
 }
 
+fn go_lifecycle_error_components(loaded: &LoadedConfig, reason: &str) -> Vec<InputComponent> {
+    let setup_detail = vec![format!("error={reason}")];
+    let unavailable_detail = vec![format!("module roots unavailable: {reason}")];
+    vec![
+        InputComponent::setup_missing(
+            "go.module_roots",
+            DigestKind::GoLifecycle,
+            setup_detail.clone(),
+        ),
+        InputComponent::setup_missing(
+            "go.files_without_module_root",
+            DigestKind::GoLifecycle,
+            setup_detail,
+        ),
+        InputComponent::setup_missing(
+            "go.mod",
+            DigestKind::GoLifecycle,
+            unavailable_detail.clone(),
+        ),
+        InputComponent::setup_missing(
+            "go.sum",
+            DigestKind::GoLifecycle,
+            unavailable_detail.clone(),
+        ),
+        InputComponent::setup_missing(
+            "go.work",
+            DigestKind::GoLifecycle,
+            unavailable_detail.clone(),
+        ),
+        values_component(
+            "go.build_tags",
+            DigestKind::GoLifecycle,
+            string_or_array_snapshot_setting(&loaded.config.languages.go, "build_tags", &[]),
+        ),
+        values_component(
+            "go.include_tests",
+            DigestKind::GoLifecycle,
+            vec![
+                bool_snapshot_setting(&loaded.config.languages.go, "include_tests", true)
+                    .to_string(),
+            ],
+        ),
+        values_component(
+            "go.package_patterns",
+            DigestKind::GoLifecycle,
+            string_or_array_snapshot_setting(
+                &loaded.config.languages.go,
+                "package_patterns",
+                &["./..."],
+            ),
+        ),
+        InputComponent::unsupported(
+            "go.tool_invocation",
+            DigestKind::ToolInvocation,
+            "not invoked by input snapshot",
+        ),
+        InputComponent::setup_missing(
+            "go.environment_policy",
+            DigestKind::GoLifecycle,
+            unavailable_detail,
+        ),
+    ]
+}
+
 fn config_component(loaded: &LoadedConfig, config_digest: &str) -> InputComponent {
     let mut detail = vec![format!("missing={}", loaded.missing)];
     detail.extend(
@@ -469,18 +541,36 @@ fn file_digest_component(
 
     let mut present_paths = Vec::new();
     let mut digest_parts = Vec::new();
+    let mut unreadable = Vec::new();
     for relative_path in paths {
         let normalized = normalize_relative_path(&relative_path);
         let path = root.join(&normalized);
         if !path.is_file() {
             continue;
         }
-        let Ok(contents) = fs::read(&path) else {
-            continue;
+        let contents = match fs::read(&path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                unreadable.push(format!("unreadable={normalized}: {error}"));
+                continue;
+            }
         };
         present_paths.push(normalized.clone());
         digest_parts.push(format!("file={normalized}"));
         digest_parts.push(format!("content_hash={}", stable_hash_bytes(&contents)));
+    }
+
+    if !unreadable.is_empty() {
+        let mut detail = present_paths;
+        detail.extend(unreadable.clone());
+        let mut setup_missing_digest_parts = digest_parts;
+        setup_missing_digest_parts.extend(unreadable);
+        return InputComponent::setup_missing_with_digest_parts(
+            name,
+            digest_kind,
+            detail,
+            setup_missing_digest_parts,
+        );
     }
 
     if present_paths.is_empty() {
@@ -535,7 +625,14 @@ fn go_work_candidates(module_roots: &[String]) -> Vec<String> {
 }
 
 fn go_environment_policy(loaded: &LoadedConfig, module_roots: &[String]) -> String {
-    if loaded.root.join("go.work").is_file() {
+    let checked_in_go_work = loaded.root.join("go.work");
+    if checked_in_go_work.is_file()
+        && crate::go::lifecycle::go_work_covers_module_roots(
+            &loaded.root,
+            &checked_in_go_work,
+            module_roots,
+        )
+    {
         "checked_in_workspace_file".to_string()
     } else if module_roots.len() == 1
         && module_roots[0] == "."
@@ -611,6 +708,41 @@ fn config_file_names() -> Vec<String> {
 
 fn ts_config_name() -> String {
     ["t", "sconfig.json"].concat()
+}
+
+fn string_or_array_snapshot_setting(
+    settings: &std::collections::BTreeMap<String, toml::Value>,
+    key: &str,
+    default: &[&str],
+) -> Vec<String> {
+    let values = settings.get(key).map_or_else(
+        || default.iter().map(|value| (*value).to_string()).collect(),
+        string_or_array_snapshot_value,
+    );
+    sorted_normalized_details(values)
+}
+
+fn string_or_array_snapshot_value(value: &toml::Value) -> Vec<String> {
+    match value {
+        toml::Value::String(value) => vec![value.clone()],
+        toml::Value::Array(values) => values
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn bool_snapshot_setting(
+    settings: &std::collections::BTreeMap<String, toml::Value>,
+    key: &str,
+    default: bool,
+) -> bool {
+    settings
+        .get(key)
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(default)
 }
 
 fn sorted_schema_labels(schemas: &[crate::analysis_kernel::SchemaVersion]) -> Vec<String> {
@@ -1001,6 +1133,13 @@ mod lifecycle {
             .unwrap_or_else(|| panic!("missing component {name}"))
     }
 
+    fn component_names(components: &[InputComponent]) -> Vec<&str> {
+        components
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect()
+    }
+
     #[test]
     fn go_lifecycle_records_module_files_and_configured_options() {
         let temp = TempDir::new().expect("create temp repo");
@@ -1081,6 +1220,152 @@ mod lifecycle {
             component(components, "go.environment_policy").status,
             InputComponentStatus::Present
         );
+    }
+
+    #[test]
+    fn go_lifecycle_records_temporary_workspace_policy_when_root_go_work_misses_roots() {
+        let temp = TempDir::new().expect("create temp repo");
+        write_file(
+            temp.path(),
+            "services/app/go.mod",
+            "module example.com/app\n\ngo 1.24\n",
+        );
+        write_file(temp.path(), "services/app/main.go", "package main\n");
+        write_file(temp.path(), "go.work", "go 1.24\n\nuse ./other\n");
+
+        let mut config = PolintConfig::default();
+        config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("services/app".to_string())]),
+        );
+        let loaded = loaded_config(temp.path(), config);
+        let db = db_with_files(temp.path(), &[("services/app/main.go", "package main\n")]);
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        assert_eq!(
+            component(&snapshot.go_lifecycle.components, "go.environment_policy").detail,
+            vec!["internal_temporary_workspace_if_needed"]
+        );
+    }
+
+    #[test]
+    fn go_lifecycle_keeps_full_component_vocabulary_when_config_is_invalid() {
+        let temp = TempDir::new().expect("create temp repo");
+        let mut config = PolintConfig::default();
+        config.languages.go.insert(
+            "module_roots".to_string(),
+            toml::Value::Array(vec![toml::Value::String("../outside".to_string())]),
+        );
+        let loaded = loaded_config(temp.path(), config);
+        let db = db_with_files(temp.path(), &[("main.go", "package main\n")]);
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        assert_eq!(
+            component_names(&snapshot.go_lifecycle.components),
+            vec![
+                "go.build_tags",
+                "go.environment_policy",
+                "go.files_without_module_root",
+                "go.include_tests",
+                "go.mod",
+                "go.module_roots",
+                "go.package_patterns",
+                "go.sum",
+                "go.tool_invocation",
+                "go.work",
+            ]
+        );
+        assert_eq!(
+            component(&snapshot.go_lifecycle.components, "go.module_roots").status,
+            InputComponentStatus::SetupMissing
+        );
+        assert_eq!(
+            component(&snapshot.go_lifecycle.components, "go.tool_invocation").status,
+            InputComponentStatus::Unsupported
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_lifecycle_file_is_setup_missing_not_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().expect("create temp repo");
+        write_file(temp.path(), "package.json", "{\"type\":\"module\"}\n");
+        write_file(temp.path(), "src/app.ts", "export const app = 1;\n");
+        let unreadable = temp.path().join("package.json");
+        let original_permissions = std::fs::metadata(&unreadable)
+            .expect("package metadata")
+            .permissions();
+        let mut locked_permissions = original_permissions.clone();
+        locked_permissions.set_mode(0o0);
+        std::fs::set_permissions(&unreadable, locked_permissions).expect("lock package.json");
+
+        let loaded = default_loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        std::fs::set_permissions(&unreadable, original_permissions).expect("restore package.json");
+        let package_manifests = component(
+            &snapshot.ts_js_lifecycle.components,
+            "ts_js.package_manifests",
+        );
+        assert_eq!(package_manifests.status, InputComponentStatus::SetupMissing);
+        assert!(
+            package_manifests
+                .detail
+                .iter()
+                .any(|detail| detail.starts_with("unreadable=package.json:")),
+            "{package_manifests:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_missing_lifecycle_digest_changes_when_readable_file_content_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().expect("create temp repo");
+        write_file(temp.path(), "package.json", "{\"version\":1}\n");
+        write_file(temp.path(), "web/package.json", "{\"version\":1}\n");
+        let unreadable = temp.path().join("web/package.json");
+        let original_permissions = std::fs::metadata(&unreadable)
+            .expect("package metadata")
+            .permissions();
+        let mut locked_permissions = original_permissions.clone();
+        locked_permissions.set_mode(0o0);
+        std::fs::set_permissions(&unreadable, locked_permissions).expect("lock package.json");
+
+        let first = file_digest_component(
+            "ts_js.package_manifests",
+            DigestKind::TsJsLifecycle,
+            temp.path(),
+            vec!["package.json".to_string(), "web/package.json".to_string()],
+        );
+        write_file(temp.path(), "package.json", "{\"version\":2}\n");
+        let second = file_digest_component(
+            "ts_js.package_manifests",
+            DigestKind::TsJsLifecycle,
+            temp.path(),
+            vec!["package.json".to_string(), "web/package.json".to_string()],
+        );
+
+        std::fs::set_permissions(&unreadable, original_permissions).expect("restore package.json");
+        assert_eq!(first.status, InputComponentStatus::SetupMissing);
+        assert_eq!(second.status, InputComponentStatus::SetupMissing);
+        assert_ne!(first.digest, second.digest);
     }
 
     #[test]
