@@ -49,6 +49,8 @@ impl CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::incremental::digest::{Digest, DigestKind};
+    use crate::analysis_kernel::incremental::keys::PrecisionTier;
 
     #[test]
     fn default_cache_stats_serialize_zero_counters() {
@@ -91,5 +93,29 @@ mod tests {
                 quarantines: 1,
             }
         );
+    }
+
+    #[test]
+    fn provider_output_meta_serializes_provider_identity_output_and_stats() {
+        let meta = ProviderOutputMeta::new(
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            Digest::from_parts(DigestKind::ProviderOutput, "output", &["facts"]),
+            PrecisionTier::Syntax,
+            "native_trusted",
+            vec![Digest::from_parts(DigestKind::SourceText, "file", &["src/main.ts"])],
+            CacheStats::default(),
+        );
+        let json = serde_json::to_value(meta).expect("provider output metadata should serialize");
+
+        assert!(json.get("provider_id").is_some());
+        assert!(json.get("provider_version").is_some());
+        assert!(json.get("schema_version").is_some());
+        assert!(json.get("output_digest").is_some());
+        assert!(json.get("precision").is_some());
+        assert!(json.get("validation").is_some());
+        assert!(json.get("dependency_inputs").is_some());
+        assert!(json.get("cache_stats").is_some());
     }
 }
