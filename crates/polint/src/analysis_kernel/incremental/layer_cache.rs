@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 
 use super::change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 use super::dependency_index::{
-    CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex,
+    CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
 };
 use super::digest::{Digest, DigestKind};
 use super::invalidation::{InvalidationAction, InvalidationPlan};
 use super::keys::{LayerKey, LayerKind, PrecisionTier};
 use crate::cache::stable_hash;
 
-pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-1";
+pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-2";
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +140,7 @@ impl LayerCacheStore {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         };
         if !manifest_path.exists() {
+            self.evict_stale_manifests_for_key(key);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         }
 
@@ -216,6 +217,9 @@ impl LayerCacheStore {
         let payload_digest = Self::payload_digest_for_json(value)?;
         if payload_digest != manifest.payload_digest {
             return Err(anyhow!("layer cache payload digest mismatch"));
+        }
+        if !self.manifest_metadata_is_supported(manifest, &manifest.key) {
+            return Err(anyhow!("unsupported layer cache manifest metadata"));
         }
         self.write_json_inner(&manifest.key, manifest, value)
     }
@@ -363,6 +367,30 @@ impl LayerCacheStore {
         Ok(())
     }
 
+    fn evict_stale_manifests_for_key(&self, key: &LayerKey) {
+        let Ok(entries) = fs::read_dir(self.manifests_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(managed_path) = self.managed_existing_file(&path, &self.manifests_dir())
+            else {
+                continue;
+            };
+            let Ok(raw_manifest) = fs::read_to_string(&managed_path) else {
+                continue;
+            };
+            let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
+                continue;
+            };
+            if layer_keys_share_identity(&manifest.key, key)
+                && !invalidation_allows_manifest_reuse(&manifest, key)
+            {
+                evict_file(&managed_path);
+            }
+        }
+    }
+
     #[cfg(test)]
     fn blobs_dir_for_test(&self) -> PathBuf {
         self.blobs_dir()
@@ -449,14 +477,20 @@ fn dependency_index_matches_dependencies(manifest: &LayerCacheManifest) -> bool 
 }
 
 fn invalidation_allows_manifest_reuse(manifest: &LayerCacheManifest, key: &LayerKey) -> bool {
-    let change_set = manifest_change_set(manifest, key);
-    let plan = InvalidationPlan::from_change_set(&manifest.dependency_index, &change_set);
-    change_set.rows().is_empty()
-        && plan.affected_nodes.is_empty()
+    let plan = invalidation_plan_for_manifest(manifest, key);
+    plan.affected_nodes.is_empty()
         && plan
             .actions
             .iter()
             .all(|action| matches!(action, InvalidationAction::Reuse(_)))
+}
+
+fn invalidation_plan_for_manifest(
+    manifest: &LayerCacheManifest,
+    key: &LayerKey,
+) -> InvalidationPlan {
+    let change_set = manifest_change_set(manifest, key);
+    InvalidationPlan::from_change_set(&manifest.dependency_index, &change_set)
 }
 
 fn manifest_change_set(manifest: &LayerCacheManifest, key: &LayerKey) -> ChangeSet {
@@ -464,28 +498,164 @@ fn manifest_change_set(manifest: &LayerCacheManifest, key: &LayerKey) -> ChangeS
         return ChangeSet::from_rows(Vec::new());
     }
 
-    ChangeSet::from_rows(vec![ChangeSetRow {
-        node: CacheNode::Layer(manifest.key.clone()),
-        kind: layer_key_change_kind(&manifest.key, key),
-        digest: layer_key_change_digest(&manifest.key, key),
-    }])
+    let mut rows = Vec::new();
+    if manifest.key.layer_kind != key.layer_kind
+        || manifest.key.provider_id != key.provider_id
+        || manifest.key.provider_version != key.provider_version
+        || manifest.key.schema_version != key.schema_version
+    {
+        rows.push(layer_key_change_row(
+            manifest,
+            key,
+            ChangeKind::ProviderVersion,
+        ));
+        return ChangeSet::from_rows(rows);
+    }
+
+    if manifest.key.parameter_digest != key.parameter_digest {
+        rows.push(layer_key_change_row(manifest, key, ChangeKind::RuleOptions));
+    }
+    if manifest.key.config_digest != key.config_digest {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[DependencyKind::Config],
+            ChangeKind::Unknown,
+            manifest.key.config_digest.clone(),
+        );
+    }
+    if manifest.key.lifecycle_digest != key.lifecycle_digest {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[DependencyKind::Lifecycle],
+            ChangeKind::Lifecycle,
+            manifest.key.lifecycle_digest.clone(),
+        );
+    }
+    if manifest.key.toolchain_digest != key.toolchain_digest {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[DependencyKind::Toolchain, DependencyKind::ToolInvocation],
+            ChangeKind::Toolchain,
+            manifest.key.toolchain_digest.clone(),
+        );
+    }
+    if manifest.key.input_digests != key.input_digests {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[
+                DependencyKind::Input,
+                DependencyKind::SourceText,
+                DependencyKind::ImportShape,
+            ],
+            ChangeKind::Unknown,
+            changed_digest_or_fallback(&manifest.key.input_digests, &key.input_digests, manifest),
+        );
+    }
+    if manifest.key.dependency_layer_digests != key.dependency_layer_digests {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[DependencyKind::Layer, DependencyKind::UpstreamLayer],
+            ChangeKind::Unknown,
+            changed_digest_or_fallback(
+                &manifest.key.dependency_layer_digests,
+                &key.dependency_layer_digests,
+                manifest,
+            ),
+        );
+    }
+    if manifest.key.extension_digests != key.extension_digests {
+        push_dependency_change_rows(
+            &mut rows,
+            manifest,
+            &[DependencyKind::Extension],
+            ChangeKind::ExtensionDeclaredInput,
+            changed_digest_or_fallback(
+                &manifest.key.extension_digests,
+                &key.extension_digests,
+                manifest,
+            ),
+        );
+    }
+    if rows.is_empty() {
+        rows.push(layer_key_change_row(manifest, key, ChangeKind::Unknown));
+    }
+
+    ChangeSet::from_rows(rows)
 }
 
-fn layer_key_change_kind(cached: &LayerKey, requested: &LayerKey) -> ChangeKind {
-    if cached.layer_kind != requested.layer_kind
-        || cached.provider_id != requested.provider_id
-        || cached.provider_version != requested.provider_version
-        || cached.schema_version != requested.schema_version
-    {
-        ChangeKind::ProviderVersion
-    } else if cached.lifecycle_digest != requested.lifecycle_digest {
-        ChangeKind::Lifecycle
-    } else if cached.toolchain_digest != requested.toolchain_digest {
-        ChangeKind::Toolchain
-    } else if cached.extension_digests != requested.extension_digests {
-        ChangeKind::ExtensionDeclaredInput
+fn push_dependency_change_rows(
+    rows: &mut Vec<ChangeSetRow>,
+    manifest: &LayerCacheManifest,
+    kinds: &[DependencyKind],
+    fallback_kind: ChangeKind,
+    digest: Digest,
+) {
+    let before = rows.len();
+    rows.extend(
+        manifest
+            .dependencies
+            .iter()
+            .filter(|edge| kinds.contains(&edge.kind))
+            .map(|edge| ChangeSetRow {
+                node: edge.to.clone(),
+                kind: change_kind_for_edge(edge, fallback_kind),
+                digest: digest.clone(),
+            }),
+    );
+    if rows.len() == before {
+        rows.push(ChangeSetRow {
+            node: CacheNode::Layer(manifest.key.clone()),
+            kind: fallback_kind,
+            digest,
+        });
+    }
+}
+
+fn change_kind_for_edge(edge: &DependencyEdge, fallback_kind: ChangeKind) -> ChangeKind {
+    match edge.required_shape {
+        ShapeKind::Content => ChangeKind::ContentOnly,
+        ShapeKind::Syntax => ChangeKind::SyntaxShape,
+        ShapeKind::Import => ChangeKind::ImportShape,
+        ShapeKind::PublicApi => ChangeKind::PublicApiShape,
+        ShapeKind::ModuleTopology => ChangeKind::ModuleTopology,
+        ShapeKind::Lifecycle => ChangeKind::Lifecycle,
+        ShapeKind::Toolchain => ChangeKind::Toolchain,
+        ShapeKind::RuleCode => ChangeKind::RuleCode,
+        ShapeKind::RuleOptions => ChangeKind::RuleOptions,
+        ShapeKind::ExtensionCode => ChangeKind::ExtensionCode,
+        ShapeKind::ExtensionDeclaredInput => ChangeKind::ExtensionDeclaredInput,
+        ShapeKind::Model => ChangeKind::ModelFile,
+        ShapeKind::ProviderVersion => ChangeKind::ProviderVersion,
+        ShapeKind::Output | ShapeKind::Unknown => fallback_kind,
+    }
+}
+
+fn layer_key_change_row(
+    manifest: &LayerCacheManifest,
+    requested: &LayerKey,
+    kind: ChangeKind,
+) -> ChangeSetRow {
+    ChangeSetRow {
+        node: CacheNode::Layer(manifest.key.clone()),
+        kind,
+        digest: layer_key_change_digest(&manifest.key, requested),
+    }
+}
+
+fn changed_digest_or_fallback(
+    cached: &[Digest],
+    requested: &[Digest],
+    manifest: &LayerCacheManifest,
+) -> Digest {
+    if let Some(digest) = cached.iter().find(|digest| !requested.contains(digest)) {
+        digest.clone()
     } else {
-        ChangeKind::Unknown
+        layer_key_change_digest(&manifest.key, &manifest.key)
     }
 }
 
@@ -530,6 +700,10 @@ fn layer_key_change_digest(cached: &LayerKey, requested: &LayerKey) -> Digest {
             ],
         )
     }
+}
+
+fn layer_keys_share_identity(cached: &LayerKey, requested: &LayerKey) -> bool {
+    cached.layer_kind == requested.layer_kind && cached.provider_id == requested.provider_id
 }
 
 fn temp_path_for(final_path: &Path) -> PathBuf {
@@ -585,6 +759,22 @@ mod tests {
             Digest::absent(DigestKind::Config, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![digest(DigestKind::SourceText, "src/main.ts")],
+            vec![digest(DigestKind::DependencyLayer, "polint.ts.syntax")],
+            Vec::new(),
+        )
+    }
+
+    fn changed_derived_key() -> LayerKey {
+        LayerKey::new(
+            crate::analysis_kernel::incremental::keys::LayerKind::ModuleGraph,
+            "polint.module_graph",
+            "1",
+            "module-graph-v1",
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::ToolInvocation, "none"),
+            vec![digest(DigestKind::SourceText, "src/changed.ts")],
             vec![digest(DigestKind::DependencyLayer, "polint.ts.syntax")],
             Vec::new(),
         )
@@ -748,7 +938,7 @@ mod tests {
         let manifest = manifest_for_payload(key(), &payload);
         let json = serde_json::to_value(manifest).expect("manifest should serialize");
 
-        assert_eq!(json["manifest_schema"], "polint-layer-cache-manifest-1");
+        assert_eq!(json["manifest_schema"], "polint-layer-cache-manifest-2");
         assert_eq!(
             json["dependency_index"]["schema_version"],
             "polint-dependency-index-1"
@@ -799,6 +989,48 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first.parent(), final_path.parent());
         assert_eq!(second.parent(), final_path.parent());
+    }
+
+    #[test]
+    fn stale_same_layer_manifest_is_evicted_on_miss_through_dependency_index() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let stale_key = derived_key();
+        let requested_key = changed_derived_key();
+        let manifest = manifest_for_payload(stale_key.clone(), &payload);
+        store.write_json(&manifest, &payload).unwrap();
+        let stale_manifest_path = store.manifest_path_for_test(&stale_key);
+
+        let outcome: LayerCacheReadOutcome<Payload> = store.read_json(&requested_key);
+
+        assert_eq!(outcome.status, LayerCacheReadStatus::Miss);
+        assert!(
+            !stale_manifest_path.exists(),
+            "stale manifest should be evicted after dependency-index invalidation"
+        );
+    }
+
+    #[test]
+    fn write_json_rejects_manifest_metadata_that_read_path_would_reject() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = derived_key();
+        let mut manifest = manifest_for_payload(layer_key, &payload);
+        manifest.dependency_index_schema = "old-dependency-index".to_string();
+
+        let error = store.write_json(&manifest, &payload).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported layer cache manifest metadata")
+        );
     }
 
     #[test]
@@ -857,7 +1089,9 @@ mod tests {
         let layer_key = derived_key();
         let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
         manifest.dependency_index_schema = "old-dependency-index".to_string();
-        store.write_json(&manifest, &payload).unwrap();
+        store
+            .write_json_without_repair_for_test(&manifest, &payload)
+            .unwrap();
 
         let dependency_index_schema_mismatch: LayerCacheReadOutcome<Payload> =
             store.read_json(&layer_key);
@@ -914,7 +1148,9 @@ mod tests {
 
         let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
         manifest.dependencies.clear();
-        store.write_json(&manifest, &payload).unwrap();
+        store
+            .write_json_without_repair_for_test(&manifest, &payload)
+            .unwrap();
 
         let missing_dependency: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
 
