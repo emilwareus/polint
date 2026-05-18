@@ -5,7 +5,10 @@ use crate::diagnostics::Diagnostic;
 use crate::graph::ImportGraph;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CACHE_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn analyze_source(path: &str, source: &str) -> (AnalysisDb, Vec<Diagnostic>) {
     let mut db = AnalysisDb::new();
@@ -21,11 +24,15 @@ fn db_with_ts_file(path: &str, source: &str) -> AnalysisDb {
 }
 
 fn unique_cache_root() -> PathBuf {
+    let sequence = CACHE_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("polint-ts-cache-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "polint-ts-cache-{}-{nanos}-{sequence}",
+        std::process::id()
+    ))
 }
 
 fn collect_files(root: &Path) -> Vec<PathBuf> {
