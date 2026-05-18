@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-18T10:40:56.187Z"
+last_updated: "2026-05-18T11:05:45.550Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 22
   completed_phases: 4
   total_plans: 22
-  completed_plans: 18
-  percent: 82
+  completed_plans: 19
+  percent: 86
 ---
 
 # State: polint
@@ -39,10 +39,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-16)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute next plan
+Status: Ready to execute
 Phase: 24 (persistent-layer-cache-for-existing-cheap-facts) — EXECUTING
-Plan: 2 of 5
-Last activity: 2026-05-18 -- Completed 24-01-PLAN.md
+Plan: 3 of 5
+Last activity: 2026-05-18 -- Completed 24-02-PLAN.md
 
 ## Phase Progress
 
@@ -131,6 +131,10 @@ Last activity: 2026-05-18 -- Completed 24-01-PLAN.md
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer payloads use digest-derived blob paths and manifests are published last under .polint/cache/layers.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Invalidation planning fails closed for unknown, schema, provider, lifecycle, toolchain, model, extension, and missing dependency cases.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Existing key structs derive ordering so CacheNode can support deterministic BTreeMap indexes.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Syntax layer identity excludes rule code, rule options, and downstream diagnostic identity; parser reuse is keyed by parser/source/config/lifecycle/provider inputs.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Go and TS/JS syntax layer payloads store normalized facts and parser diagnostics, not raw source bodies or absolute temp roots.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Adapter provider-output metadata reuses validated layer read output digests on hits and computes output digests after recompute misses.
+- [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Cache hit/miss/reuse counters remain internal; CLI compatibility is guarded by public PolintReport parsing and no-leak assertions.
 
 ## Execution Metrics
 
@@ -148,14 +152,15 @@ Last activity: 2026-05-18 -- Completed 24-01-PLAN.md
 | 22-internal-evaluation-harness-mvp | 05 | 8 min | 1 | 9 |
 | 22-internal-evaluation-harness-mvp | 06 | 9 min | 1 | 4 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 01 | 13 min | 2 | 7 |
+| 24-persistent-layer-cache-for-existing-cheap-facts | 02 | 20 min | 3 | 10 |
 
 ## Session
 
 - Last session: 2026-05-18
-- Stopped at: Completed 24-01-PLAN.md
+- Stopped at: Completed 24-02-PLAN.md
 
 ## Next Action
 
-Phase 24 Plan 02 is ready to execute:
+Phase 24 Plan 03 is ready to execute:
 
 `/gsd-execute-phase 24-persistent-layer-cache-for-existing-cheap-facts`
