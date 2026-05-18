@@ -109,6 +109,14 @@ Plans:
 **Goal:** Add the typed snapshot and key vocabulary required for correct layered cache invalidation.
 **Requirements:** SAE-FND-04
 **Research:** `research/incremental-query-engine/FINAL-REPORT.md`, `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/module-graph/RECOMMENDED_IMPLEMENTATION.md`
+**Plans:** 5 plans
+
+Plans:
+- [ ] 23-01-PLAN.md — Internal digest, cache-key, cache-stat, and provider-output vocabulary
+- [ ] 23-02-PLAN.md — Deterministic input snapshots for source, config, lifecycle, rule, model, extension, provider, and tool inputs
+- [ ] 23-03-PLAN.md — Current Go/TS file-fact cache stats instrumentation without layer-cache reuse
+- [ ] 23-04-PLAN.md — Kernel run report with input snapshot and provider output metadata
+- [ ] 23-05-PLAN.md — Native eval fixture coverage and public-boundary proof
 
 **Success criteria:**
 1. `InputSnapshot`, `Digest`, `LayerKey`, `QueryKey`, `SummaryKey`, and `DiagnosticKey` exist internally.
