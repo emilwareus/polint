@@ -4,6 +4,11 @@ pub(crate) mod paths;
 pub(crate) mod query;
 pub(crate) mod ts;
 
+use crate::analysis_kernel::ProviderManifest;
+use crate::analysis_kernel::incremental::{
+    CacheNode, DependencyEdge, DependencyKind, Digest, DigestKind, LayerKey, LayerKind, ShapeKind,
+    dependency_layer_digest,
+};
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
@@ -40,6 +45,188 @@ impl ModuleGraphDerivation {
         }
         CapabilitySupportView::new(entries)
     }
+}
+
+pub(crate) fn module_graph_layer_key(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> LayerKey {
+    LayerKey::module_graph_layer_key(
+        manifest,
+        module_graph_import_shape_digests(db),
+        module_graph_source_package_digests(db),
+        config_digest,
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
+        upstream_syntax_output_digests,
+        module_graph_parameter_digest(),
+    )
+}
+
+pub(crate) fn module_graph_layer_dependency_edges(
+    db: &AnalysisDb,
+    key: &LayerKey,
+    manifest: &ProviderManifest,
+    upstream_syntax_output_digests: &[Digest],
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(key.clone());
+    let mut edges = Vec::new();
+
+    for file in sorted_files(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "source:{}:{}",
+                normalized_file_path(file),
+                file.content_hash
+            )),
+            DependencyKind::SourceText,
+            ShapeKind::Content,
+        ));
+    }
+
+    for package in sort_packages(db.packages(), db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "package:{}:{}:{}",
+                db.path_for(package.file),
+                language_cache_label(package.language),
+                package.name
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for import in sorted_imports(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "import:{}:{}:{}:{}",
+                db.path_for(import.file),
+                import.path,
+                import.span.start_byte,
+                language_cache_label(import.language)
+            )),
+            DependencyKind::ImportShape,
+            ShapeKind::Import,
+        ));
+    }
+
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("config:{}", config_digest)),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "provider_schema:{}:{}",
+            manifest.id,
+            manifest.primary_schema_label()
+        )),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input("toolchain:module_graph:absent".to_string()),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+
+    let mut upstream_digests = upstream_syntax_output_digests.to_vec();
+    upstream_digests.sort();
+    for (index, output_digest) in upstream_digests.into_iter().enumerate() {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Layer(upstream_syntax_layer_key(index, output_digest)),
+            DependencyKind::UpstreamLayer,
+            ShapeKind::Output,
+        ));
+    }
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+pub(crate) fn module_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
+    sorted_imports(db)
+        .into_iter()
+        .map(|import| {
+            let parts = [
+                db.path_for(import.file),
+                import.path.clone(),
+                import.package.clone().unwrap_or_default(),
+                import.span.start_byte.to_string(),
+                import.span.end_byte.to_string(),
+                language_cache_label(import.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &refs)
+        })
+        .collect()
+}
+
+pub(crate) fn module_graph_source_package_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let mut digests = sorted_files(db)
+        .into_iter()
+        .map(|file| {
+            let parts = [
+                normalized_file_path(file),
+                file.content_hash.clone(),
+                language_cache_label(file.language).to_string(),
+            ];
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            Digest::from_parts(DigestKind::SourceText, "source_package", &refs)
+        })
+        .collect::<Vec<_>>();
+    digests.extend(sort_packages(db.packages(), db).into_iter().map(|package| {
+        let parts = [
+            db.path_for(package.file),
+            package.name.clone(),
+            language_cache_label(package.language).to_string(),
+        ];
+        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        Digest::from_parts(DigestKind::ProviderParameters, "package_context", &refs)
+    }));
+    digests.sort();
+    digests
+}
+
+pub(crate) fn module_graph_parameter_digest() -> Digest {
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "module_graph_parameters",
+        &[
+            "resolver=go+ts",
+            "output=resolved_imports",
+            "output=module_nodes",
+            "output=module_edges",
+        ],
+    )
 }
 
 pub(crate) fn derive_requested_module_graph(
@@ -217,6 +404,71 @@ fn import_order(left: &ImportFact, right: &ImportFact, db: &AnalysisDb) -> std::
             right.path.as_str(),
             right.id,
         ))
+}
+
+fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
+    let mut files = db.files().iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    files
+}
+
+fn sorted_imports(db: &AnalysisDb) -> Vec<&ImportFact> {
+    let mut imports = db.imports().iter().collect::<Vec<_>>();
+    imports.sort_by(|left, right| import_order(left, right, db));
+    imports
+}
+
+fn normalized_file_path(file: &SourceFile) -> String {
+    paths::normalize_repo_relative(&file.relative_path)
+        .unwrap_or_else(|| file.relative_path.clone())
+}
+
+fn dependency_edge(
+    from: &CacheNode,
+    to: CacheNode,
+    kind: DependencyKind,
+    required_shape: ShapeKind,
+) -> DependencyEdge {
+    DependencyEdge {
+        from: from.clone(),
+        to,
+        kind,
+        required_shape,
+    }
+}
+
+fn upstream_syntax_layer_key(index: usize, output_digest: Digest) -> LayerKey {
+    let (layer_kind, provider_id) = match index {
+        0 => (LayerKind::GoSyntax, "polint.go.syntax"),
+        1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
+        _ => (LayerKind::Extension, "polint.unknown_upstream"),
+    };
+    let output_dependency = dependency_layer_digest(output_digest);
+
+    LayerKey::new(
+        layer_kind,
+        provider_id,
+        "output-digest",
+        "output-digest",
+        output_dependency.clone(),
+        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
+        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
+        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
+        vec![output_dependency],
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn language_cache_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "go",
+        Language::TypeScript => "typescript",
+        Language::Tsx => "tsx",
+        Language::JavaScript => "javascript",
+        Language::Jsx => "jsx",
+        Language::Unknown => "unknown",
+    }
 }
 
 fn seed_ts_project_module_nodes(
@@ -415,19 +667,10 @@ mod tests {
             .expect("module graph provider manifest exists")
     }
 
-    fn module_graph_key() -> LayerKey {
-        LayerKey::module_graph_layer_key(
+    fn module_graph_key(db: &AnalysisDb) -> LayerKey {
+        super::module_graph_layer_key(
+            db,
             module_graph_manifest(),
-            vec![Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "import_shape",
-                &["src/app.ts", "react"],
-            )],
-            vec![Digest::from_parts(
-                DigestKind::SourceText,
-                "source_package",
-                &["src/app.ts", "hash", "pkg"],
-            )],
             Digest::from_parts(DigestKind::Config, "config", &["base"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
@@ -436,11 +679,6 @@ mod tests {
                 "go_syntax",
                 &["base"],
             )],
-            Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "module_graph_parameters",
-                &["resolver=default"],
-            ),
         )
     }
 
@@ -495,7 +733,7 @@ mod tests {
             span: span(file, 0),
             language: Language::TypeScript,
         });
-        let key = module_graph_key();
+        let key = module_graph_key(&db);
         let go_syntax_output =
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]);
         let ts_syntax_output =
@@ -521,7 +759,7 @@ mod tests {
         assert!(edges.iter().any(|edge| matches!(
             (&edge.from, &edge.to, edge.required_shape),
             (CacheNode::Layer(layer), CacheNode::Input(input), ShapeKind::Import)
-                if *layer == key && input.contains("import:src/app.ts:react")
+                if layer == &key && input.contains("import:src/app.ts:react")
         )));
     }
 

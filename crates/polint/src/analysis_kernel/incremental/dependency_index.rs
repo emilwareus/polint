@@ -30,6 +30,8 @@ pub(crate) enum CacheNode {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DependencyKind {
     Input,
+    SourceText,
+    ImportShape,
     Layer,
     Lifecycle,
     Config,
@@ -38,6 +40,8 @@ pub(crate) enum DependencyKind {
     Extension,
     Model,
     Provider,
+    ProviderSchema,
+    UpstreamLayer,
     ToolInvocation,
 }
 

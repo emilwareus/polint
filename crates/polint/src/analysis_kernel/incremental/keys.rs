@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::digest::{Digest, DigestKind};
+use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -194,6 +195,58 @@ impl LayerKey {
             )],
         )
     }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Module graph layer identity must keep import, lifecycle, config, upstream, and provider parameters explicit."
+    )]
+    pub(crate) fn module_graph_layer_key(
+        manifest: &ProviderManifest,
+        import_shape_digests: Vec<Digest>,
+        source_package_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        module_graph_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.module_graph",
+            "module graph layer keys require the module graph provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_graph_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let mut input_digests =
+            Vec::with_capacity(2 + import_shape_digests.len() + source_package_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.extend(import_shape_digests);
+        input_digests.extend(source_package_digests);
+
+        Self::new(
+            LayerKind::ModuleGraph,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            module_graph_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "module_graph_toolchain"),
+            input_digests,
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest)
+                .collect(),
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
 }
 
 impl QueryKey {
@@ -259,6 +312,14 @@ impl DiagnosticKey {
 fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
     digests.sort();
     digests
+}
+
+pub(crate) fn dependency_layer_digest(output_digest: Digest) -> Digest {
+    Digest::from_parts(
+        DigestKind::DependencyLayer,
+        "upstream_layer_output",
+        &[&output_digest.to_string()],
+    )
 }
 
 #[cfg(test)]
