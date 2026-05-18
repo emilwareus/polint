@@ -11,9 +11,9 @@ use crate::cache::{
 use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{AnalysisDb, Language, Rule, RuleOptions, run_rules};
 use crate::diagnostics::{
-    ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
-    apply_report_filters, diagnostics_from_json_report, limit_report_diagnostics,
-    render_with_sarif_help,
+    AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
+    apply_report_filters, build_ai_friendly_report, diagnostics_from_json_report,
+    limit_report_diagnostics, render_ai_friendly_stdout, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
@@ -26,13 +26,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod rules_host_error;
 mod skill;
 
 const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-cache-status-v1.json";
 const POLINT_RULES_PROFILE_ENV: &str = "POLINT_RULES_PROFILE";
+const AI_FRIENDLY_OUTPUT_DIR: &str = ".polint/output";
+const AI_FRIENDLY_LATEST_OUTPUT: &str = ".polint/output/latest.json";
+
+struct AiFriendlyOutput {
+    report: AiFriendlyReport,
+}
 
 fn json_report_meta() -> JsonReportMeta<'static> {
     JsonReportMeta {
@@ -64,6 +70,44 @@ fn sarif_help_map(config: &LoadedConfig) -> Option<&BTreeMap<String, String>> {
     }
 }
 
+fn write_ai_friendly_report(
+    root: &Path,
+    diagnostics: &[Diagnostic],
+    persisted_diagnostics: &[Diagnostic],
+    json_meta: JsonReportMeta<'_>,
+) -> Result<AiFriendlyOutput> {
+    let polint_dir = root.join(".polint");
+    fs::create_dir_all(polint_dir.join("output"))
+        .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
+    ensure_polint_nested_gitignore(&polint_dir)?;
+
+    let generated_at = generated_at_label();
+    let report = build_ai_friendly_report(
+        diagnostics,
+        persisted_diagnostics,
+        json_meta,
+        generated_at.clone(),
+    );
+    let json = serde_json::to_string_pretty(&report)?;
+    let hash = crate::cache::stable_hash(&[&json]);
+    let run_name = format!("check-{generated_at}-{}.json", &hash[..12]);
+    let run_path = root.join(AI_FRIENDLY_OUTPUT_DIR).join(run_name);
+    let latest_path = root.join(AI_FRIENDLY_LATEST_OUTPUT);
+    fs::write(&run_path, &json)
+        .with_context(|| format!("failed to write {}", run_path.display()))?;
+    fs::write(&latest_path, json)
+        .with_context(|| format!("failed to write {}", latest_path.display()))?;
+    Ok(AiFriendlyOutput { report })
+}
+
+fn generated_at_label() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    secs.to_string()
+}
+
 fn read_sources_for_diagnostics(
     root: &Path,
     diagnostics: &[Diagnostic],
@@ -90,6 +134,9 @@ fn read_sources_for_diagnostics(
 #[derive(Debug, Parser)]
 #[command(name = "polint")]
 #[command(about = "Repo-local static analysis policy as code.")]
+#[command(
+    after_help = "AI agents: prefer `polint check --format ai-friendly --fail-on none` to avoid context overload."
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -213,6 +260,9 @@ struct BaselineUpdateArgs {
 }
 
 #[derive(Debug, Args, Clone)]
+#[command(
+    after_help = "AI agents: use `--format ai-friendly` to print a compact summary and save queryable JSON under `.polint/output/`."
+)]
 struct CheckArgs {
     /// Files or directories to check. Defaults to the workspace include config.
     #[arg(value_name = "PATH")]
@@ -293,6 +343,7 @@ enum FormatArg {
     Github,
     Json,
     Sarif,
+    AiFriendly,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -362,6 +413,8 @@ fn init_project(root: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to create {}", polint_dir.display()))?;
     fs::create_dir_all(polint_dir.join("cache"))
         .with_context(|| format!("failed to create {}", polint_dir.join("cache").display()))?;
+    fs::create_dir_all(polint_dir.join("output"))
+        .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
     ensure_polint_nested_gitignore(&polint_dir)?;
     ensure_repo_rust_toolchain_shim(&root)?;
 
@@ -372,22 +425,30 @@ fn init_project(root: PathBuf) -> Result<()> {
 /// Ensures `.polint/.gitignore` lists `cache/` so analysis cache stays local to each machine.
 fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
     let path = polint_dir.join(".gitignore");
-    const ENTRY: &str = "cache/";
+    const ENTRIES: &[&str] = &["cache/", "output/"];
 
     if path.is_file() {
         let existing = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
-        if existing.lines().any(gitignore_line_covers_polint_cache) {
+        if ENTRIES.iter().all(|entry| {
+            existing
+                .lines()
+                .any(|line| gitignore_line_covers(line, entry))
+        }) {
             return Ok(());
         }
         let mut out = existing;
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str(ENTRY);
-        out.push('\n');
+        for entry in ENTRIES {
+            if !out.lines().any(|line| gitignore_line_covers(line, entry)) {
+                out.push_str(entry);
+                out.push('\n');
+            }
+        }
         fs::write(&path, out).with_context(|| format!("failed to update {}", path.display()))?;
     } else {
-        let content = format!("# polint: local cache (not shared between checkouts)\n{ENTRY}\n");
+        let content = "# polint: local cache and agent output (not shared between checkouts)\ncache/\noutput/\n";
         fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())
@@ -414,12 +475,12 @@ fn ensure_repo_rust_toolchain_shim(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn gitignore_line_covers_polint_cache(line: &str) -> bool {
+fn gitignore_line_covers(line: &str, entry: &str) -> bool {
     let t = line.trim();
     if t.is_empty() || t.starts_with('#') {
         return false;
     }
-    t.trim_end_matches('/') == "cache"
+    t.trim_end_matches('/') == entry.trim_end_matches('/')
 }
 
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
@@ -891,6 +952,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
+        FormatArg::AiFriendly => OutputFormat::AiFriendly,
     };
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let baseline = apply_baseline(&root, args, diagnostics)?;
@@ -906,15 +968,28 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
         FormatArg::Human => Some(&source_map),
         _ => None,
     };
-    print!(
-        "{}",
-        render_with_sarif_help(
-            format,
+    if matches!(args.format, FormatArg::AiFriendly) {
+        let output = write_ai_friendly_report(
+            &root,
+            &diagnostics,
             &rendered_diagnostics,
-            render_opts(args, sources),
-            sarif_help_map(&loaded),
-        )
-    );
+            json_report_meta(),
+        )?;
+        print!(
+            "{}",
+            render_ai_friendly_stdout(&output.report, AI_FRIENDLY_LATEST_OUTPUT)
+        );
+    } else {
+        print!(
+            "{}",
+            render_with_sarif_help(
+                format,
+                &rendered_diagnostics,
+                render_opts(args, sources),
+                sarif_help_map(&loaded),
+            )
+        );
+    }
 
     if loaded.missing && matches!(args.format, FormatArg::Human) {
         println!("Config not found. Run `polint init` to create .polint.toml.");
@@ -1347,20 +1422,34 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
         FormatArg::Github => OutputFormat::Github,
         FormatArg::Json => OutputFormat::Json,
         FormatArg::Sarif => OutputFormat::Sarif,
+        FormatArg::AiFriendly => OutputFormat::AiFriendly,
     };
     let sources = match args.format {
         FormatArg::Human => Some(&source_map),
         _ => None,
     };
-    print!(
-        "{}",
-        render_with_sarif_help(
-            format,
+    if matches!(args.format, FormatArg::AiFriendly) {
+        let output = write_ai_friendly_report(
+            root,
+            &diagnostics,
             &rendered_diagnostics,
-            render_opts(args, sources),
-            sarif_help_map(&config),
-        )
-    );
+            json_report_meta(),
+        )?;
+        print!(
+            "{}",
+            render_ai_friendly_stdout(&output.report, AI_FRIENDLY_LATEST_OUTPUT)
+        );
+    } else {
+        print!(
+            "{}",
+            render_with_sarif_help(
+                format,
+                &rendered_diagnostics,
+                render_opts(args, sources),
+                sarif_help_map(&config),
+            )
+        );
+    }
     if should_render_check_stats(args)
         && let Some(db) = &db
     {

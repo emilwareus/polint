@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json",
+  "title": "PolintAiFriendlyReport",
+  "description": "Machine output saved by `polint check --format ai-friendly`. Stdout stays compact; this file contains the queryable full diagnostic payload.",
+  "type": "object",
+  "required": [
+    "version",
+    "schema",
+    "tool",
+    "generated_at",
+    "summary",
+    "examples",
+    "diagnostics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "Run timestamp label used for generated output file names."
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_diagnostics",
+        "rules_triggered",
+        "by_severity",
+        "by_rule",
+        "examples_limit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total_diagnostics": { "type": "integer", "minimum": 0 },
+        "rules_triggered": { "type": "integer", "minimum": 0 },
+        "by_severity": { "$ref": "#/$defs/severityCounts" },
+        "by_rule": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ruleSummary" }
+        },
+        "examples_limit": { "type": "integer", "const": 10 }
+      }
+    },
+    "examples": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/example" }
+    },
+    "truncation": {
+      "type": "object",
+      "required": ["total_diagnostics", "included_diagnostics", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "total_diagnostics": { "type": "integer", "minimum": 0 },
+        "included_diagnostics": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "polint-report-v1.json#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "severityCounts": {
+      "type": "object",
+      "required": ["error", "warn", "info"],
+      "additionalProperties": false,
+      "properties": {
+        "error": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "textRange": {
+      "type": "object",
+      "required": ["start_line", "start_col", "end_line", "end_col"],
+      "additionalProperties": false,
+      "properties": {
+        "start_line": { "type": "integer", "minimum": 0 },
+        "start_col": { "type": "integer", "minimum": 0 },
+        "end_line": { "type": "integer", "minimum": 0 },
+        "end_col": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ruleSummary": {
+      "type": "object",
+      "required": ["rule_id", "total", "by_severity"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "total": { "type": "integer", "minimum": 0 },
+        "by_severity": { "$ref": "#/$defs/severityCounts" }
+      }
+    },
+    "example": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "severity",
+        "file",
+        "range",
+        "message",
+        "stable_fingerprint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "file": { "type": "string" },
+        "range": { "$ref": "#/$defs/textRange" },
+        "message": { "type": "string" },
+        "stable_fingerprint": { "type": "string" }
+      }
+    }
+  }
+}

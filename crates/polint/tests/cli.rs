@@ -54,6 +54,21 @@ fn top_level_help_only_lists_supported_public_commands() {
             "help should not expose internal command {command}: {help}"
         );
     }
+    assert!(
+        help.contains("polint check --format ai-friendly --fail-on none"),
+        "top-level help should guide AI agents to compact output: {help}"
+    );
+}
+
+#[test]
+fn check_help_guides_ai_agents_to_compact_output() {
+    let help = stdout_string(polint_cmd().args(["check", "--help"]).assert().success());
+
+    assert!(help.contains("ai-friendly"), "{help}");
+    assert!(
+        help.contains(".polint/output/"),
+        "check help should mention saved AI-friendly output path: {help}"
+    );
 }
 
 #[test]
@@ -2082,8 +2097,10 @@ fn init_creates_config() {
     assert!(temp.path().join(".polint/rules").exists());
     assert!(temp.path().join(".polint/rules/src").exists());
     assert!(temp.path().join(".polint/cache").exists());
+    assert!(temp.path().join(".polint/output").exists());
     let nested_gitignore = fs::read_to_string(temp.path().join(".polint/.gitignore")).unwrap();
     assert!(nested_gitignore.contains("cache/"), "{nested_gitignore:?}");
+    assert!(nested_gitignore.contains("output/"), "{nested_gitignore:?}");
     let toolchain = fs::read_to_string(temp.path().join("rust-toolchain.toml")).unwrap();
     assert!(toolchain.contains("channel = \"1.95\""), "{toolchain:?}");
 }
@@ -2125,6 +2142,7 @@ fn init_does_not_overwrite_existing_config() {
     assert!(temp.path().join(".polint/rules").exists());
     assert!(temp.path().join(".polint/rules/src").exists());
     assert!(temp.path().join(".polint/cache").exists());
+    assert!(temp.path().join(".polint/output").exists());
     assert!(temp.path().join(".polint/.gitignore").exists());
     assert_eq!(
         fs::read_to_string(config).unwrap(),
@@ -2135,7 +2153,7 @@ fn init_does_not_overwrite_existing_config() {
 }
 
 #[test]
-fn init_appends_cache_to_existing_polint_gitignore() {
+fn init_appends_cache_and_output_to_existing_polint_gitignore() {
     let temp = tempfile::tempdir().unwrap();
     let polint_dir = temp.path().join(".polint");
     fs::create_dir_all(&polint_dir).unwrap();
@@ -2151,6 +2169,7 @@ fn init_appends_cache_to_existing_polint_gitignore() {
     assert!(gi.contains("# keep"));
     assert!(gi.contains("other/"));
     assert!(gi.contains("cache/"));
+    assert!(gi.contains("output/"));
 }
 
 #[test]
@@ -2246,7 +2265,9 @@ fn add_skill_installs_claude_skill_non_interactively() {
     let skill = temp.path().join(".claude/skills/polint/SKILL.md");
     let contents = fs::read_to_string(skill).unwrap();
     assert!(contents.contains("name: polint"));
-    assert!(contents.contains("polint check --fail-on none"));
+    assert!(contents.contains("polint check --format ai-friendly --fail-on none"));
+    assert!(contents.contains(".polint/output/latest.json"));
+    assert!(contents.contains("Do not `cat` the whole file"));
     assert!(contents.contains("polint ignores --shortstat"));
     assert!(contents.contains("docs/schemas/polint-report-v1.json"));
     assert!(contents.contains("polint ships no built-in"));
@@ -2922,6 +2943,124 @@ pub(crate) fn no_todo_literals(
         "Configured forbidden literal found."
     );
     assert!(diagnostic_has_evidence(diagnostics[0], "token", "TODO"));
+}
+
+#[test]
+fn check_ai_friendly_saves_full_json_and_prints_compact_summary() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-todo-literals"])
+        .assert()
+        .success();
+
+    point_generated_rule_pack_at_local_polint(temp.path());
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+
+[[rules.config]]
+id = "custom/no-todo-literals"
+severity = "warn"
+files = ["src/**/*.ts"]
+"#,
+    );
+    write_file(
+        &temp.path().join(".polint/rules/src/no_todo_literals.rs"),
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "custom/no-todo-literals",
+    description = "Reject TODO literals.",
+    severity = "warn"
+)]
+pub(crate) fn no_todo_literals(
+    ctx: &mut RuleCtx<'_>,
+    literals: StringLiterals<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    let mut diagnostics = Vec::new();
+    for literal in literals.iter() {
+        if literal.value == "TODO" {
+            diagnostics.push(Diagnostic::warning(
+                rule_id.clone(),
+                ctx.file_path(literal.file),
+                literal.span.diagnostic_range(),
+                "Configured forbidden literal found.",
+            ));
+        }
+    }
+    for diagnostic in diagnostics {
+        ctx.report(diagnostic);
+    }
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/component.ts"),
+        r#"export const status = "TODO";"#,
+    );
+
+    let stdout = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "ai-friendly", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        stdout.contains("polint: 1 diagnostic across 1 rule"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("custom/no-todo-literals: 1"), "{stdout}");
+    assert!(
+        stdout.contains("Full JSON: .polint/output/latest.json"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("\"diagnostics\""),
+        "stdout should stay compact: {stdout}"
+    );
+
+    let latest = temp.path().join(".polint/output/latest.json");
+    let report: serde_json::Value = serde_json::from_str(&fs::read_to_string(&latest).unwrap())
+        .unwrap_or_else(|error| panic!("AI-friendly report should be JSON: {error}"));
+    assert_eq!(
+        report["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json"
+    );
+    assert_eq!(report["summary"]["total_diagnostics"], 1);
+    assert_eq!(report["summary"]["rules_triggered"], 1);
+    assert_eq!(
+        report["summary"]["by_rule"][0]["rule_id"],
+        "custom/no-todo-literals"
+    );
+    assert_eq!(report["examples"].as_array().unwrap().len(), 1);
+    assert_eq!(diagnostics(&report).len(), 1);
+    assert_eq!(diagnostics(&report)[0]["file"], "src/component.ts");
+
+    let nested_gitignore = fs::read_to_string(temp.path().join(".polint/.gitignore")).unwrap();
+    assert!(nested_gitignore.contains("output/"), "{nested_gitignore}");
+    let output_entries = fs::read_dir(temp.path().join(".polint/output"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert!(output_entries.contains("latest.json"), "{output_entries:?}");
+    assert!(
+        output_entries
+            .iter()
+            .any(|name| name.starts_with("check-") && name.ends_with(".json")),
+        "{output_entries:?}"
+    );
 }
 
 #[test]

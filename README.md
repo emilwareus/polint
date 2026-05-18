@@ -58,7 +58,7 @@ polint new-rule ts no-raw-colors
 polint check
 ```
 
-`polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/.gitignore` (ignoring `cache/`), and root `rust-toolchain.toml` when missing (see [Minimum Rust version](#minimum-rust-version)).
+`polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/output/`, `.polint/.gitignore` (ignoring `cache/` and `output/`), and root `rust-toolchain.toml` when missing (see [Minimum Rust version](#minimum-rust-version)).
 `polint new-rule <go|ts|js|generic> <name>` adds a Rust rule module to your
 local rule pack. `polint check` discovers and runs that rule pack.
 
@@ -195,6 +195,23 @@ polint check --stat
 These flags summarize scanned files, diagnostics, and ignore suppression counts
 for human output. They do not change JSON or SARIF output.
 
+For AI agents or large repositories, use the compact agent-oriented format:
+
+```bash
+polint check --format ai-friendly --fail-on none
+```
+
+This prints counts by triggered rule plus at most 10 example diagnostics, then
+saves the full report under `.polint/output/`. The stable path is
+`.polint/output/latest.json`. Do not paste the whole file into an agent prompt;
+query it selectively:
+
+```bash
+jq '.summary.by_rule' .polint/output/latest.json
+jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
+jq '.diagnostics[] | select(.file=="src/Button.tsx") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000
+```
+
 ## Baselines
 
 Use a baseline when adopting polint in a repository that already has valid
@@ -239,6 +256,11 @@ also set a top-level `schema` URL when using current polint. Diagnostics are
 deduplicated and sorted deterministically; `--only-rule` and `--max-diagnostics`
 apply after that pipeline for emitted reports. `--max-diagnostics` does not hide
 failures from `--fail-on` (see [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md)).
+
+AI-friendly saved reports (`polint check --format ai-friendly`) match
+[docs/schemas/polint-ai-friendly-v1.json](docs/schemas/polint-ai-friendly-v1.json).
+They contain `summary`, `examples`, and `diagnostics`; stdout intentionally stays
+small to avoid overloading coding-agent context.
 
 ## Minimum Rust version
 

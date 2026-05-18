@@ -10,11 +10,25 @@ Use this when wiring coding agents or CI to polint.
 
 ## Machine-readable output
 
+- **AI-friendly report**: `polint check --format ai-friendly --fail-on none`
+- **AI-friendly schema**: [`docs/schemas/polint-ai-friendly-v1.json`](schemas/polint-ai-friendly-v1.json)
 - **JSON report**: `polint check --format json`
 - **Schema**: [`docs/schemas/polint-report-v1.json`](schemas/polint-report-v1.json)
 - **Stable ordering**: diagnostics are sorted by file, range, rule id, message, fingerprint; use `--max-diagnostics N` to truncate emitted reports **after** that sort. The cap does not change `--fail-on`.
 
-Validate against expectations by deserializing with your agent’s JSON stack; do not rely on stderr prose for pass/fail when JSON is available.
+Use `--format ai-friendly` by default when you are an AI coding agent. It prints
+counts by triggered rule, shows at most 10 example diagnostics, and saves the
+full report to `.polint/output/latest.json`. Do not read that whole file into
+context. Query it selectively:
+
+```bash
+jq '.summary.by_rule' .polint/output/latest.json
+jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
+jq '.diagnostics[] | select(.file=="src/Button.tsx") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000
+```
+
+Validate against expectations by deserializing with your agent's JSON stack; do
+not rely on stderr prose for pass/fail when JSON is available.
 
 ## Focused runs
 
@@ -26,7 +40,7 @@ Validate against expectations by deserializing with your agent’s JSON stack; d
 Example:
 
 ```bash
-polint check --format json --fail-on error --only-rule 'local/*' path/to/dir
+polint check --format ai-friendly --fail-on none --only-rule 'local/*' path/to/dir
 ```
 
 `--stat` and `--shortstat` are human-output helpers. They do not append prose to
@@ -96,12 +110,15 @@ SARIF for GitHub Code Scanning: `polint check --format sarif` then
 ## Prompt starter (copy-paste)
 
 > Use the polint JSON report (`polint check --format json`). The schema is in
-> `docs/schemas/polint-report-v1.json`. Parse `diagnostics[]`; each item has
-> `rule_id`, `severity`, `file`, `range`, `message`, optional `fix`. Apply fixes
-> and re-run until the report is empty or only allowed severities remain. To
-> ratchet adoption, run `polint check --baseline --new-only`. To remove
-> suppressed debt, run `polint ignores --stat --filter RULE_ID`, fix the
-> underlying code, remove the ignore comment, and rerun `polint check`.
+> `docs/schemas/polint-report-v1.json`. If you are an AI agent, start with
+> `polint check --format ai-friendly --fail-on none` and query
+> `.polint/output/latest.json` instead of reading the whole file. Parse
+> `diagnostics[]`; each item has `rule_id`, `severity`, `file`, `range`,
+> `message`, optional `fix`. Apply fixes and re-run until the report is empty or
+> only allowed severities remain. To ratchet adoption, run
+> `polint check --baseline --new-only`. To remove suppressed debt, run
+> `polint ignores --stat --filter RULE_ID`, fix the underlying code, remove the
+> ignore comment, and rerun `polint check`.
 
 ## Troubleshooting
 
