@@ -503,7 +503,7 @@ fn language_cache_label(language: crate::core::Language) -> &'static str {
 }
 
 fn sort_file_metrics(metrics: &mut [FileMetricFact]) {
-    metrics.sort_by(|left, right| (left.file, left.language).cmp(&(right.file, right.language)));
+    metrics.sort_by_key(|metric| (metric.file, metric.language));
 }
 
 fn sort_function_metrics(metrics: &mut [FunctionMetricFact]) {

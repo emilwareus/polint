@@ -312,10 +312,6 @@ impl LayerKey {
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Metrics layer identity must keep source, function, config, upstream, and provider inputs explicit."
-    )]
     pub(crate) fn metrics_layer_key(
         manifest: &ProviderManifest,
         source_text_digests: Vec<Digest>,

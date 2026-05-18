@@ -249,10 +249,6 @@ pub(crate) fn derive_requested_module_graph(
     derive_requested_module_graph_uncached(db, loaded, plan)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Module graph cache identity consumes cache, snapshot, provider manifest, and upstream syntax outputs explicitly."
-)]
 pub(crate) fn derive_requested_module_graph_with_cache_stats(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,

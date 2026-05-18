@@ -227,6 +227,10 @@ fn derive_requested_symbols_uncached(
     derivation
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Symbol graph cache identity consumes provider, module graph, syntax, config, and language lifecycle inputs explicitly."
+)]
 fn symbol_graph_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,

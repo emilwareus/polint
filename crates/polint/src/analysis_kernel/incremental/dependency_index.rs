@@ -190,18 +190,17 @@ mod tests {
         ]);
 
         assert_eq!(index.schema_version, DEPENDENCY_INDEX_SCHEMA);
-        assert_eq!(
-            index
-                .forward_edges(&layer_a)
-                .expect("layer a should have forward edges"),
-            &[edge(layer_a.clone(), source_a.clone(), ShapeKind::Content)]
-        );
-        assert_eq!(
-            index
-                .reverse_edges(&source_b)
-                .expect("source b should have reverse edges"),
-            &[edge(layer_b, source_b, ShapeKind::Syntax)]
-        );
+        let forward_a = index
+            .forward_edges(&layer_a)
+            .expect("layer a should have forward edges");
+        let expected_forward_a = [edge(layer_a.clone(), source_a, ShapeKind::Content)];
+        assert_eq!(forward_a, expected_forward_a.as_slice());
+
+        let reverse_b = index
+            .reverse_edges(&source_b)
+            .expect("source b should have reverse edges");
+        let expected_reverse_b = [edge(layer_b, source_b, ShapeKind::Syntax)];
+        assert_eq!(reverse_b, expected_reverse_b.as_slice());
     }
 
     #[test]
@@ -214,11 +213,11 @@ mod tests {
 
         assert_eq!(
             index.forward_edges(&layer).expect("forward edges"),
-            &[duplicate.clone()]
+            std::slice::from_ref(&duplicate)
         );
         assert_eq!(
             index.reverse_edges(&source).expect("reverse edges"),
-            &[duplicate]
+            std::slice::from_ref(&duplicate)
         );
     }
 
@@ -257,7 +256,7 @@ mod tests {
             Digest::absent(DigestKind::Evidence, "none"),
         );
 
-        let mut nodes = vec![
+        let mut nodes = [
             CacheNode::ToolInvocation("go".to_string()),
             CacheNode::Extension("extension".to_string()),
             CacheNode::Diagnostic(diagnostic),

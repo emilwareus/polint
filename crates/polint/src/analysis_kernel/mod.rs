@@ -105,10 +105,10 @@ impl AnalysisKernel {
             ts_output_digest.clone(),
         ));
 
-        let go_dependency_output_digest = go_output_digest.clone().unwrap_or_else(|| {
+        let go_dependency_output_digest = go_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.go.syntax")
         });
-        let ts_dependency_output_digest = ts_output_digest.clone().unwrap_or_else(|| {
+        let ts_dependency_output_digest = ts_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.ts.syntax")
         });
         let module_graph = crate::module_graph::derive_requested_module_graph_with_cache_stats(
@@ -135,7 +135,7 @@ impl AnalysisKernel {
             module_output_digest.clone(),
         ));
 
-        let module_dependency_output_digest = module_output_digest.clone().unwrap_or_else(|| {
+        let module_dependency_output_digest = module_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(
                 incremental::DigestKind::ProviderOutput,
                 "polint.module_graph",
@@ -174,7 +174,7 @@ impl AnalysisKernel {
             vec![go_dependency_output_digest, ts_dependency_output_digest],
         );
         let polint_metrics_cache_stats = metrics.cache_stats.clone();
-        let metrics_output_digest = metrics.output_digest.clone();
+        let metrics_output_digest = metrics.output_digest;
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.metrics",
             &db,
