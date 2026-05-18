@@ -341,6 +341,11 @@ pub(crate) struct AiFriendlyExample {
     pub(crate) file: String,
     pub(crate) range: TextRange,
     pub(crate) message: String,
+    pub(crate) labels: Vec<Label>,
+    pub(crate) help: Option<String>,
+    pub(crate) evidence: Vec<Evidence>,
+    pub(crate) suggestions: Vec<Suggestion>,
+    pub(crate) fix: Option<Fix>,
     pub(crate) stable_fingerprint: String,
 }
 
@@ -510,6 +515,11 @@ impl From<&Diagnostic> for AiFriendlyExample {
             file: diagnostic.file.clone(),
             range: diagnostic.range,
             message: diagnostic.message.clone(),
+            labels: diagnostic.labels.clone(),
+            help: diagnostic.help.clone(),
+            evidence: diagnostic.evidence.clone(),
+            suggestions: diagnostic.suggestions.clone(),
+            fix: diagnostic.fix.clone(),
             stable_fingerprint: diagnostic.stable_fingerprint.clone(),
         }
     }
@@ -581,14 +591,7 @@ pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &s
         out.push_str("  none\n");
     } else {
         for example in &report.examples {
-            out.push_str(&format!(
-                "  {} {}:{}:{} {}\n",
-                example.rule_id,
-                example.file,
-                example.range.start_line,
-                example.range.start_col,
-                example.message
-            ));
+            push_ai_friendly_example(&mut out, example);
         }
     }
 
@@ -604,6 +607,54 @@ pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &s
         "  jq '.diagnostics[] | select(.file==\"src/Button.tsx\") | {{rule_id, range, message}}' {json_path} | head -c 12000\n"
     ));
     out
+}
+
+fn push_ai_friendly_example(out: &mut String, example: &AiFriendlyExample) {
+    out.push_str(&format!(
+        "  {}[{}]: {}\n    --> {}:{}\n",
+        severity_label(example.severity),
+        example.rule_id,
+        example.message,
+        example.file,
+        format_range(example.range)
+    ));
+    for label in &example.labels {
+        out.push_str(&format!(
+            "    label {}: {}\n",
+            format_range(label.range),
+            label.message
+        ));
+    }
+    for evidence in &example.evidence {
+        out.push_str(&format!(
+            "    evidence {}: {}\n",
+            evidence.label, evidence.value
+        ));
+    }
+    for suggestion in &example.suggestions {
+        out.push_str(&format!("    suggestion: {}\n", suggestion.message));
+    }
+    if let Some(fix) = &example.fix {
+        out.push_str(&format!("    fix: {}\n", fix.message));
+        if let Some(replacement) = &fix.replacement {
+            out.push_str(&format!("      replacement: {replacement}\n"));
+        }
+    }
+    if let Some(help) = &example.help {
+        out.push_str(&format!("    help: {help}\n"));
+    }
+    out.push_str(&format!(
+        "    fingerprint: {}\n\n",
+        example.stable_fingerprint
+    ));
+}
+
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warn",
+        Severity::Info => "info",
+    }
 }
 
 fn dominant_rule_severity(rule: &AiFriendlyRuleSummary) -> &'static str {
@@ -1707,6 +1758,8 @@ mod tests {
         assert_eq!(report.summary.by_rule[0].total, 2);
         assert_eq!(report.examples.len(), AI_FRIENDLY_EXAMPLE_LIMIT);
         assert_eq!(report.examples[0].message, "more important");
+        assert!(report.examples[0].labels.is_empty());
+        assert!(report.examples[0].evidence.is_empty());
         assert_eq!(report.diagnostics.len(), 3);
         assert_eq!(report.truncation.as_ref().unwrap().total_diagnostics, 13);
     }
@@ -1720,7 +1773,13 @@ mod tests {
 
         assert!(rendered.contains("polint: 1 diagnostic across 1 rule"));
         assert!(rendered.contains("Full JSON: .polint/output/latest.json"));
-        assert!(rendered.contains("project/rule src/lib.rs:10:4 policy failed"));
+        assert!(rendered.contains("error[project/rule]: policy failed"));
+        assert!(rendered.contains("--> src/lib.rs:10:4-10:12"));
+        assert!(rendered.contains("label 11:2-11:8: related expression"));
+        assert!(rendered.contains("evidence symbol: unsafe_api"));
+        assert!(rendered.contains("suggestion: Prefer safe_api here"));
+        assert!(rendered.contains("fix: Replace unsafe_api"));
+        assert!(rendered.contains("help: Use the safe wrapper before crossing this boundary."));
         assert!(rendered.contains("jq '.summary.by_rule' .polint/output/latest.json"));
         assert!(rendered.contains("Do not read the whole file into an AI prompt"));
         assert!(!rendered.contains("stable_fingerprint"));

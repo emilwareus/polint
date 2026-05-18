@@ -121,6 +121,11 @@
         "file",
         "range",
         "message",
+        "labels",
+        "help",
+        "evidence",
+        "suggestions",
+        "fix",
         "stable_fingerprint"
       ],
       "additionalProperties": false,
@@ -130,6 +135,51 @@
         "file": { "type": "string" },
         "range": { "$ref": "#/$defs/textRange" },
         "message": { "type": "string" },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["range", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "range": { "$ref": "#/$defs/textRange" },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        "help": { "type": ["string", "null"] },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "label": { "type": "string" },
+              "value": { "type": "string" }
+            }
+          }
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "additionalProperties": false,
+            "properties": {
+              "message": { "type": "string" }
+            }
+          }
+        },
+        "fix": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["message", "replacement"],
+          "properties": {
+            "message": { "type": "string" },
+            "replacement": { "type": ["string", "null"] }
+          }
+        },
         "stable_fingerprint": { "type": "string" }
       }
     }

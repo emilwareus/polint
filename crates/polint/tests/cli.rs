@@ -3023,6 +3023,12 @@ pub(crate) fn no_todo_literals(
     );
     assert!(stdout.contains("custom/no-todo-literals: 1"), "{stdout}");
     assert!(
+        stdout.contains("warn[custom/no-todo-literals]: Configured forbidden literal found."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("--> src/component.ts:"), "{stdout}");
+    assert!(stdout.contains("fingerprint:"), "{stdout}");
+    assert!(
         stdout.contains("Full JSON: .polint/output/latest.json"),
         "{stdout}"
     );
@@ -3045,6 +3051,12 @@ pub(crate) fn no_todo_literals(
         "custom/no-todo-literals"
     );
     assert_eq!(report["examples"].as_array().unwrap().len(), 1);
+    assert_eq!(report["examples"][0]["rule_id"], "custom/no-todo-literals");
+    assert_eq!(report["examples"][0]["labels"], serde_json::json!([]));
+    assert_eq!(report["examples"][0]["help"], serde_json::Value::Null);
+    assert_eq!(report["examples"][0]["evidence"], serde_json::json!([]));
+    assert_eq!(report["examples"][0]["suggestions"], serde_json::json!([]));
+    assert_eq!(report["examples"][0]["fix"], serde_json::Value::Null);
     assert_eq!(diagnostics(&report).len(), 1);
     assert_eq!(diagnostics(&report)[0]["file"], "src/component.ts");
 
