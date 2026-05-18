@@ -192,6 +192,82 @@ pub(crate) fn run_cache_current_determinism_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_layer_cache_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "resolved_imports",
+        "module_graph",
+        "symbols",
+        "references",
+        "file_metrics",
+        "function_metrics",
+        "complexity_metrics",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let layer_file_count_after_warm = managed_layer_file_count(temp.path())?;
+    let disabled_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+    let layer_file_count_after_disabled = managed_layer_file_count(temp.path())?;
+
+    apply_layer_cache_import_edit(temp.path())?;
+    let import_edit_observed =
+        crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+            &fixture,
+            temp.path(),
+            true,
+            &plan,
+        )?;
+
+    let mut observed = Vec::new();
+    observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
+    observed.extend(tagged_layer_cache_invariants("warm", &warm_observed));
+    observed.extend(tagged_layer_cache_invariants(
+        "disabled",
+        &disabled_observed,
+    ));
+    observed.extend(tagged_layer_cache_invariants(
+        "import_edit",
+        &import_edit_observed,
+    ));
+    observed.push(layer_cache_fixture_invariant(
+        "layer_cache.disabled.no_new_files",
+        bool_string(layer_file_count_after_warm == layer_file_count_after_disabled),
+    ));
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -281,11 +357,114 @@ fn run_without_runtime_durations(
 fn is_cache_stats_observed_invariant(item: &crate::eval::model::ObservedItem) -> bool {
     match item {
         crate::eval::model::ObservedItem::Invariant(invariant) => {
-            invariant.name.starts_with("provider_output.polint.")
-                && invariant.name.contains(".cache_stats.")
+            (invariant.name.starts_with("provider_output.polint.")
+                && invariant.name.contains(".cache_stats."))
+                || invariant.name.starts_with("layer_cache.")
         }
         _ => false,
     }
+}
+
+#[cfg(test)]
+fn tagged_layer_cache_invariants(
+    pass: &str,
+    observed: &[crate::eval::model::ObservedItem],
+) -> Vec<crate::eval::model::ObservedItem> {
+    observed
+        .iter()
+        .filter_map(|item| {
+            let crate::eval::model::ObservedItem::Invariant(invariant) = item else {
+                return None;
+            };
+            if !matches!(
+                invariant.name.as_str(),
+                name if name.starts_with("layer_cache.provider.")
+                    || name.starts_with("layer_cache.aggregate.")
+            ) {
+                return None;
+            }
+            let mut tagged = invariant.clone();
+            tagged.value = format!("{pass}={}", invariant.value);
+            Some(crate::eval::model::ObservedItem::Invariant(tagged))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn apply_layer_cache_import_edit(repo_root: &Path) -> anyhow::Result<()> {
+    let app_path = repo_root.join("web/src/app.ts");
+    let source = fs::read_to_string(&app_path)
+        .with_context(|| format!("read layer-cache fixture {}", app_path.display()))?;
+    let edited = source.replace("@billing/rates", "@billing/tax");
+    ensure!(
+        edited != source,
+        "layer-cache fixture import edit did not change {}",
+        app_path.display()
+    );
+    fs::write(&app_path, edited)
+        .with_context(|| format!("write layer-cache fixture {}", app_path.display()))
+}
+
+#[cfg(test)]
+fn managed_layer_file_count(repo_root: &Path) -> anyhow::Result<usize> {
+    let layer_root = repo_root.join(".polint/cache/layers");
+    if !layer_root.exists() {
+        return Ok(0);
+    }
+    managed_layer_file_count_in(&layer_root)
+}
+
+#[cfg(test)]
+fn managed_layer_file_count_in(path: &Path) -> anyhow::Result<usize> {
+    let mut count = 0;
+    for entry in fs::read_dir(path).with_context(|| format!("read {}", path.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            count += managed_layer_file_count_in(&path)?;
+        } else if file_type.is_file() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+fn layer_cache_fixture_invariant(
+    name: impl Into<String>,
+    value: impl Into<String>,
+) -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: name.into(),
+        value: value.into(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("kernel.run_report.layer_cache.fixture".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn runtime_budget_name(expected: &[crate::eval::model::ExpectedItem], case_id: &str) -> String {
+    expected
+        .iter()
+        .find_map(|item| match item {
+            crate::eval::model::ExpectedItem::RuntimeBudget(budget) => Some(budget.name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| case_id.to_string())
+}
+
+#[cfg(test)]
+fn bool_string(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+#[cfg(test)]
+fn saturating_millis(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -796,9 +975,9 @@ mod eval_native_fixture_runner_tests {
 
         assert_eq!(case.case_id, "input-snapshots");
         assert_eq!(case.area, FixtureArea::Cache);
-        assert_eq!(run.metrics.false_negatives, 0);
-        assert_eq!(run.metrics.forbidden_hits, 0);
-        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
         assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
         assert!(!rendered.contains("package payment"));
         assert!(!rendered.contains("export const amount"));
@@ -813,9 +992,9 @@ mod eval_native_fixture_runner_tests {
 
         assert_eq!(case.case_id, "layer-cache");
         assert_eq!(case.area, FixtureArea::Cache);
-        assert_eq!(run.metrics.false_negatives, 0);
-        assert_eq!(run.metrics.forbidden_hits, 0);
-        assert_eq!(run.metrics.runtime_budget_failed, 0);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
         assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
         assert!(!rendered.contains("package payment"));
         assert!(!rendered.contains("export function charge"));
@@ -1023,6 +1202,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "cache-current-determinism"
         {
             run_cache_current_determinism_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::Cache
+            && fixture.manifest.case_id == "layer-cache"
+        {
+            run_layer_cache_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }

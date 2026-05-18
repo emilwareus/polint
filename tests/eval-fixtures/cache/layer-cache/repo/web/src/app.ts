@@ -1,4 +1,4 @@
-import { rate } from "./price";
+import { rate } from "@billing/rates";
 
 export const amount = 42;
 
