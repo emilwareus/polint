@@ -1,4 +1,5 @@
 use super::*;
+use crate::analysis_plan::AnalysisPlan;
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 use crate::graph::ImportGraph;
@@ -77,6 +78,46 @@ export function Button() {
             .any(|attribute| attribute.name == "data-color"
                 && attribute.value.as_deref() == Some("#ff00aa"))
     );
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn cache_stats_record_ts_miss_write_and_hit() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(&cache_root, true);
+    let plan = AnalysisPlan::empty();
+    let source = r#"
+export function Button() {
+  return "ok";
+}
+"#;
+    let mut first = db_with_ts_file("component.ts", source);
+
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", &plan, false);
+
+    assert_no_parser_diagnostics(&first_result.diagnostics);
+    assert_eq!(first_result.cache_stats.misses, 1);
+    assert_eq!(first_result.cache_stats.recomputes, 1);
+    assert_eq!(first_result.cache_stats.writes, 1);
+    assert_eq!(first_result.cache_stats.verified_reuse, 0);
+    assert_eq!(first_result.cache_stats.quarantines, 0);
+
+    let mut second = db_with_ts_file("component.ts", source);
+    let second_result = analyze_with_plan_options_and_cache_stats(
+        &mut second,
+        &cache,
+        "config",
+        "rule",
+        &plan,
+        false,
+    );
+
+    assert_no_parser_diagnostics(&second_result.diagnostics);
+    assert_eq!(second_result.cache_stats.hits, 1);
+    assert_eq!(second_result.cache_stats.recomputes, 0);
+    assert_eq!(second_result.cache_stats.writes, 0);
 
     fs::remove_dir_all(cache_root).ok();
 }
