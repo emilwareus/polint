@@ -364,6 +364,44 @@ mod tests {
         )
     }
 
+    fn symbol_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn symbol_graph_key(
+        source_function_digest: Digest,
+        import_shape_digest: Digest,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        syntax_output_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::symbol_graph_layer_key(
+            symbol_graph_manifest(),
+            vec![source_function_digest],
+            vec![Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "package_context",
+                &["src/app.ts", "pkg"],
+            )],
+            vec![import_shape_digest],
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+            module_graph_output_digest,
+            vec![syntax_output_digest],
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "symbol_graph_parameters",
+                &["symbols", "references"],
+            ),
+        )
+    }
+
     fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
         LayerKey::syntax_layer_key(
             LayerKind::GoSyntax,
@@ -463,6 +501,147 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
             )
         );
+    }
+
+    #[test]
+    fn symbol_graph_layer_key_changes_on_source_import_lifecycle_config_or_upstream_digest() {
+        let base = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_source = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "changed"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_import = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["./other"]),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_config = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_go_lifecycle = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_module_output = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+        );
+        let changed_syntax_output = symbol_graph_key(
+            Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            ),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            ),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
+        );
+        let mut changed_provider_version = base.clone();
+        changed_provider_version.provider_version = "different-provider-version".to_string();
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "symbol-graph-facts-2:2".to_string();
+
+        for changed in [
+            changed_source,
+            changed_import,
+            changed_config,
+            changed_go_lifecycle,
+            changed_module_output,
+            changed_syntax_output,
+            changed_provider_version,
+            changed_schema,
+        ] {
+            assert_ne!(base, changed);
+        }
+        assert_eq!(base.layer_kind, LayerKind::SymbolGraph);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
     }
 
     #[test]

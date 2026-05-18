@@ -629,6 +629,53 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_symbol_graph_row_carries_layer_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "export function answer() { return 42; }\nexport const value = answer();\n",
+        )
+        .expect("write app");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+
+        let first_symbol_graph = provider_output(&first, "polint.symbol_graph");
+        let second_symbol_graph = provider_output(&second, "polint.symbol_graph");
+
+        assert_eq!(first_symbol_graph.cache_stats.misses, 1);
+        assert_eq!(first_symbol_graph.cache_stats.recomputes, 1);
+        assert_eq!(first_symbol_graph.cache_stats.writes, 1);
+        assert_eq!(second_symbol_graph.cache_stats.hits, 1);
+        assert_eq!(second_symbol_graph.cache_stats.verified_reuse, 1);
+        assert_eq!(second_symbol_graph.cache_stats.recomputes, 0);
+        assert_eq!(
+            first_symbol_graph.output_digest,
+            second_symbol_graph.output_digest
+        );
+    }
+
+    #[test]
     fn kernel_run_report_source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");

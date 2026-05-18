@@ -189,17 +189,22 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 #[cfg(test)]
 mod symbol_graph_derivation {
     use super::{SymbolGraphDerivation, derive_requested_symbols};
+    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
     use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
     use crate::config::load_config;
     use crate::core::{
         AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView,
-        DefinitionFact, DefinitionId, DefinitionKind, FileId, Language, ReferenceFact, ReferenceId,
-        ReferenceKind, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
-        SymbolResolutionStatus,
+        DefinitionFact, DefinitionId, DefinitionKind, FileId, ImportFact, ImportId, Language,
+        ModuleNode, ModuleNodeId, ModuleNodeKind, ReferenceFact, ReferenceId, ReferenceKind,
+        ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId, Span,
+        SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
+        span_from_byte_range,
     };
+    use std::fs;
     use std::path::Path;
 
     type SymbolRows = Vec<(Language, String, SymbolPrecision)>;
@@ -277,6 +282,163 @@ mod symbol_graph_derivation {
             status: SymbolResolutionStatus::Unsupported,
             precision: SymbolPrecision::Unsupported,
         }
+    }
+
+    fn symbol_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn requested_symbol_plan() -> AnalysisPlan {
+        AnalysisPlan::from_capability_names_for_test(&["symbols", "references"])
+    }
+
+    fn upstream_digests(label: &str) -> (Digest, Vec<Digest>) {
+        (
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &[label]),
+            vec![
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &[label]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &[label]),
+            ],
+        )
+    }
+
+    fn symbol_input_snapshot(
+        loaded: &crate::config::LoadedConfig,
+        db: &AnalysisDb,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+    ) -> InputSnapshot {
+        InputSnapshot::from_run_inputs(
+            loaded,
+            db,
+            config_digest,
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        )
+    }
+
+    fn derive_symbols_with_cache(
+        db: &mut AnalysisDb,
+        loaded: &crate::config::LoadedConfig,
+        cache: &Cache,
+        plan: &AnalysisPlan,
+        config_digest: &str,
+        upstream_label: &str,
+    ) -> SymbolGraphDerivation {
+        let snapshot = symbol_input_snapshot(loaded, db, plan, config_digest);
+        let (module_graph_output_digest, syntax_output_digests) = upstream_digests(upstream_label);
+        super::derive_requested_symbols_with_cache_stats(
+            db,
+            loaded,
+            plan,
+            cache,
+            &snapshot,
+            symbol_graph_manifest(),
+            module_graph_output_digest,
+            syntax_output_digests,
+        )
+    }
+
+    fn collect_files(root: &Path) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        collect_files_into(root, &mut files);
+        files.sort();
+        files
+    }
+
+    fn collect_files_into(root: &Path, files: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("read cache entry").path();
+            if path.is_dir() {
+                collect_files_into(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+
+    fn first_layer_file(cache_root: &Path, category: &str) -> std::path::PathBuf {
+        collect_files(&cache_root.join("layers").join(category))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("expected layer cache {category} file"))
+    }
+
+    fn add_ts_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        add_file(db, root, relative_path, source)
+    }
+
+    fn span_for(file: FileId, source: &str, needle: &str) -> Span {
+        let start = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing fixture text {needle:?}"));
+        span_from_byte_range(file, source, start, start + needle.len())
+    }
+
+    fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(0),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span_for(file, source, &format!("{path:?}")),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn fixture_db(root: &Path, import_path: &str) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let app_source = format!(
+            r#"
+import {{ token as importedToken }} from "{import_path}";
+
+export function answer() {{
+    return importedToken;
+}}
+"#
+        );
+        let target_source = "export const token = 42;\n";
+        let app = add_ts_file(&mut db, root, "src/app.ts", &app_source);
+        let target = add_ts_file(&mut db, root, "src/target.ts", target_source);
+        let import = push_import(&mut db, app, &app_source, import_path);
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: app,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(app),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::File,
+                    label: "src/target.ts".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        db
     }
 
     #[test]
@@ -556,5 +718,138 @@ mod symbol_graph_derivation {
         assert!(first.0.iter().any(|(_, name, _)| name == "value"));
         assert!(first.0.iter().all(|(_, name, _)| name != "stale"));
         assert!(first.1.iter().all(|(_, name, _, _)| name != "stale"));
+    }
+
+    #[test]
+    fn symbol_graph_layer_reuses_warm_cache() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+        let mut first_db = fixture_db(temp.path(), "./target");
+        let mut second_db = fixture_db(temp.path(), "./target");
+
+        let first =
+            derive_symbols_with_cache(&mut first_db, &loaded, &cache, &plan, "config", "stable");
+        let second =
+            derive_symbols_with_cache(&mut second_db, &loaded, &cache, &plan, "config", "stable");
+
+        assert_eq!(first.cache_stats.misses, 1);
+        assert_eq!(first.cache_stats.recomputes, 1);
+        assert_eq!(first.cache_stats.writes, 1);
+        assert_eq!(second.cache_stats.hits, 1);
+        assert_eq!(second.cache_stats.verified_reuse, 1);
+        assert_eq!(second.cache_stats.recomputes, 0);
+        assert_eq!(first.output_digest, second.output_digest);
+        assert_eq!(symbol_rows(&first_db), symbol_rows(&second_db));
+        assert_eq!(reference_rows(&first_db), reference_rows(&second_db));
+    }
+
+    #[test]
+    fn symbol_graph_layer_invalidates_on_import_or_module_digest_change() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+        let mut base_db = fixture_db(temp.path(), "./target");
+        derive_symbols_with_cache(&mut base_db, &loaded, &cache, &plan, "config", "stable");
+
+        let mut import_changed_db = fixture_db(temp.path(), "./other");
+        let import_changed = derive_symbols_with_cache(
+            &mut import_changed_db,
+            &loaded,
+            &cache,
+            &plan,
+            "config",
+            "stable",
+        );
+        let mut module_changed_db = fixture_db(temp.path(), "./target");
+        let module_changed = derive_symbols_with_cache(
+            &mut module_changed_db,
+            &loaded,
+            &cache,
+            &plan,
+            "config",
+            "changed",
+        );
+
+        assert_eq!(import_changed.cache_stats.misses, 1);
+        assert_eq!(import_changed.cache_stats.recomputes, 1);
+        assert_eq!(module_changed.cache_stats.misses, 1);
+        assert_eq!(module_changed.cache_stats.recomputes, 1);
+    }
+
+    #[test]
+    fn symbol_graph_layer_corrupt_cache_recomputes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+        let mut first_db = fixture_db(temp.path(), "./target");
+        derive_symbols_with_cache(&mut first_db, &loaded, &cache, &plan, "config", "stable");
+        let manifest = first_layer_file(temp.path().join("cache").as_path(), "manifests");
+        fs::write(manifest, "{broken").expect("corrupt symbol graph manifest");
+        let mut second_db = fixture_db(temp.path(), "./target");
+
+        let second =
+            derive_symbols_with_cache(&mut second_db, &loaded, &cache, &plan, "config", "stable");
+
+        assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second.cache_stats.recomputes, 1);
+    }
+
+    #[test]
+    fn symbol_graph_layer_disabled_cache_records_bypass_without_layer_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let cache_root = temp.path().join("cache").join("analysis");
+        let cache = Cache::new(&cache_root, false);
+        let plan = requested_symbol_plan();
+        let mut db = fixture_db(temp.path(), "./target");
+
+        let derivation =
+            derive_symbols_with_cache(&mut db, &loaded, &cache, &plan, "config", "stable");
+
+        assert_eq!(derivation.cache_stats.bypasses_disabled, 1);
+        assert_eq!(derivation.cache_stats.recomputes, 1);
+        assert!(!temp.path().join("cache").join("layers").exists());
+        assert!(!db.symbols().is_empty());
+    }
+
+    fn symbol_rows(db: &AnalysisDb) -> Vec<(String, String, SymbolKind, SymbolPrecision)> {
+        db.symbols()
+            .iter()
+            .map(|symbol| {
+                (
+                    symbol.stable_key.clone(),
+                    symbol.name.clone(),
+                    symbol.kind,
+                    symbol.precision,
+                )
+            })
+            .collect()
+    }
+
+    fn reference_rows(
+        db: &AnalysisDb,
+    ) -> Vec<(
+        String,
+        String,
+        ReferenceKind,
+        SymbolResolutionStatus,
+        SymbolPrecision,
+    )> {
+        db.references()
+            .iter()
+            .map(|reference| {
+                (
+                    reference.stable_key.clone(),
+                    reference.name.clone(),
+                    reference.kind,
+                    reference.status,
+                    reference.precision,
+                )
+            })
+            .collect()
     }
 }
