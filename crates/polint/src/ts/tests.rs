@@ -94,8 +94,9 @@ export function Button() {
 "#;
     let mut first = db_with_ts_file("component.ts", source);
 
-    let first_result =
-        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", "rule", &plan, false);
+    let first_result = analyze_with_plan_options_and_cache_stats(
+        &mut first, &cache, "config", "rule", &plan, false,
+    );
 
     assert_no_parser_diagnostics(&first_result.diagnostics);
     assert_eq!(first_result.cache_stats.misses, 1);

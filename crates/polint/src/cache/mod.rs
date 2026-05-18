@@ -137,6 +137,7 @@ impl Cache {
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn read_json_or_miss<T>(&self, key: &CacheKey) -> Option<T>
     where
         T: for<'de> Deserialize<'de>,
@@ -182,6 +183,7 @@ impl Cache {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn write_json<T>(&self, key: &CacheKey, value: &T) -> Result<()>
     where
         T: Serialize,

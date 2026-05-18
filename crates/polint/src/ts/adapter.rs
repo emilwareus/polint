@@ -1,4 +1,6 @@
+use crate::analysis_kernel::incremental::CacheStats;
 use crate::analysis_plan::AnalysisPlan;
+use crate::cache::{CacheReadStatus, CacheWriteStatus};
 use crate::core::{
     AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
     Language, SourceFile, Span, StringLiteralFact, TsClassFact, TsComponentFact,
@@ -66,6 +68,24 @@ pub(crate) fn analyze_with_plan_options(
     plan: &AnalysisPlan,
     parallel: bool,
 ) -> Vec<Diagnostic> {
+    analyze_with_plan_options_and_cache_stats(db, cache, config_hash, rule_hash, plan, parallel)
+        .diagnostics
+}
+
+#[allow(dead_code)]
+pub(crate) struct ProviderAnalysisResult {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) cache_stats: CacheStats,
+}
+
+pub(crate) fn analyze_with_plan_options_and_cache_stats(
+    db: &mut AnalysisDb,
+    cache: &crate::cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+    plan: &AnalysisPlan,
+    parallel: bool,
+) -> ProviderAnalysisResult {
     let files: Vec<&SourceFile> = db
         .files()
         .iter()
@@ -86,19 +106,40 @@ pub(crate) fn analyze_with_plan_options(
     results.sort_by_key(|result| result.file_id);
 
     let mut diagnostics = Vec::new();
+    let mut cache_stats = CacheStats::default();
     for result in results {
+        record_cache_event(&mut cache_stats, result.cache_event);
         if let Some(facts) = result.facts {
             db.restore_file_facts(result.file_id, facts);
         }
         diagnostics.extend(result.diagnostics);
     }
-    diagnostics
+    ProviderAnalysisResult {
+        diagnostics,
+        cache_stats,
+    }
 }
 
 struct TsFileAnalysis {
     file_id: FileId,
     diagnostics: Vec<Diagnostic>,
     facts: Option<crate::core::CachedFileFacts>,
+    cache_event: FileCacheEvent,
+}
+
+#[derive(Clone, Copy)]
+struct FileCacheEvent {
+    read_status: CacheReadStatus,
+    write_status: Option<CacheWriteStatus>,
+}
+
+impl FileCacheEvent {
+    fn new(read_status: CacheReadStatus) -> Self {
+        Self {
+            read_status,
+            write_status: None,
+        }
+    }
 }
 
 fn analyze_ts_source_file(
@@ -116,15 +157,23 @@ fn analyze_ts_source_file(
         plan_hash,
         TS_CACHE_SCHEMA,
     );
-    if let Some(cached) = cache.read_json_or_miss::<CachedFileAnalysis>(&key)
+    let read = cache.read_json_with_status::<CachedFileAnalysis>(&key);
+    if read.status == CacheReadStatus::Hit
+        && let Some(cached) = read.value
         && cached.schema == TS_CACHE_SCHEMA
     {
         return TsFileAnalysis {
             file_id: file.id,
             diagnostics: cached.diagnostics,
             facts: Some(cached.facts),
+            cache_event: FileCacheEvent::new(CacheReadStatus::Hit),
         };
     }
+    let read_status = if read.status == CacheReadStatus::Hit {
+        CacheReadStatus::Miss
+    } else {
+        read.status
+    };
 
     let mut local_db = AnalysisDb::new();
     let local_file = local_db.add_source_file(
@@ -146,6 +195,7 @@ fn analyze_ts_source_file(
                     format!("Failed to parse TS/JS file: {error}"),
                 )],
                 facts: None,
+                cache_event: FileCacheEvent::new(read_status),
             };
         }
     };
@@ -155,13 +205,41 @@ fn analyze_ts_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Err(error) = cache.write_json(&key, &cached) {
-        diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
-    }
+    let mut cache_event = FileCacheEvent::new(read_status);
+    match cache.write_json_with_status(&key, &cached) {
+        Ok(status) => {
+            cache_event.write_status = Some(status);
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
+        }
+    };
     TsFileAnalysis {
         file_id: file.id,
         diagnostics,
         facts: Some(facts),
+        cache_event,
+    }
+}
+
+fn record_cache_event(stats: &mut CacheStats, event: FileCacheEvent) {
+    match event.read_status {
+        CacheReadStatus::Disabled => {
+            stats.record_disabled_bypass();
+            stats.record_recompute();
+        }
+        CacheReadStatus::Miss => {
+            stats.record_miss();
+            stats.record_recompute();
+        }
+        CacheReadStatus::Hit => stats.record_hit(),
+        CacheReadStatus::InvalidEvicted => {
+            stats.record_invalid_evicted_read();
+            stats.record_recompute();
+        }
+    }
+    if event.write_status == Some(CacheWriteStatus::Written) {
+        stats.record_write();
     }
 }
 
