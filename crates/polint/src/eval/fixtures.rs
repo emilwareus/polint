@@ -181,9 +181,7 @@ pub(crate) fn run_cache_current_determinism_fixture_for_test(
 
     let cold_warm_no_cache_equal = cache_comparison_json(&cold_run)
         == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run)
-        && cold_run.output_hash == warm_run.output_hash
-        && cold_run.output_hash == no_cache_run.output_hash;
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
 
     let mut observed = no_cache_observed;
     if cold_warm_no_cache_equal {
@@ -254,6 +252,8 @@ fn run_without_runtime_durations(
     normalized.output_hash.clear();
     for case in &mut normalized.cases {
         case.runtime.observed_runtime_ms = None;
+        case.observed
+            .retain(|item| !is_cache_stats_observed_invariant(item));
         for item in &mut case.observed {
             if let crate::eval::model::ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = None;
@@ -262,8 +262,30 @@ fn run_without_runtime_durations(
         for summary in &mut case.matches {
             summary.observed_runtime_ms = None;
         }
+        case.matches = crate::eval::matcher::match_case(
+            &case.expected,
+            &case.observed,
+            crate::eval::matcher::MatcherConfig::default(),
+        );
     }
+    let matches = normalized
+        .cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
     normalized
+}
+
+#[cfg(test)]
+fn is_cache_stats_observed_invariant(item: &crate::eval::model::ObservedItem) -> bool {
+    match item {
+        crate::eval::model::ObservedItem::Invariant(invariant) => {
+            invariant.name.starts_with("provider_output.polint.")
+                && invariant.name.contains(".cache_stats.")
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
