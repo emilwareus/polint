@@ -19,7 +19,7 @@ mod stats;
     not(test),
     expect(
         unused_imports,
-        reason = "Phase 24 establishes conservative invalidation vocabulary before provider consumers wire every type in."
+        reason = "Layer manifest reuse consumes this vocabulary; some future change kinds remain reserved."
     )
 )]
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
@@ -34,7 +34,7 @@ pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
     not(test),
     expect(
         unused_imports,
-        reason = "Phase 24 establishes dependency-index vocabulary before layer cache providers consume every shape."
+        reason = "Layer manifests consume dependency indexes; some future shapes remain reserved."
     )
 )]
 pub(crate) use dependency_index::{
@@ -70,7 +70,7 @@ pub(crate) use input_snapshot::{
     not(test),
     expect(
         unused_imports,
-        reason = "Phase 24 establishes invalidation vocabulary before provider consumers wire every action in."
+        reason = "Layer manifest reuse consumes invalidation plans; some future actions remain reserved."
     )
 )]
 pub(crate) use invalidation::{

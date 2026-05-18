@@ -69,6 +69,19 @@ fn layer_cache_text(cache_root: &Path) -> String {
         .join("\n")
 }
 
+fn corrupt_first_manifest_output_digest(cache_root: &Path) {
+    let manifest_path = first_layer_file(cache_root, "manifests");
+    let mut manifest_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("read manifest"))
+            .expect("manifest json");
+    manifest_json["output_digest"]["value"] = serde_json::json!("deadbeef");
+    fs::write(
+        manifest_path,
+        serde_json::to_vec(&manifest_json).expect("manifest serializes"),
+    )
+    .expect("write manifest");
+}
+
 #[test]
 fn cache_writes_and_restores_go_facts() {
     let cache_root = unique_cache_root();
@@ -183,6 +196,38 @@ fn go_syntax_layer_cache_corrupt() {
         &cache,
         "config",
         "changed-rule",
+        &plan,
+        false,
+    );
+
+    assert!(second_result.diagnostics.is_empty());
+    assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+    assert_eq!(second_result.cache_stats.recomputes, 1);
+    assert_eq!(second_result.cache_stats.writes, 1);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn go_syntax_layer_cache_output_digest_mismatch_recomputes() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let source = "package main\nfunc main() {}\n";
+    let mut first = db_with_go_file("main.go", source);
+
+    let first_result = analyze_with_plan_options_and_cache_stats(
+        &mut first, &cache, "config", "rule", &plan, false,
+    );
+    assert!(first_result.diagnostics.is_empty());
+    corrupt_first_manifest_output_digest(&cache_root);
+
+    let mut second = db_with_go_file("main.go", source);
+    let second_result = analyze_with_plan_options_and_cache_stats(
+        &mut second,
+        &cache,
+        "config",
+        "rule",
         &plan,
         false,
     );

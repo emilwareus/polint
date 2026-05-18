@@ -110,10 +110,12 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
 
     let layer_store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
     let layer_key = ts_syntax_layer_key(&files, config_hash);
-    let read = layer_store
-        .read_json_validated::<SyntaxLayerPayload, _>(&layer_key, |payload, _| {
-            validate_syntax_layer_payload(payload, TS_SYNTAX_LAYER_SCHEMA, &files)
-        });
+    let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
+        &layer_key,
+        |payload, manifest| {
+            validate_syntax_layer_payload(payload, manifest, TS_SYNTAX_LAYER_SCHEMA, &files)
+        },
+    );
 
     match read.status {
         LayerCacheReadStatus::Hit => {
@@ -249,6 +251,7 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
 
 fn validate_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
+    manifest: &LayerCacheManifest,
     schema: &str,
     files: &[&SourceFile],
 ) -> bool {
@@ -265,7 +268,7 @@ fn validate_syntax_layer_payload(
         .iter()
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
-    actual == expected
+    actual == expected && manifest.output_digest == ts_syntax_output_digest_for_payload(payload)
 }
 
 fn parse_ts_syntax_layer_payload(
@@ -339,11 +342,7 @@ fn write_syntax_layer_payload(
             return None;
         }
     };
-    let output_digest = Digest::from_parts(
-        DigestKind::ProviderOutput,
-        "ts_syntax_layer_output",
-        &[&payload_digest.to_string()],
-    );
+    let output_digest = ts_syntax_output_digest(&payload_digest);
     let manifest = LayerCacheManifest::new(
         layer_key,
         output_digest.clone(),
@@ -360,6 +359,20 @@ fn write_syntax_layer_payload(
         Err(error) => diagnostics.push(cache_write_diagnostic("ts syntax layer", error)),
     }
     Some(output_digest)
+}
+
+fn ts_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)
+        .unwrap_or_else(|_| Digest::unsupported(DigestKind::LayerOutput, "ts_syntax", "json"));
+    ts_syntax_output_digest(&payload_digest)
+}
+
+fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "ts_syntax_layer_output",
+        &[&payload_digest.to_string()],
+    )
 }
 
 fn analyze_ts_source_file(

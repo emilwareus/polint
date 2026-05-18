@@ -10,6 +10,7 @@ use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionMetricFact,
     SourceFile, Span,
 };
+use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -19,6 +20,7 @@ const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MetricsDerivation {
     pub(crate) cache_stats: CacheStats,
+    pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -77,6 +79,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
             restore_metrics_layer_payload(db, &payload);
             MetricsDerivation {
                 cache_stats,
+                diagnostics: Vec::new(),
                 output_digest: read.output_digest,
             }
         }
@@ -109,6 +112,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 &payload,
                 dependencies,
                 &mut cache_stats,
+                &mut derivation.diagnostics,
             );
             derivation.cache_stats = cache_stats;
             derivation
@@ -192,6 +196,7 @@ fn derive_requested_metrics_uncached(
     db.replace_metric_facts(file_metrics, function_metrics, complexity_metrics);
     MetricsDerivation {
         cache_stats: CacheStats::default(),
+        diagnostics: Vec::new(),
         output_digest: Some(metrics_output_digest_for_payload(
             &metrics_layer_payload(db),
             None,
@@ -377,9 +382,14 @@ fn write_metrics_layer_payload(
     payload: &MetricsLayerPayload,
     dependencies: Vec<DependencyEdge>,
     stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let Ok(payload_digest) = LayerCacheStore::payload_digest_for_json(payload) else {
-        return None;
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("metrics layer", error));
+            return None;
+        }
     };
     let output_digest = metrics_output_digest(&layer_key, &payload_digest);
     let manifest = LayerCacheManifest::new(
@@ -395,9 +405,18 @@ fn write_metrics_layer_payload(
     match store.write_json(&manifest, payload) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(_error) => {}
+        Err(error) => diagnostics.push(cache_write_diagnostic("metrics layer", error)),
     }
     Some(output_digest)
+}
+
+fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
+    Diagnostic::warning(
+        "internal/cache",
+        path,
+        TextRange::point(1, 1),
+        format!("cache write failed: {error}"),
+    )
 }
 
 fn metrics_output_digest_for_payload(
@@ -981,6 +1000,32 @@ mod tests {
 
             assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
             assert_eq!(second.cache_stats.recomputes, 1);
+        }
+
+        #[test]
+        fn metrics_layer_cache_write_failure_is_reported() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache_root = temp.path().join("cache");
+            fs::create_dir_all(&cache_root).expect("cache root");
+            fs::write(cache_root.join("layers"), "not a directory").expect("layer root file");
+            let cache = Cache::new(cache_root.join("analysis"), true);
+            let plan = requested_metrics_plan();
+            let source = "export function handler() {\n  return 1;\n}\n";
+            let mut db = fixture_db(temp.path(), "handler", source);
+
+            let derivation =
+                derive_metrics_with_cache(&mut db, &loaded, &cache, &plan, "config", "stable");
+
+            assert_eq!(derivation.cache_stats.misses, 1);
+            assert_eq!(derivation.cache_stats.recomputes, 1);
+            assert_eq!(derivation.cache_stats.writes, 0);
+            assert!(derivation.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "internal/cache"
+                    && diagnostic.file == "metrics layer"
+                    && diagnostic.message.contains("cache write failed")
+            }));
+            assert!(!db.file_metrics().is_empty());
         }
 
         #[test]

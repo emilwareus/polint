@@ -1,11 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 24 establishes change-set vocabulary before provider change classification is wired in."
-    )
-)]
-
 use serde::{Deserialize, Serialize};
 
 use super::dependency_index::CacheNode;

@@ -2,13 +2,13 @@
     not(test),
     expect(
         dead_code,
-        reason = "Phase 24 establishes dependency-index vocabulary before provider dependency recording is wired in."
+        reason = "Layer manifests validate dependency indexes now; some future cache node and shape variants remain reserved."
     )
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey};
 
@@ -76,7 +76,9 @@ pub(crate) struct DependencyEdge {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DependencyIndex {
     pub(crate) schema_version: String,
+    #[serde(with = "dependency_index_map")]
     pub(crate) forward: BTreeMap<CacheNode, Vec<DependencyEdge>>,
+    #[serde(with = "dependency_index_map")]
     pub(crate) reverse: BTreeMap<CacheNode, Vec<DependencyEdge>>,
 }
 
@@ -140,6 +142,48 @@ fn sort_and_dedup_edges(index: &mut BTreeMap<CacheNode, Vec<DependencyEdge>>) {
     for edges in index.values_mut() {
         edges.sort();
         edges.dedup();
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct DependencyIndexBucket {
+    node: CacheNode,
+    edges: Vec<DependencyEdge>,
+}
+
+mod dependency_index_map {
+    use super::*;
+
+    pub(super) fn serialize<S>(
+        index: &BTreeMap<CacheNode, Vec<DependencyEdge>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let buckets = index
+            .iter()
+            .map(|(node, edges)| DependencyIndexBucket {
+                node: node.clone(),
+                edges: edges.clone(),
+            })
+            .collect::<Vec<_>>();
+        buckets.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<CacheNode, Vec<DependencyEdge>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let buckets = Vec::<DependencyIndexBucket>::deserialize(deserializer)?;
+        let mut index: BTreeMap<CacheNode, Vec<DependencyEdge>> = BTreeMap::new();
+        for bucket in buckets {
+            index.entry(bucket.node).or_default().extend(bucket.edges);
+        }
+        sort_and_dedup_edges(&mut index);
+        Ok(index)
     }
 }
 

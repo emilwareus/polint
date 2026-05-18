@@ -2,7 +2,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "Phase 24 establishes invalidation vocabulary before providers call the planner."
+        reason = "Layer manifest reuse now calls the planner; some future invalidation actions remain reserved."
     )
 )]
 

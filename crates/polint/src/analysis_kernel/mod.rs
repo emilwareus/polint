@@ -175,6 +175,7 @@ impl AnalysisKernel {
         );
         let polint_metrics_cache_stats = metrics.cache_stats.clone();
         let metrics_output_digest = metrics.output_digest;
+        diagnostics.extend(metrics.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.metrics",
             &db,
@@ -747,6 +748,37 @@ mod tests {
         assert_eq!(second_metrics.cache_stats.verified_reuse, 1);
         assert_eq!(second_metrics.cache_stats.recomputes, 0);
         assert_eq!(first_metrics.output_digest, second_metrics.output_digest);
+    }
+
+    #[test]
+    fn kernel_surfaces_metrics_layer_cache_write_diagnostics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache_root = temp.path().join("cache");
+        std::fs::create_dir_all(&cache_root).expect("cache root");
+        std::fs::write(cache_root.join("layers"), "not a directory").expect("layer root file");
+        let cache = Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let metrics = provider_output(&output, "polint.metrics");
+
+        assert_eq!(metrics.cache_stats.misses, 1);
+        assert_eq!(metrics.cache_stats.recomputes, 1);
+        assert_eq!(metrics.cache_stats.writes, 0);
+        assert!(output.diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == "internal/cache"
+                && diagnostic.file == "metrics layer"
+                && diagnostic.message.contains("cache write failed")
+        }));
     }
 
     #[test]
