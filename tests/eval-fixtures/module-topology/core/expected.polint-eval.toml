@@ -27,7 +27,7 @@ fact = { family = "SourceSet", stable_key = "ts-source-set:source:web/src/app.ts
 fact = { family = "SourceSet", stable_key = "ts-source-set:test:web/src/app.test.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
 
 [[expected]]
-fact = { family = "SourceSet", stable_key = "ts-source-set:generated:web/generated/client.generated.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "generated" }
+fact = { family = "SourceSet", stable_key = "ts-source-set:generated:web/generated/client.generated.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
 
 [[expected]]
 fact = { family = "DependencyRequirement", stable_key = "github.com/acme/lib", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
@@ -45,16 +45,18 @@ fact = { family = "ResolvedDependencyEdge", stable_key = "@scope/lib:2.3.4", mod
 fact = { family = "ImportToPackage", stable_key = "app.test.ts", mode = "partial", producer_id = "polint.module_topology", precision = "exact_static", status = "resolved" }
 
 [[expected]]
-fact = { family = "ImportToPackage", stable_key = "@scope/lib", mode = "partial", producer_id = "polint.module_topology", precision = "heuristic", status = "external" }
+fact = { family = "ImportToPackage", stable_key = "@scope/lib", mode = "partial", producer_id = "polint.module_topology", precision = "exact_static", status = "external" }
 
 [[expected]]
-fact = { family = "ImportToPackage", stable_key = "client.generated.ts", mode = "partial", producer_id = "polint.module_topology", precision = "heuristic", status = "external" }
+fact = { family = "ImportToPackage", stable_key = "client.generated.ts", mode = "partial", producer_id = "polint.module_topology", precision = "exact_static", status = "external" }
 
 [[expected]]
-fact = { family = "RepoTopologyOverlay", stable_key = "GeneratedZone", mode = "partial", producer_id = "polint.module_graph", precision = "heuristic", status = "present" }
+# kind = "GeneratedZone"
+fact = { family = "RepoTopologyOverlay", stable_key = "repo-topology:generated-zone:web/generated/client.generated.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
 
 [[expected]]
-fact = { family = "RepoTopologyOverlay", stable_key = "TestOnlyVisibility", mode = "partial", producer_id = "polint.module_graph", precision = "heuristic", status = "present" }
+# kind = "TestOnlyVisibility"
+fact = { family = "RepoTopologyOverlay", stable_key = "repo-topology:test-only-visibility:web/src/app.test.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
 
 [[expected]]
 invariant = { name = "layer_cache.provider.polint.module_graph.hits", value = "warm=1", mode = "exact" }

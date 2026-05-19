@@ -317,6 +317,80 @@ pub(crate) fn run_semantic_index_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_module_topology_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "resolved_imports",
+        "module_graph",
+        "symbols",
+        "references",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+
+    apply_module_topology_package_json_edit(temp.path())?;
+    let package_json_observed =
+        crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+            &fixture,
+            temp.path(),
+            true,
+            &plan,
+        )?;
+
+    apply_module_topology_go_mod_edit(temp.path())?;
+    let go_mod_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+
+    let mut observed = warm_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
+    observed.extend(tagged_layer_cache_invariants("warm", &warm_observed));
+    observed.extend(tagged_layer_cache_invariants(
+        "package_json_edit",
+        &package_json_observed,
+    ));
+    observed.extend(tagged_layer_cache_invariants(
+        "go_mod_edit",
+        &go_mod_observed,
+    ));
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -452,6 +526,36 @@ fn apply_layer_cache_import_edit(repo_root: &Path) -> anyhow::Result<()> {
     );
     fs::write(&app_path, edited)
         .with_context(|| format!("write layer-cache fixture {}", app_path.display()))
+}
+
+#[cfg(test)]
+fn apply_module_topology_package_json_edit(repo_root: &Path) -> anyhow::Result<()> {
+    let manifest_path = repo_root.join("web/package.json");
+    let source = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read module topology fixture {}", manifest_path.display()))?;
+    let edited = source.replace("\"^2.3.0\"", "\"^2.4.0\"");
+    ensure!(
+        edited != source,
+        "module topology package.json edit did not change {}",
+        manifest_path.display()
+    );
+    fs::write(&manifest_path, edited)
+        .with_context(|| format!("write module topology fixture {}", manifest_path.display()))
+}
+
+#[cfg(test)]
+fn apply_module_topology_go_mod_edit(repo_root: &Path) -> anyhow::Result<()> {
+    let manifest_path = repo_root.join("services/api/go.mod");
+    let source = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read module topology fixture {}", manifest_path.display()))?;
+    let edited = source.replace("github.com/acme/lib v1.2.3", "github.com/acme/lib v1.2.4");
+    ensure!(
+        edited != source,
+        "module topology go.mod edit did not change {}",
+        manifest_path.display()
+    );
+    fs::write(&manifest_path, edited)
+        .with_context(|| format!("write module topology fixture {}", manifest_path.display()))
 }
 
 #[cfg(test)]
@@ -1260,6 +1364,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "semantic-index-core"
         {
             run_semantic_index_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::ModuleTopology
+            && fixture.manifest.case_id == "module-topology-core"
+        {
+            run_module_topology_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -1427,13 +1535,21 @@ mod module_topology_core {
             .collect::<Vec<_>>();
 
         for required in [
-            ("WorkspaceRoot", "services/api", Some(ObservedStatus::Present)),
+            (
+                "WorkspaceRoot",
+                "services/api",
+                Some(ObservedStatus::Present),
+            ),
             ("TopologyPackage", "web", Some(ObservedStatus::Present)),
-            ("SourceSet", "web/src/app.test.ts", Some(ObservedStatus::Present)),
+            (
+                "SourceSet",
+                "web/src/app.test.ts",
+                Some(ObservedStatus::Present),
+            ),
             (
                 "SourceSet",
                 "web/generated/client.generated.ts",
-                Some(ObservedStatus::Generated),
+                Some(ObservedStatus::Present),
             ),
             (
                 "DependencyRequirement",
@@ -1457,20 +1573,18 @@ mod module_topology_core {
             ),
             (
                 "RepoTopologyOverlay",
-                "GeneratedZone",
+                "generated-zone",
                 Some(ObservedStatus::Present),
             ),
             (
                 "RepoTopologyOverlay",
-                "TestOnlyVisibility",
+                "test-only-visibility",
                 Some(ObservedStatus::Present),
             ),
         ] {
             assert!(
                 expected_facts.iter().any(|(family, key, status)| {
-                    *family == required.0
-                        && key.contains(required.1)
-                        && *status == required.2
+                    *family == required.0 && key.contains(required.1) && *status == required.2
                 }),
                 "module topology fixture missing expected {required:?}: {expected_facts:#?}"
             );
@@ -1483,14 +1597,8 @@ mod module_topology_core {
         let case = run.cases.first().expect("module-topology core case");
 
         for required in [
-            (
-                "layer_cache.provider.polint.module_graph.hits",
-                "warm=1",
-            ),
-            (
-                "layer_cache.provider.polint.module_topology.hits",
-                "warm=1",
-            ),
+            ("layer_cache.provider.polint.module_graph.hits", "warm=1"),
+            ("layer_cache.provider.polint.module_topology.hits", "warm=1"),
             (
                 "layer_cache.provider.polint.module_graph.misses",
                 "package_json_edit=1",
