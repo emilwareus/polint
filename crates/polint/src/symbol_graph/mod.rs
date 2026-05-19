@@ -20,6 +20,7 @@ use crate::core::{
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
+use semantic::{SemanticIndexOutput, alias_reexport_closure};
 
 const SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -53,6 +54,7 @@ impl SymbolGraphDerivation {
 pub(crate) struct LanguageSymbolOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) semantic: SemanticIndexOutput,
 }
 
 #[cfg_attr(
@@ -204,17 +206,36 @@ fn derive_requested_symbols_uncached(
 
     let mut builder = SymbolGraphBuilder::new();
     let mut derivation = SymbolGraphDerivation::default();
+    let mut semantic = SemanticIndexOutput::default();
 
     merge_language_output(
         &mut derivation,
+        &mut semantic,
         ts::derive_ts_symbols(&mut builder, db, loaded, plan),
     );
     merge_language_output(
         &mut derivation,
+        &mut semantic,
         go::derive_go_symbols(&mut builder, db, loaded, plan),
     );
 
     let output = builder.finish();
+    let closure = alias_reexport_closure(
+        &semantic.aliases,
+        &semantic.exports,
+        &semantic.stable_exports,
+    );
+    semantic.aliases = closure.aliases;
+    semantic.resolutions.extend(closure.resolutions);
+    db.replace_semantic_index_facts(
+        semantic.scopes,
+        semantic.semantic_imports,
+        semantic.exports,
+        semantic.aliases,
+        semantic.resolutions,
+        semantic.generated_symbols,
+        semantic.stable_exports,
+    );
     db.replace_symbol_graph_facts(output.symbols, output.definitions, output.references);
     derivation.diagnostics.extend(output.diagnostics);
     derivation
@@ -744,11 +765,16 @@ fn fact_order_key<'a>(
     (stable_key, file, start_byte, end_byte, name)
 }
 
-fn merge_language_output(derivation: &mut SymbolGraphDerivation, output: LanguageSymbolOutput) {
+fn merge_language_output(
+    derivation: &mut SymbolGraphDerivation,
+    semantic: &mut SemanticIndexOutput,
+    output: LanguageSymbolOutput,
+) {
     derivation.diagnostics.extend(output.diagnostics);
     derivation
         .capability_support
         .extend(output.capability_support);
+    semantic.extend(output.semantic);
 }
 
 fn capability_diagnostics(support: &[CapabilitySupport]) -> Vec<Diagnostic> {

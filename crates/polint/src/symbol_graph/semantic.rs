@@ -1,6 +1,7 @@
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{FileId, Language, ModuleNodeId, PackageId, Span, SymbolId, SymbolNamespace};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ScopeId(pub(crate) u64);
@@ -138,6 +139,12 @@ pub(crate) struct SemanticIndexOutput {
     pub(crate) resolutions: Vec<ResolutionFact>,
     pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
     pub(crate) stable_exports: Vec<StableExportIdentity>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AliasReexportClosureOutput {
+    pub(crate) aliases: Vec<AliasFact>,
+    pub(crate) resolutions: Vec<ResolutionFact>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -349,6 +356,157 @@ impl SemanticIndexBuilder {
             stable_exports: sort_rows(self.stable_exports, stable_export_sort_key),
         }
     }
+}
+
+impl SemanticIndexOutput {
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.scopes.extend(other.scopes);
+        self.semantic_imports.extend(other.semantic_imports);
+        self.exports.extend(other.exports);
+        self.aliases.extend(other.aliases);
+        self.resolutions.extend(other.resolutions);
+        self.generated_symbols.extend(other.generated_symbols);
+        self.stable_exports.extend(other.stable_exports);
+    }
+}
+
+pub(crate) fn alias_reexport_closure(
+    aliases: &[AliasFact],
+    exports: &[ExportFact],
+    stable_exports: &[StableExportIdentity],
+) -> AliasReexportClosureOutput {
+    let max_iterations = aliases.len() + exports.len() + stable_exports.len() + 1;
+    let alias_targets = aliases
+        .iter()
+        .map(|alias| {
+            (
+                alias.source_symbol_stable_key.as_str(),
+                alias
+                    .target_symbol_stable_keys
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut closure_aliases = BTreeMap::<String, AliasFact>::new();
+    let mut closure_resolutions = BTreeMap::<String, ResolutionFact>::new();
+
+    for alias in aliases {
+        let (targets, status) = resolve_alias_targets(alias, &alias_targets, max_iterations);
+        let mut closure = alias.clone();
+        closure.target_symbol_stable_keys = targets.into_iter().collect();
+        closure.status = closure_status(alias.status, status);
+        closure.stable_key = closure.computed_stable_key();
+        let resolution = closure_resolution_for_alias(&closure);
+        closure_resolutions.insert(resolution.stable_key.clone(), resolution);
+        closure_aliases.insert(closure.stable_key.clone(), closure);
+    }
+
+    let stable_export_targets = stable_exports
+        .iter()
+        .map(|export| export.symbol_stable_key.clone())
+        .collect::<BTreeSet<_>>();
+    for export in exports
+        .iter()
+        .filter(|export| matches!(export.kind, ExportKind::Star | ExportKind::StarReexport))
+    {
+        let mut closure = AliasFact {
+            id: AliasId(0),
+            language: export.language,
+            file: export.file,
+            package: export.package,
+            module: export.module,
+            source_symbol_stable_key: export.stable_key.clone(),
+            target_symbol_stable_keys: stable_export_targets.iter().cloned().collect(),
+            kind: AliasKind::ReExport,
+            stable_key: String::new(),
+            status: SemanticStatus::Ambiguous,
+        };
+        closure.stable_key = closure.computed_stable_key();
+        let resolution = closure_resolution_for_alias(&closure);
+        closure_resolutions.insert(resolution.stable_key.clone(), resolution);
+        closure_aliases.insert(closure.stable_key.clone(), closure);
+    }
+
+    AliasReexportClosureOutput {
+        aliases: sort_rows(closure_aliases.into_values().collect(), alias_sort_key),
+        resolutions: sort_rows(
+            closure_resolutions.into_values().collect(),
+            resolution_sort_key,
+        ),
+    }
+}
+
+fn resolve_alias_targets(
+    alias: &AliasFact,
+    alias_targets: &BTreeMap<&str, Vec<&str>>,
+    max_iterations: usize,
+) -> (BTreeSet<String>, SemanticStatus) {
+    if !matches!(
+        alias.status,
+        SemanticStatus::Resolved | SemanticStatus::Generated
+    ) {
+        return (
+            alias.target_symbol_stable_keys.iter().cloned().collect(),
+            alias.status,
+        );
+    }
+
+    let mut terminals = BTreeSet::new();
+    let mut stack = alias
+        .target_symbol_stable_keys
+        .iter()
+        .map(|target| (target.as_str(), 0usize))
+        .collect::<Vec<_>>();
+    let mut seen_edges = BTreeSet::<(String, String)>::new();
+    let mut status = SemanticStatus::Resolved;
+
+    while let Some((target, depth)) = stack.pop() {
+        if depth >= max_iterations || target == alias.source_symbol_stable_key {
+            status = SemanticStatus::Cycle;
+            continue;
+        }
+        if let Some(next_targets) = alias_targets.get(target) {
+            for next in next_targets {
+                let edge = (target.to_string(), (*next).to_string());
+                if !seen_edges.insert(edge) {
+                    status = SemanticStatus::Cycle;
+                    continue;
+                }
+                stack.push((next, depth + 1));
+            }
+        } else {
+            terminals.insert(target.to_string());
+        }
+    }
+
+    (terminals, status)
+}
+
+fn closure_status(original: SemanticStatus, resolved: SemanticStatus) -> SemanticStatus {
+    if resolved == SemanticStatus::Cycle {
+        SemanticStatus::Cycle
+    } else {
+        original
+    }
+}
+
+fn closure_resolution_for_alias(alias: &AliasFact) -> ResolutionFact {
+    let mut resolution = ResolutionFact {
+        id: ResolutionId(0),
+        language: alias.language,
+        file: alias.file,
+        package: alias.package,
+        module: alias.module,
+        source_stable_key: alias.source_symbol_stable_key.clone(),
+        target_stable_keys: alias.target_symbol_stable_keys.clone(),
+        step: ResolutionStepKind::ImportAliasLookup,
+        stable_key: String::new(),
+        status: alias.status,
+    };
+    resolution.stable_key = resolution.computed_stable_key();
+    resolution
 }
 
 impl ScopeFact {
@@ -1145,11 +1303,10 @@ mod alias_reexport_closure_tests {
     #[test]
     fn acyclic_import_alias_chains_resolve_to_deterministic_targets() {
         let output = super::alias_reexport_closure(
-            &[alias("import:a", &["import:b"], SemanticStatus::Resolved), alias(
-                "import:b",
-                &["symbol:c"],
-                SemanticStatus::Resolved,
-            )],
+            &[
+                alias("import:a", &["import:b"], SemanticStatus::Resolved),
+                alias("import:b", &["symbol:c"], SemanticStatus::Resolved),
+            ],
             &[],
             &[],
         );
@@ -1195,7 +1352,10 @@ mod alias_reexport_closure_tests {
     fn star_exports_with_incomplete_targets_emit_ambiguous_closure_rows() {
         let output = super::alias_reexport_closure(
             &[],
-            &[star_export("export:*:src/star.ts", SemanticStatus::Unresolved)],
+            &[star_export(
+                "export:*:src/star.ts",
+                SemanticStatus::Unresolved,
+            )],
             &[stable_export("known", "symbol:known")],
         );
 

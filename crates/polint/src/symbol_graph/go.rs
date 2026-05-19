@@ -287,7 +287,9 @@ fn derive_go_symbols_with_runner(
     output
         .capability_support
         .extend(supported_language_support(plan, &files));
-    convert_sidecar_output(builder, db, &sidecar);
+    output
+        .semantic
+        .extend(convert_sidecar_output(builder, db, &sidecar));
     output
         .diagnostics
         .extend(package_error_diagnostics(&sidecar.errors));
@@ -646,6 +648,7 @@ fn setup_missing_output(
     reason: &str,
     hint: &str,
 ) -> LanguageSymbolOutput {
+    let mut output = LanguageSymbolOutput::default();
     if !plan
         .rules_for_capability_matching_files("references", files)
         .is_empty()
@@ -658,10 +661,11 @@ fn setup_missing_output(
                 "<setup-missing>",
             );
         }
-        let _semantic_index = setup_missing_semantic_index_for_files(files);
+        output
+            .semantic
+            .extend(setup_missing_semantic_index_for_files(files));
     }
 
-    let mut output = LanguageSymbolOutput::default();
     output
         .capability_support
         .extend(setup_support(plan, files, reason, hint));
@@ -738,7 +742,7 @@ fn convert_sidecar_output(
     builder: &mut SymbolGraphBuilder,
     db: &AnalysisDb,
     sidecar: &GoSidecarOutput,
-) {
+) -> SemanticIndexOutput {
     let files = go_files_by_path(db);
     let symbol_rows = sidecar
         .symbols
@@ -786,7 +790,7 @@ fn convert_sidecar_output(
         }
     }
 
-    let _semantic_index = derive_go_semantic_index(sidecar, &files);
+    derive_go_semantic_index(sidecar, &files)
 }
 
 fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticIndexOutput {

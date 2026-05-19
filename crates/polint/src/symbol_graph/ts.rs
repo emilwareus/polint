@@ -185,7 +185,13 @@ fn derive_ts_file_symbols(
     let semantic = semantic_return.semantic;
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
-    let _semantic_index = derive_ts_semantic_index(file, source, &parsed.program, scoping, nodes);
+    output.semantic.extend(derive_ts_semantic_index(
+        file,
+        source,
+        &parsed.program,
+        scoping,
+        nodes,
+    ));
     let export_names = collect_export_names(&parsed.program, scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
     let mut summary = TsFileSymbolSummary {
