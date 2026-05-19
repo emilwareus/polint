@@ -1749,6 +1749,7 @@ class Widget {
         }
     }
 }
+
 "#;
         let file = source_file(source);
         let allocator = Allocator::default();
@@ -1811,5 +1812,118 @@ function outer(value: number) {
 
         assert!(stable_key.contains("src/scopes.ts"));
         assert!(stable_key.contains("block"));
+    }
+}
+
+#[cfg(test)]
+mod semantic_imports_exports {
+    use super::{derive_ts_semantic_index, parse_source_type};
+    use crate::core::{FileId, Language, SourceFile};
+    use crate::symbol_graph::semantic::{ExportKind, SemanticImportKind, SemanticStatus};
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use std::path::PathBuf;
+
+    fn derive(source: &str) -> crate::symbol_graph::semantic::SemanticIndexOutput {
+        let file = SourceFile {
+            id: FileId(0),
+            path: PathBuf::from("src/imports.ts"),
+            relative_path: "src/imports.ts".to_string(),
+            language: Language::TypeScript,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        };
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+
+        derive_ts_semantic_index(
+            &file,
+            source,
+            &parsed.program,
+            semantic.scoping(),
+            semantic.nodes(),
+        )
+    }
+
+    #[test]
+    fn emits_static_import_rows_for_named_default_namespace_side_effect_and_type_only_forms() {
+        let output = derive(
+            r#"
+import defaultThing from "pkg";
+import { named as local, type TypeName } from "./mod";
+import * as ns from "./ns";
+import "./side-effect";
+"#,
+        );
+        let kinds = output
+            .semantic_imports
+            .iter()
+            .map(|fact| fact.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&SemanticImportKind::StaticDefault));
+        assert!(kinds.contains(&SemanticImportKind::StaticNamed));
+        assert!(kinds.contains(&SemanticImportKind::StaticNamespace));
+        assert!(kinds.contains(&SemanticImportKind::SideEffect));
+        assert!(kinds.contains(&SemanticImportKind::TypeOnly));
+    }
+
+    #[test]
+    fn emits_export_rows_for_named_default_star_reexport_and_reexport_specifiers() {
+        let output = derive(
+            r#"
+const local = 1;
+export { local as renamed };
+export default function main() {}
+export * from "./star";
+export { named as reexported } from "./mod";
+"#,
+        );
+        let kinds = output
+            .exports
+            .iter()
+            .map(|fact| fact.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&ExportKind::Named));
+        assert!(kinds.contains(&ExportKind::Default));
+        assert!(kinds.contains(&ExportKind::StarReexport));
+        assert!(kinds.contains(&ExportKind::Namespace));
+        assert!(
+            output
+                .aliases
+                .iter()
+                .any(|alias| alias.status == SemanticStatus::Unresolved)
+        );
+    }
+
+    #[test]
+    fn emits_conservative_rows_for_commonjs_and_dynamic_import_forms() {
+        let output = derive(
+            r#"
+const req = require(moduleName);
+module.exports = req;
+exports.named = req;
+const lazy = import(moduleName);
+"#,
+        );
+
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::CommonJsRequire
+                && fact.status == SemanticStatus::Dynamic
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::DynamicImport && fact.status == SemanticStatus::Dynamic
+        }));
+        assert!(output.exports.iter().any(|fact| {
+            fact.kind == ExportKind::CommonJsModuleExports
+                && fact.status == SemanticStatus::Unsupported
+        }));
+        assert!(output.exports.iter().any(|fact| {
+            fact.kind == ExportKind::CommonJsExportsProperty
+                && fact.status == SemanticStatus::Unsupported
+        }));
     }
 }
