@@ -2283,3 +2283,281 @@ mod tests {
         }));
     }
 }
+
+#[cfg(test)]
+mod base_topology {
+    use super::derive_requested_module_graph;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{AnalysisDb, ImportFact, ImportId, Language, Span};
+    use crate::module_graph::topology::{
+        RepoTopologyOverlayKind, TopologyStatus,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn span(file: crate::core::FileId, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 1,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: start_byte + 2,
+        }
+    }
+
+    fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture");
+        path
+    }
+
+    fn add_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_file(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn push_ts_import(
+        db: &mut AnalysisDb,
+        file: crate::core::FileId,
+        path: &str,
+        start_byte: u32,
+    ) {
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span(file, start_byte),
+            language: Language::TypeScript,
+        });
+    }
+
+    #[test]
+    fn module_graph_derivation_stores_mixed_go_ts_base_topology() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "go.mod",
+            "module example.com/repo\n\ngo 1.22\n\nrequire github.com/acme/lib v1.2.3\n",
+        );
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "cmd/api/main.go", "package main\n");
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        assert!(!db.workspace_roots().is_empty());
+        assert!(!db.topology_packages().is_empty());
+        assert!(!db.source_sets().is_empty());
+        assert!(!db.dependency_requirements().is_empty());
+        assert!(!db.resolved_dependency_edges().is_empty());
+        assert!(!db.repo_topology_overlays().is_empty());
+    }
+
+    #[test]
+    fn base_topology_stable_keys_are_byte_identical_across_derivations() {
+        let first = derive_stable_keys_for_fixture();
+        let second = derive_stable_keys_for_fixture();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn declared_dependencies_and_actual_imports_remain_separate_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        assert!(db
+            .dependency_requirements()
+            .iter()
+            .any(|row| row.target_name == "react"));
+        assert!(db
+            .resolved_imports()
+            .iter()
+            .any(|row| row.import == ImportId(0)));
+        assert!(db.import_to_package_edges().is_empty());
+    }
+
+    #[test]
+    fn base_topology_emits_d21_overlay_rows_or_unknowns() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let mut db = AnalysisDb::new();
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.generated.ts",
+            "export const app = true;\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.test.ts",
+            "export const app = true;\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        let overlays = db.repo_topology_overlays();
+        for kind in [
+            RepoTopologyOverlayKind::OwnershipZone,
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            RepoTopologyOverlayKind::DeployUnit,
+            RepoTopologyOverlayKind::GeneratedZone,
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+        ] {
+            assert!(
+                overlays.iter().any(|overlay| overlay.kind == kind),
+                "missing overlay kind {kind:?}"
+            );
+        }
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:ownership-zone:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:architecture-layer:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:deploy-unit:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:internal-public-api-boundary:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+    }
+
+    fn derive_stable_keys_for_fixture() -> Vec<Vec<String>> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        vec![
+            db.workspace_roots()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.topology_packages()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.source_sets()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.dependency_requirements()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.resolved_dependency_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.repo_topology_overlays()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod topology_overlay_categories {
+    use crate::module_graph::topology::RepoTopologyOverlayKind;
+
+    #[test]
+    fn overlay_kind_contains_d21_categories() {
+        let kinds = [
+            RepoTopologyOverlayKind::OwnershipZone,
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            RepoTopologyOverlayKind::DeployUnit,
+            RepoTopologyOverlayKind::GeneratedZone,
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+        ];
+
+        assert_eq!(kinds.len(), 7);
+    }
+}
