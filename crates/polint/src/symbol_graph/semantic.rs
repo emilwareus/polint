@@ -654,4 +654,44 @@ mod tests {
 
         assert_eq!(aliases.len(), 9);
     }
+
+    #[test]
+    fn semantic_index_builder_sorts_scope_rows_by_stable_key() {
+        let mut builder = SemanticIndexBuilder::new();
+        builder.add_scope(ScopeFact {
+            id: ScopeId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            parent: None,
+            scope_path: vec!["src/app.ts".to_string(), "function@20-40".to_string()],
+            kind: ScopeKind::Function,
+            stable_key: "z-scope".to_string(),
+            status: SemanticStatus::Resolved,
+        });
+        builder.add_scope(ScopeFact {
+            id: ScopeId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            parent: None,
+            scope_path: vec!["src/app.ts".to_string(), "module@0-50".to_string()],
+            kind: ScopeKind::Module,
+            stable_key: "a-scope".to_string(),
+            status: SemanticStatus::Resolved,
+        });
+
+        let output = builder.finish();
+
+        assert_eq!(
+            output
+                .scopes
+                .iter()
+                .map(|scope| scope.stable_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-scope", "z-scope"]
+        );
+    }
 }

@@ -1501,3 +1501,113 @@ export const used = missing;
         }));
     }
 }
+
+#[cfg(test)]
+mod semantic_scopes {
+    use super::{derive_ts_semantic_index, parse_source_type, reference_scope_stable_key};
+    use crate::core::{FileId, Language, SourceFile};
+    use crate::symbol_graph::semantic::ScopeKind;
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use std::path::PathBuf;
+
+    fn source_file(source: &str) -> SourceFile {
+        SourceFile {
+            id: FileId(0),
+            path: PathBuf::from("src/scopes.ts"),
+            relative_path: "src/scopes.ts".to_string(),
+            language: Language::TypeScript,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        }
+    }
+
+    #[test]
+    fn emits_module_function_block_class_catch_loop_switch_type_and_namespace_scopes() {
+        let source = r#"
+namespace App {
+    export interface Model { value: string }
+    export type Alias = Model;
+    export enum Choice { One }
+}
+
+class Widget {
+    render() {
+        for (const item of [1]) {
+            switch (item) {
+                case 1: break;
+            }
+        }
+        try {
+            throw new Error();
+        } catch (err) {
+            const local = err;
+        }
+    }
+}
+"#;
+        let file = source_file(source);
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+
+        let output = derive_ts_semantic_index(
+            &file,
+            source,
+            &parsed.program,
+            semantic.scoping(),
+            semantic.nodes(),
+        );
+        let kinds = output
+            .scopes
+            .iter()
+            .map(|scope| scope.kind)
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&ScopeKind::Module));
+        assert!(kinds.contains(&ScopeKind::Function));
+        assert!(kinds.contains(&ScopeKind::Block));
+        assert!(kinds.contains(&ScopeKind::Class));
+        assert!(kinds.contains(&ScopeKind::Catch));
+        assert!(kinds.contains(&ScopeKind::Loop));
+        assert!(kinds.contains(&ScopeKind::Switch));
+        assert!(kinds.contains(&ScopeKind::Type));
+        assert!(kinds.contains(&ScopeKind::Namespace));
+    }
+
+    #[test]
+    fn reference_scope_stable_key_uses_the_enclosing_oxc_scope_path() {
+        let source = r#"
+function outer(value: number) {
+    {
+        const value = 1;
+        return value;
+    }
+}
+"#;
+        let file = source_file(source);
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+        let reference = semantic
+            .nodes()
+            .iter()
+            .find_map(|node| {
+                let AstKind::IdentifierReference(identifier) = node.kind() else {
+                    return None;
+                };
+                (identifier.name == "value")
+                    .then(|| identifier.reference_id.get())
+                    .flatten()
+            })
+            .expect("fixture has a value reference");
+
+        let stable_key =
+            reference_scope_stable_key(&file, semantic.scoping(), semantic.nodes(), reference);
+
+        assert!(stable_key.contains("src/scopes.ts"));
+        assert!(stable_key.contains("block"));
+    }
+}
