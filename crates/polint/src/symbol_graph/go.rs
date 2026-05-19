@@ -1475,6 +1475,140 @@ mod semantic_conversion {
 }
 
 #[cfg(test)]
+mod semantic_setup_missing {
+    use super::*;
+    use crate::core::{
+        FileId, ReferenceKind, SourceFile, SymbolResolutionStatus,
+    };
+    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticStatus};
+    use std::path::PathBuf;
+
+    fn source_file(relative_path: &str, source: &str) -> SourceFile {
+        SourceFile {
+            id: FileId(0),
+            path: PathBuf::from(relative_path),
+            relative_path: relative_path.to_string(),
+            language: Language::Go,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        }
+    }
+
+    fn parse(json: &[u8]) -> GoSidecarOutput {
+        parse_sidecar_output(json).expect("sidecar fixture parses")
+    }
+
+    #[test]
+    fn setup_missing_files_get_unknown_fallback_semantic_rows() {
+        let file = source_file("main.go", "package app\n");
+        let files = vec![&file];
+
+        let output = setup_missing_semantic_index_for_files(&files);
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::UnknownFallback
+                && resolution.status == SemanticStatus::SetupMissing
+                && resolution.source_stable_key.contains("main.go")
+        }));
+    }
+
+    #[test]
+    fn sidecar_reference_without_target_or_candidates_gets_unresolved_unknown_fallback() {
+        let file = source_file("main.go", "package app\n");
+        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
+        let sidecar = parse(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[{
+    "package_id":"example.com/app",
+    "file":"main.go",
+    "name":"Missing",
+    "target_key":"",
+    "kind":"call",
+    "span":{"start_byte":12,"end_byte":19,"start_line":3,"start_column":2,"end_line":3,"end_column":9},
+    "precision":"exact_semantic"
+  }],
+  "scopes":[],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        let output = derive_go_semantic_index(&sidecar, &files);
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::UnknownFallback
+                && resolution.status == SemanticStatus::Unresolved
+                && resolution.source_stable_key.contains("Missing")
+        }));
+    }
+
+    #[test]
+    fn sidecar_candidate_sets_become_ambiguous_public_references() {
+        let file = source_file("main.go", "package app\nfunc Use() { Thing() }\n");
+        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
+        let sidecar = parse(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[
+    {"key":"one","package_id":"example.com/app","package_path":"example.com/app","test_variant":"regular","file":"main.go","name":"Thing","qualified_name":"Thing","namespace":"value","kind":"function","span":{"start_byte":12,"end_byte":17,"start_line":2,"start_column":6,"end_line":2,"end_column":11},"exported":true},
+    {"key":"two","package_id":"example.com/app","package_path":"example.com/app","test_variant":"regular","file":"main.go","name":"Thing","qualified_name":"Thing","namespace":"value","kind":"function","span":{"start_byte":18,"end_byte":23,"start_line":2,"start_column":12,"end_line":2,"end_column":17},"exported":true}
+  ],
+  "definitions":[],
+  "references":[{
+    "package_id":"example.com/app",
+    "file":"main.go",
+    "name":"Thing",
+    "target_key":"",
+    "kind":"call",
+    "span":{"start_byte":26,"end_byte":31,"start_line":2,"start_column":20,"end_line":2,"end_column":25},
+    "precision":"exact_semantic"
+  }],
+  "scopes":[],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[{
+    "reference_key":"example.com/app|main.go|Thing||call|26|31",
+    "step":"UnknownFallback",
+    "status":"ambiguous",
+    "target_key":"",
+    "candidate_keys":["one","two"]
+  }],
+  "errors":[]
+}"#,
+        );
+        let mut builder = SymbolGraphBuilder::new();
+
+        convert_sidecar_output(&mut builder, &analysis_db_with(file), &sidecar);
+        let graph = builder.finish();
+
+        assert!(graph.references.iter().any(|reference| {
+            reference.kind == ReferenceKind::Call
+                && reference.status == SymbolResolutionStatus::Ambiguous
+                && reference.candidates.len() == 2
+        }));
+    }
+
+    fn analysis_db_with(file: SourceFile) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            file.path.clone(),
+            file.relative_path.clone(),
+            file.source.to_string(),
+        );
+        db
+    }
+}
+
+#[cfg(test)]
 mod symbol_graph_go_setup {
     use super::*;
     use crate::core::{
