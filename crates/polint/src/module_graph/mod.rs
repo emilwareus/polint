@@ -120,6 +120,10 @@ pub(crate) fn module_topology_layer_key(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dependency-index rows are built from explicit cache-key inputs to avoid bundling unrelated state"
+)]
 pub(crate) fn module_graph_layer_dependency_edges(
     root: &Path,
     db: &AnalysisDb,
@@ -255,6 +259,10 @@ pub(crate) fn module_graph_layer_dependency_edges(
     edges
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "module topology cache dependencies mirror the explicit layer-key inputs"
+)]
 pub(crate) fn module_topology_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,
@@ -1389,6 +1397,10 @@ fn module_topology_output_digest(layer_key: &LayerKey, payload_digest: &Digest) 
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "payload construction keeps persisted row families explicit and schema-aligned"
+)]
 fn module_graph_layer_payload_parts(
     diagnostics: &[Diagnostic],
     capability_support: &[CapabilitySupport],
@@ -1676,6 +1688,10 @@ pub(crate) fn collect_repo_topology_overlays(
     overlays
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "overlay construction records every topology evidence field at the call site"
+)]
 fn push_repo_overlay(
     overlays: &mut Vec<RepoTopologyOverlayFact>,
     seen_keys: &mut BTreeSet<String>,
