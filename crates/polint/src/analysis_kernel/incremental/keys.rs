@@ -774,6 +774,132 @@ mod tests {
         )));
     }
 
+    mod symbol_graph_semantic_layer_key {
+        use super::*;
+
+        #[test]
+        fn includes_semantic_provider_parameters() {
+            let digest = semantic_provider_parameter_digest();
+
+            for expected in [
+                "scopes=enabled",
+                "semantic_imports=enabled",
+                "exports=enabled",
+                "aliases=enabled",
+                "resolution_facts=enabled",
+                "generated_symbols=enabled",
+                "stable_exports=enabled",
+                "alias_closure=max_input_plus_one",
+                "generated_hooks=native_rows_only",
+            ] {
+                assert!(
+                    digest.to_string().contains(expected),
+                    "semantic provider parameter digest should include {expected}"
+                );
+            }
+        }
+
+        #[test]
+        fn key_changes_when_semantic_parameters_change() {
+            let base = symbol_graph_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+            );
+            let changed = LayerKey::symbol_graph_layer_key(
+                symbol_graph_manifest(),
+                vec![Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                )],
+                vec![Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "package_context",
+                    &["src/app.ts", "pkg"],
+                )],
+                vec![Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                )],
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                vec![Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &["base"],
+                )],
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "symbol_graph_parameters",
+                    &[
+                        "output=symbols",
+                        "output=definitions",
+                        "output=references",
+                        "scopes=disabled",
+                    ],
+                ),
+            );
+
+            assert_ne!(base.parameter_digest, changed.parameter_digest);
+            assert_ne!(base, changed);
+        }
+
+        #[test]
+        fn key_tracks_provider_schema_and_absent_extension_digest() {
+            let base = symbol_graph_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+            );
+            let mut changed_schema = base.clone();
+            changed_schema.schema_version = "symbol-graph-facts-3:3".to_string();
+
+            assert_ne!(base, changed_schema);
+            assert!(base.extension_digests.contains(&Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent"
+            )));
+            assert!(
+                base.dependency_layer_digests.iter().any(|digest| digest
+                    .to_string()
+                    .contains("module_graph"))
+            );
+            assert!(
+                base.dependency_layer_digests.iter().any(|digest| digest
+                    .to_string()
+                    .contains("ts_syntax"))
+            );
+        }
+    }
+
     #[test]
     fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
         let base = metrics_key(
