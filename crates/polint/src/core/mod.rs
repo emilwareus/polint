@@ -7,6 +7,7 @@ use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
 use crate::rule_error::RuleResult;
+use crate::rule_manifest::{FactViewRequirement, RuleManifest};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2381,6 +2382,7 @@ type RuleRunFn = dyn Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sy
 pub struct Rule {
     meta: Arc<RuleMetaFn>,
     capabilities: Arc<RuleCapabilitiesFn>,
+    fact_views: Arc<[FactViewRequirement]>,
     run: Arc<RuleRunFn>,
 }
 
@@ -2394,6 +2396,26 @@ impl Rule {
         Self {
             meta: Arc::new(meta),
             capabilities: Arc::new(capabilities),
+            fact_views: Arc::from(Vec::new().into_boxed_slice()),
+            run: Arc::new(run),
+        }
+    }
+
+    pub(crate) fn from_parts_with_fact_views<M, C, R>(
+        meta: M,
+        capabilities: C,
+        fact_views: Vec<FactViewRequirement>,
+        run: R,
+    ) -> Self
+    where
+        M: Fn() -> RuleMeta + Send + Sync + 'static,
+        C: Fn() -> Capabilities + Send + Sync + 'static,
+        R: Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sync + 'static,
+    {
+        Self {
+            meta: Arc::new(meta),
+            capabilities: Arc::new(capabilities),
+            fact_views: Arc::from(fact_views.into_boxed_slice()),
             run: Arc::new(run),
         }
     }
@@ -2404,6 +2426,15 @@ impl Rule {
 
     pub(crate) fn capabilities(&self) -> Capabilities {
         (self.capabilities)()
+    }
+
+    pub(crate) fn manifest(&self, options: Option<&RuleOptions>) -> RuleManifest {
+        RuleManifest::from_parts(
+            self.meta(),
+            self.capabilities(),
+            self.fact_views.iter().cloned().collect(),
+            options,
+        )
     }
 
     pub(crate) fn run(&self, db: &AnalysisDb, ctx: &mut RuleCtx<'_>) -> RuleResult {

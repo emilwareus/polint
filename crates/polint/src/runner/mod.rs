@@ -8,6 +8,7 @@ use crate::diagnostics::{
     render_with_sarif_help,
 };
 use crate::ignores::apply_ignores;
+use crate::rule_manifest::{InspectRuleReport, RuleManifestWire};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +32,30 @@ struct Cli {
 enum Command {
     /// Run the registered local rules against the current directory.
     Check(CheckArgs),
+    /// Inspect registered local rules without running analysis.
+    Inspect(InspectArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectArgs {
+    #[command(subcommand)]
+    command: InspectCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+enum InspectCommand {
+    /// Show registered rule manifests.
+    Rule(InspectRuleArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectRuleArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = InspectFormatArg::Human)]
+    format: InspectFormatArg,
+    /// Only include rules whose id matches this pattern.
+    #[arg(long, value_name = "RULE_ID")]
+    rule: Option<String>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -84,6 +109,12 @@ enum FormatArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum InspectFormatArg {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum FailOn {
     Warn,
     Error,
@@ -104,7 +135,72 @@ fn run(rules: Vec<Rule>) -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check(args) => check(std::env::current_dir()?, &args, &rules),
+        Command::Inspect(args) => inspect(std::env::current_dir()?, &args, &rules),
     }
+}
+
+fn inspect(root: PathBuf, args: &InspectArgs, rules: &[Rule]) -> Result<u8> {
+    match &args.command {
+        InspectCommand::Rule(rule_args) => inspect_rule(root, rule_args, rules),
+    }
+}
+
+fn inspect_rule(root: PathBuf, args: &InspectRuleArgs, rules: &[Rule]) -> Result<u8> {
+    let loaded = load_config_for_check(&root, &[])?;
+    let mut plan_inputs = RulePlanInputs::collect(rules, None);
+    plan_inputs.retain_rule_pattern(args.rule.as_deref());
+    let selected_rule_ids = plan_inputs.exact_rule_ids();
+    if args.rule.is_some() && selected_rule_ids.is_empty() {
+        anyhow::bail!(
+            "no registered rule matched `{}`",
+            args.rule.as_deref().unwrap_or_default()
+        );
+    }
+
+    let options = plan_inputs.rule_options_from_config(&loaded);
+    let plan = AnalysisPlan::from_inputs(&plan_inputs, &options);
+    let mut manifests = Vec::new();
+    for rule in rules {
+        let meta = rule.meta();
+        if !selected_rule_ids.contains(&meta.id) {
+            continue;
+        }
+        let manifest = rule.manifest(options.get(&meta.id));
+        manifests.push(RuleManifestWire::from_manifest(
+            manifest,
+            None,
+            plan.support_view(),
+        ));
+    }
+    let report = InspectRuleReport::new("polint-local-rules", env!("CARGO_PKG_VERSION"), manifests);
+    match args.format {
+        InspectFormatArg::Human => print!("{}", render_inspect_rule_human(&report)),
+        InspectFormatArg::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+    Ok(0)
+}
+
+fn render_inspect_rule_human(report: &InspectRuleReport) -> String {
+    if report.rules.is_empty() {
+        return "No registered local rules.\n".to_string();
+    }
+    let mut out = String::new();
+    for rule in &report.rules {
+        let capabilities = if rule.capabilities.is_empty() {
+            "none".to_string()
+        } else {
+            rule.capabilities
+                .iter()
+                .map(|capability| capability.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!(
+            "{} [{}]: {} (capabilities: {})\n",
+            rule.rule_id, rule.severity, rule.description, capabilities
+        ));
+    }
+    out
 }
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {

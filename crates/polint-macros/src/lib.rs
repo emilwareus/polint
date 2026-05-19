@@ -27,6 +27,8 @@ struct ViewParam {
     ty: Type,
     view_type: Ident,
     capability_method: Ident,
+    capability_name: String,
+    canonical_path: String,
 }
 
 fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
@@ -68,6 +70,20 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
         .iter()
         .map(|param| &param.ident)
         .collect::<Vec<_>>();
+    let fact_view_requirements = view_params.iter().map(|param| {
+        let view_type = param.view_type.to_string();
+        let capability = param.capability_name.as_str();
+        let canonical_path = param.canonical_path.as_str();
+        let parameter_name = param.ident.to_string();
+        quote! {
+            ::polint::sdk::__private::FactViewRequirement::generated(
+                #view_type,
+                #canonical_path,
+                #capability,
+                #parameter_name,
+            )
+        }
+    });
     let run_inputs = std::iter::once(first.clone())
         .chain(input.sig.inputs.iter().skip(1).cloned())
         .collect::<syn::punctuated::Punctuated<FnArg, syn::Token![,]>>();
@@ -77,7 +93,7 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
 
     Ok(quote! {
         #vis fn #fn_name() -> ::polint::sdk::prelude::Rule {
-            ::polint::sdk::__private::make_rule(
+            ::polint::sdk::__private::make_rule_with_manifest(
                 || {
                     ::polint::sdk::__private::RuleMeta {
                         id: #id.to_string(),
@@ -88,6 +104,7 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
                 || {
                     ::polint::sdk::__private::Capabilities::new()#(.#capability_methods())*
                 },
+                vec![#(#fact_view_requirements),*],
                 |db: &::polint::sdk::__private::AnalysisDb,
                  #ctx_ident: &mut ::polint::sdk::prelude::RuleCtx<'_>|
                  -> ::polint::sdk::prelude::RuleResult {
@@ -277,16 +294,19 @@ fn parse_view_param(arg: &FnArg) -> syn::Result<ViewParam> {
             "fact-view parameters cannot be `mut`",
         ));
     }
-    let (view_type, capability_method) = capability_for_type(pat_type.ty.as_ref())?;
+    let (view_type, capability_method, capability_name, canonical_path) =
+        capability_for_type(pat_type.ty.as_ref())?;
     Ok(ViewParam {
         ident: ident.clone(),
         ty: (*pat_type.ty).clone(),
         view_type,
         capability_method,
+        capability_name,
+        canonical_path,
     })
 }
 
-fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident)> {
+fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident, String, String)> {
     let Type::Path(path) = ty else {
         return Err(syn::Error::new(
             ty.span(),
@@ -343,7 +363,12 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident)> {
             ));
         }
     };
-    Ok((segment.ident.clone(), format_ident!("{method}")))
+    Ok((
+        segment.ident.clone(),
+        format_ident!("{method}"),
+        method.to_string(),
+        format!("polint::sdk::facts::{}<'_>", segment.ident),
+    ))
 }
 
 fn path_is_unqualified_or_under(path: &syn::Path, item: &str, prefixes: &[&[&str]]) -> bool {
@@ -402,6 +427,11 @@ mod tests {
         capability_for_type(&ty).unwrap().1.to_string()
     }
 
+    fn canonical_path(type_source: &str) -> String {
+        let ty = syn::parse_str::<Type>(type_source).unwrap();
+        capability_for_type(&ty).unwrap().3
+    }
+
     fn first_arg(source: &str) -> FnArg {
         syn::parse_str::<FnArg>(source).unwrap()
     }
@@ -440,13 +470,22 @@ mod tests {
     #[test]
     fn capability_for_type_maps_supported_fact_views() {
         assert_eq!(capability("SourceFiles<'_>"), "syntax");
+        assert_eq!(capability("Packages<'_>"), "syntax");
+        assert_eq!(capability("Functions<'_>"), "syntax");
+        assert_eq!(capability("Imports<'_>"), "imports");
         assert_eq!(capability("GoTests<'_>"), "go_tests");
         assert_eq!(capability("BranchObligations<'_>"), "branch_obligations");
+        assert_eq!(capability("CoverageFacts<'_>"), "coverage_facts");
+        assert_eq!(capability("TestSuiteMetrics<'_>"), "test_suite_metrics");
         assert_eq!(capability("DataFlow<'_>"), "dataflow");
+        assert_eq!(capability("Cfg<'_>"), "cfg");
+        assert_eq!(capability("CallGraph<'_>"), "call_graph");
         assert_eq!(capability("FileMetrics<'_>"), "file_metrics");
         assert_eq!(capability("FunctionMetrics<'_>"), "function_metrics");
         assert_eq!(capability("ComplexityMetrics<'_>"), "complexity_metrics");
         assert_eq!(capability("ResolvedImports<'_>"), "resolved_imports");
+        assert_eq!(capability("TsComponents<'_>"), "ts_components");
+        assert_eq!(capability("TsClasses<'_>"), "ts_classes");
         // capability("polint::sdk::facts::ModuleGraphFacts<'_>") maps to module_graph.
         assert_eq!(
             capability("polint::sdk::facts::ModuleGraphFacts<'_>"),
@@ -463,6 +502,10 @@ mod tests {
         assert_eq!(
             capability("polint::sdk::facts::JsxAttributes<'_>"),
             "jsx_attributes"
+        );
+        assert_eq!(
+            canonical_path("polint::sdk::prelude::Imports<'_>"),
+            "polint::sdk::facts::Imports<'_>"
         );
     }
 

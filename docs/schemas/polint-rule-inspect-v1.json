@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json",
+  "title": "polint rule inspect report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "schema", "tool", "rules"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "schema": {
+      "type": "string",
+      "const": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "description",
+        "severity",
+        "sdk_version",
+        "fact_views",
+        "capabilities",
+        "options",
+        "capability_support"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "host_path": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "sdk_version": {
+          "type": "string"
+        },
+        "fact_views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fact_view"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "options": {
+          "$ref": "#/$defs/options"
+        },
+        "capability_support": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability_support"
+          }
+        }
+      }
+    },
+    "fact_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["view_type", "canonical_path", "capability", "parameter_name"],
+      "properties": {
+        "view_type": {
+          "type": "string"
+        },
+        "canonical_path": {
+          "type": "string"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "parameter_name": {
+          "type": "string"
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "derived_from_fact_views", "status"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "derived_from_fact_views": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": ["requested"]
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["common_fields", "custom_settings", "typed_schema"],
+      "properties": {
+        "common_fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/option_field"
+          }
+        },
+        "custom_settings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "typed_schema": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "option_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "configured"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "configured": {
+          "type": "boolean"
+        }
+      }
+    },
+    "capability_support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "language", "status", "rules", "reason", "hint", "docs_path"],
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "language": {
+          "type": ["string", "null"],
+          "enum": ["go", "typescript", "tsx", "javascript", "jsx", "unknown", null]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["supported", "unsupported", "setup_missing"]
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "hint": {
+          "type": ["string", "null"]
+        },
+        "docs_path": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

@@ -27,7 +27,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 22 | 6/6 | Complete    | 2026-05-17 |
 | 23 | 5/5 | Complete   | 2026-05-18 |
 | 24 | 5/5 | Complete    | 2026-05-18 |
-| 25 | Rule Manifest, Inspect, and Test Skeleton | Generate rule manifests and add the first supported inspect/test authoring loop. | SAE-FND-06 |
+| 25 | 4/4 | Complete    | 2026-05-18 |
 | 26 | Semantic Index Deepening | Add scopes, richer imports, resolution facts, aliases, generated symbols, unknowns, and stable exports. | SAE-SEM-01 |
 | 27 | Layered Module/Package/Topology Graph | Expand topology facts for workspaces, packages, source sets, declared deps, lockfiles, and overlays. | SAE-SEM-02 |
 | 28 | Private Semantic MIR and Place Identity | Lower Go and TS/JS function bodies into private MIR with stable place identities. | SAE-SEM-03 |
