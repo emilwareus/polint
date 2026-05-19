@@ -7,6 +7,7 @@
 )]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -530,6 +531,10 @@ pub(crate) fn module_graph_topology_input_digest_rows(
                 .map(move |file_name| topology_input_relative_path(&dir, file_name))
         })
         .collect::<Vec<_>>();
+    candidate_paths.extend(workspace_member_topology_input_candidates(
+        root,
+        candidate_paths.iter().map(String::as_str),
+    ));
     candidate_paths.extend(extended_ts_config_candidates(
         root,
         candidate_paths.iter().map(String::as_str),
@@ -552,6 +557,105 @@ pub(crate) fn module_graph_topology_input_digest_rows(
     rows.sort();
     rows.dedup();
     rows
+}
+
+fn workspace_member_topology_input_candidates<'a>(
+    root: &Path,
+    initial_candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut package_paths = BTreeSet::new();
+    for candidate in initial_candidates {
+        if Path::new(candidate)
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some("package.json")
+        {
+            continue;
+        }
+        let Some(package_path) = package_path_for_manifest_path(candidate) else {
+            continue;
+        };
+        let manifest_path = root.join(candidate);
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        for workspace in package_json_workspace_patterns(&contents) {
+            package_paths.extend(expand_package_workspace_glob(
+                root,
+                &package_path,
+                &workspace,
+            ));
+        }
+    }
+
+    package_paths
+        .into_iter()
+        .flat_map(|package_path| {
+            MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES
+                .iter()
+                .map(move |file_name| topology_input_relative_path(&package_path, file_name))
+        })
+        .collect()
+}
+
+fn package_path_for_manifest_path(relative_path: &str) -> Option<String> {
+    if relative_path == "package.json" {
+        Some(".".to_string())
+    } else {
+        relative_path
+            .strip_suffix("/package.json")
+            .map(str::to_string)
+    }
+}
+
+fn package_json_workspace_patterns(contents: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(contents) else {
+        return Vec::new();
+    };
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    match object.get("workspaces") {
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::Object(object)) => object
+            .get("packages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn expand_package_workspace_glob(root: &Path, package_path: &str, pattern: &str) -> Vec<String> {
+    let Some(base) = pattern.strip_suffix("/*") else {
+        return Vec::new();
+    };
+    let base_path = if package_path == "." {
+        PathBuf::from(base)
+    } else {
+        Path::new(package_path).join(base)
+    };
+    let Ok(entries) = fs::read_dir(root.join(base_path)) else {
+        return Vec::new();
+    };
+    let mut members = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_type().ok()?.is_dir().then_some(entry.path()))
+        .filter(|path| path.join("package.json").is_file())
+        .filter_map(|path| repo_relative_path(root, &path))
+        .collect::<Vec<_>>();
+    members.sort();
+    members
 }
 
 fn topology_relevant_dirs(db: &AnalysisDb) -> BTreeSet<String> {
@@ -676,6 +780,7 @@ fn normalize_existing_path(path: &Path) -> Option<PathBuf> {
 
 fn repo_relative_path(root: &Path, path: &Path) -> Option<String> {
     let root = root.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
     let relative = path.strip_prefix(root).ok()?;
     Some(path_to_repo_string(relative))
 }
@@ -972,6 +1077,46 @@ mod tests {
         let changed = module_graph_topology_input_digest_rows(temp.path(), &db);
 
         assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_workspace_member_manifests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            base.iter()
+                .all(|(path, _)| path != "packages/ui/package.json")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let with_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            with_member
+                .iter()
+                .any(|(path, _)| path == "packages/ui/package.json")
+        );
+        assert_ne!(base, with_member);
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.1"}"#,
+        );
+        let changed_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert_ne!(with_member, changed_member);
     }
 
     #[test]

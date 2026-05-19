@@ -35,7 +35,8 @@ mod topology {
     use crate::config::load_config;
     use crate::core::{AnalysisDb, FileId};
     use crate::module_graph::topology::{
-        RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, WorkspaceRootKind,
+        RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, TopologyPrecision,
+        TopologyStatus, WorkspaceRootKind,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -164,6 +165,16 @@ mod topology {
         assert!(labels.contains(&"lockfile:yarn.lock:yarn-lock-present"));
         assert!(labels.contains(&"lockfile:bun.lock:bun-lock-present"));
         assert!(labels.contains(&"lockfile:bun.lockb:bun-lockb-present"));
+        let package_lock_overlay = output
+            .overlays
+            .iter()
+            .find(|overlay| overlay.label == "lockfile:package-lock.json:package-lock-v3")
+            .expect("package-lock overlay exists");
+        assert_eq!(
+            package_lock_overlay.precision,
+            TopologyPrecision::ExactStatic
+        );
+        assert_eq!(package_lock_overlay.status, TopologyStatus::Present);
     }
 
     #[test]
@@ -565,6 +576,31 @@ mod dependency_topology {
         }));
     }
 
+    #[test]
+    fn collect_ts_topology_marks_malformed_package_json_unsupported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(temp.path(), "package.json", "{");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let package = output
+            .packages
+            .iter()
+            .find(|package| package.path == ".")
+            .expect("root package row exists");
+
+        assert_eq!(package.precision, TopologyPrecision::Unknown);
+        assert_eq!(package.status, TopologyStatus::Unsupported);
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.label == "package-json-unsupported:malformed-json"
+                && overlay.path.as_deref() == Some("package.json")
+                && overlay.precision == TopologyPrecision::Unknown
+                && overlay.status == TopologyStatus::Unsupported
+        }));
+    }
+
     fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
         let path = root.join(relative_path);
         fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
@@ -766,6 +802,7 @@ pub(crate) fn collect_ts_topology(
 
     let mut package_ids_by_path = BTreeMap::new();
     for (package_path, manifest) in &package_manifests {
+        let (precision, status) = package_manifest_topology_state(manifest);
         let id = TopologyPackageId(output.packages.len() as u64);
         let workspace_root = workspace_root_for_package(package_path, &workspace_roots)
             .and_then(|root| root_ids_by_path.get(root).copied());
@@ -787,14 +824,15 @@ pub(crate) fn collect_ts_topology(
                 manifest.name.as_deref().unwrap_or("")
             ),
             producer_id: TS_TOPOLOGY_PROVIDER_ID,
-            precision: TopologyPrecision::ExactStatic,
-            status: TopologyStatus::Present,
+            precision,
+            status,
         });
         package_ids_by_path.insert(package_path.clone(), id);
     }
 
     for (package_path, manifest) in &package_manifests {
         emit_package_manager_overlays(&mut output, package_path, manifest);
+        emit_package_manifest_unsupported_overlays(&mut output, package_path, manifest);
         emit_lockfile_overlays(&mut output, loaded, package_path);
         if let Some(package_id) = package_ids_by_path.get(package_path).copied() {
             emit_package_requirements(&mut output, package_id, package_path, manifest);
@@ -895,6 +933,16 @@ fn read_package_manifest(loaded: &LoadedConfig, package_path: &str) -> Option<Pa
     Some(parse_package_json(&manifest_path, &contents))
 }
 
+fn package_manifest_topology_state(
+    manifest: &PackageJsonManifest,
+) -> (TopologyPrecision, TopologyStatus) {
+    if manifest.unsupported.is_empty() {
+        (TopologyPrecision::ExactStatic, TopologyStatus::Present)
+    } else {
+        (TopologyPrecision::Unknown, TopologyStatus::Unsupported)
+    }
+}
+
 fn package_manifest_path(package_path: &str) -> String {
     if package_path == "." {
         "package.json".to_string()
@@ -973,6 +1021,24 @@ fn emit_package_manager_overlays(
     }
 }
 
+fn emit_package_manifest_unsupported_overlays(
+    output: &mut TopologyOutput,
+    package_path: &str,
+    manifest: &PackageJsonManifest,
+) {
+    for unsupported in &manifest.unsupported {
+        let reason = unsupported.reason.replace([':', ' '], "-");
+        push_overlay(
+            output,
+            package_path,
+            format!("package-json-unsupported:{reason}"),
+            Some(unsupported.source_path.clone()),
+            unsupported.precision,
+            unsupported.status,
+        );
+    }
+}
+
 fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, package_path: &str) {
     let lockfiles = [
         ("package-lock.json", None),
@@ -1005,7 +1071,7 @@ fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, pa
             if unsupported_schema.is_some() {
                 TopologyPrecision::Unsupported
             } else {
-                TopologyPrecision::ExactLockfile
+                TopologyPrecision::ExactStatic
             },
             if unsupported_schema.is_some() {
                 TopologyStatus::Unsupported

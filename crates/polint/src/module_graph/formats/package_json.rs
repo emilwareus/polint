@@ -76,6 +76,7 @@ pub(crate) fn parse_package_json(relative_path: &str, contents: &str) -> Package
         ("peerDependencies", RequirementKind::Peer),
         ("optionalDependencies", RequirementKind::Optional),
         ("bundleDependencies", RequirementKind::Bundled),
+        ("bundledDependencies", RequirementKind::Bundled),
     ] {
         append_dependency_section(
             &mut manifest,
@@ -165,7 +166,9 @@ fn append_dependency_section(
                     })
                 }));
         }
-        Some(Value::Array(entries)) if section == "bundleDependencies" => {
+        Some(Value::Array(entries))
+            if matches!(section, "bundleDependencies" | "bundledDependencies") =>
+        {
             manifest
                 .dependencies
                 .extend(entries.iter().filter_map(Value::as_str).map(|target_name| {
@@ -225,7 +228,8 @@ mod tests {
   "devDependencies": { "vitest": "^2.0.0" },
   "peerDependencies": { "typescript": "^5.0.0" },
   "optionalDependencies": { "fsevents": "^2.0.0" },
-  "bundleDependencies": ["left-pad"]
+  "bundleDependencies": ["left-pad"],
+  "bundledDependencies": ["right-pad"]
 }"##,
         );
 
@@ -287,6 +291,14 @@ mod tests {
                 (
                     "bundleDependencies",
                     "left-pad",
+                    None,
+                    RequirementKind::Bundled,
+                    TopologyPrecision::ExactStatic,
+                    TopologyStatus::Present,
+                ),
+                (
+                    "bundledDependencies",
+                    "right-pad",
                     None,
                     RequirementKind::Bundled,
                     TopologyPrecision::ExactStatic,

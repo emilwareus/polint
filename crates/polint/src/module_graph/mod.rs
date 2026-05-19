@@ -515,7 +515,7 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 .get(&(import.file, import.path.clone()))
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let semantic = unambiguous_semantic_import(semantic_candidates);
+            let semantic = semantic_import_match(semantic_candidates);
             let source_set = source_sets_by_file.get(&import.file).and_then(|sets| {
                 sets.iter()
                     .filter_map(|id| source_set_by_id(db.source_sets(), *id))
@@ -555,6 +555,7 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 None
             };
             let import_path = semantic
+                .unique
                 .map(|fact| fact.import_path.clone())
                 .unwrap_or_else(|| import.path.clone());
             let from_package_stable_key = from_package.map(|package| package.stable_key.clone());
@@ -574,7 +575,7 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 id: ImportToPackageId(index as u64),
                 syntax_import: Some(import.id),
                 resolved_import: resolved.map(|fact| fact.id),
-                semantic_import_stable_key: semantic.map(|fact| fact.stable_key.clone()),
+                semantic_import_stable_key: semantic.unique.map(|fact| fact.stable_key.clone()),
                 from_file: Some(import.file),
                 from_package: from_package.map(|package| package.id),
                 to_package: to_package.map(|package| package.id),
@@ -733,14 +734,70 @@ fn semantic_imports_by_file_path(
     by_file_path
 }
 
-fn unambiguous_semantic_import<'a>(
+#[derive(Clone, Copy)]
+struct SemanticImportMatch<'a> {
+    unique: Option<&'a SemanticImportFact>,
+    duplicate_status: Option<ImportToPackageStatus>,
+}
+
+fn semantic_import_match<'a>(
     semantic_imports: &[&'a SemanticImportFact],
-) -> Option<&'a SemanticImportFact> {
-    if semantic_imports.len() == 1 {
-        semantic_imports.first().copied()
-    } else {
-        None
+) -> SemanticImportMatch<'a> {
+    SemanticImportMatch {
+        unique: semantic_imports
+            .first()
+            .copied()
+            .filter(|_| semantic_imports.len() == 1),
+        duplicate_status: duplicate_semantic_import_status(semantic_imports),
     }
+}
+
+fn duplicate_semantic_import_status(
+    semantic_imports: &[&SemanticImportFact],
+) -> Option<ImportToPackageStatus> {
+    if semantic_imports.len() <= 1 {
+        return None;
+    }
+    let any_dynamic = semantic_imports
+        .iter()
+        .any(|fact| semantic_import_is_dynamic(fact));
+    if any_dynamic {
+        return if semantic_imports
+            .iter()
+            .all(|fact| semantic_import_is_dynamic(fact))
+        {
+            Some(ImportToPackageStatus::Dynamic)
+        } else {
+            Some(ImportToPackageStatus::Ambiguous)
+        };
+    }
+
+    let first = semantic_imports[0];
+    if semantic_imports
+        .iter()
+        .any(|fact| fact.status != first.status || fact.kind != first.kind)
+    {
+        return Some(ImportToPackageStatus::Ambiguous);
+    }
+
+    match first.status {
+        SemanticStatus::Ambiguous | SemanticStatus::Cycle => Some(ImportToPackageStatus::Ambiguous),
+        SemanticStatus::SetupMissing => Some(ImportToPackageStatus::SetupMissing),
+        SemanticStatus::Unsupported => Some(ImportToPackageStatus::Unsupported),
+        SemanticStatus::Dynamic
+        | SemanticStatus::Resolved
+        | SemanticStatus::Unresolved
+        | SemanticStatus::Generated
+        | SemanticStatus::External => None,
+    }
+}
+
+fn semantic_import_is_dynamic(fact: &SemanticImportFact) -> bool {
+    fact.status == SemanticStatus::Dynamic
+        || matches!(
+            fact.kind,
+            SemanticImportKind::DynamicImport | SemanticImportKind::Dynamic
+        )
 }
 
 fn source_sets_by_file(
@@ -805,7 +862,7 @@ fn package_candidates_for_file(db: &AnalysisDb, file: FileId) -> Vec<&TopologyPa
 fn import_to_package_status(
     import: &ImportFact,
     resolved: Option<&crate::core::ResolvedImportFact>,
-    semantic: Option<&SemanticImportFact>,
+    semantic: SemanticImportMatch<'_>,
     target_node: Option<&crate::core::ModuleNode>,
     candidates: &[&TopologyPackageFact],
     from_package: Option<&TopologyPackageFact>,
@@ -814,28 +871,32 @@ fn import_to_package_status(
     if resolved.is_some_and(|fact| fact.reason == Some(UnresolvedReason::OutsideWorkspace)) {
         return ImportToPackageStatus::OutsideWorkspace;
     }
-    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Dynamic)
-        || semantic.is_some_and(|fact| {
-            matches!(
-                fact.kind,
-                SemanticImportKind::DynamicImport | SemanticImportKind::Dynamic
-            )
-        })
+    if let Some(status) = semantic.duplicate_status {
+        return status;
+    }
+    if semantic.unique.is_some_and(semantic_import_is_dynamic)
         || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Dynamic)
     {
         return ImportToPackageStatus::Dynamic;
     }
-    if semantic.is_some_and(|fact| fact.status == SemanticStatus::SetupMissing)
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::SetupMissing)
         || resolved.is_some_and(|fact| fact.status == ResolutionStatus::SetupMissing)
     {
         return ImportToPackageStatus::SetupMissing;
     }
-    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Unsupported)
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::Unsupported)
         || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Unsupported)
     {
         return ImportToPackageStatus::Unsupported;
     }
-    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Ambiguous) || candidates.len() > 1
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::Ambiguous)
+        || candidates.len() > 1
     {
         return ImportToPackageStatus::Ambiguous;
     }
@@ -844,7 +905,9 @@ fn import_to_package_status(
     }
     if target_node.is_some_and(|node| node.kind == ModuleNodeKind::External)
         || resolved.is_some_and(|fact| fact.status == ResolutionStatus::External)
-        || semantic.is_some_and(|fact| fact.status == SemanticStatus::External)
+        || semantic
+            .unique
+            .is_some_and(|fact| fact.status == SemanticStatus::External)
     {
         if declared_requirement_exists(import, from_package, requirement_scope) {
             ImportToPackageStatus::External
@@ -2399,6 +2462,52 @@ mod tests {
 
         assert_eq!(second_result.cache_stats.hits, 1);
         assert_eq!(topology_stable_keys(&second), first_keys);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_invalidates_when_source_less_workspace_member_manifest_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let loaded = loaded_config_for(temp.path());
+        let mut first = AnalysisDb::new();
+        add_file(&mut first, temp.path(), "src/app.ts", "export {};\n");
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert!(
+            first
+                .topology_packages()
+                .iter()
+                .all(|package| package.path != "packages/ui")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let mut second = AnalysisDb::new();
+        add_file(&mut second, temp.path(), "src/app.ts", "export {};\n");
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.misses, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert!(
+            second
+                .topology_packages()
+                .iter()
+                .any(|package| { package.path == "packages/ui" && package.name == "@acme/ui" })
+        );
     }
 
     #[test]
@@ -4309,7 +4418,7 @@ mod import_to_package {
     }
 
     #[test]
-    fn duplicate_syntax_import_paths_do_not_share_one_semantic_row() {
+    fn mixed_duplicate_semantic_import_paths_are_ambiguous_not_exact() {
         let mut db = AnalysisDb::new();
         let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
         let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
@@ -4425,7 +4534,7 @@ mod import_to_package {
         assert!(
             edges
                 .iter()
-                .all(|edge| edge.status == ImportToPackageStatus::Resolved)
+                .all(|edge| edge.status == ImportToPackageStatus::Ambiguous)
         );
         assert!(
             edges
@@ -4435,7 +4544,138 @@ mod import_to_package {
         assert!(
             edges
                 .iter()
-                .all(|edge| edge.to_package_stable_key.as_deref() == Some("package:target"))
+                .all(|edge| edge.to_package_stable_key.is_none())
+        );
+    }
+
+    #[test]
+    fn duplicate_dynamic_import_paths_remain_dynamic_without_unique_semantic_link() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let first_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 0),
+            language: Language::TypeScript,
+        });
+        let second_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 10),
+            language: Language::TypeScript,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![
+                SemanticImportFact {
+                    id: SemanticImportId(0),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic-a".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+                SemanticImportFact {
+                    id: SemanticImportId(1),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic-b".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(0),
+                    import: first_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(1),
+                    import: second_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.status == ImportToPackageStatus::Dynamic)
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.semantic_import_stable_key.is_none())
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.to_package_stable_key.is_none())
         );
     }
 
