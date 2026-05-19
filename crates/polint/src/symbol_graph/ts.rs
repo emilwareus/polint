@@ -11,9 +11,10 @@ use crate::symbol_graph::model::{
     DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
 };
 use crate::symbol_graph::semantic::{
-    AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ScopeFact, ScopeId, ScopeKind,
-    SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticIndexBuilder,
-    SemanticIndexOutput, SemanticStatus,
+    AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ResolutionFact, ResolutionId,
+    ResolutionStepKind, ScopeFact, ScopeId, ScopeKind, SemanticImportFact, SemanticImportId,
+    SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus, StableExportId,
+    StableExportIdentity,
 };
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
@@ -357,6 +358,7 @@ fn derive_ts_semantic_index(
     }
 
     add_ts_semantic_import_export_rows(&mut builder, file, source, program, module_scope_id);
+    add_ts_semantic_resolution_rows(&mut builder, file, scoping, nodes);
 
     builder.finish()
 }
@@ -454,30 +456,34 @@ fn add_import_declaration_rows(
     for specifier in specifiers {
         match specifier {
             ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                let local_name = default.local.name.to_string();
                 add_import_row(
                     builder,
                     file,
                     module_scope,
                     import_path.clone(),
-                    Some(default.local.name.to_string()),
+                    Some(local_name.clone()),
                     Some("default".to_string()),
                     SymbolNamespace::Value,
                     SemanticImportKind::StaticDefault,
                     status,
                 );
+                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
             }
             ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                let local_name = namespace.local.name.to_string();
                 add_import_row(
                     builder,
                     file,
                     module_scope,
                     import_path.clone(),
-                    Some(namespace.local.name.to_string()),
+                    Some(local_name.clone()),
                     Some("*".to_string()),
                     SymbolNamespace::Namespace,
                     SemanticImportKind::StaticNamespace,
                     status,
                 );
+                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
             }
             ImportDeclarationSpecifier::ImportSpecifier(named) => {
                 let is_type_import = matches!(import.import_kind, ImportOrExportKind::Type)
@@ -514,6 +520,7 @@ fn add_import_declaration_rows(
                     },
                     status,
                 );
+                add_import_lookup_rows(builder, file, &local_name, &import_path, status);
             }
         }
     }
@@ -621,7 +628,7 @@ fn add_export_row(
     kind: ExportKind,
     status: SemanticStatus,
 ) -> ExportId {
-    builder.add_export_identity(ExportFact {
+    let export = builder.add_export_identity(ExportFact {
         id: ExportId(0),
         language: file.language,
         file: Some(file.id),
@@ -629,12 +636,21 @@ fn add_export_row(
         module: None,
         scope,
         symbol: None,
-        export_name,
+        export_name: export_name.clone(),
         namespace,
         kind,
         stable_key: String::new(),
         status,
-    })
+    });
+    if status == SemanticStatus::Resolved
+        && matches!(
+            kind,
+            ExportKind::Named | ExportKind::Default | ExportKind::Namespace
+        )
+    {
+        add_stable_export_identity(builder, file, export, &export_name, namespace, status);
+    }
+    export
 }
 
 fn add_alias_row(
@@ -654,6 +670,77 @@ fn add_alias_row(
         source_symbol_stable_key,
         target_symbol_stable_keys,
         kind,
+        stable_key: String::new(),
+        status,
+    })
+}
+
+fn add_resolution_row(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    source_stable_key: String,
+    target_stable_keys: Vec<String>,
+    step: ResolutionStepKind,
+    status: SemanticStatus,
+) -> ResolutionId {
+    builder.add_resolution(ResolutionFact {
+        id: ResolutionId(0),
+        language: file.language,
+        file: Some(file.id),
+        package: None,
+        module: None,
+        source_stable_key,
+        target_stable_keys,
+        step,
+        stable_key: String::new(),
+        status,
+    })
+}
+
+fn add_import_lookup_rows(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    local_name: &str,
+    import_path: &str,
+    status: SemanticStatus,
+) {
+    let source = format!("{}::import::{local_name}", file.relative_path);
+    add_resolution_row(
+        builder,
+        file,
+        source.clone(),
+        Vec::new(),
+        ResolutionStepKind::ImportAliasLookup,
+        status,
+    );
+    add_resolution_row(
+        builder,
+        file,
+        source,
+        vec![format!("module:{import_path}")],
+        ResolutionStepKind::ModuleLookup,
+        status,
+    );
+}
+
+fn add_stable_export_identity(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    export: ExportId,
+    export_name: &str,
+    namespace: SymbolNamespace,
+    status: SemanticStatus,
+) -> StableExportId {
+    builder.add_stable_export(StableExportIdentity {
+        id: StableExportId(0),
+        export,
+        language: file.language,
+        package_key: None,
+        module_key: Some(file.relative_path.clone()),
+        export_name: export_name.to_string(),
+        namespace,
+        symbol_stable_key: format!("{}::export::{export_name}", file.relative_path),
+        generated_discriminator: Some("native".to_string()),
         stable_key: String::new(),
         status,
     })
@@ -909,6 +996,91 @@ fn reference_scope_stable_key(
 ) -> String {
     let reference = scoping.get_reference(reference_id);
     scope_stable_key(file, scoping, nodes, reference.scope_id())
+}
+
+fn add_ts_semantic_resolution_rows(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) {
+    let mut resolved = scoping
+        .symbol_ids()
+        .flat_map(|symbol| {
+            scoping
+                .get_resolved_reference_ids(symbol)
+                .iter()
+                .map(move |reference| (symbol, *reference))
+        })
+        .collect::<Vec<_>>();
+    resolved.sort_by(|left, right| {
+        reference_order_key(scoping, nodes, left.1)
+            .cmp(&reference_order_key(scoping, nodes, right.1))
+    });
+
+    for (symbol, reference_id) in resolved {
+        let reference = scoping.get_reference(reference_id);
+        let name = reference_name(nodes, reference);
+        add_resolution_row(
+            builder,
+            file,
+            semantic_reference_key(file, scoping, nodes, reference_id, &name),
+            vec![semantic_symbol_key(file, scoping, symbol)],
+            ResolutionStepKind::LexicalLookup,
+            SemanticStatus::Resolved,
+        );
+    }
+
+    let mut unresolved = scoping
+        .root_unresolved_references_ids()
+        .flat_map(|references| references.collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    unresolved.sort_by(|left, right| {
+        reference_order_key(scoping, nodes, *left).cmp(&reference_order_key(scoping, nodes, *right))
+    });
+    unresolved.dedup();
+
+    for reference_id in unresolved {
+        let reference = scoping.get_reference(reference_id);
+        let name = reference_name(nodes, reference);
+        add_resolution_row(
+            builder,
+            file,
+            semantic_reference_key(file, scoping, nodes, reference_id, &name),
+            Vec::new(),
+            ResolutionStepKind::UnknownFallback,
+            SemanticStatus::Unresolved,
+        );
+    }
+}
+
+fn semantic_reference_key(
+    file: &SourceFile,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    reference_id: OxcReferenceId,
+    name: &str,
+) -> String {
+    let reference = scoping.get_reference(reference_id);
+    let span = nodes.kind(reference.node_id()).span();
+    format!(
+        "{}::ref::{name}@{}-{}::scope:{}",
+        file.relative_path,
+        span.start,
+        span.end,
+        reference_scope_stable_key(file, scoping, nodes, reference_id)
+    )
+}
+
+fn semantic_symbol_key(file: &SourceFile, scoping: &Scoping, symbol: OxcSymbolId) -> String {
+    let span = scoping.symbol_span(symbol);
+    format!(
+        "{}::symbol::{}@{}-{}",
+        file.relative_path,
+        scoping.symbol_name(symbol),
+        span.start,
+        span.end
+    )
 }
 
 fn scope_path_for_scope(

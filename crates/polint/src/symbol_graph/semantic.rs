@@ -217,6 +217,12 @@ pub(crate) enum AliasKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ResolutionStepKind {
+    LexicalLookup,
+    ImportAliasLookup,
+    ModuleLookup,
+    MemberLookup,
+    GeneratedHintLookup,
+    UnknownFallback,
     Lexical,
     ImportAlias,
     ExportAlias,
@@ -809,6 +815,12 @@ fn alias_kind_label(kind: AliasKind) -> &'static str {
 
 fn resolution_step_kind_label(kind: ResolutionStepKind) -> &'static str {
     match kind {
+        ResolutionStepKind::LexicalLookup => "LexicalLookup",
+        ResolutionStepKind::ImportAliasLookup => "ImportAliasLookup",
+        ResolutionStepKind::ModuleLookup => "ModuleLookup",
+        ResolutionStepKind::MemberLookup => "MemberLookup",
+        ResolutionStepKind::GeneratedHintLookup => "GeneratedHintLookup",
+        ResolutionStepKind::UnknownFallback => "UnknownFallback",
         ResolutionStepKind::Lexical => "lexical",
         ResolutionStepKind::ImportAlias => "import_alias",
         ResolutionStepKind::ExportAlias => "export_alias",
