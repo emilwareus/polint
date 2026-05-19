@@ -21,7 +21,11 @@ use crate::core::{
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
-use semantic::{SemanticIndexOutput, alias_reexport_closure, emit_native_generated_symbol_hooks};
+use semantic::{
+    AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
+    SemanticIndexOutput, StableExportIdentity, alias_reexport_closure,
+    emit_native_generated_symbol_hooks,
+};
 
 const SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -498,6 +502,7 @@ fn symbol_graph_layer_payload(
         symbols,
         definitions,
         references,
+        semantic_index: semantic_index_payload(db),
     }
 }
 
@@ -509,6 +514,15 @@ fn restore_symbol_graph_layer_payload(db: &mut AnalysisDb, payload: &SymbolGraph
     sort_definition_facts(&mut definitions);
     sort_reference_facts(&mut references);
     db.replace_symbol_graph_facts(symbols, definitions, references);
+    db.replace_semantic_index_facts(
+        payload.semantic_index.scopes.clone(),
+        payload.semantic_index.semantic_imports.clone(),
+        payload.semantic_index.exports.clone(),
+        payload.semantic_index.aliases.clone(),
+        payload.semantic_index.resolutions.clone(),
+        payload.semantic_index.generated_symbols.clone(),
+        payload.semantic_index.stable_exports.clone(),
+    );
 }
 
 fn validate_symbol_graph_layer_payload(
@@ -516,8 +530,110 @@ fn validate_symbol_graph_layer_payload(
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == SYMBOL_GRAPH_LAYER_SCHEMA
+        && semantic_payload_rows_are_valid(&payload.semantic_index)
         && manifest.output_digest
             == symbol_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn semantic_index_payload(db: &AnalysisDb) -> SemanticIndexOutput {
+    SemanticIndexOutput {
+        scopes: sorted_semantic_rows(db.scopes().to_vec(), scope_payload_sort_key),
+        semantic_imports: sorted_semantic_rows(
+            db.semantic_imports().to_vec(),
+            semantic_import_payload_sort_key,
+        ),
+        exports: sorted_semantic_rows(db.exports().to_vec(), export_payload_sort_key),
+        aliases: sorted_semantic_rows(db.aliases().to_vec(), alias_payload_sort_key),
+        resolutions: sorted_semantic_rows(
+            db.resolution_facts().to_vec(),
+            resolution_payload_sort_key,
+        ),
+        generated_symbols: sorted_semantic_rows(
+            db.generated_symbols().to_vec(),
+            generated_symbol_payload_sort_key,
+        ),
+        stable_exports: sorted_semantic_rows(
+            db.stable_exports().to_vec(),
+            stable_export_payload_sort_key,
+        ),
+    }
+}
+
+fn semantic_payload_rows_are_valid(semantic: &SemanticIndexOutput) -> bool {
+    semantic.scopes.iter().all(scope_payload_row_is_valid)
+        && semantic
+            .semantic_imports
+            .iter()
+            .all(semantic_import_payload_row_is_valid)
+        && semantic.exports.iter().all(export_payload_row_is_valid)
+        && semantic.aliases.iter().all(alias_payload_row_is_valid)
+        && semantic
+            .resolutions
+            .iter()
+            .all(resolution_payload_row_is_valid)
+        && semantic
+            .generated_symbols
+            .iter()
+            .all(generated_symbol_payload_row_is_valid)
+        && semantic
+            .stable_exports
+            .iter()
+            .all(stable_export_payload_row_is_valid)
+        && stable_export_identities_are_consistent(&semantic.stable_exports)
+}
+
+fn scope_payload_row_is_valid(row: &ScopeFact) -> bool {
+    !row.stable_key.is_empty() && row.scope_path.iter().all(|part| !is_absolute_path_like(part))
+}
+
+fn semantic_import_payload_row_is_valid(row: &SemanticImportFact) -> bool {
+    !row.stable_key.is_empty() && !is_absolute_path_like(&row.import_path)
+}
+
+fn export_payload_row_is_valid(row: &ExportFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn alias_payload_row_is_valid(row: &AliasFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn resolution_payload_row_is_valid(row: &ResolutionFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn generated_symbol_payload_row_is_valid(row: &GeneratedSymbolFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn stable_export_payload_row_is_valid(row: &StableExportIdentity) -> bool {
+    !row.stable_key.is_empty()
+        && row
+            .package_key
+            .as_deref()
+            .is_none_or(|package_key| !is_absolute_path_like(package_key))
+        && row
+            .module_key
+            .as_deref()
+            .is_none_or(|module_key| !is_absolute_path_like(module_key))
+}
+
+fn stable_export_identities_are_consistent(rows: &[StableExportIdentity]) -> bool {
+    let mut targets_by_stable_key = std::collections::BTreeMap::<&str, &str>::new();
+    for row in rows {
+        if let Some(existing) = targets_by_stable_key.get(row.stable_key.as_str()) {
+            if *existing != row.symbol_stable_key {
+                return false;
+            }
+        } else {
+            targets_by_stable_key.insert(row.stable_key.as_str(), row.symbol_stable_key.as_str());
+        }
+    }
+    true
+}
+
+fn is_absolute_path_like(value: &str) -> bool {
+    std::path::Path::new(value).is_absolute() || value.starts_with("\\\\")
 }
 
 fn write_symbol_graph_layer_payload(
@@ -767,6 +883,43 @@ fn sort_reference_facts(references: &mut [ReferenceFact]) {
             &right.name,
         ))
     });
+}
+
+fn sorted_semantic_rows<T, K: Ord>(mut rows: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T> {
+    rows.sort_by_key(key);
+    rows
+}
+
+fn scope_payload_sort_key(row: &ScopeFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn semantic_import_payload_sort_key(
+    row: &SemanticImportFact,
+) -> (String, Option<crate::core::FileId>, String) {
+    (row.stable_key.clone(), row.file, row.import_path.clone())
+}
+
+fn export_payload_sort_key(row: &ExportFact) -> (String, Option<crate::core::FileId>, String) {
+    (row.stable_key.clone(), row.file, row.export_name.clone())
+}
+
+fn alias_payload_sort_key(row: &AliasFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn resolution_payload_sort_key(row: &ResolutionFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn generated_symbol_payload_sort_key(
+    row: &GeneratedSymbolFact,
+) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn stable_export_payload_sort_key(row: &StableExportIdentity) -> (String, String) {
+    (row.stable_key.clone(), row.symbol_stable_key.clone())
 }
 
 fn fact_order_key<'a>(
@@ -1756,7 +1909,7 @@ export function answer() {
         }
     }
 
-    fn payload_with_semantic_index(file: FileId, semantic_index: SemanticIndexOutput) -> SymbolGraphLayerPayload {
+    fn payload_with_semantic_index(semantic_index: SemanticIndexOutput) -> SymbolGraphLayerPayload {
         SymbolGraphLayerPayload {
             schema: SYMBOL_GRAPH_LAYER_SCHEMA.to_string(),
             diagnostics: Vec::new(),
@@ -1827,7 +1980,6 @@ export function answer() {
             status: SemanticStatus::Resolved,
         };
         let payload = payload_with_semantic_index(
-            file,
             SemanticIndexOutput {
                 scopes: vec![scope(file, "semantic:scope:module")],
                 exports: vec![export],
@@ -1861,7 +2013,6 @@ export function answer() {
             "export const answer = 42;\n".to_string(),
         );
         let valid_payload = payload_with_semantic_index(
-            file,
             SemanticIndexOutput {
                 scopes: vec![scope(file, "semantic:scope:module")],
                 stable_exports: vec![stable_export(
