@@ -2748,6 +2748,10 @@ mod tests {
         BranchObligations, FactView, Functions, GoTests, Imports, JsxAttributes, Packages,
         SourceFiles, StringLiterals, TsClasses, TsComponents,
     };
+    use crate::symbol_graph::semantic::{
+        AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, ScopeId, ScopeKind,
+        SemanticImportFact, SemanticStatus, StableExportIdentity,
+    };
     use anyhow::anyhow;
     use proptest::prelude::*;
     use std::thread;
@@ -2894,6 +2898,30 @@ mod tests {
             start_col: 1,
             end_line: line,
             end_col: 2,
+        }
+    }
+
+    fn test_scope(name: &str, file: FileId, status: SemanticStatus) -> ScopeFact {
+        let scope_path = vec![name.to_string()];
+        ScopeFact {
+            id: ScopeId(99),
+            language: Language::TypeScript,
+            file: Some(file),
+            package: None,
+            module: None,
+            parent: None,
+            stable_key: ScopeFact::stable_key_for(
+                Language::TypeScript,
+                &scope_path,
+                Some(format!("file:{}", file.0)),
+                None,
+                None,
+                ScopeKind::Function,
+                status,
+            ),
+            scope_path,
+            kind: ScopeKind::Function,
+            status,
         }
     }
 
@@ -3986,6 +4014,86 @@ mod tests {
         assert_eq!(db.packages()[1].name, "billing");
         assert_eq!(db.packages()[1].span, second_span);
         assert_eq!(db.packages()[1].language, Language::Go);
+    }
+
+    #[test]
+    fn semantic_index_storage_replaces_rows_and_rebuilds_metadata() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function handler() {}\n".to_string(),
+        );
+        let stale = test_scope("stale", file, SemanticStatus::Resolved);
+        let beta = test_scope("beta", file, SemanticStatus::Resolved);
+        let alpha = test_scope("alpha", file, SemanticStatus::SetupMissing);
+
+        db.replace_semantic_index_facts(
+            vec![stale],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_semantic_index_facts(
+            vec![beta, alpha],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(
+            db.scopes()
+                .iter()
+                .map(|scope| (scope.id.0, scope.scope_path.as_slice()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, &["alpha".to_string()][..]),
+                (1, &["beta".to_string()][..]),
+            ]
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::Scope, 0))
+                .is_some()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::Scope, 2))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn semantic_index_storage_reports_missing_metadata_when_refresh_is_bypassed() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function handler() {}\n".to_string(),
+        );
+
+        db.replace_semantic_index_facts(
+            vec![test_scope("root", file, SemanticStatus::Resolved)],
+            Vec::<SemanticImportFact>::new(),
+            Vec::<ExportFact>::new(),
+            Vec::<AliasFact>::new(),
+            Vec::<ResolutionFact>::new(),
+            Vec::<GeneratedSymbolFact>::new(),
+            Vec::<StableExportIdentity>::new(),
+        );
+        db.remove_fact_metadata_for_test(FactRef::new(FactFamily::Scope, 0));
+
+        assert_eq!(
+            db.missing_fact_metadata(),
+            vec![MissingFactMeta {
+                family: FactFamily::Scope,
+                run_id: 0,
+            }]
+        );
     }
 
     #[test]
