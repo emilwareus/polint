@@ -4,12 +4,12 @@ use crate::core::{
     SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::symbol_graph::semantic::SemanticIndexOutput;
 use crate::symbol_graph::stable_id::{
     StableDefinitionKey, StableKeyHash, StableReferenceKey, StableSymbolKey,
     default_stable_key_hash, definition_id_from_key_with_hash, reference_id_from_key_with_hash,
     symbol_id_from_key_with_hash,
 };
-use crate::symbol_graph::semantic::SemanticIndexOutput;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

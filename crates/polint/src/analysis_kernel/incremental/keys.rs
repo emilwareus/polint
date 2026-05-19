@@ -905,12 +905,22 @@ mod tests {
                 DigestKind::ExtensionCode,
                 "extension_digest_absent"
             )));
-            assert!(base.dependency_layer_digests.contains(&dependency_layer_digest(
-                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"])
-            )));
-            assert!(base.dependency_layer_digests.contains(&dependency_layer_digest(
-                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"])
-            )));
+            assert!(
+                base.dependency_layer_digests
+                    .contains(&dependency_layer_digest(Digest::from_parts(
+                        DigestKind::ProviderOutput,
+                        "module_graph",
+                        &["base"]
+                    )))
+            );
+            assert!(
+                base.dependency_layer_digests
+                    .contains(&dependency_layer_digest(Digest::from_parts(
+                        DigestKind::ProviderOutput,
+                        "ts_syntax",
+                        &["base"]
+                    )))
+            );
         }
     }
 
@@ -1348,11 +1358,21 @@ mod symbol_graph_semantic_layer_key {
             DigestKind::ExtensionCode,
             "extension_digest_absent"
         )));
-        assert!(base.dependency_layer_digests.contains(&dependency_layer_digest(
-            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"])
-        )));
-        assert!(base.dependency_layer_digests.contains(&dependency_layer_digest(
-            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"])
-        )));
+        assert!(
+            base.dependency_layer_digests
+                .contains(&dependency_layer_digest(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "module_graph",
+                    &["base"]
+                )))
+        );
+        assert!(
+            base.dependency_layer_digests
+                .contains(&dependency_layer_digest(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &["base"]
+                )))
+        );
     }
 }

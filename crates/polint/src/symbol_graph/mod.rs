@@ -583,7 +583,11 @@ fn semantic_payload_rows_are_valid(semantic: &SemanticIndexOutput) -> bool {
 }
 
 fn scope_payload_row_is_valid(row: &ScopeFact) -> bool {
-    !row.stable_key.is_empty() && row.scope_path.iter().all(|part| !is_absolute_path_like(part))
+    !row.stable_key.is_empty()
+        && row
+            .scope_path
+            .iter()
+            .all(|part| !is_absolute_path_like(part))
 }
 
 fn semantic_import_payload_row_is_valid(row: &SemanticImportFact) -> bool {
@@ -1750,8 +1754,8 @@ mod semantic_layer_payload {
     use crate::cache::Cache;
     use crate::config::load_config;
     use crate::core::{
-        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode,
-        ModuleNodeId, ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
         ResolvedImportId, Span, SymbolNamespace, span_from_byte_range,
     };
     use crate::symbol_graph::semantic::{
@@ -1979,19 +1983,17 @@ export function answer() {
             stable_key: "semantic:export:answer".to_string(),
             status: SemanticStatus::Resolved,
         };
-        let payload = payload_with_semantic_index(
-            SemanticIndexOutput {
-                scopes: vec![scope(file, "semantic:scope:module")],
-                exports: vec![export],
-                stable_exports: vec![stable_export(
-                    file,
-                    ExportId(0),
-                    "semantic:stable-export:answer",
-                    "symbol:answer",
-                )],
-                ..SemanticIndexOutput::default()
-            },
-        );
+        let payload = payload_with_semantic_index(SemanticIndexOutput {
+            scopes: vec![scope(file, "semantic:scope:module")],
+            exports: vec![export],
+            stable_exports: vec![stable_export(
+                file,
+                ExportId(0),
+                "semantic:stable-export:answer",
+                "symbol:answer",
+            )],
+            ..SemanticIndexOutput::default()
+        });
 
         restore_symbol_graph_layer_payload(&mut db, &payload);
 
@@ -2012,18 +2014,16 @@ export function answer() {
             "src/app.ts".to_string(),
             "export const answer = 42;\n".to_string(),
         );
-        let valid_payload = payload_with_semantic_index(
-            SemanticIndexOutput {
-                scopes: vec![scope(file, "semantic:scope:module")],
-                stable_exports: vec![stable_export(
-                    file,
-                    ExportId(0),
-                    "semantic:stable-export:answer",
-                    "symbol:answer",
-                )],
-                ..SemanticIndexOutput::default()
-            },
-        );
+        let valid_payload = payload_with_semantic_index(SemanticIndexOutput {
+            scopes: vec![scope(file, "semantic:scope:module")],
+            stable_exports: vec![stable_export(
+                file,
+                ExportId(0),
+                "semantic:stable-export:answer",
+                "symbol:answer",
+            )],
+            ..SemanticIndexOutput::default()
+        });
         let valid_manifest = cache_manifest_for(&valid_payload);
         assert!(validate_symbol_graph_layer_payload(
             &valid_payload,
@@ -2031,7 +2031,9 @@ export function answer() {
         ));
 
         let mut empty_key_payload = valid_payload.clone();
-        empty_key_payload.semantic_index.scopes[0].stable_key.clear();
+        empty_key_payload.semantic_index.scopes[0]
+            .stable_key
+            .clear();
         assert!(!validate_symbol_graph_layer_payload(
             &empty_key_payload,
             &cache_manifest_for(&empty_key_payload)
@@ -2100,7 +2102,8 @@ mod semantic_cache_restore {
     }
 
     fn stable_export_keys(output: &KernelOutput) -> Vec<String> {
-        assert!(output.db.stable_exports().iter().all(|row| !row.stable_key.is_empty()));
+        let has_empty_key = output.db.stable_exports().iter().any(stable_key_is_empty);
+        assert!(!has_empty_key);
         let mut keys = output
             .db
             .stable_exports()
@@ -2109,6 +2112,10 @@ mod semantic_cache_restore {
             .collect::<Vec<_>>();
         keys.sort();
         keys
+    }
+
+    fn stable_key_is_empty(row: &crate::symbol_graph::semantic::StableExportIdentity) -> bool {
+        row.stable_key.is_empty()
     }
 
     fn assert_warm_symbol_graph_reuse(output: &KernelOutput) {
@@ -2127,8 +2134,11 @@ mod semantic_cache_restore {
             "import { token } from './tokens';\nexport function answer() { return token; }\n",
         )
         .expect("write app");
-        std::fs::write(temp.path().join("src/tokens.ts"), "export const token = 42;\n")
-            .expect("write tokens");
+        std::fs::write(
+            temp.path().join("src/tokens.ts"),
+            "export const token = 42;\n",
+        )
+        .expect("write tokens");
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = requested_symbol_plan();
 
@@ -2145,8 +2155,11 @@ mod semantic_cache_restore {
     #[test]
     fn go_stable_exports_survive_warm_cache_restore_when_setup_succeeds() {
         let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("go.mod"), "module example.com/cache\n\ngo 1.24\n")
-            .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/cache\n\ngo 1.24\n",
+        )
+        .expect("write go.mod");
         std::fs::create_dir_all(temp.path().join("pkg")).expect("create pkg");
         std::fs::write(
             temp.path().join("pkg/cache.go"),
