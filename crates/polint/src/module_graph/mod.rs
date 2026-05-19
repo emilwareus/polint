@@ -29,8 +29,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use topology::{
-    RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind, SourceSetKind,
-    TopologyOutput, TopologyPrecision, TopologyStatus,
+    DependencyRequirementFact, RepoTopologyOverlayFact, RepoTopologyOverlayId,
+    RepoTopologyOverlayKind, ResolvedDependencyEdgeFact, SourceSetFact, SourceSetKind,
+    TopologyOutput, TopologyPackageFact, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
 };
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
@@ -497,6 +498,12 @@ fn derive_requested_module_graph_uncached(
             db.resolved_imports(),
             db.module_nodes(),
             db.module_edges(),
+            db.workspace_roots(),
+            db.topology_packages(),
+            db.source_sets(),
+            db.dependency_requirements(),
+            db.resolved_dependency_edges(),
+            db.repo_topology_overlays(),
         ),
         None,
     ));
@@ -534,6 +541,12 @@ fn module_graph_layer_payload(
         resolved_imports: db.resolved_imports().to_vec(),
         nodes: db.module_nodes().to_vec(),
         edges: db.module_edges().to_vec(),
+        workspace_roots: db.workspace_roots().to_vec(),
+        topology_packages: db.topology_packages().to_vec(),
+        source_sets: db.source_sets().to_vec(),
+        dependency_requirements: db.dependency_requirements().to_vec(),
+        resolved_dependency_edges: db.resolved_dependency_edges().to_vec(),
+        repo_topology_overlays: db.repo_topology_overlays().to_vec(),
     }
 }
 
@@ -543,6 +556,15 @@ fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraph
         payload.nodes.clone(),
         payload.edges.clone(),
     );
+    db.replace_topology_facts(TopologyOutput {
+        workspace_roots: payload.workspace_roots.clone(),
+        packages: payload.topology_packages.clone(),
+        source_sets: payload.source_sets.clone(),
+        dependency_requirements: payload.dependency_requirements.clone(),
+        resolved_dependency_edges: payload.resolved_dependency_edges.clone(),
+        import_to_package_edges: Vec::new(),
+        overlays: payload.repo_topology_overlays.clone(),
+    });
 }
 
 fn validate_module_graph_layer_payload(
@@ -550,6 +572,7 @@ fn validate_module_graph_layer_payload(
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == MODULE_GRAPH_LAYER_SCHEMA
+        && topology_payload_stable_keys_are_unique(payload)
         && manifest.output_digest
             == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
 }
@@ -621,6 +644,12 @@ fn module_graph_layer_payload_parts(
     resolved_imports: &[crate::core::ResolvedImportFact],
     nodes: &[crate::core::ModuleNode],
     edges: &[crate::core::ModuleEdge],
+    workspace_roots: &[WorkspaceRootFact],
+    topology_packages: &[TopologyPackageFact],
+    source_sets: &[SourceSetFact],
+    dependency_requirements: &[DependencyRequirementFact],
+    resolved_dependency_edges: &[ResolvedDependencyEdgeFact],
+    repo_topology_overlays: &[RepoTopologyOverlayFact],
 ) -> ModuleGraphLayerPayload {
     ModuleGraphLayerPayload {
         schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
@@ -629,7 +658,67 @@ fn module_graph_layer_payload_parts(
         resolved_imports: resolved_imports.to_vec(),
         nodes: nodes.to_vec(),
         edges: edges.to_vec(),
+        workspace_roots: workspace_roots.to_vec(),
+        topology_packages: topology_packages.to_vec(),
+        source_sets: source_sets.to_vec(),
+        dependency_requirements: dependency_requirements.to_vec(),
+        resolved_dependency_edges: resolved_dependency_edges.to_vec(),
+        repo_topology_overlays: repo_topology_overlays.to_vec(),
     }
+}
+
+fn topology_payload_stable_keys_are_unique(payload: &ModuleGraphLayerPayload) -> bool {
+    topology_stable_keys_unique(
+        "WorkspaceRootFact",
+        payload
+            .workspace_roots
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "TopologyPackageFact",
+        payload
+            .topology_packages
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "SourceSetFact",
+        payload
+            .source_sets
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "DependencyRequirementFact",
+        payload
+            .dependency_requirements
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "ResolvedDependencyEdgeFact",
+        payload
+            .resolved_dependency_edges
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "RepoTopologyOverlayFact",
+        payload
+            .repo_topology_overlays
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    )
+}
+
+fn topology_stable_keys_unique<'a>(
+    family: &'static str,
+    stable_keys: impl Iterator<Item = &'a str>,
+) -> bool {
+    let mut seen = BTreeSet::new();
+    for stable_key in stable_keys {
+        if !seen.insert(stable_key) {
+            let _stable_key_conflict = (family, stable_key);
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn derive_base_topology(
@@ -1497,7 +1586,9 @@ mod tests {
             "repo_topology_overlays",
         ] {
             assert!(
-                payload[field].as_array().is_some_and(|rows| !rows.is_empty()),
+                payload[field]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty()),
                 "{field} should contain normalized topology rows"
             );
         }
@@ -1516,7 +1607,8 @@ mod tests {
         add_file(&mut first, temp.path(), "src/app.ts", "export {};\n");
         let loaded = loaded_config_for(temp.path());
 
-        let derivation = derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        let derivation =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
         let mut payload = super::module_graph_layer_payload(&first, &derivation);
         let mut duplicate_root = payload.workspace_roots[0].clone();
         duplicate_root.id = WorkspaceRootId(99);

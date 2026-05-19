@@ -5,11 +5,15 @@ use crate::core::{
 };
 use crate::diagnostics::Diagnostic;
 use crate::module_graph::paths::normalize_repo_relative;
+use crate::module_graph::topology::{
+    DependencyRequirementFact, RepoTopologyOverlayFact, ResolvedDependencyEdgeFact, SourceSetFact,
+    TopologyPackageFact, WorkspaceRootFact,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v1";
+pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v2";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphOutput {
@@ -25,6 +29,12 @@ pub(crate) struct ModuleGraphLayerPayload {
     pub(crate) resolved_imports: Vec<ResolvedImportFact>,
     pub(crate) nodes: Vec<ModuleNode>,
     pub(crate) edges: Vec<ModuleEdge>,
+    pub(crate) workspace_roots: Vec<WorkspaceRootFact>,
+    pub(crate) topology_packages: Vec<TopologyPackageFact>,
+    pub(crate) source_sets: Vec<SourceSetFact>,
+    pub(crate) dependency_requirements: Vec<DependencyRequirementFact>,
+    pub(crate) resolved_dependency_edges: Vec<ResolvedDependencyEdgeFact>,
+    pub(crate) repo_topology_overlays: Vec<RepoTopologyOverlayFact>,
 }
 
 #[derive(Debug, Clone)]

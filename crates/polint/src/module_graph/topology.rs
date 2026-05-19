@@ -1,30 +1,26 @@
-#![expect(
-    dead_code,
-    reason = "Topology contracts are populated by later Phase 27 collectors."
-)]
-
 use crate::core::{FileId, ImportId, Language, ModuleNodeId, PackageId, ResolvedImportId};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct WorkspaceRootId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct TopologyPackageId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct SourceSetId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct DependencyRequirementId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ResolvedDependencyEdgeId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ImportToPackageId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct RepoTopologyOverlayId(pub(crate) u64);
 
 macro_rules! impl_topology_id_from_u64 {
@@ -49,7 +45,7 @@ impl_topology_id_from_u64!(
     RepoTopologyOverlayId,
 );
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WorkspaceRootFact {
     pub(crate) id: WorkspaceRootId,
     pub(crate) kind: WorkspaceRootKind,
@@ -57,12 +53,13 @@ pub(crate) struct WorkspaceRootFact {
     pub(crate) manifest_path: Option<String>,
     pub(crate) language: Option<Language>,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TopologyPackageFact {
     pub(crate) id: TopologyPackageId,
     pub(crate) workspace_root: Option<WorkspaceRootId>,
@@ -74,12 +71,13 @@ pub(crate) struct TopologyPackageFact {
     pub(crate) path: String,
     pub(crate) language: Option<Language>,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceSetFact {
     pub(crate) id: SourceSetId,
     pub(crate) package: Option<TopologyPackageId>,
@@ -89,12 +87,13 @@ pub(crate) struct SourceSetFact {
     pub(crate) language: Option<Language>,
     pub(crate) files: Vec<FileId>,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DependencyRequirementFact {
     pub(crate) id: DependencyRequirementId,
     pub(crate) from_package: Option<TopologyPackageId>,
@@ -104,12 +103,13 @@ pub(crate) struct DependencyRequirementFact {
     pub(crate) kind: RequirementKind,
     pub(crate) manifest_path: Option<String>,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ResolvedDependencyEdgeFact {
     pub(crate) id: ResolvedDependencyEdgeId,
     pub(crate) requirement: Option<DependencyRequirementId>,
@@ -119,12 +119,13 @@ pub(crate) struct ResolvedDependencyEdgeFact {
     pub(crate) resolved_version: Option<String>,
     pub(crate) kind: ResolvedDependencyKind,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ImportToPackageFact {
     pub(crate) id: ImportToPackageId,
     pub(crate) import: Option<ImportId>,
@@ -135,12 +136,13 @@ pub(crate) struct ImportToPackageFact {
     pub(crate) target_node: Option<ModuleNodeId>,
     pub(crate) context: ImportContextKind,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: ImportToPackageStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RepoTopologyOverlayFact {
     pub(crate) id: RepoTopologyOverlayId,
     pub(crate) root: Option<WorkspaceRootId>,
@@ -150,12 +152,13 @@ pub(crate) struct RepoTopologyOverlayFact {
     pub(crate) label: String,
     pub(crate) path: Option<String>,
     pub(crate) stable_key: String,
+    #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: TopologyStatus,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TopologyOutput {
     pub(crate) workspace_roots: Vec<WorkspaceRootFact>,
     pub(crate) packages: Vec<TopologyPackageFact>,
@@ -166,7 +169,7 @@ pub(crate) struct TopologyOutput {
     pub(crate) overlays: Vec<RepoTopologyOverlayFact>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum WorkspaceRootKind {
     Repository,
     GoModule,
@@ -178,7 +181,7 @@ pub(crate) enum WorkspaceRootKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TopologyPackageKind {
     Workspace,
     JsPackage,
@@ -189,7 +192,7 @@ pub(crate) enum TopologyPackageKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum SourceSetKind {
     Source,
     Test,
@@ -199,7 +202,7 @@ pub(crate) enum SourceSetKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum RequirementKind {
     Direct,
     Runtime,
@@ -217,7 +220,7 @@ pub(crate) enum RequirementKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum ResolvedDependencyKind {
     Lockfile,
     LockfileSelected,
@@ -229,7 +232,7 @@ pub(crate) enum ResolvedDependencyKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum ImportToPackageStatus {
     Resolved,
     External,
@@ -242,7 +245,7 @@ pub(crate) enum ImportToPackageStatus {
     OutsideWorkspace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum ImportContextKind {
     Source,
     Test,
@@ -252,7 +255,7 @@ pub(crate) enum ImportContextKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum RepoTopologyOverlayKind {
     OwnershipZone,
     ArchitectureLayer,
@@ -264,7 +267,7 @@ pub(crate) enum RepoTopologyOverlayKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TopologyPrecision {
     ExactStatic,
     ExactLockfile,
@@ -273,7 +276,7 @@ pub(crate) enum TopologyPrecision {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TopologyStatus {
     Present,
     Resolved,
@@ -399,6 +402,10 @@ fn remap_option<Id: Copy + Ord>(value: &mut Option<Id>, ids: &BTreeMap<Id, Id>) 
     {
         *value = Some(*remapped);
     }
+}
+
+fn module_graph_producer_id() -> &'static str {
+    "polint.module_graph"
 }
 
 #[cfg(test)]
