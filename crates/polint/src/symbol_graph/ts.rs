@@ -1771,7 +1771,7 @@ fn collect_export_names(
                 }
             }
             Statement::ExportDefaultDeclaration(export) => {
-                if let Some(symbol) = default_export_symbol(&export.declaration) {
+                if let Some(symbol) = default_export_symbol(&export.declaration, scoping) {
                     exports
                         .entry(symbol)
                         .or_default()
@@ -1859,7 +1859,10 @@ fn collect_binding_identifier_symbol(
     }
 }
 
-fn default_export_symbol(declaration: &ExportDefaultDeclarationKind<'_>) -> Option<OxcSymbolId> {
+fn default_export_symbol(
+    declaration: &ExportDefaultDeclarationKind<'_>,
+    scoping: &Scoping,
+) -> Option<OxcSymbolId> {
     match declaration {
         ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
             function.id.as_ref()?.symbol_id.get()
@@ -1867,6 +1870,33 @@ fn default_export_symbol(declaration: &ExportDefaultDeclarationKind<'_>) -> Opti
         ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref()?.symbol_id.get(),
         ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
             interface.id.symbol_id.get()
+        }
+        _ => declaration
+            .as_expression()
+            .and_then(|expression| expression_symbol(expression, scoping)),
+    }
+}
+
+fn expression_symbol(expression: &Expression<'_>, scoping: &Scoping) -> Option<OxcSymbolId> {
+    match expression {
+        Expression::Identifier(identifier) => identifier
+            .reference_id
+            .get()
+            .and_then(|reference| scoping.get_reference(reference).symbol_id()),
+        Expression::ParenthesizedExpression(expression) => {
+            expression_symbol(&expression.expression, scoping)
+        }
+        Expression::TSAsExpression(expression) => {
+            expression_symbol(&expression.expression, scoping)
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            expression_symbol(&expression.expression, scoping)
+        }
+        Expression::TSNonNullExpression(expression) => {
+            expression_symbol(&expression.expression, scoping)
+        }
+        Expression::TSTypeAssertion(expression) => {
+            expression_symbol(&expression.expression, scoping)
         }
         _ => None,
     }
@@ -2306,9 +2336,10 @@ export const used = localValue + defaultThing() + targetModule.exportedValue;
         let target = r#"
 export const exportedValue = 1;
 
-export default function defaultThing() {
+const defaultThing = function() {
     return exportedValue;
-}
+};
+export default defaultThing;
 "#;
         let source_file = add_file(&mut db, temp.path(), "src/source.ts", source);
         let target_file = add_file(&mut db, temp.path(), "src/target.ts", target);

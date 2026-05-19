@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -118,6 +119,62 @@ func (w Widget) Label() string {
 	}
 	if !hasExportObjectPath(out.Exports, "Label") {
 		t.Fatalf("Label export with object path missing from %#v", out.Exports)
+	}
+}
+
+func TestEmitScopeKeysUseFileRelativeOffsets(t *testing.T) {
+	widget := `package app
+
+type Widget struct {
+	Name string
+}
+
+func Use() string {
+	w := Widget{Name: "ok"}
+	return w.Name
+}
+`
+	baseRoot := writeModule(t, map[string]string{
+		"go.mod":    "module example.com/app\n\ngo 1.24.0\n",
+		"widget.go": widget,
+	})
+	expandedRoot := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
+		"aaa.go": `package app
+
+func Earlier() int {
+	return 1
+}
+`,
+		"widget.go": widget,
+	})
+
+	base, err := Emit(Config{
+		Root:         baseRoot,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("base Emit returned error: %v", err)
+	}
+	expanded, err := Emit(Config{
+		Root:         expandedRoot,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("expanded Emit returned error: %v", err)
+	}
+
+	baseKeys := scopeKeysForFile(base.Scopes, "widget.go")
+	expandedKeys := scopeKeysForFile(expanded.Scopes, "widget.go")
+	if !reflect.DeepEqual(baseKeys, expandedKeys) {
+		t.Fatalf("widget.go scope keys changed after adding unrelated file:\nbase: %#v\nexpanded: %#v", baseKeys, expandedKeys)
+	}
+	for _, key := range expandedKeys {
+		if strings.Contains(key, "pos:") || !strings.Contains(key, "offset:") {
+			t.Fatalf("scope key %q should use file-relative offset labels", key)
+		}
 	}
 }
 
@@ -425,6 +482,16 @@ func hasScopeKind(scopes []ScopeRow, kind string) bool {
 		}
 	}
 	return false
+}
+
+func scopeKeysForFile(scopes []ScopeRow, file string) []string {
+	keys := make([]string, 0)
+	for _, scope := range scopes {
+		if scope.File == file {
+			keys = append(keys, scope.Key)
+		}
+	}
+	return keys
 }
 
 func hasImportAliasKind(imports []ImportRow, alias string) bool {

@@ -574,16 +574,17 @@ func (e *emitter) emitScopesAndImports(pkg *packages.Package) {
 					kind = "method"
 					name = recv + "." + n.Name.Name
 				}
-				key := scopeKey(pkg.PkgPath, filePath, kind, n.Pos(), name)
+				key := scopeKey(pkg.PkgPath, filePath, kind, e.fileRelativeOffset(n.Pos()), name)
 				e.addScope(key, fileKey, kind, pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
 			case *ast.FuncLit:
-				key := scopeKey(pkg.PkgPath, filePath, "function", n.Pos(), "literal")
+				key := scopeKey(pkg.PkgPath, filePath, "function", e.fileRelativeOffset(n.Pos()), "literal")
 				e.addScope(key, fileKey, "function", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
 			case *ast.TypeSpec:
-				key := scopeKey(pkg.PkgPath, filePath, "type", n.Pos(), n.Name.Name)
+				key := scopeKey(pkg.PkgPath, filePath, "type", e.fileRelativeOffset(n.Pos()), n.Name.Name)
 				e.addScope(key, fileKey, "type", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
 			case *ast.BlockStmt:
-				key := scopeKey(pkg.PkgPath, filePath, "block", n.Pos(), fmt.Sprintf("%d", n.Pos()))
+				offset := e.fileRelativeOffset(n.Pos())
+				key := scopeKey(pkg.PkgPath, filePath, "block", offset, fmt.Sprintf("%d", offset))
 				parent := e.enclosingScopeKey(pkg, filePath, fileKey, n.Pos())
 				e.addScope(key, parent, "block", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
 			}
@@ -1179,7 +1180,7 @@ func (e *emitter) enclosingScopeKey(pkg *packages.Package, filePath string, file
 	case strings.HasPrefix(name, "func@"):
 		name = "literal"
 	}
-	return scopeKey(pkg.PkgPath, filePath, kind, best.start, name)
+	return scopeKey(pkg.PkgPath, filePath, kind, e.fileRelativeOffset(best.start), name)
 }
 
 func (e *emitter) identSpan(ident *ast.Ident) Span {
@@ -1200,6 +1201,17 @@ func (e *emitter) span(start token.Pos, end token.Pos) Span {
 		EndLine:     endPos.Line,
 		EndColumn:   endPos.Column,
 	}
+}
+
+func (e *emitter) fileRelativeOffset(pos token.Pos) int {
+	if pos == token.NoPos {
+		return 0
+	}
+	offset := e.fset.PositionFor(pos, false).Offset
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func (e *emitter) fileForPos(pos token.Pos) string {
@@ -1348,14 +1360,14 @@ func referenceOrderKey(row ReferenceRow) string {
 	}, "\x00")
 }
 
-func scopeKey(packagePath string, file string, kind string, pos token.Pos, name string) string {
+func scopeKey(packagePath string, file string, kind string, offset int, name string) string {
 	return strings.Join([]string{
 		"go:scope",
 		"package:" + packagePath,
 		"file:" + file,
 		"kind:" + kind,
 		"name:" + name,
-		fmt.Sprintf("pos:%d", pos),
+		fmt.Sprintf("offset:%d", offset),
 	}, "|")
 }
 
