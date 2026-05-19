@@ -2,7 +2,7 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
-    ReferenceKind, SourceFile, Span, SymbolKind, SymbolNamespace, SymbolPrecision,
+    ReferenceKind, SourceFile, Span, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
     span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
@@ -126,6 +126,7 @@ struct GoSidecarDefinition {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarReference {
+    package_id: String,
     #[serde(default)]
     file: String,
     name: String,
@@ -657,6 +658,7 @@ fn setup_missing_output(
                 "<setup-missing>",
             );
         }
+        let _semantic_index = setup_missing_semantic_index_for_files(files);
     }
 
     let mut output = LanguageSymbolOutput::default();
@@ -744,6 +746,11 @@ fn convert_sidecar_output(
         .map(|symbol| (symbol.key.as_str(), symbol))
         .collect::<BTreeMap<_, _>>();
     let mut symbols = BTreeMap::new();
+    let resolution_steps = sidecar
+        .resolution_steps
+        .iter()
+        .map(|step| (step.reference_key.as_str(), step))
+        .collect::<BTreeMap<_, _>>();
 
     for symbol in &sidecar.symbols {
         let id = builder.add_symbol(symbol_draft(symbol, &files));
@@ -759,15 +766,47 @@ fn convert_sidecar_output(
     }
 
     for reference in &sidecar.references {
-        let draft = reference_draft(reference, &files);
+        let mut draft = reference_draft(reference, &files);
         if let Some(target) = symbols.get(&reference.target_key).copied() {
             builder.add_reference(target, draft);
         } else {
-            builder.add_unresolved_reference(draft);
+            let candidates = resolution_steps
+                .get(go_reference_key(reference).as_str())
+                .map(|step| semantic_candidate_symbol_ids(step, &symbols))
+                .unwrap_or_default();
+            if candidates.len() > 1 {
+                draft.precision = SymbolPrecision::Ambiguous;
+                builder.add_ambiguous_reference(candidates, draft);
+            } else if let Some(candidate) = candidates.first().copied() {
+                builder.add_reference(candidate, draft);
+            } else {
+                draft.precision = SymbolPrecision::Unresolved;
+                builder.add_unresolved_reference(draft);
+            }
         }
     }
 
     let _semantic_index = derive_go_semantic_index(sidecar, &files);
+}
+
+fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticIndexOutput {
+    let mut builder = SemanticIndexBuilder::new();
+    for file in files {
+        let source_key = format!("go:setup-missing|file:{}", file.relative_path);
+        builder.add_resolution(ResolutionFact {
+            id: ResolutionId(0),
+            language: Language::Go,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            source_stable_key: source_key.clone(),
+            target_stable_keys: Vec::new(),
+            step: ResolutionStepKind::UnknownFallback,
+            stable_key: format!("{source_key}|step:UnknownFallback|status:setup_missing"),
+            status: SemanticStatus::SetupMissing,
+        });
+    }
+    builder.finish()
 }
 
 fn derive_go_semantic_index(
@@ -870,6 +909,26 @@ fn derive_go_semantic_index(
             stable_key: go_resolution_stable_key(step),
             status: semantic_status(&step.status),
         });
+    }
+    for reference in &sidecar.references {
+        let reference_key = go_reference_key(reference);
+        if resolution_steps.contains_key(reference_key.as_str()) {
+            continue;
+        }
+        if reference.target_key.is_empty() {
+            builder.add_resolution(ResolutionFact {
+                id: ResolutionId(0),
+                language: Language::Go,
+                file: file_for_path(files, &reference.file).map(|file| file.id),
+                package: None,
+                module: None,
+                source_stable_key: reference_key,
+                target_stable_keys: Vec::new(),
+                step: ResolutionStepKind::UnknownFallback,
+                stable_key: go_reference_unknown_fallback_key(reference),
+                status: SemanticStatus::Unresolved,
+            });
+        }
     }
 
     builder.finish()
@@ -998,6 +1057,36 @@ fn go_resolution_stable_key(step: &GoSidecarResolutionStep) -> String {
         "go:resolution|reference:{}|step:{}|status:{}",
         step.reference_key, step.step, step.status
     )
+}
+
+fn go_reference_key(reference: &GoSidecarReference) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        reference.package_id,
+        reference.file,
+        reference.name,
+        reference.target_key,
+        reference.kind,
+        reference.span.start_byte,
+        reference.span.end_byte
+    )
+}
+
+fn go_reference_unknown_fallback_key(reference: &GoSidecarReference) -> String {
+    format!(
+        "go:resolution|reference:{}|step:UnknownFallback|status:unresolved",
+        go_reference_key(reference)
+    )
+}
+
+fn semantic_candidate_symbol_ids(
+    step: &GoSidecarResolutionStep,
+    symbols: &BTreeMap<String, SymbolId>,
+) -> Vec<SymbolId> {
+    normalized_candidate_keys(step)
+        .into_iter()
+        .filter_map(|key| symbols.get(&key).copied())
+        .collect()
 }
 
 fn go_resolution_step_kind(step: &str) -> ResolutionStepKind {
@@ -1477,9 +1566,7 @@ mod semantic_conversion {
 #[cfg(test)]
 mod semantic_setup_missing {
     use super::*;
-    use crate::core::{
-        FileId, ReferenceKind, SourceFile, SymbolResolutionStatus,
-    };
+    use crate::core::{FileId, ReferenceKind, SourceFile, SymbolResolutionStatus};
     use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticStatus};
     use std::path::PathBuf;
 
@@ -1552,7 +1639,6 @@ mod semantic_setup_missing {
     #[test]
     fn sidecar_candidate_sets_become_ambiguous_public_references() {
         let file = source_file("main.go", "package app\nfunc Use() { Thing() }\n");
-        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
         let sidecar = parse(
             br#"{
   "schema":"polint-go-symbols-semantic-1",
