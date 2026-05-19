@@ -2061,3 +2061,122 @@ export function answer() {
         ));
     }
 }
+
+#[cfg(test)]
+mod semantic_cache_restore {
+    use crate::analysis_kernel::{AnalysisKernel, KernelInput, KernelOutput};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::symbol_graph::semantic::SemanticStatus;
+    use std::path::Path;
+
+    fn requested_symbol_plan() -> AnalysisPlan {
+        AnalysisPlan::from_capability_names_for_test(&["symbols", "references"])
+    }
+
+    fn run_kernel(root: &Path, cache: &Cache, plan: &AnalysisPlan) -> KernelOutput {
+        let loaded = load_config(root).expect("default config loads");
+        AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan,
+            parallel: false,
+        })
+        .expect("kernel run should succeed")
+    }
+
+    fn symbol_graph_output(
+        output: &KernelOutput,
+    ) -> &crate::analysis_kernel::incremental::ProviderOutputMeta {
+        output
+            .run_report
+            .provider_outputs
+            .iter()
+            .find(|row| row.provider_id == "polint.symbol_graph")
+            .expect("symbol graph provider output exists")
+    }
+
+    fn stable_export_keys(output: &KernelOutput) -> Vec<String> {
+        assert!(output.db.stable_exports().iter().all(|row| !row.stable_key.is_empty()));
+        let mut keys = output
+            .db
+            .stable_exports()
+            .iter()
+            .map(|row| row.stable_key.clone())
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    fn assert_warm_symbol_graph_reuse(output: &KernelOutput) {
+        let warm = symbol_graph_output(output);
+        assert_eq!(warm.cache_stats.hits, 1);
+        assert_eq!(warm.cache_stats.verified_reuse, 1);
+        assert_eq!(warm.cache_stats.recomputes, 0);
+    }
+
+    #[test]
+    fn ts_stable_exports_survive_warm_cache_restore() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "import { token } from './tokens';\nexport function answer() { return token; }\n",
+        )
+        .expect("write app");
+        std::fs::write(temp.path().join("src/tokens.ts"), "export const token = 42;\n")
+            .expect("write tokens");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+
+        let cold = run_kernel(temp.path(), &cache, &plan);
+        let warm = run_kernel(temp.path(), &cache, &plan);
+
+        assert_warm_symbol_graph_reuse(&warm);
+        let cold_keys = stable_export_keys(&cold);
+        let warm_keys = stable_export_keys(&warm);
+        assert!(!cold_keys.is_empty());
+        assert_eq!(cold_keys, warm_keys);
+    }
+
+    #[test]
+    fn go_stable_exports_survive_warm_cache_restore_when_setup_succeeds() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("go.mod"), "module example.com/cache\n\ngo 1.24\n")
+            .expect("write go.mod");
+        std::fs::create_dir_all(temp.path().join("pkg")).expect("create pkg");
+        std::fs::write(
+            temp.path().join("pkg/cache.go"),
+            "package pkg\n\nfunc Answer() int { return 42 }\n",
+        )
+        .expect("write go file");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+
+        let cold = run_kernel(temp.path(), &cache, &plan);
+        let warm = run_kernel(temp.path(), &cache, &plan);
+
+        assert_warm_symbol_graph_reuse(&warm);
+        let cold_keys = stable_export_keys(&cold);
+        let warm_keys = stable_export_keys(&warm);
+        if cold_keys.is_empty() {
+            assert!(cold.db.resolution_facts().iter().any(|row| {
+                matches!(
+                    row.status,
+                    SemanticStatus::SetupMissing | SemanticStatus::Unsupported
+                )
+            }));
+            assert!(cold.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic
+                        .message
+                        .contains("symbol graph provider support is setup_missing")
+            }));
+        } else {
+            assert_eq!(cold_keys, warm_keys);
+        }
+    }
+}
