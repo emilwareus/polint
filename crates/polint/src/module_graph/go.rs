@@ -910,6 +910,164 @@ mod tests {
         assert!(rule_diagnostics.is_empty());
     }
 
+    mod topology {
+        use super::*;
+        use crate::module_graph::topology::{
+            SourceSetKind, TopologyStatus, WorkspaceRootKind,
+        };
+
+        #[test]
+        fn topology_monorepo_infers_go_module_roots_without_repo_go_mod() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+            std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+            std::fs::write(
+                temp.path().join("services/api/go.mod"),
+                "module example.com/api\n\ngo 1.24\n",
+            )
+            .expect("write api go.mod");
+            std::fs::write(
+                temp.path().join("libs/common/go.mod"),
+                "module example.com/common\n\ngo 1.24\n",
+            )
+            .expect("write common go.mod");
+            let mut db = AnalysisDb::new();
+            add_go_file(&mut db, temp.path(), "services/api/main.go", "package api\n");
+            add_go_file(
+                &mut db,
+                temp.path(),
+                "libs/common/common.go",
+                "package common\n",
+            );
+            let metadata = go_index_with_module_path(
+                temp.path(),
+                &db,
+                "example.com/api",
+                &[("example.com/api", "services/api", &["main.go"], false)],
+            );
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+            let module_roots = output
+                .workspace_roots
+                .iter()
+                .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+                .map(|root| (root.root_path.as_str(), root.status))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                module_roots,
+                vec![
+                    ("libs/common", TopologyStatus::Present),
+                    ("services/api", TopologyStatus::Present),
+                ]
+            );
+        }
+
+        #[test]
+        fn topology_monorepo_configured_module_roots_win_over_nearest_discovery() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+            std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+            std::fs::write(
+                temp.path().join(".polint.toml"),
+                "[languages.go]\nmodule_roots = [\"services/api\"]\n",
+            )
+            .expect("write config");
+            std::fs::write(
+                temp.path().join("services/api/go.mod"),
+                "module example.com/api\n\ngo 1.24\n",
+            )
+            .expect("write api go.mod");
+            std::fs::write(
+                temp.path().join("libs/common/go.mod"),
+                "module example.com/common\n\ngo 1.24\n",
+            )
+            .expect("write common go.mod");
+            let mut db = AnalysisDb::new();
+            add_go_file(&mut db, temp.path(), "services/api/main.go", "package api\n");
+            let outside = add_go_file(
+                &mut db,
+                temp.path(),
+                "libs/common/common.go",
+                "package common\n",
+            );
+            let metadata = GoPackageIndex::default();
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+            let module_roots = output
+                .workspace_roots
+                .iter()
+                .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+                .map(|root| root.root_path.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!(module_roots, vec!["services/api"]);
+            assert!(output.source_sets.iter().any(|source_set| {
+                source_set.files == vec![outside]
+                    && source_set.status == TopologyStatus::SetupMissing
+            }));
+        }
+
+        #[test]
+        fn topology_source_sets_classify_tests_vendor_and_generated_go_files() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::write(temp.path().join("go.mod"), "module example.com/app\n\ngo 1.24\n")
+                .expect("write go.mod");
+            let mut db = AnalysisDb::new();
+            let source = add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+            let test = add_go_file(&mut db, temp.path(), "main_test.go", "package app\n");
+            let proto = add_go_file(&mut db, temp.path(), "api.pb.go", "package app\n");
+            let generated = add_go_file(
+                &mut db,
+                temp.path(),
+                "generated.go",
+                "// Code generated by tool. DO NOT EDIT.\npackage app\n",
+            );
+            let vendor = add_go_file(
+                &mut db,
+                temp.path(),
+                "vendor/github.com/acme/lib/lib.go",
+                "package lib\n",
+            );
+            let metadata = go_index(
+                temp.path(),
+                &db,
+                &[(
+                    "example.com/app",
+                    ".",
+                    &["main.go", "main_test.go", "api.pb.go", "generated.go"],
+                    false,
+                )],
+            );
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+
+            assert!(source_set_for_file(&output, source, SourceSetKind::Source));
+            assert!(source_set_for_file(&output, test, SourceSetKind::Test));
+            assert!(source_set_for_file(&output, proto, SourceSetKind::Generated));
+            assert!(source_set_for_file(
+                &output,
+                generated,
+                SourceSetKind::Generated
+            ));
+            assert!(source_set_for_file(&output, vendor, SourceSetKind::Vendor));
+        }
+
+        fn source_set_for_file(
+            output: &crate::module_graph::topology::TopologyOutput,
+            file: FileId,
+            kind: SourceSetKind,
+        ) -> bool {
+            output
+                .source_sets
+                .iter()
+                .any(|source_set| source_set.files == vec![file] && source_set.kind == kind)
+        }
+    }
+
     fn add_go_file(
         db: &mut AnalysisDb,
         root: &Path,
