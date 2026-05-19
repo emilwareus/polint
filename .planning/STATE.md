@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T13:40:05.788Z"
+last_updated: "2026-05-19T13:47:04.460Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 39
-  completed_plans: 38
-  percent: 97
+  completed_plans: 39
+  percent: 100
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 27 — Layered Module/Package/Topology Graph
+**Current focus:** Phase 28 — Private Semantic MIR and Place Identity
 
 ## Current Status
 
@@ -41,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 27 (Layered Module/Package/Topology Graph) — EXECUTING
-Plan: 6 of 7
+Phase: 27 (Layered Module/Package/Topology Graph) — COMPLETE
+Plan: 7 of 7
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -56,7 +56,7 @@ Last activity: 2026-05-19
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
-| 27 | In Progress | 4/7 plans complete; internal topology contracts, Go/TS topology collectors, normal provider wiring, schema v2 layer payload persistence, and topology-aware cache identity done; requirement SAE-SEM-02 |
+| 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
@@ -185,6 +185,8 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Kept topology eval observation crate-private and test-facing, with no SDK, runner, CLI, or public crate-root topology API.
 - [Phase 27-layered-module-package-topology-graph]: Represented topology expected rows through stable keys, status labels, precision labels, and compact payload fragments instead of raw source or absolute paths.
 - [Phase 27-layered-module-package-topology-graph]: Updated existing layer-cache expectations so polint.module_topology is part of the managed provider cache proof.
+- [Phase 27-layered-module-package-topology-graph]: Keep Phase 27 topology internals private and prove the boundary with public CLI JSON, help text, and source-surface assertions rather than adding any SDK topology view.
+- [Phase 27-layered-module-package-topology-graph]: Document ResolvedImports<'_> and ModuleGraphFacts<'_> as the supported relationship surfaces while explicitly leaving richer package/workspace topology internals outside SDK facts.
 
 ## Execution Metrics
 
@@ -217,12 +219,14 @@ Last activity: 2026-05-19
 | 27-layered-module-package-topology-graph | 03 | 16 min | 3 | 5 |
 | 27-layered-module-package-topology-graph | 04 | 14 min | 3 | 6 |
 | 27-layered-module-package-topology-graph | 05 | 23 min | 3 | 12 |
+| 27-layered-module-package-topology-graph | 06 | 17 min | 2 | 21 |
+| 27-layered-module-package-topology-graph | 07 | 5 min | 1 | 2 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 27 Plan 05 semantic-aware import-to-package provider, cache, and validation.
-- Stopped at: Completed 27-layered-module-package-topology-graph-05-PLAN.md; Phase 27 Plan 06 is ready.
+- Last activity: 2026-05-19 - Completed Phase 27 Plan 07 public no-leak proof, SDK compatibility, and docs alignment.
+- Stopped at: Completed 27-layered-module-package-topology-graph-07-PLAN.md; Phase 27 is complete and Phase 28 is next.
 
 ### Quick Tasks Completed
 
@@ -234,4 +238,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 27 Plan 06 is ready for execution.
+Phase 28 is ready for planning/execution.
