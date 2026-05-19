@@ -1120,6 +1120,330 @@ fn assert_semantic_index_public_output_is_private(output: &str) {
     }
 }
 
+#[test]
+fn module_topology_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_module_topology_public_rule_repo(temp.path());
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/module-relationships-public"),
+        "external module relationship rule should run through public SDK views: {report:#?}"
+    );
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/module-relationships-public"
+    );
+    let fact_views = inspect["rules"][0]["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {inspect:#?}"));
+    assert!(fact_views.iter().any(|view| {
+        view["canonical_path"] == "polint::sdk::facts::ResolvedImports<'_>"
+            && view["capability"] == "resolved_imports"
+    }));
+    assert!(fact_views.iter().any(|view| {
+        view["canonical_path"] == "polint::sdk::facts::ModuleGraphFacts<'_>"
+            && view["capability"] == "module_graph"
+    }));
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_module_topology_public_output_is_private(output);
+    }
+    assert_module_topology_public_surfaces_are_private();
+    assert_module_topology_cli_help_is_private();
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("ResolvedImports<'_>"));
+    assert!(source.contains("ModuleGraphFacts<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_public_relationship_rule_source(&source);
+
+    let docs = fs::read_to_string(repo_root().join("docs/facts/imports.md")).unwrap();
+    assert!(
+        docs.contains(
+            "ResolvedImports<'_>` and `ModuleGraphFacts<'_>` remain the supported public relationship surfaces"
+        ),
+        "public import docs should clarify that richer topology internals are not SDK views"
+    );
+}
+
+fn assert_module_topology_public_output_is_private(output: &str) {
+    for marker in MODULE_TOPOLOGY_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak module-topology internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn assert_module_topology_public_surfaces_are_private() {
+    let root = repo_root();
+    let mut public_surface = String::new();
+    for path in [
+        root.join("crates/polint/src/lib.rs"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&source_tree_text(&path));
+    }
+
+    for marker in MODULE_TOPOLOGY_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public crate-root/CLI/SDK/runner source must not expose module-topology marker `{marker}`"
+        );
+    }
+}
+
+fn assert_module_topology_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in [
+            "topology",
+            "Packages",
+            "Dependencies",
+            "SourceSets",
+            "RepoTopology",
+        ] {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose module-topology marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
+const MODULE_TOPOLOGY_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "workspace_roots",
+    "topology_packages",
+    "source_sets",
+    "dependency_requirements",
+    "resolved_dependency_edges",
+    "import_to_package_edges",
+    "repo_topology_overlays",
+    "polint.module_topology",
+    "module-topology-facts",
+    "Packages<'_>",
+    "Dependencies<'_>",
+    "SourceSets<'_>",
+    "RepoTopology<'_>",
+];
+
+fn assert_public_relationship_rule_source(source: &str) {
+    assert!(
+        source.contains("use polint::sdk::prelude::*;"),
+        "external rule must import the public SDK prelude only:\n{source}"
+    );
+    assert!(
+        source.contains("ResolvedImports<'_>") && source.contains("ModuleGraphFacts<'_>"),
+        "external rule must request public relationship facts through its signature:\n{source}"
+    );
+    for forbidden in [
+        concat!("polint::", "core"),
+        concat!("polint::", "module_graph"),
+        concat!("polint::", "analysis_kernel"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        "Capabilities::new(",
+        "impl Rule for",
+        "workspace_roots",
+        "topology_packages",
+        "source_sets",
+        "dependency_requirements",
+        "resolved_dependency_edges",
+        "import_to_package_edges",
+        "repo_topology_overlays",
+        "polint.module_topology",
+        "module-topology-facts",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{source}"
+        );
+    }
+}
+
+fn write_module_topology_public_rule_repo(root: &Path) {
+    assert_public_relationship_rule_source(MODULE_TOPOLOGY_PUBLIC_RULE_SOURCE);
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        MODULE_TOPOLOGY_PUBLIC_RULE_SOURCE,
+    );
+    write_module_topology_fixture_files(root);
+
+    let case_root = root.join(".polint/tests/rules/module_relationships/basic");
+    write_file(
+        &case_root.join("polint-test.toml"),
+        r#"
+rule = "local/module-relationships-public"
+paths = ["src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/module-relationships-public"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public relationship facts remain available"
+"#,
+    );
+    write_module_topology_fixture_files(&case_root);
+}
+
+const MODULE_TOPOLOGY_PUBLIC_RULE_SOURCE: &str = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/module-relationships-public",
+    description = "Reads public relationship facts without topology internals.",
+    severity = "warn"
+)]
+fn module_relationships_public(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+) -> RuleResult {
+    let resolved_count = resolved.iter().count();
+    let unresolved_count = resolved
+        .iter()
+        .filter(|import| {
+            !matches!(
+                import.status,
+                ResolutionStatus::Resolved | ResolutionStatus::External
+            )
+        })
+        .count();
+    let edge_count = graph.edges().len();
+    if resolved_count == 0 && edge_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public relationship facts remain available",
+        )
+        .with_evidence("resolved_imports", resolved_count.to_string())
+        .with_evidence("unresolved_imports", unresolved_count.to_string())
+        .with_evidence("module_edges", edge_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![module_relationships_public()])
+}
+"#;
+
+fn write_module_topology_fixture_files(root: &Path) {
+    write_file(
+        &root.join("package.json"),
+        r#"{"name":"module-topology-public-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("tsconfig.json"),
+        r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@domain/*": ["src/domain/*"]
+    }
+  }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/domain/model.ts"),
+        r#"export const model = "domain";"#,
+    );
+    write_file(
+        &root.join("src/ui/view.ts"),
+        r#"import { model } from "../domain/model";
+import { missing } from "./missing";
+
+export const view = `${model}:${missing}`;
+"#,
+    );
+}
+
 fn write_semantic_index_public_rule_repo(root: &Path) {
     write_external_symbol_rule_repo(
         root,
