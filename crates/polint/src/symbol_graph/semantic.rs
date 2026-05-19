@@ -1373,3 +1373,102 @@ mod alias_reexport_closure_tests {
         }));
     }
 }
+
+#[cfg(test)]
+mod native_generated_hooks {
+    use super::*;
+    use crate::analysis_kernel::{FactFamily, FactRef};
+    use crate::core::{AnalysisDb, FileId, Language, SymbolNamespace};
+
+    fn stable_export(language: Language, export_name: &str, generated: bool) -> StableExportIdentity {
+        StableExportIdentity {
+            id: StableExportId(0),
+            export: ExportId(0),
+            language,
+            package_key: (language == Language::Go).then(|| "go:package:example.com/app".to_string()),
+            module_key: (language != Language::Go).then(|| "src/mod.ts".to_string()),
+            export_name: export_name.to_string(),
+            namespace: SymbolNamespace::Value,
+            symbol_stable_key: format!("symbol:{export_name}"),
+            generated_discriminator: generated.then(|| "native".to_string()),
+            stable_key: format!("stable-export:{export_name}"),
+            status: if generated {
+                SemanticStatus::Generated
+            } else {
+                SemanticStatus::Resolved
+            },
+        }
+    }
+
+    #[test]
+    fn ts_native_stable_exports_emit_generated_symbol_hooks_with_provenance() {
+        let mut semantic = SemanticIndexOutput::default();
+        semantic
+            .stable_exports
+            .push(stable_export(Language::TypeScript, "route", true));
+
+        let output = super::emit_native_generated_symbol_hooks(&semantic);
+
+        assert_eq!(output.generated_symbols.len(), 1);
+        let generated = &output.generated_symbols[0];
+        assert_eq!(generated.status, SemanticStatus::Generated);
+        assert_eq!(generated.producer_id, "polint.symbol_graph");
+        assert_eq!(generated.source_stable_key, "stable-export:route");
+        assert_eq!(generated.generated_discriminator, "native");
+        assert!(generated.stable_key.contains("polint.symbol_graph"));
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::GeneratedHintLookup
+                && resolution.status == SemanticStatus::Generated
+                && resolution.source_stable_key == "stable-export:route"
+        }));
+    }
+
+    #[test]
+    fn go_generated_stable_exports_emit_generated_symbol_hooks() {
+        let mut semantic = SemanticIndexOutput::default();
+        semantic
+            .stable_exports
+            .push(stable_export(Language::Go, "Handler", true));
+
+        let output = super::emit_native_generated_symbol_hooks(&semantic);
+
+        assert_eq!(output.generated_symbols.len(), 1);
+        let generated = &output.generated_symbols[0];
+        assert_eq!(generated.language, Language::Go);
+        assert_eq!(generated.status, SemanticStatus::Generated);
+        assert_eq!(generated.producer_id, "polint.symbol_graph");
+        assert_eq!(generated.source_stable_key, "stable-export:Handler");
+    }
+
+    #[test]
+    fn generated_hooks_have_metadata_after_semantic_replacement() {
+        let mut semantic = SemanticIndexOutput::default();
+        semantic
+            .stable_exports
+            .push(stable_export(Language::TypeScript, "route", true));
+        let output = super::emit_native_generated_symbol_hooks(&semantic);
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            std::path::PathBuf::from("src/mod.ts"),
+            "src/mod.ts".to_string(),
+            "export const route = 1;\n".to_string(),
+        );
+
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            output.resolutions,
+            output.generated_symbols,
+            semantic.stable_exports,
+        );
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::GeneratedSymbol, 0))
+            .expect("generated hook metadata exists");
+
+        assert_eq!(metadata.producer_id, "polint.symbol_graph");
+        assert_eq!(db.generated_symbols()[0].producer_id, "polint.symbol_graph");
+    }
+}
