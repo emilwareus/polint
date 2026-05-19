@@ -48,6 +48,23 @@ pub(crate) fn parse_package_lock(relative_path: &str, contents: &str) -> Package
 
     manifest.lockfile_version = lock.lockfile_version;
     manifest.schema_label = schema_label(lock.lockfile_version);
+    if lock.lockfile_version == Some(1) {
+        manifest.unsupported.push(unsupported(
+            relative_path,
+            "package-lock v1 dependency tree is not supported",
+        ));
+        return manifest;
+    }
+    if lock
+        .lockfile_version
+        .is_some_and(|version| !matches!(version, 2 | 3))
+    {
+        manifest.unsupported.push(unsupported(
+            relative_path,
+            "unsupported package-lock version",
+        ));
+        return manifest;
+    }
     manifest.packages = lock
         .packages
         .into_iter()
@@ -81,7 +98,7 @@ fn unsupported(relative_path: &str, reason: &str) -> PackageLockUnsupported {
         reason: reason.to_string(),
         source_path: relative_path.to_string(),
         source_label: PACKAGE_LOCK_SOURCE_LABEL,
-        precision: TopologyPrecision::Unknown,
+        precision: TopologyPrecision::Unsupported,
         status: TopologyStatus::Unsupported,
     }
 }
@@ -167,5 +184,41 @@ mod tests {
         assert_eq!(manifest.packages[1].version.as_deref(), Some("18.2.0"));
         assert!(manifest.packages[1].dev);
         assert!(manifest.packages[1].optional);
+    }
+
+    #[test]
+    fn parse_package_lock_marks_malformed_json_unsupported() {
+        let manifest = parse_package_lock("package-lock.json", "{");
+
+        assert_eq!(manifest.packages, Vec::new());
+        assert_eq!(manifest.unsupported.len(), 1);
+        assert_eq!(manifest.unsupported[0].reason, "malformed json");
+        assert_eq!(
+            manifest.unsupported[0].precision,
+            TopologyPrecision::Unsupported
+        );
+        assert_eq!(manifest.unsupported[0].status, TopologyStatus::Unsupported);
+    }
+
+    #[test]
+    fn parse_package_lock_marks_v1_unsupported() {
+        let manifest = parse_package_lock(
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 1,
+  "dependencies": {
+    "react": { "version": "18.2.0" }
+  }
+}"#,
+        );
+
+        assert_eq!(manifest.lockfile_version, Some(1));
+        assert_eq!(manifest.schema_label, "package-lock-v1");
+        assert_eq!(manifest.packages, Vec::new());
+        assert_eq!(manifest.unsupported.len(), 1);
+        assert_eq!(
+            manifest.unsupported[0].reason,
+            "package-lock v1 dependency tree is not supported"
+        );
     }
 }

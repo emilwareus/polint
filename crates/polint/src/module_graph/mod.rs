@@ -36,7 +36,7 @@ use topology::{
     DependencyRequirementFact, ImportContextKind, ImportToPackageFact, ImportToPackageId,
     ImportToPackageStatus, RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind,
     ResolvedDependencyEdgeFact, SourceSetFact, SourceSetKind, TopologyOutput, TopologyPackageFact,
-    TopologyPrecision, TopologyStatus, WorkspaceRootFact,
+    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
 };
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
@@ -542,7 +542,10 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 target_node.and_then(|id| module_node_by_id(db, id)),
                 &candidates,
                 from_package,
-                db.dependency_requirements(),
+                RequirementScope {
+                    requirements: db.dependency_requirements(),
+                    packages: db.topology_packages(),
+                },
             );
             let to_package = if status == ImportToPackageStatus::Resolved && candidates.len() == 1 {
                 candidates.first().copied()
@@ -597,6 +600,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
     symbol_graph_output_digest: Digest,
 ) -> ModuleTopologyDerivation {
     if db.imports().is_empty() {
+        db.replace_import_to_package_facts(Vec::new());
         return ModuleTopologyDerivation {
             output_digest: Some(module_topology_output_digest_for_payload(
                 &ModuleTopologyLayerPayload {
@@ -757,10 +761,23 @@ fn module_node_by_id(db: &AnalysisDb, id: ModuleNodeId) -> Option<&crate::core::
 }
 
 fn package_candidates_for_node(db: &AnalysisDb, node: ModuleNodeId) -> Vec<&TopologyPackageFact> {
-    db.topology_packages()
+    let mut candidates = db
+        .topology_packages()
         .iter()
         .filter(|package| package.module_node == Some(node))
-        .collect()
+        .collect::<Vec<_>>();
+    if candidates.is_empty()
+        && let Some(node) = module_node_by_id(db, node)
+        && node.language == Some(Language::Go)
+        && node.kind == ModuleNodeKind::Package
+    {
+        candidates.extend(db.topology_packages().iter().filter(|package| {
+            package.language == Some(Language::Go)
+                && package.kind == TopologyPackageKind::Package
+                && package.name == node.label
+        }));
+    }
+    candidates
 }
 
 fn package_candidates_for_file(db: &AnalysisDb, file: FileId) -> Vec<&TopologyPackageFact> {
@@ -779,7 +796,7 @@ fn import_to_package_status(
     target_node: Option<&crate::core::ModuleNode>,
     candidates: &[&TopologyPackageFact],
     from_package: Option<&TopologyPackageFact>,
-    requirements: &[DependencyRequirementFact],
+    requirement_scope: RequirementScope<'_>,
 ) -> ImportToPackageStatus {
     if resolved.is_some_and(|fact| fact.reason == Some(UnresolvedReason::OutsideWorkspace)) {
         return ImportToPackageStatus::OutsideWorkspace;
@@ -816,7 +833,7 @@ fn import_to_package_status(
         || resolved.is_some_and(|fact| fact.status == ResolutionStatus::External)
         || semantic.is_some_and(|fact| fact.status == SemanticStatus::External)
     {
-        if declared_requirement_exists(import, from_package, requirements) {
+        if declared_requirement_exists(import, from_package, requirement_scope) {
             ImportToPackageStatus::External
         } else {
             ImportToPackageStatus::Undeclared
@@ -828,16 +845,59 @@ fn import_to_package_status(
     }
 }
 
+#[derive(Clone, Copy)]
+struct RequirementScope<'a> {
+    requirements: &'a [DependencyRequirementFact],
+    packages: &'a [TopologyPackageFact],
+}
+
 fn declared_requirement_exists(
     import: &ImportFact,
     from_package: Option<&TopologyPackageFact>,
-    requirements: &[DependencyRequirementFact],
+    scope: RequirementScope<'_>,
 ) -> bool {
-    let target = external_package_name(&import.path);
-    requirements.iter().any(|requirement| {
-        requirement.target_name == target
-            && from_package.is_none_or(|package| requirement.from_package == Some(package.id))
+    scope.requirements.iter().any(|requirement| {
+        requirement_matches_import(requirement, import)
+            && from_package.is_none_or(|package| {
+                requirement_applies_to_package(requirement, package, scope.packages)
+            })
     })
+}
+
+fn requirement_matches_import(
+    requirement: &DependencyRequirementFact,
+    import: &ImportFact,
+) -> bool {
+    if import.language == Language::Go {
+        import.path == requirement.target_name
+            || import
+                .path
+                .strip_prefix(requirement.target_name.as_str())
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    } else {
+        requirement.target_name == external_package_name(&import.path)
+    }
+}
+
+fn requirement_applies_to_package(
+    requirement: &DependencyRequirementFact,
+    package: &TopologyPackageFact,
+    packages: &[TopologyPackageFact],
+) -> bool {
+    if requirement.from_package == Some(package.id) {
+        return true;
+    }
+    if package.language != Some(Language::Go) {
+        return false;
+    }
+    requirement
+        .from_package
+        .and_then(|id| topology_package_by_id(packages, id))
+        .is_some_and(|requirement_package| {
+            requirement_package.language == Some(Language::Go)
+                && requirement_package.kind == TopologyPackageKind::Workspace
+                && requirement_package.workspace_root == package.workspace_root
+        })
 }
 
 fn external_package_name(path: &str) -> &str {
@@ -4236,6 +4296,251 @@ mod import_to_package {
     }
 
     #[test]
+    fn go_local_package_import_resolves_by_import_path_package_label() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "cmd/app/main.go", Language::Go);
+        let target = add_file(&mut db, "internal/foo/foo.go", Language::Go);
+        let import_path = "example.com/app/internal/foo";
+        let import = push_import(
+            &mut db,
+            from,
+            import_path,
+            Language::Go,
+            SemanticStatus::Resolved,
+            SemanticImportKind::StaticNamed,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::Resolved,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "example.com/app/cmd/app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: import_path.to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+            ],
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::GoModule,
+                root_path: ".".to_string(),
+                manifest_path: Some("go.mod".to_string()),
+                language: Some(Language::Go),
+                stable_key: "go-root:.".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: "example.com/app/cmd/app".to_string(),
+                    version: None,
+                    path: "cmd/app".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: import_path.to_string(),
+                    version: None,
+                    path: "internal/foo".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: format!("go-package:{import_path}"),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![
+                SourceSetFact {
+                    id: SourceSetId(0),
+                    package: Some(TopologyPackageId(0)),
+                    root: Some(WorkspaceRootId(0)),
+                    kind: SourceSetKind::Source,
+                    path: "cmd/app/main.go".to_string(),
+                    language: Some(Language::Go),
+                    files: vec![from],
+                    stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                SourceSetFact {
+                    id: SourceSetId(1),
+                    package: Some(TopologyPackageId(1)),
+                    root: Some(WorkspaceRootId(0)),
+                    kind: SourceSetKind::Source,
+                    path: "internal/foo/foo.go".to_string(),
+                    language: Some(Language::Go),
+                    files: vec![target],
+                    stable_key: "go-source-set:source:internal/foo/foo.go".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            ..TopologyOutput::default()
+        });
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].status, ImportToPackageStatus::Resolved);
+        assert_eq!(edges[0].to_package, Some(TopologyPackageId(1)));
+        assert_eq!(
+            edges[0].to_package_stable_key.as_deref(),
+            Some("go-package:example.com/app/internal/foo")
+        );
+    }
+
+    #[test]
+    fn go_external_import_uses_module_requirement_for_local_package() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "cmd/app/main.go", Language::Go);
+        let import_path = "github.com/acme/lib/subpkg";
+        let import = push_import(
+            &mut db,
+            from,
+            import_path,
+            Language::Go,
+            SemanticStatus::External,
+            SemanticImportKind::StaticNamed,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::External,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "example.com/app/cmd/app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::External,
+                    label: import_path.to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+            ],
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::GoModule,
+                root_path: ".".to_string(),
+                manifest_path: Some("go.mod".to_string()),
+                language: Some(Language::Go),
+                stable_key: "go-root:.".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Workspace,
+                    name: "example.com/app".to_string(),
+                    version: None,
+                    path: ".".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-module:.:example.com/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: "example.com/app/cmd/app".to_string(),
+                    version: None,
+                    path: "cmd/app".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(1)),
+                root: Some(WorkspaceRootId(0)),
+                kind: SourceSetKind::Source,
+                path: "cmd/app/main.go".to_string(),
+                language: Some(Language::Go),
+                files: vec![from],
+                stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            dependency_requirements: vec![DependencyRequirementFact {
+                id: DependencyRequirementId(0),
+                from_package: Some(TopologyPackageId(0)),
+                target_package: None,
+                target_name: "github.com/acme/lib".to_string(),
+                version_requirement: Some("v1.2.3".to_string()),
+                kind: RequirementKind::Direct,
+                manifest_path: Some("go.mod".to_string()),
+                stable_key: "go-require:go.mod:github.com/acme/lib:v1.2.3".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            ..TopologyOutput::default()
+        });
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].status, ImportToPackageStatus::External);
+        assert_eq!(edges[0].from_package, Some(TopologyPackageId(1)));
+    }
+
+    #[test]
     fn source_set_ownership_classifies_test_generated_and_vendor_contexts() {
         for (path, source_set, expected) in [
             (
@@ -4440,6 +4745,7 @@ mod module_topology_layer_cache {
         ResolvedImportId, Span,
     };
     use crate::module_graph::topology::{
+        ImportContextKind, ImportToPackageFact, ImportToPackageId, ImportToPackageStatus,
         SourceSetFact, SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact,
         TopologyPackageId, TopologyPackageKind, TopologyPrecision, TopologyStatus,
         WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
@@ -4604,6 +4910,54 @@ mod module_topology_layer_cache {
             Vec::new(),
         );
         db
+    }
+
+    #[test]
+    fn empty_imports_clear_stale_import_to_package_edges_before_cache_return() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut db = AnalysisDb::new();
+        db.replace_import_to_package_facts(vec![ImportToPackageFact {
+            id: ImportToPackageId(0),
+            syntax_import: None,
+            resolved_import: None,
+            semantic_import_stable_key: None,
+            from_file: None,
+            from_package: None,
+            to_package: None,
+            target_node: None,
+            from_package_stable_key: None,
+            to_package_stable_key: None,
+            source_set_stable_key: None,
+            import_path: "stale".to_string(),
+            context: ImportContextKind::Unknown,
+            stable_key: "import-to-package:stale".to_string(),
+            producer_id: "polint.module_topology",
+            precision: TopologyPrecision::Unknown,
+            status: ImportToPackageStatus::Unresolved,
+        }]);
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        let result = derive_module_topology_with_cache_stats(
+            &mut db,
+            &cache,
+            &snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["empty"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["empty"]),
+        );
+
+        assert_eq!(db.import_to_package_edges(), &[]);
+        assert!(result.output_digest.is_some());
     }
 
     #[test]

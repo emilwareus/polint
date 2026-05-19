@@ -407,6 +407,71 @@ mod dependency_topology {
         }));
     }
 
+    #[test]
+    fn collect_ts_topology_emits_unsupported_package_lock_evidence_for_malformed_json() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(temp.path(), "package-lock.json", "{");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("js-lock-unsupported")
+                && edge.stable_key.contains("source=package-lock.json")
+                && edge.stable_key.contains("reason=malformed-json")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+        assert!(
+            !output
+                .resolved_dependency_edges
+                .iter()
+                .any(|edge| edge.status == TopologyStatus::MissingLockfile)
+        );
+    }
+
+    #[test]
+    fn collect_ts_topology_emits_unsupported_package_lock_evidence_for_v1() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 1,
+  "dependencies": {
+    "react": { "version": "18.2.0" }
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("js-lock-unsupported")
+                && edge.stable_key.contains("schema=package-lock-v1")
+                && edge
+                    .stable_key
+                    .contains("reason=package-lock-v1-dependency-tree-is-not-supported")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+    }
+
     fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
         let path = root.join(relative_path);
         fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
@@ -886,6 +951,27 @@ fn emit_package_lock_edges(
         return;
     };
     let manifest = parse_package_lock(&relative_path, &contents);
+    for unsupported in &manifest.unsupported {
+        let reason = unsupported.reason.replace([':', ' '], "-");
+        output
+            .resolved_dependency_edges
+            .push(ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                requirement: None,
+                from_package: Some(package_id),
+                to_package: None,
+                package_name: String::new(),
+                resolved_version: None,
+                kind: ResolvedDependencyKind::LockfileSelected,
+                stable_key: format!(
+                    "js-lock-unsupported:{package_path}:package-lock.json:source={}:schema={}:reason={reason}",
+                    unsupported.source_label, manifest.schema_label
+                ),
+                producer_id: TS_TOPOLOGY_PROVIDER_ID,
+                precision: unsupported.precision,
+                status: unsupported.status,
+            });
+    }
     for package in manifest
         .packages
         .iter()
