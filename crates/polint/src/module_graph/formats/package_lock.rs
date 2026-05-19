@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 pub(crate) const PACKAGE_LOCK_SOURCE_LABEL: &str = "package-lock.json";
+pub(crate) const NPM_SHRINKWRAP_SOURCE_LABEL: &str = "npm-shrinkwrap.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PackageLockManifest {
@@ -38,11 +39,12 @@ pub(crate) struct PackageLockUnsupported {
 }
 
 pub(crate) fn parse_package_lock(relative_path: &str, contents: &str) -> PackageLockManifest {
-    let mut manifest = empty_manifest(relative_path);
+    let source_label = package_lock_source_label(relative_path);
+    let mut manifest = empty_manifest(relative_path, source_label);
     let Ok(lock) = serde_json::from_str::<PackageLockWire>(contents) else {
         manifest
             .unsupported
-            .push(unsupported(relative_path, "malformed json"));
+            .push(unsupported(relative_path, source_label, "malformed json"));
         return manifest;
     };
 
@@ -51,6 +53,7 @@ pub(crate) fn parse_package_lock(relative_path: &str, contents: &str) -> Package
     if lock.lockfile_version == Some(1) {
         manifest.unsupported.push(unsupported(
             relative_path,
+            source_label,
             "package-lock v1 dependency tree is not supported",
         ));
         return manifest;
@@ -61,6 +64,7 @@ pub(crate) fn parse_package_lock(relative_path: &str, contents: &str) -> Package
     {
         manifest.unsupported.push(unsupported(
             relative_path,
+            source_label,
             "unsupported package-lock version",
         ));
         return manifest;
@@ -68,15 +72,22 @@ pub(crate) fn parse_package_lock(relative_path: &str, contents: &str) -> Package
     manifest.packages = lock
         .packages
         .into_iter()
-        .map(|(path, package)| package.into_manifest_package(relative_path, path))
+        .map(|(path, package)| package.into_manifest_package(relative_path, source_label, path))
         .collect();
     manifest
 }
 
-fn empty_manifest(relative_path: &str) -> PackageLockManifest {
+fn package_lock_source_label(relative_path: &str) -> &'static str {
+    match relative_path.rsplit('/').next() {
+        Some(NPM_SHRINKWRAP_SOURCE_LABEL) => NPM_SHRINKWRAP_SOURCE_LABEL,
+        _ => PACKAGE_LOCK_SOURCE_LABEL,
+    }
+}
+
+fn empty_manifest(relative_path: &str, source_label: &'static str) -> PackageLockManifest {
     PackageLockManifest {
         relative_path: relative_path.to_string(),
-        source_label: PACKAGE_LOCK_SOURCE_LABEL,
+        source_label,
         lockfile_version: None,
         schema_label: "package-lock-unknown",
         packages: Vec::new(),
@@ -93,11 +104,15 @@ fn schema_label(lockfile_version: Option<u64>) -> &'static str {
     }
 }
 
-fn unsupported(relative_path: &str, reason: &str) -> PackageLockUnsupported {
+fn unsupported(
+    relative_path: &str,
+    source_label: &'static str,
+    reason: &str,
+) -> PackageLockUnsupported {
     PackageLockUnsupported {
         reason: reason.to_string(),
         source_path: relative_path.to_string(),
-        source_label: PACKAGE_LOCK_SOURCE_LABEL,
+        source_label,
         precision: TopologyPrecision::Unsupported,
         status: TopologyStatus::Unsupported,
     }
@@ -125,7 +140,12 @@ struct PackageLockPackageWire {
 }
 
 impl PackageLockPackageWire {
-    fn into_manifest_package(self, relative_path: &str, path: String) -> PackageLockPackage {
+    fn into_manifest_package(
+        self,
+        relative_path: &str,
+        source_label: &'static str,
+        path: String,
+    ) -> PackageLockPackage {
         let name = self.name.or_else(|| package_name_from_lock_path(&path));
         PackageLockPackage {
             path,
@@ -135,7 +155,7 @@ impl PackageLockPackageWire {
             dev: self.dev,
             optional: self.optional,
             source_path: relative_path.to_string(),
-            source_label: PACKAGE_LOCK_SOURCE_LABEL,
+            source_label,
             precision: TopologyPrecision::ExactLockfile,
             status: TopologyStatus::Resolved,
         }

@@ -695,10 +695,10 @@ fn package_manifest_names() -> Vec<String> {
 fn lock_file_names() -> Vec<String> {
     vec![
         "package-lock.json".to_string(),
+        "npm-shrinkwrap.json".to_string(),
         ["p", "n", "p", "m", "-lock.yaml"].concat(),
         ["ya", "rn.lock"].concat(),
         ["b", "un.lock"].concat(),
-        ["b", "un.lockb"].concat(),
     ]
 }
 

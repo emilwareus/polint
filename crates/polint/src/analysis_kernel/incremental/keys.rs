@@ -23,11 +23,11 @@ pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.sum",
     "package.json",
     "package-lock.json",
+    "npm-shrinkwrap.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "yarn.lock",
     "bun.lock",
-    "bun.lockb",
     "tsconfig.json",
 ];
 
@@ -1015,11 +1015,11 @@ mod tests {
             "go.sum",
             "package.json",
             "package-lock.json",
+            "npm-shrinkwrap.json",
             "pnpm-lock.yaml",
             "pnpm-workspace.yaml",
             "yarn.lock",
             "bun.lock",
-            "bun.lockb",
             "tsconfig.json",
         ];
         for name in topology_files {
