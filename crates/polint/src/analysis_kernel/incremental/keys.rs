@@ -7,10 +7,28 @@
 )]
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
+use crate::core::AnalysisDb;
+
+pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
+    "go.mod",
+    "go.work",
+    "go.sum",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "tsconfig.json",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -425,6 +443,83 @@ pub(crate) fn dependency_layer_digest(output_digest: Digest) -> Digest {
     )
 }
 
+pub(crate) fn module_graph_topology_input_digests(root: &Path, db: &AnalysisDb) -> Vec<Digest> {
+    module_graph_topology_input_digest_rows(root, db)
+        .into_iter()
+        .map(|(_, digest)| digest)
+        .collect()
+}
+
+pub(crate) fn module_graph_topology_input_digest_rows(
+    root: &Path,
+    db: &AnalysisDb,
+) -> Vec<(String, Digest)> {
+    let mut rows = topology_relevant_dirs(db)
+        .into_iter()
+        .flat_map(|dir| {
+            MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES
+                .iter()
+                .map(move |file_name| topology_input_relative_path(&dir, file_name))
+        })
+        .filter_map(|relative_path| {
+            let path = root.join(&relative_path);
+            let bytes = fs::read(path).ok()?;
+            let content_hash = stable_hash_bytes(&bytes);
+            let digest = Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "module_graph_topology_input",
+                &[relative_path.as_str(), content_hash.as_str()],
+            );
+            Some((relative_path, digest))
+        })
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+fn topology_relevant_dirs(db: &AnalysisDb) -> BTreeSet<String> {
+    let mut dirs = BTreeSet::from([".".to_string()]);
+    for file in db.files() {
+        let normalized = normalize_relative_path(&file.relative_path);
+        let mut current = Path::new(&normalized).parent();
+        while let Some(dir) = current {
+            dirs.insert(path_to_repo_string(dir));
+            current = dir.parent();
+        }
+    }
+    dirs
+}
+
+fn topology_input_relative_path(dir: &str, file_name: &str) -> String {
+    if dir == "." {
+        file_name.to_string()
+    } else {
+        format!("{dir}/{file_name}")
+    }
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn path_to_repo_string(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if path.is_empty() {
+        ".".to_string()
+    } else {
+        path
+    }
+}
+
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    crate::cache::stable_hash(&[hex.as_str()])
+}
+
 pub(crate) fn semantic_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
@@ -593,10 +688,21 @@ mod tests {
         assert_eq!(base.len(), topology_files.len());
 
         for changed_name in topology_files {
-            write_file(temp.path(), changed_name, &format!("{changed_name}: changed\n"));
+            write_file(
+                temp.path(),
+                changed_name,
+                &format!("{changed_name}: changed\n"),
+            );
             let changed = module_graph_topology_input_digests(temp.path(), &db);
-            assert_ne!(base, changed, "{changed_name} should affect topology inputs");
-            write_file(temp.path(), changed_name, &format!("{changed_name}: base\n"));
+            assert_ne!(
+                base, changed,
+                "{changed_name} should affect topology inputs"
+            );
+            write_file(
+                temp.path(),
+                changed_name,
+                &format!("{changed_name}: base\n"),
+            );
         }
     }
 

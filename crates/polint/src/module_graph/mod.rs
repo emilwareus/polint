@@ -11,6 +11,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -63,6 +64,7 @@ impl ModuleGraphDerivation {
 }
 
 pub(crate) fn module_graph_layer_key(
+    root: &Path,
     db: &AnalysisDb,
     manifest: &ProviderManifest,
     config_digest: Digest,
@@ -70,10 +72,12 @@ pub(crate) fn module_graph_layer_key(
     ts_js_lifecycle_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> LayerKey {
+    let mut source_package_digests = module_graph_source_package_digests(db);
+    source_package_digests.extend(module_graph_topology_input_digests(root, db));
     LayerKey::module_graph_layer_key(
         manifest,
         module_graph_import_shape_digests(db),
-        module_graph_source_package_digests(db),
+        source_package_digests,
         config_digest,
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
@@ -83,6 +87,7 @@ pub(crate) fn module_graph_layer_key(
 }
 
 pub(crate) fn module_graph_layer_dependency_edges(
+    root: &Path,
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
@@ -115,6 +120,37 @@ pub(crate) fn module_graph_layer_dependency_edges(
                 db.path_for(package.file),
                 language_cache_label(package.language),
                 package.name
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for (relative_path, digest) in module_graph_topology_input_digest_rows(root, db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!("topology_input:{relative_path}:{digest}")),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for file in sorted_files(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "topology_source_set:{}:{}",
+                normalized_file_path(file),
+                language_cache_label(file.language)
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "topology_overlay_path:{}",
+                normalized_file_path(file)
             )),
             DependencyKind::Input,
             ShapeKind::ModuleTopology,
@@ -282,6 +318,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         &input_snapshot.ts_js_lifecycle.components,
     );
     let layer_key = module_graph_layer_key(
+        loaded.root.as_path(),
         db,
         manifest,
         config_digest.clone(),
@@ -328,6 +365,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
             let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
             let payload = module_graph_layer_payload(db, &derivation);
             let dependencies = module_graph_layer_dependency_edges(
+                loaded.root.as_path(),
                 db,
                 &layer_key,
                 manifest,
@@ -1322,7 +1360,12 @@ mod tests {
     }
 
     fn module_graph_key(db: &AnalysisDb) -> LayerKey {
+        module_graph_key_for_root(Path::new("."), db)
+    }
+
+    fn module_graph_key_for_root(root: &Path, db: &AnalysisDb) -> LayerKey {
         super::module_graph_layer_key(
+            root,
             db,
             module_graph_manifest(),
             Digest::from_parts(DigestKind::Config, "config", &["base"]),
@@ -1631,6 +1674,7 @@ mod tests {
             &snapshot.ts_js_lifecycle.components,
         );
         let key = super::module_graph_layer_key(
+            temp.path(),
             &first,
             module_graph_manifest(),
             config_digest.clone(),
@@ -1639,6 +1683,7 @@ mod tests {
             upstream.clone(),
         );
         let dependencies = super::module_graph_layer_dependency_edges(
+            temp.path(),
             &first,
             &key,
             module_graph_manifest(),
@@ -1847,6 +1892,7 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]);
 
         let edges = super::module_graph_layer_dependency_edges(
+            temp.path(),
             &db,
             &key,
             module_graph_manifest(),
@@ -1887,9 +1933,10 @@ mod tests {
         }
         let mut db = AnalysisDb::new();
         add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
-        let key = module_graph_key(&db);
+        let key = module_graph_key_for_root(temp.path(), &db);
 
         let edges = super::module_graph_layer_dependency_edges(
+            temp.path(),
             &db,
             &key,
             module_graph_manifest(),
