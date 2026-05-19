@@ -143,7 +143,7 @@ impl PackageLockPackageWire {
 }
 
 fn package_name_from_lock_path(path: &str) -> Option<String> {
-    let suffix = path.strip_prefix("node_modules/")?;
+    let (_, suffix) = path.rsplit_once("node_modules/")?;
     let mut parts = suffix.split('/');
     let first = parts.next()?;
     if first.starts_with('@') {
@@ -184,6 +184,23 @@ mod tests {
         assert_eq!(manifest.packages[1].version.as_deref(), Some("18.2.0"));
         assert!(manifest.packages[1].dev);
         assert!(manifest.packages[1].optional);
+    }
+
+    #[test]
+    fn parse_package_lock_infers_nested_node_modules_package_name() {
+        let manifest = parse_package_lock(
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 3,
+  "packages": {
+    "node_modules/plugin/node_modules/react": { "version": "18.2.0" },
+    "node_modules/plugin/node_modules/@scope/lib": { "version": "1.0.0" }
+  }
+}"#,
+        );
+
+        assert_eq!(manifest.packages[0].name.as_deref(), Some("@scope/lib"));
+        assert_eq!(manifest.packages[1].name.as_deref(), Some("react"));
     }
 
     #[test]

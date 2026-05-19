@@ -511,9 +511,11 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
         .enumerate()
         .map(|(index, import)| {
             let resolved = resolved_by_import.get(&import.id).copied();
-            let semantic = semantic_by_file_path
+            let semantic_candidates = semantic_by_file_path
                 .get(&(import.file, import.path.clone()))
-                .copied();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let semantic = unambiguous_semantic_import(semantic_candidates);
             let source_set = source_sets_by_file.get(&import.file).and_then(|sets| {
                 sets.iter()
                     .filter_map(|id| source_set_by_id(db.source_sets(), *id))
@@ -716,7 +718,7 @@ fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivat
 
 fn semantic_imports_by_file_path(
     semantic_imports: &[SemanticImportFact],
-) -> BTreeMap<(FileId, String), &SemanticImportFact> {
+) -> BTreeMap<(FileId, String), Vec<&SemanticImportFact>> {
     let mut imports = semantic_imports.iter().collect::<Vec<_>>();
     imports.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
     let mut by_file_path = BTreeMap::new();
@@ -724,10 +726,21 @@ fn semantic_imports_by_file_path(
         if let Some(file) = import.file {
             by_file_path
                 .entry((file, import.import_path.clone()))
-                .or_insert(import);
+                .or_insert_with(Vec::new)
+                .push(import);
         }
     }
     by_file_path
+}
+
+fn unambiguous_semantic_import<'a>(
+    semantic_imports: &[&'a SemanticImportFact],
+) -> Option<&'a SemanticImportFact> {
+    if semantic_imports.len() == 1 {
+        semantic_imports.first().copied()
+    } else {
+        None
+    }
 }
 
 fn source_sets_by_file(
@@ -4293,6 +4306,137 @@ mod import_to_package {
         );
         assert_eq!(edge.context, ImportContextKind::Source);
         assert_eq!(edge.status, ImportToPackageStatus::Resolved);
+    }
+
+    #[test]
+    fn duplicate_syntax_import_paths_do_not_share_one_semantic_row() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let first_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 0),
+            language: Language::TypeScript,
+        });
+        let second_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 10),
+            language: Language::TypeScript,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![
+                SemanticImportFact {
+                    id: SemanticImportId(0),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+                SemanticImportFact {
+                    id: SemanticImportId(1),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::StaticDefault,
+                    stable_key: "semantic-import:static".to_string(),
+                    status: SemanticStatus::Resolved,
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(0),
+                    import: first_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(1),
+                    import: second_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.status == ImportToPackageStatus::Resolved)
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.semantic_import_stable_key.is_none())
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.to_package_stable_key.as_deref() == Some("package:target"))
+        );
     }
 
     #[test]

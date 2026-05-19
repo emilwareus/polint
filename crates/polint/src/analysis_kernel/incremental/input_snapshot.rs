@@ -6,7 +6,7 @@ use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path as FsPath;
+use std::path::{Path as FsPath, PathBuf};
 
 pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
 
@@ -159,7 +159,7 @@ impl TsJsLifecycleSnapshot {
                 "ts_js.config_files",
                 DigestKind::TsJsLifecycle,
                 &loaded.root,
-                lifecycle_candidates(&lifecycle_dirs, config_file_names()),
+                ts_js_config_candidates(&loaded.root, &lifecycle_dirs),
             ),
             settings_component(
                 "ts_js.resolver_options",
@@ -708,6 +708,151 @@ fn config_file_names() -> Vec<String> {
 
 fn ts_config_name() -> String {
     ["t", "sconfig.json"].concat()
+}
+
+fn ts_js_config_candidates(root: &FsPath, lifecycle_dirs: &BTreeSet<String>) -> Vec<String> {
+    let mut candidates = lifecycle_candidates(lifecycle_dirs, config_file_names());
+    candidates.extend(extended_ts_config_candidates(
+        root,
+        candidates.iter().map(String::as_str),
+    ));
+    candidates
+}
+
+fn extended_ts_config_candidates<'a>(
+    root: &FsPath,
+    initial_candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    let mut discovered = BTreeSet::new();
+    for candidate in initial_candidates {
+        let file_name = FsPath::new(candidate)
+            .file_name()
+            .and_then(|name| name.to_str());
+        if !matches!(file_name, Some("tsconfig.json" | "jsconfig.json")) {
+            continue;
+        }
+        collect_extended_ts_configs(root, &root.join(candidate), &mut visited, &mut discovered);
+    }
+    discovered.into_iter().collect()
+}
+
+fn collect_extended_ts_configs(
+    root: &FsPath,
+    config_path: &FsPath,
+    visited: &mut BTreeSet<PathBuf>,
+    discovered: &mut BTreeSet<String>,
+) {
+    let Some(config_path) = normalize_existing_path(config_path) else {
+        return;
+    };
+    if !visited.insert(config_path.clone()) {
+        return;
+    }
+    let Some(config) = read_tsconfig_extends_wire(&config_path) else {
+        return;
+    };
+    let Some(config_dir) = config_path.parent() else {
+        return;
+    };
+    for specifier in config
+        .extends
+        .into_iter()
+        .flat_map(TsconfigExtendsWire::into_specifiers)
+    {
+        let Some(extended_path) = resolve_tsconfig_extends_path(config_dir, &specifier) else {
+            continue;
+        };
+        if let Some(relative_path) = repo_relative_path(root, &extended_path) {
+            discovered.insert(relative_path);
+        }
+        collect_extended_ts_configs(root, &extended_path, visited, discovered);
+    }
+}
+
+fn read_tsconfig_extends_wire(path: &FsPath) -> Option<TsconfigExtendsOnlyWire> {
+    let Ok(mut source) = fs::read_to_string(path) else {
+        return None;
+    };
+    if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        source = stripped.to_string();
+    }
+    if json_strip_comments::strip(&mut source).is_err() {
+        return None;
+    }
+    serde_json::from_str::<TsconfigExtendsOnlyWire>(&source).ok()
+}
+
+fn resolve_tsconfig_extends_path(config_dir: &FsPath, specifier: &str) -> Option<PathBuf> {
+    let specifier_path = FsPath::new(specifier);
+    if specifier_path.is_absolute() {
+        return resolve_tsconfig_file_candidate(specifier_path);
+    }
+    if specifier.starts_with('.') {
+        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+    }
+    resolve_package_tsconfig_extends_path(config_dir, specifier)
+}
+
+fn resolve_package_tsconfig_extends_path(config_dir: &FsPath, specifier: &str) -> Option<PathBuf> {
+    let mut current = normalize_existing_path(config_dir)?;
+    loop {
+        let candidate = current.join("node_modules").join(specifier);
+        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+            return Some(resolved);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_tsconfig_file_candidate(base: &FsPath) -> Option<PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        let mut with_json = base.as_os_str().to_owned();
+        with_json.push(".json");
+        candidates.push(PathBuf::from(with_json));
+    }
+    candidates.push(base.join("tsconfig.json"));
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| normalize_existing_path(&candidate))
+}
+
+fn normalize_existing_path(path: &FsPath) -> Option<PathBuf> {
+    path.canonicalize().ok()
+}
+
+fn repo_relative_path(root: &FsPath, path: &FsPath) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let relative = path.strip_prefix(root).ok()?;
+    Some(normalize_relative_path(&relative.to_string_lossy()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TsconfigExtendsOnlyWire {
+    #[serde(default)]
+    extends: Option<TsconfigExtendsWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TsconfigExtendsWire {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl TsconfigExtendsWire {
+    fn into_specifiers(self) -> Vec<String> {
+        match self {
+            Self::Single(specifier) => vec![specifier],
+            Self::Multiple(specifiers) => specifiers,
+        }
+    }
 }
 
 fn string_or_array_snapshot_setting(
@@ -1378,7 +1523,16 @@ mod lifecycle {
             "{\"lockfileVersion\":3}\n",
         );
         let ts_config = ts_config_name();
-        write_file(temp.path(), &ts_config, "{\"compilerOptions\":{}}\n");
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            "{\"compilerOptions\":{\"baseUrl\":\".\"}}\n",
+        );
+        write_file(
+            temp.path(),
+            &ts_config,
+            "{\"extends\":\"./tsconfig.base.json\",\"compilerOptions\":{}}\n",
+        );
 
         let mut config = PolintConfig::default();
         config.languages.ts.insert(
@@ -1418,7 +1572,7 @@ mod lifecycle {
         );
         assert_eq!(
             component(components, "ts_js.config_files").detail,
-            vec![ts_config]
+            vec!["tsconfig.base.json".to_string(), ts_config]
         );
         assert!(
             component(components, "ts_js.resolver_options")

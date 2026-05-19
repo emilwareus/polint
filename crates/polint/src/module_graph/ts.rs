@@ -74,6 +74,58 @@ mod topology {
                 && package.name == "@acme/ui"
                 && package.path == "packages/ui"
         }));
+        let root = output
+            .workspace_roots
+            .iter()
+            .find(|root| root.root_path == ".")
+            .expect("root workspace exists");
+        let package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "packages/ui")
+            .expect("workspace package exists");
+        assert_eq!(package.workspace_root, Some(root.id));
+        let source_set = output
+            .source_sets
+            .iter()
+            .find(|source_set| source_set.path == "packages/ui/src/index.ts")
+            .expect("workspace source set exists");
+        assert_eq!(source_set.root, Some(root.id));
+        assert_eq!(source_set.package, Some(package.id));
+    }
+
+    #[test]
+    fn collect_ts_topology_expands_nested_workspace_globs_relative_to_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "web/package.json",
+            r#"{"name":"web-root","workspaces":["packages/*"]}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "web/packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "web/packages/ui/src/index.ts",
+            "export const ui = true;\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.workspace_roots.iter().any(|root| {
+            root.kind == WorkspaceRootKind::JsWorkspace && root.root_path == "web"
+        }));
+        assert!(output.packages.iter().any(|package| {
+            package.kind == TopologyPackageKind::JsPackage
+                && package.name == "@acme/ui"
+                && package.path == "web/packages/ui"
+        }));
     }
 
     #[test]
@@ -343,6 +395,47 @@ mod dependency_topology {
                 && edge.status == TopologyStatus::Resolved
                 && edge.stable_key.contains("source=package-lock.json")
                 && edge.stable_key.contains("schema=package-lock-v3")
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_keeps_nested_package_lock_entries_distinct() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 3,
+  "packages": {
+    "": { "name": "root", "version": "1.0.0" },
+    "node_modules/react": { "version": "18.2.0" },
+    "node_modules/plugin/node_modules/react": { "version": "18.2.0" }
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let react_edges = output
+            .resolved_dependency_edges
+            .iter()
+            .filter(|edge| {
+                edge.package_name == "react" && edge.resolved_version.as_deref() == Some("18.2.0")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(react_edges.len(), 2);
+        assert_ne!(react_edges[0].stable_key, react_edges[1].stable_key);
+        assert!(react_edges.iter().any(|edge| {
+            edge.stable_key
+                .contains("node_modules/plugin/node_modules/react")
         }));
     }
 
@@ -758,18 +851,14 @@ fn collect_package_manifests(
         package_paths.insert(".".to_string());
     }
     for file in ts_files {
-        if let Some(package_path) =
-            nearest_package_root_for_relative_path(loaded, &file.relative_path)
-        {
-            package_paths.insert(package_path);
-        }
+        package_paths.extend(package_roots_for_relative_path(loaded, &file.relative_path));
     }
 
     let mut manifests = BTreeMap::new();
     for package_path in package_paths {
         if let Some(manifest) = read_package_manifest(loaded, &package_path) {
             for workspace in &manifest.workspaces {
-                for member in expand_workspace_glob(&loaded.root, workspace) {
+                for member in expand_workspace_glob(&loaded.root, &package_path, workspace) {
                     if let Some(member_manifest) = read_package_manifest(loaded, &member) {
                         manifests.insert(member, member_manifest);
                     }
@@ -779,6 +868,25 @@ fn collect_package_manifests(
         }
     }
     manifests
+}
+
+fn package_roots_for_relative_path(loaded: &LoadedConfig, relative_path: &str) -> Vec<String> {
+    let Some(mut path) = Path::new(relative_path).parent().map(Path::to_path_buf) else {
+        return Vec::new();
+    };
+    let mut package_roots = Vec::new();
+    loop {
+        if let Some(package_path) = normalize_repo_relative(path.to_string_lossy()) {
+            let manifest_path = package_manifest_path(&package_path);
+            if loaded.root.join(manifest_path).is_file() {
+                package_roots.push(package_path);
+            }
+        }
+        if !path.pop() {
+            break;
+        }
+    }
+    package_roots
 }
 
 fn read_package_manifest(loaded: &LoadedConfig, package_path: &str) -> Option<PackageJsonManifest> {
@@ -812,11 +920,16 @@ fn nearest_package_root_for_relative_path(
     }
 }
 
-fn expand_workspace_glob(root: &Path, pattern: &str) -> Vec<String> {
+fn expand_workspace_glob(root: &Path, package_path: &str, pattern: &str) -> Vec<String> {
     let Some(base) = pattern.strip_suffix("/*") else {
         return Vec::new();
     };
-    let Ok(entries) = fs::read_dir(root.join(base)) else {
+    let base_path = if package_path == "." {
+        PathBuf::from(base)
+    } else {
+        Path::new(package_path).join(base)
+    };
+    let Ok(entries) = fs::read_dir(root.join(base_path)) else {
         return Vec::new();
     };
     let mut members = entries
@@ -836,7 +949,9 @@ fn workspace_root_for_package<'a>(
     workspace_roots
         .iter()
         .filter(|root| {
-            package_path == root.as_str() || package_path.starts_with(&format!("{root}/"))
+            root.as_str() == "."
+                || package_path == root.as_str()
+                || package_path.starts_with(&format!("{root}/"))
         })
         .max_by_key(|root| root.len())
 }
@@ -994,8 +1109,8 @@ fn emit_package_lock_edges(
                 resolved_version: Some(resolved_version.clone()),
                 kind: ResolvedDependencyKind::LockfileSelected,
                 stable_key: format!(
-                    "js-lock-selected:{package_path}:{package_name}:{resolved_version}:source=package-lock.json:schema={}",
-                    manifest.schema_label
+                    "js-lock-selected:{package_path}:{}:{package_name}:{resolved_version}:source=package-lock.json:schema={}",
+                    package.path, manifest.schema_label
                 ),
                 producer_id: TS_TOPOLOGY_PROVIDER_ID,
                 precision: TopologyPrecision::ExactLockfile,

@@ -296,7 +296,25 @@ pub(crate) enum TopologyStatus {
 }
 
 impl TopologyOutput {
-    pub(crate) fn merge(&mut self, other: TopologyOutput) {
+    pub(crate) fn merge(&mut self, mut other: TopologyOutput) {
+        let root_offset = self.workspace_roots.len() as u64;
+        let package_offset = self.packages.len() as u64;
+        let source_set_offset = self.source_sets.len() as u64;
+        let requirement_offset = self.dependency_requirements.len() as u64;
+        let resolved_dependency_offset = self.resolved_dependency_edges.len() as u64;
+        let import_to_package_offset = self.import_to_package_edges.len() as u64;
+        let overlay_offset = self.overlays.len() as u64;
+
+        offset_output_ids(
+            &mut other,
+            root_offset,
+            package_offset,
+            source_set_offset,
+            requirement_offset,
+            resolved_dependency_offset,
+            import_to_package_offset,
+            overlay_offset,
+        );
         self.workspace_roots.extend(other.workspace_roots);
         self.packages.extend(other.packages);
         self.source_sets.extend(other.source_sets);
@@ -378,6 +396,85 @@ impl TopologyOutput {
             remap_option(&mut overlay.source_set, &source_set_ids);
         }
         self
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each topology ID family has an independent run-local namespace that must be offset separately"
+)]
+fn offset_output_ids(
+    output: &mut TopologyOutput,
+    root_offset: u64,
+    package_offset: u64,
+    source_set_offset: u64,
+    requirement_offset: u64,
+    resolved_dependency_offset: u64,
+    import_to_package_offset: u64,
+    overlay_offset: u64,
+) {
+    for root in &mut output.workspace_roots {
+        root.id.0 += root_offset;
+    }
+    for package in &mut output.packages {
+        package.id.0 += package_offset;
+        offset_option_id(&mut package.workspace_root, root_offset);
+    }
+    for source_set in &mut output.source_sets {
+        source_set.id.0 += source_set_offset;
+        offset_option_id(&mut source_set.package, package_offset);
+        offset_option_id(&mut source_set.root, root_offset);
+    }
+    for requirement in &mut output.dependency_requirements {
+        requirement.id.0 += requirement_offset;
+        offset_option_id(&mut requirement.from_package, package_offset);
+        offset_option_id(&mut requirement.target_package, package_offset);
+    }
+    for edge in &mut output.resolved_dependency_edges {
+        edge.id.0 += resolved_dependency_offset;
+        offset_option_id(&mut edge.requirement, requirement_offset);
+        offset_option_id(&mut edge.from_package, package_offset);
+        offset_option_id(&mut edge.to_package, package_offset);
+    }
+    for edge in &mut output.import_to_package_edges {
+        edge.id.0 += import_to_package_offset;
+        offset_option_id(&mut edge.from_package, package_offset);
+        offset_option_id(&mut edge.to_package, package_offset);
+    }
+    for overlay in &mut output.overlays {
+        overlay.id.0 += overlay_offset;
+        offset_option_id(&mut overlay.root, root_offset);
+        offset_option_id(&mut overlay.package, package_offset);
+        offset_option_id(&mut overlay.source_set, source_set_offset);
+    }
+}
+
+trait OffsetTopologyId {
+    fn offset(&mut self, offset: u64);
+}
+
+macro_rules! impl_offset_topology_id {
+    ($($id:ty),* $(,)?) => {
+        $(
+            impl OffsetTopologyId for $id {
+                fn offset(&mut self, offset: u64) {
+                    self.0 += offset;
+                }
+            }
+        )*
+    };
+}
+
+impl_offset_topology_id!(
+    WorkspaceRootId,
+    TopologyPackageId,
+    SourceSetId,
+    DependencyRequirementId,
+);
+
+fn offset_option_id<Id: OffsetTopologyId>(value: &mut Option<Id>, offset: u64) {
+    if let Some(id) = value {
+        id.offset(offset);
     }
 }
 
@@ -584,6 +681,122 @@ mod tests {
         assert_eq!(output.import_to_package_edges[0].stable_key, "import:a");
         assert_eq!(output.overlays[0].id, RepoTopologyOverlayId(0));
         assert_eq!(output.overlays[0].stable_key, "overlay:a");
+    }
+
+    #[test]
+    fn merge_offsets_colliding_ids_before_final_normalization() {
+        let mut left = TopologyOutput {
+            workspace_roots: vec![root("root:b", 0)],
+            packages: vec![package("package:b", 0)],
+            source_sets: vec![source_set("source-set:b", 0)],
+            dependency_requirements: vec![requirement("requirement:b", 0)],
+            resolved_dependency_edges: vec![resolved_edge("resolved:b", 0)],
+            import_to_package_edges: vec![import_edge("import:b", 0)],
+            overlays: vec![overlay("overlay:b", 0)],
+        };
+        let right = TopologyOutput {
+            workspace_roots: vec![root("root:a", 0)],
+            packages: vec![package("package:a", 0)],
+            source_sets: vec![source_set("source-set:a", 0)],
+            dependency_requirements: vec![requirement("requirement:a", 0)],
+            resolved_dependency_edges: vec![resolved_edge("resolved:a", 0)],
+            import_to_package_edges: vec![import_edge("import:a", 0)],
+            overlays: vec![overlay("overlay:a", 0)],
+        };
+
+        left.merge(right);
+        let output = left.normalized();
+
+        let source_set_a = output
+            .source_sets
+            .iter()
+            .find(|row| row.stable_key == "source-set:a")
+            .expect("right source set survives merge");
+        assert_eq!(
+            stable_key_for_root(&output, source_set_a.root),
+            Some("root:a")
+        );
+        assert_eq!(
+            stable_key_for_package(&output, source_set_a.package),
+            Some("package:a")
+        );
+
+        let requirement_a = output
+            .dependency_requirements
+            .iter()
+            .find(|row| row.stable_key == "requirement:a")
+            .expect("right requirement survives merge");
+        assert_eq!(
+            stable_key_for_package(&output, requirement_a.from_package),
+            Some("package:a")
+        );
+
+        let resolved_a = output
+            .resolved_dependency_edges
+            .iter()
+            .find(|row| row.stable_key == "resolved:a")
+            .expect("right resolved edge survives merge");
+        assert_eq!(
+            stable_key_for_requirement(&output, resolved_a.requirement),
+            Some("requirement:a")
+        );
+        assert_eq!(
+            stable_key_for_package(&output, resolved_a.from_package),
+            Some("package:a")
+        );
+
+        let overlay_a = output
+            .overlays
+            .iter()
+            .find(|row| row.stable_key == "overlay:a")
+            .expect("right overlay survives merge");
+        assert_eq!(stable_key_for_root(&output, overlay_a.root), Some("root:a"));
+        assert_eq!(
+            stable_key_for_package(&output, overlay_a.package),
+            Some("package:a")
+        );
+        assert_eq!(
+            stable_key_for_source_set(&output, overlay_a.source_set),
+            Some("source-set:a")
+        );
+    }
+
+    fn stable_key_for_root(output: &TopologyOutput, id: Option<WorkspaceRootId>) -> Option<&str> {
+        output
+            .workspace_roots
+            .iter()
+            .find(|row| Some(row.id) == id)
+            .map(|row| row.stable_key.as_str())
+    }
+
+    fn stable_key_for_package(
+        output: &TopologyOutput,
+        id: Option<TopologyPackageId>,
+    ) -> Option<&str> {
+        output
+            .packages
+            .iter()
+            .find(|row| Some(row.id) == id)
+            .map(|row| row.stable_key.as_str())
+    }
+
+    fn stable_key_for_source_set(output: &TopologyOutput, id: Option<SourceSetId>) -> Option<&str> {
+        output
+            .source_sets
+            .iter()
+            .find(|row| Some(row.id) == id)
+            .map(|row| row.stable_key.as_str())
+    }
+
+    fn stable_key_for_requirement(
+        output: &TopologyOutput,
+        id: Option<DependencyRequirementId>,
+    ) -> Option<&str> {
+        output
+            .dependency_requirements
+            .iter()
+            .find(|row| Some(row.id) == id)
+            .map(|row| row.stable_key.as_str())
     }
 
     #[test]

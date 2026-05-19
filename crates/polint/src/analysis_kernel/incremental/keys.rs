@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
@@ -521,13 +521,22 @@ pub(crate) fn module_graph_topology_input_digest_rows(
     root: &Path,
     db: &AnalysisDb,
 ) -> Vec<(String, Digest)> {
-    let mut rows = topology_relevant_dirs(db)
+    let dirs = topology_relevant_dirs(db);
+    let mut candidate_paths = dirs
         .into_iter()
         .flat_map(|dir| {
             MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES
                 .iter()
                 .map(move |file_name| topology_input_relative_path(&dir, file_name))
         })
+        .collect::<Vec<_>>();
+    candidate_paths.extend(extended_ts_config_candidates(
+        root,
+        candidate_paths.iter().map(String::as_str),
+    ));
+
+    let mut rows = candidate_paths
+        .into_iter()
         .filter_map(|relative_path| {
             let path = root.join(&relative_path);
             let bytes = fs::read(path).ok()?;
@@ -556,6 +565,142 @@ fn topology_relevant_dirs(db: &AnalysisDb) -> BTreeSet<String> {
         }
     }
     dirs
+}
+
+fn extended_ts_config_candidates<'a>(
+    root: &Path,
+    initial_candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    let mut discovered = BTreeSet::new();
+    for candidate in initial_candidates {
+        let file_name = Path::new(candidate)
+            .file_name()
+            .and_then(|name| name.to_str());
+        if !matches!(file_name, Some("tsconfig.json" | "jsconfig.json")) {
+            continue;
+        }
+        collect_extended_ts_configs(root, &root.join(candidate), &mut visited, &mut discovered);
+    }
+    discovered.into_iter().collect()
+}
+
+fn collect_extended_ts_configs(
+    root: &Path,
+    config_path: &Path,
+    visited: &mut BTreeSet<PathBuf>,
+    discovered: &mut BTreeSet<String>,
+) {
+    let Some(config_path) = normalize_existing_path(config_path) else {
+        return;
+    };
+    if !visited.insert(config_path.clone()) {
+        return;
+    }
+    let Some(config) = read_tsconfig_extends_wire(&config_path) else {
+        return;
+    };
+    let Some(config_dir) = config_path.parent() else {
+        return;
+    };
+    for specifier in config
+        .extends
+        .into_iter()
+        .flat_map(TsconfigExtendsWire::into_specifiers)
+    {
+        let Some(extended_path) = resolve_tsconfig_extends_path(config_dir, &specifier) else {
+            continue;
+        };
+        if let Some(relative_path) = repo_relative_path(root, &extended_path) {
+            discovered.insert(relative_path);
+        }
+        collect_extended_ts_configs(root, &extended_path, visited, discovered);
+    }
+}
+
+fn read_tsconfig_extends_wire(path: &Path) -> Option<TsconfigExtendsOnlyWire> {
+    let Ok(mut source) = fs::read_to_string(path) else {
+        return None;
+    };
+    if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        source = stripped.to_string();
+    }
+    if json_strip_comments::strip(&mut source).is_err() {
+        return None;
+    }
+    serde_json::from_str::<TsconfigExtendsOnlyWire>(&source).ok()
+}
+
+fn resolve_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let specifier_path = Path::new(specifier);
+    if specifier_path.is_absolute() {
+        return resolve_tsconfig_file_candidate(specifier_path);
+    }
+    if specifier.starts_with('.') {
+        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+    }
+    resolve_package_tsconfig_extends_path(config_dir, specifier)
+}
+
+fn resolve_package_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let mut current = normalize_existing_path(config_dir)?;
+    loop {
+        let candidate = current.join("node_modules").join(specifier);
+        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+            return Some(resolved);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        let mut with_json = base.as_os_str().to_owned();
+        with_json.push(".json");
+        candidates.push(PathBuf::from(with_json));
+    }
+    candidates.push(base.join("tsconfig.json"));
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| normalize_existing_path(&candidate))
+}
+
+fn normalize_existing_path(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok()
+}
+
+fn repo_relative_path(root: &Path, path: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let relative = path.strip_prefix(root).ok()?;
+    Some(path_to_repo_string(relative))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TsconfigExtendsOnlyWire {
+    #[serde(default)]
+    extends: Option<TsconfigExtendsWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TsconfigExtendsWire {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl TsconfigExtendsWire {
+    fn into_specifiers(self) -> Vec<String> {
+        match self {
+            Self::Single(specifier) => vec![specifier],
+            Self::Multiple(specifiers) => specifiers,
+        }
+    }
 }
 
 fn topology_input_relative_path(dir: &str, file_name: &str) -> String {
@@ -798,6 +943,35 @@ mod tests {
                 &format!("{changed_name}: base\n"),
             );
         }
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_tsconfig_extends() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"extends":"./tsconfig.base.json"}"#,
+        );
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(base.iter().any(|(path, _)| path == "tsconfig.base.json"));
+
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        );
+        let changed = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert_ne!(base, changed);
     }
 
     #[test]

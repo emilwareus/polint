@@ -312,6 +312,7 @@ pub(crate) fn collect_go_topology(
     let mut package_ids_by_import_path = BTreeMap::new();
     let mut go_module_paths = Vec::new();
     let mut module_requirements = BTreeMap::new();
+    let mut module_package_ids = BTreeMap::new();
     for module_root in &config.module_roots {
         let go_mod_path = module_root_manifest_path(module_root, "go.mod");
         let Ok(contents) = std::fs::read_to_string(loaded.root.join(&go_mod_path)) else {
@@ -339,6 +340,7 @@ pub(crate) fn collect_go_topology(
         });
         package_ids_by_import_path.insert(module_path.clone(), id);
         go_module_paths.push(module_path);
+        module_package_ids.insert(module_root.clone(), id);
         emit_go_mod_requirements(
             &mut output,
             id,
@@ -420,6 +422,7 @@ pub(crate) fn collect_go_topology(
         &loaded.root,
         &config.module_roots,
         &module_requirements,
+        &module_package_ids,
         &go_module_paths,
     );
 
@@ -547,11 +550,13 @@ fn emit_go_sum_edges(
         String,
         Vec<crate::module_graph::formats::go_mod::GoRequirementDirective>,
     >,
+    module_package_ids: &BTreeMap<String, TopologyPackageId>,
     go_module_paths: &[String],
 ) {
     for module_root in module_roots {
         let go_sum_path = module_root_manifest_path(module_root, "go.sum");
         let source_label = "go.sum";
+        let module_package = module_package_ids.get(module_root).copied();
         let requirements = module_requirements
             .get(module_root)
             .map(Vec::as_slice)
@@ -564,10 +569,11 @@ fn emit_go_sum_edges(
                         id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
                         requirement: requirement_id_for(
                             output,
+                            module_package,
                             &package_name,
                             Some(&resolved_version),
                         ),
-                        from_package: None,
+                        from_package: module_package,
                         to_package: None,
                         package_name: package_name.clone(),
                         resolved_version: Some(resolved_version.clone()),
@@ -594,10 +600,11 @@ fn emit_go_sum_edges(
                     id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
                     requirement: requirement_id_for(
                         output,
+                        module_package,
                         &requirement.target_name,
                         resolved_version.as_deref(),
                     ),
-                    from_package: None,
+                    from_package: module_package,
                     to_package: None,
                     package_name: requirement.target_name.clone(),
                     resolved_version,
@@ -625,6 +632,7 @@ fn parse_go_sum_line(line: &str) -> Option<(String, String)> {
 
 fn requirement_id_for(
     output: &TopologyOutput,
+    from_package: Option<TopologyPackageId>,
     target_name: &str,
     version_requirement: Option<&str>,
 ) -> Option<DependencyRequirementId> {
@@ -632,7 +640,8 @@ fn requirement_id_for(
         .dependency_requirements
         .iter()
         .find(|requirement| {
-            requirement.target_name == target_name
+            requirement.from_package == from_package
+                && requirement.target_name == target_name
                 && requirement.version_requirement.as_deref() == version_requirement
         })
         .map(|requirement| requirement.id)
@@ -1279,6 +1288,87 @@ mod dependency_topology {
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
                 && edge.stable_key.contains("go-sum-line")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_scopes_go_sum_edges_to_module_package() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for module_root in ["services/api", "services/worker"] {
+            std::fs::create_dir_all(temp.path().join(module_root)).expect("mkdir module");
+            std::fs::write(
+                temp.path().join(module_root).join("go.mod"),
+                format!(
+                    "module example.com/{}\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+                    module_root
+                        .rsplit('/')
+                        .next()
+                        .expect("module root has name")
+                ),
+            )
+            .expect("write go.mod");
+            std::fs::write(
+                temp.path().join(module_root).join("go.sum"),
+                "github.com/acme/lib v1.2.3 h1:abc\n",
+            )
+            .expect("write go.sum");
+        }
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/api/main.go",
+            "package api\n",
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/worker/main.go",
+            "package worker\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+        let api_package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "services/api")
+            .expect("api module package exists");
+        let worker_package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "services/worker")
+            .expect("worker module package exists");
+        let api_requirement = output
+            .dependency_requirements
+            .iter()
+            .find(|requirement| {
+                requirement.from_package == Some(api_package.id)
+                    && requirement.target_name == "github.com/acme/lib"
+                    && requirement.version_requirement.as_deref() == Some("v1.2.3")
+            })
+            .expect("api requirement exists");
+        let worker_requirement = output
+            .dependency_requirements
+            .iter()
+            .find(|requirement| {
+                requirement.from_package == Some(worker_package.id)
+                    && requirement.target_name == "github.com/acme/lib"
+                    && requirement.version_requirement.as_deref() == Some("v1.2.3")
+            })
+            .expect("worker requirement exists");
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.from_package == Some(api_package.id)
+                && edge.requirement == Some(api_requirement.id)
+                && edge.package_name == "github.com/acme/lib"
+                && edge.stable_key.contains("services/api/go.sum")
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.from_package == Some(worker_package.id)
+                && edge.requirement == Some(worker_requirement.id)
+                && edge.package_name == "github.com/acme/lib"
+                && edge.stable_key.contains("services/worker/go.sum")
         }));
     }
 
