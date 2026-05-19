@@ -292,6 +292,48 @@ mod tests {
     }
 
     #[test]
+    fn symbol_graph_manifest_declares_semantic_outputs_without_reordering_providers() {
+        assert_eq!(
+            provider_order_for_test(),
+            vec![
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ]
+        );
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph manifest should exist");
+
+        assert_eq!(
+            manifest.outputs,
+            &[
+                "symbols",
+                "definitions",
+                "references",
+                "scopes",
+                "semantic_imports",
+                "exports",
+                "aliases",
+                "resolution_facts",
+                "generated_symbols",
+                "stable_exports",
+            ]
+        );
+        assert_eq!(
+            manifest.schema_versions,
+            &[SchemaVersion {
+                name: "symbol-graph-facts-2",
+                version: 2,
+            }]
+        );
+    }
+
+    #[test]
     fn provider_manifest_dependencies_are_deterministic_metadata() {
         let report = provider_order_report_for_test();
 
