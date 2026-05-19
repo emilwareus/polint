@@ -944,7 +944,11 @@ mod tests {
     use crate::core::{
         AnalysisDb, BranchId, BranchObligation, ComplexityMetricFact, FileId, FileMetricFact,
         FunctionFact, FunctionId, FunctionMetricFact, Language, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, PackageId, Span, TestFact, TsComponentFact,
+        ModuleNodeKind, PackageId, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
+        SymbolPrecision, TestFact, TsComponentFact,
+    };
+    use crate::symbol_graph::semantic::{
+        GeneratedSymbolFact, GeneratedSymbolId, GeneratedSymbolKind, SemanticStatus,
     };
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -1213,6 +1217,159 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(provider_fields, BTreeSet::from(["layer_id", "producer_id"]));
+    }
+
+    mod semantic_index {
+        use super::*;
+
+        #[test]
+        fn semantic_validation_reports_malformed_generated_rows_with_evidence() {
+            let mut db = semantic_db();
+            db.replace_semantic_index_facts(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![GeneratedSymbolFact {
+                    id: GeneratedSymbolId(99),
+                    language: Language::TypeScript,
+                    file: Some(FileId(404)),
+                    package: None,
+                    module: None,
+                    symbol_stable_key: "symbol:answer".to_string(),
+                    source_stable_key: String::new(),
+                    producer_id: String::new(),
+                    generator: "test".to_string(),
+                    generated_discriminator: String::new(),
+                    kind: GeneratedSymbolKind::BuildGenerated,
+                    span: Some(span(FileId(404), 0, 999)),
+                    stable_key: "generated:bad".to_string(),
+                    status: SemanticStatus::Resolved,
+                }],
+                Vec::new(),
+            );
+
+            let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+            let semantic_diagnostics = diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .message
+                        .starts_with("Semantic index validation failed")
+                })
+                .collect::<Vec<_>>();
+
+            assert!(
+                semantic_diagnostics.len() >= 4,
+                "expected generated-row validation diagnostics: {diagnostics:#?}"
+            );
+            assert!(
+                semantic_diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.rule_id == "polint/internal")
+            );
+            assert!(semantic_diagnostics.iter().all(|diagnostic| {
+                let labels = evidence_labels(diagnostic);
+                labels.contains("family")
+                    && labels.contains("stable_key")
+                    && labels.contains("reason")
+            }));
+        }
+
+        #[test]
+        fn semantic_validation_rejects_symbol_graph_exact_semantic_metadata() {
+            let mut db = semantic_db();
+            db.replace_semantic_index_facts(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![GeneratedSymbolFact {
+                    id: GeneratedSymbolId(0),
+                    language: Language::TypeScript,
+                    file: Some(FileId(0)),
+                    package: None,
+                    module: None,
+                    symbol_stable_key: "symbol:answer".to_string(),
+                    source_stable_key: "symbol:answer".to_string(),
+                    producer_id: "polint.symbol_graph".to_string(),
+                    generator: "test".to_string(),
+                    generated_discriminator: "entrypoint".to_string(),
+                    kind: GeneratedSymbolKind::BuildGenerated,
+                    span: Some(span(FileId(0), 0, 1)),
+                    stable_key: "generated:answer".to_string(),
+                    status: SemanticStatus::Generated,
+                }],
+                Vec::new(),
+            );
+            db.fact_meta_mut_for_test()
+                .remove_for_test(FactRef::new(FactFamily::GeneratedSymbol, 0));
+            db.fact_meta_mut_for_test().insert(
+                FactRef::new(FactFamily::GeneratedSymbol, 0),
+                FactMeta {
+                    stable_key: "generated:answer".to_string(),
+                    producer_id: "polint.symbol_graph",
+                    layer_id: "polint.symbol_graph",
+                    precision: FactPrecision::Exact,
+                    confidence: FactConfidence::High,
+                    validation: ValidationStatus::NativeTrusted,
+                    payload_digest: "payload:exact-generated".to_string(),
+                },
+            );
+
+            let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic
+                        .message
+                        .starts_with("Semantic index validation failed")
+                        && diagnostic.evidence.iter().any(|evidence| {
+                            evidence.label == "reason"
+                                && evidence.value.contains("provider precision ceiling")
+                        })
+                        && diagnostic.evidence.iter().any(|evidence| {
+                            evidence.label == "family" && evidence.value == "GeneratedSymbol"
+                        })
+                        && diagnostic.evidence.iter().any(|evidence| {
+                            evidence.label == "stable_key" && evidence.value == "generated:answer"
+                        })
+                }),
+                "expected semantic precision ceiling diagnostic: {diagnostics:#?}"
+            );
+        }
+
+        fn semantic_db() -> AnalysisDb {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "export const answer = 1;\n".to_string(),
+            );
+            db.replace_symbol_graph_facts(
+                vec![SymbolFact {
+                    id: SymbolId(0),
+                    language: Language::TypeScript,
+                    name: "answer".to_string(),
+                    qualified_name: "answer".to_string(),
+                    kind: SymbolKind::Constant,
+                    namespace: SymbolNamespace::Value,
+                    file: Some(file),
+                    package: None,
+                    module: None,
+                    owner: None,
+                    primary_span: Some(span(file, 13, 19)),
+                    is_exported: true,
+                    stable_key: "symbol:answer".to_string(),
+                    precision: SymbolPrecision::ExactLocal,
+                }],
+                Vec::new(),
+                Vec::new(),
+            );
+            db
+        }
     }
 
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {

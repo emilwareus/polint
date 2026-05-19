@@ -502,6 +502,77 @@ export const value = answer();
         }
     }
 
+    mod semantic_debug_json {
+        use super::*;
+
+        #[test]
+        fn metadata_debug_json_contains_semantic_index_families() {
+            let (_temp, report) = debug_report_from_kernel_run();
+            let semantic = report["semantic"]
+                .as_object()
+                .unwrap_or_else(|| panic!("missing semantic debug object: {report:#?}"));
+
+            for key in [
+                "scopes",
+                "imports",
+                "exports",
+                "aliases",
+                "resolutions",
+                "generated_symbols",
+                "stable_exports",
+            ] {
+                assert!(
+                    semantic
+                        .get(key)
+                        .and_then(serde_json::Value::as_array)
+                        .is_some(),
+                    "semantic debug object missing `{key}` array: {semantic:#?}"
+                );
+            }
+            assert!(
+                !semantic["stable_exports"].as_array().unwrap().is_empty(),
+                "debug fixture should expose stable export identities: {semantic:#?}"
+            );
+            assert!(
+                !semantic["generated_symbols"].as_array().unwrap().is_empty(),
+                "debug fixture should expose native generated symbol hooks: {semantic:#?}"
+            );
+        }
+
+        #[test]
+        fn semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata() {
+            let (_temp, report) = debug_report_from_kernel_run();
+            let row = report["semantic"]["generated_symbols"]
+                .as_array()
+                .and_then(|rows| rows.first())
+                .unwrap_or_else(|| {
+                    panic!("missing generated symbol semantic debug row: {report:#?}")
+                });
+
+            for field in [
+                "status",
+                "fact_precision",
+                "stable_key",
+                "producer_id",
+                "layer_id",
+            ] {
+                assert!(
+                    row.get(field).is_some(),
+                    "semantic generated row missing `{field}`: {row:#?}"
+                );
+            }
+            let metadata = row["metadata"]
+                .as_object()
+                .unwrap_or_else(|| panic!("missing nested metadata object: {row:#?}"));
+            for field in ["precision", "confidence", "validation"] {
+                assert!(
+                    metadata.get(field).is_some(),
+                    "semantic metadata missing `{field}`: {row:#?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn metadata_debug_json_rows_include_required_metadata_fields() {
         let (_temp, report) = debug_report_from_kernel_run();
