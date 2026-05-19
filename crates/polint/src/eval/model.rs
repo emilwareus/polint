@@ -10,6 +10,16 @@ pub(crate) const SEMANTIC_FACT_FAMILIES: &[&str] = &[
     "StableExport",
 ];
 
+pub(crate) const TOPOLOGY_FACT_FAMILIES: &[&str] = &[
+    "WorkspaceRoot",
+    "TopologyPackage",
+    "SourceSet",
+    "DependencyRequirement",
+    "ResolvedDependencyEdge",
+    "ImportToPackage",
+    "RepoTopologyOverlay",
+];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -37,6 +47,8 @@ pub(crate) enum FixtureArea {
     Extension,
     #[serde(rename = "semantic-index")]
     SemanticIndex,
+    #[serde(rename = "module-topology")]
+    ModuleTopology,
     Facts,
     Graphs,
     Paths,
@@ -221,10 +233,13 @@ pub(crate) enum ObservedStatus {
     Ambiguous,
     Dynamic,
     SetupMissing,
+    MissingLockfile,
     Unsupported,
     External,
     Cycle,
     Generated,
+    Undeclared,
+    OutsideWorkspace,
     Rejected,
     Accepted,
 }

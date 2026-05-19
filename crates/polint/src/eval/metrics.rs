@@ -133,10 +133,13 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                     | crate::eval::model::ObservedStatus::Ambiguous
                     | crate::eval::model::ObservedStatus::Dynamic
                     | crate::eval::model::ObservedStatus::SetupMissing
+                    | crate::eval::model::ObservedStatus::MissingLockfile
                     | crate::eval::model::ObservedStatus::Unsupported
                     | crate::eval::model::ObservedStatus::External
                     | crate::eval::model::ObservedStatus::Cycle
-                    | crate::eval::model::ObservedStatus::Generated,
+                    | crate::eval::model::ObservedStatus::Generated
+                    | crate::eval::model::ObservedStatus::Undeclared
+                    | crate::eval::model::ObservedStatus::OutsideWorkspace,
                 )
                 | None => {}
             },

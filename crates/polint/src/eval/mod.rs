@@ -144,13 +144,12 @@ mod topology_rows {
         ObservedStatus, TOPOLOGY_FACT_FAMILIES,
     };
     use crate::module_graph::topology::{
-        DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
-        ImportToPackageFact, ImportToPackageId, ImportToPackageStatus, RepoTopologyOverlayFact,
-        RepoTopologyOverlayId, RepoTopologyOverlayKind, RequirementKind, ResolvedDependencyEdgeFact,
+        DependencyRequirementFact, DependencyRequirementId, ImportContextKind, ImportToPackageFact,
+        ImportToPackageId, ImportToPackageStatus, RepoTopologyOverlayFact, RepoTopologyOverlayId,
+        RepoTopologyOverlayKind, RequirementKind, ResolvedDependencyEdgeFact,
         ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact, SourceSetId,
-        SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
-        TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
-        WorkspaceRootId, WorkspaceRootKind,
+        SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
+        TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
     };
 
     #[test]
