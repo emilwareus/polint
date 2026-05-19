@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
+use serde::Serialize;
+
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
@@ -9,6 +11,10 @@ use crate::core::{
     Span, SymbolId,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::module_graph::topology::{
+    DependencyRequirementId, ImportToPackageStatus, ResolvedDependencyKind, SourceSetId,
+    TopologyPackageId, TopologyPrecision, TopologyStatus, WorkspaceRootId,
+};
 use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
@@ -30,6 +36,7 @@ pub(crate) fn validate_fact_metadata(
     validate_references(db, &ids, &mut diagnostics);
     validate_spans(db, &ids.files, &mut diagnostics);
     validate_semantic_index(db, &ids, &mut diagnostics);
+    validate_topology_facts(db, &ids, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
@@ -617,9 +624,14 @@ struct IdSets {
     imports: BTreeSet<ImportId>,
     resolved_imports: BTreeSet<ResolvedImportId>,
     module_nodes: BTreeSet<ModuleNodeId>,
+    workspace_roots: BTreeSet<WorkspaceRootId>,
+    topology_packages: BTreeSet<TopologyPackageId>,
+    source_sets: BTreeSet<SourceSetId>,
+    dependency_requirements: BTreeSet<DependencyRequirementId>,
     symbols: BTreeSet<SymbolId>,
     scopes: BTreeSet<ScopeId>,
     exports: BTreeSet<ExportId>,
+    semantic_import_stable_keys: BTreeSet<String>,
     symbol_stable_keys: BTreeSet<String>,
     reference_stable_keys: BTreeSet<String>,
 }
@@ -634,9 +646,22 @@ impl IdSets {
             imports: db.imports().iter().map(|fact| fact.id).collect(),
             resolved_imports: db.resolved_imports().iter().map(|fact| fact.id).collect(),
             module_nodes: db.module_nodes().iter().map(|fact| fact.id).collect(),
+            workspace_roots: db.workspace_roots().iter().map(|fact| fact.id).collect(),
+            topology_packages: db.topology_packages().iter().map(|fact| fact.id).collect(),
+            source_sets: db.source_sets().iter().map(|fact| fact.id).collect(),
+            dependency_requirements: db
+                .dependency_requirements()
+                .iter()
+                .map(|fact| fact.id)
+                .collect(),
             symbols: db.symbols().iter().map(|fact| fact.id).collect(),
             scopes: db.scopes().iter().map(|fact| fact.id).collect(),
             exports: db.exports().iter().map(|fact| fact.id).collect(),
+            semantic_import_stable_keys: db
+                .semantic_imports()
+                .iter()
+                .map(|fact| fact.stable_key.clone())
+                .collect(),
             symbol_stable_keys: db
                 .symbols()
                 .iter()
@@ -1631,6 +1656,599 @@ fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             ));
         }
     }
+}
+
+fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::WorkspaceRoot,
+        db.workspace_roots(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::TopologyPackage,
+        db.topology_packages(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::SourceSet,
+        db.source_sets(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::DependencyRequirement,
+        db.dependency_requirements(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::ResolvedDependencyEdge,
+        db.resolved_dependency_edges(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::ImportToPackage,
+        db.import_to_package_edges(),
+        |row| row.stable_key.as_str(),
+    );
+    check_topology_family_stable_keys(
+        diagnostics,
+        FactFamily::RepoTopologyOverlay,
+        db.repo_topology_overlays(),
+        |row| row.stable_key.as_str(),
+    );
+
+    for root in db.workspace_roots() {
+        check_topology_path(
+            diagnostics,
+            FactFamily::WorkspaceRoot,
+            root.stable_key.as_str(),
+            "WorkspaceRootFact.root_path",
+            root.root_path.as_str(),
+        );
+        check_topology_optional_path(
+            diagnostics,
+            FactFamily::WorkspaceRoot,
+            root.stable_key.as_str(),
+            "WorkspaceRootFact.manifest_path",
+            root.manifest_path.as_deref(),
+        );
+        check_topology_precision(
+            diagnostics,
+            FactFamily::WorkspaceRoot,
+            root.stable_key.as_str(),
+            "WorkspaceRootFact.precision",
+            root.precision,
+            root.status,
+        );
+    }
+
+    for package in db.topology_packages() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.workspace_roots,
+            FactFamily::TopologyPackage,
+            package.stable_key.as_str(),
+            "TopologyPackageFact.workspace_root",
+            package.workspace_root,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::TopologyPackage,
+            package.stable_key.as_str(),
+            "TopologyPackageFact.package",
+            package.package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::TopologyPackage,
+            package.stable_key.as_str(),
+            "TopologyPackageFact.module_node",
+            package.module_node,
+        );
+        check_topology_path(
+            diagnostics,
+            FactFamily::TopologyPackage,
+            package.stable_key.as_str(),
+            "TopologyPackageFact.path",
+            package.path.as_str(),
+        );
+        check_topology_precision(
+            diagnostics,
+            FactFamily::TopologyPackage,
+            package.stable_key.as_str(),
+            "TopologyPackageFact.precision",
+            package.precision,
+            package.status,
+        );
+    }
+
+    for source_set in db.source_sets() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::SourceSet,
+            source_set.stable_key.as_str(),
+            "SourceSetFact.package",
+            source_set.package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.workspace_roots,
+            FactFamily::SourceSet,
+            source_set.stable_key.as_str(),
+            "SourceSetFact.root",
+            source_set.root,
+        );
+        for file in &source_set.files {
+            check_topology_ref(
+                diagnostics,
+                &ids.files,
+                FactFamily::SourceSet,
+                source_set.stable_key.as_str(),
+                "SourceSetFact.files",
+                *file,
+            );
+        }
+        check_topology_path(
+            diagnostics,
+            FactFamily::SourceSet,
+            source_set.stable_key.as_str(),
+            "SourceSetFact.path",
+            source_set.path.as_str(),
+        );
+        check_topology_precision(
+            diagnostics,
+            FactFamily::SourceSet,
+            source_set.stable_key.as_str(),
+            "SourceSetFact.precision",
+            source_set.precision,
+            source_set.status,
+        );
+    }
+
+    for requirement in db.dependency_requirements() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::DependencyRequirement,
+            requirement.stable_key.as_str(),
+            "DependencyRequirementFact.from_package",
+            requirement.from_package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::DependencyRequirement,
+            requirement.stable_key.as_str(),
+            "DependencyRequirementFact.target_package",
+            requirement.target_package,
+        );
+        check_topology_optional_path(
+            diagnostics,
+            FactFamily::DependencyRequirement,
+            requirement.stable_key.as_str(),
+            "DependencyRequirementFact.manifest_path",
+            requirement.manifest_path.as_deref(),
+        );
+        check_topology_precision(
+            diagnostics,
+            FactFamily::DependencyRequirement,
+            requirement.stable_key.as_str(),
+            "DependencyRequirementFact.precision",
+            requirement.precision,
+            requirement.status,
+        );
+    }
+
+    for edge in db.resolved_dependency_edges() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.dependency_requirements,
+            FactFamily::ResolvedDependencyEdge,
+            edge.stable_key.as_str(),
+            "ResolvedDependencyEdgeFact.requirement",
+            edge.requirement,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::ResolvedDependencyEdge,
+            edge.stable_key.as_str(),
+            "ResolvedDependencyEdgeFact.from_package",
+            edge.from_package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::ResolvedDependencyEdge,
+            edge.stable_key.as_str(),
+            "ResolvedDependencyEdgeFact.to_package",
+            edge.to_package,
+        );
+        check_resolved_dependency_precision(diagnostics, edge);
+    }
+
+    for edge in db.import_to_package_edges() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.imports,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.syntax_import",
+            edge.syntax_import,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.resolved_imports,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.resolved_import",
+            edge.resolved_import,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.from_file",
+            edge.from_file,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.from_package",
+            edge.from_package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.to_package",
+            edge.to_package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.target_node",
+            edge.target_node,
+        );
+        if let Some(key) = edge.semantic_import_stable_key.as_deref()
+            && !ids.semantic_import_stable_keys.contains(key)
+        {
+            diagnostics.push(topology_diagnostic(
+                FactFamily::ImportToPackage,
+                edge.stable_key.as_str(),
+                "ImportToPackageFact.semantic_import_stable_key",
+                "semantic_import_stable_key_missing",
+            ));
+        }
+        if edge.status == ImportToPackageStatus::Resolved && edge.to_package_stable_key.is_none() {
+            diagnostics.push(topology_diagnostic(
+                FactFamily::ImportToPackage,
+                edge.stable_key.as_str(),
+                "ImportToPackageFact.to_package_stable_key",
+                "resolved_row_missing_to_package_stable_key",
+            ));
+        }
+        if edge.status == ImportToPackageStatus::Undeclared
+            && declared_requirement_exists(edge, db.dependency_requirements())
+        {
+            diagnostics.push(topology_diagnostic(
+                FactFamily::ImportToPackage,
+                edge.stable_key.as_str(),
+                "ImportToPackageFact.status",
+                "undeclared_row_has_matching_dependency_requirement",
+            ));
+        }
+        check_import_to_package_precision(diagnostics, edge);
+    }
+
+    for overlay in db.repo_topology_overlays() {
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.workspace_roots,
+            FactFamily::RepoTopologyOverlay,
+            overlay.stable_key.as_str(),
+            "RepoTopologyOverlayFact.root",
+            overlay.root,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.topology_packages,
+            FactFamily::RepoTopologyOverlay,
+            overlay.stable_key.as_str(),
+            "RepoTopologyOverlayFact.package",
+            overlay.package,
+        );
+        check_topology_optional_ref(
+            diagnostics,
+            &ids.source_sets,
+            FactFamily::RepoTopologyOverlay,
+            overlay.stable_key.as_str(),
+            "RepoTopologyOverlayFact.source_set",
+            overlay.source_set,
+        );
+        check_topology_optional_path(
+            diagnostics,
+            FactFamily::RepoTopologyOverlay,
+            overlay.stable_key.as_str(),
+            "RepoTopologyOverlayFact.path",
+            overlay.path.as_deref(),
+        );
+        check_topology_precision(
+            diagnostics,
+            FactFamily::RepoTopologyOverlay,
+            overlay.stable_key.as_str(),
+            "RepoTopologyOverlayFact.precision",
+            overlay.precision,
+            overlay.status,
+        );
+    }
+}
+
+fn check_topology_family_stable_keys<T: Serialize>(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    rows: &[T],
+    stable_key: impl Fn(&T) -> &str,
+) {
+    let mut seen = BTreeMap::<String, serde_json::Value>::new();
+    for row in rows {
+        let key = stable_key(row).to_string();
+        let normalized = normalized_topology_row(row);
+        if let Some(existing) = seen.get(&key) {
+            if existing != &normalized {
+                diagnostics.push(topology_diagnostic(
+                    family,
+                    key.as_str(),
+                    "stable_key",
+                    "stable_key_conflict",
+                ));
+            } else {
+                diagnostics.push(topology_diagnostic(
+                    family,
+                    key.as_str(),
+                    "stable_key",
+                    "duplicate_stable_key",
+                ));
+            }
+        } else {
+            seen.insert(key, normalized);
+        }
+    }
+}
+
+fn normalized_topology_row<T: Serialize>(row: &T) -> serde_json::Value {
+    let mut value = serde_json::to_value(row).unwrap_or(serde_json::Value::Null);
+    if let serde_json::Value::Object(object) = &mut value {
+        object.remove("id");
+    }
+    value
+}
+
+fn check_topology_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: T,
+) where
+    T: Copy + Debug + Ord,
+{
+    if valid_ids.contains(&value) {
+        return;
+    }
+    diagnostics.push(topology_diagnostic(
+        family,
+        stable_key,
+        field,
+        format!("reference_missing:{value:?}"),
+    ));
+}
+
+fn check_topology_optional_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: Option<T>,
+) where
+    T: Copy + Debug + Ord,
+{
+    let Some(value) = value else {
+        return;
+    };
+    check_topology_ref(diagnostics, valid_ids, family, stable_key, field, value);
+}
+
+fn check_topology_path(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    path: &str,
+) {
+    if repo_relative_path_is_valid(path) {
+        return;
+    }
+    diagnostics.push(topology_diagnostic(
+        family,
+        stable_key,
+        field,
+        "malformed_repo_relative_path",
+    ));
+}
+
+fn check_topology_optional_path(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    path: Option<&str>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+    check_topology_path(diagnostics, family, stable_key, field, path);
+}
+
+fn repo_relative_path_is_valid(path: &str) -> bool {
+    if path.is_empty() || path == "." {
+        return true;
+    }
+    if path.contains('\\') || path.starts_with('/') || path.contains(':') {
+        return false;
+    }
+    !path.split('/').any(|component| component == "..")
+}
+
+fn check_resolved_dependency_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    edge: &crate::module_graph::topology::ResolvedDependencyEdgeFact,
+) {
+    if edge.precision == TopologyPrecision::ExactLockfile
+        && !matches!(
+            edge.kind,
+            ResolvedDependencyKind::Lockfile
+                | ResolvedDependencyKind::LockfileSelected
+                | ResolvedDependencyKind::ChecksumEvidence
+        )
+    {
+        diagnostics.push(topology_diagnostic(
+            FactFamily::ResolvedDependencyEdge,
+            edge.stable_key.as_str(),
+            "ResolvedDependencyEdgeFact.precision",
+            "exact_lockfile_requires_lockfile_or_checksum_row",
+        ));
+    }
+    check_topology_precision(
+        diagnostics,
+        FactFamily::ResolvedDependencyEdge,
+        edge.stable_key.as_str(),
+        "ResolvedDependencyEdgeFact.precision",
+        edge.precision,
+        edge.status,
+    );
+}
+
+fn check_import_to_package_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    edge: &crate::module_graph::topology::ImportToPackageFact,
+) {
+    if matches!(
+        edge.status,
+        ImportToPackageStatus::Dynamic
+            | ImportToPackageStatus::Unsupported
+            | ImportToPackageStatus::SetupMissing
+    ) && matches!(
+        edge.precision,
+        TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile
+    ) {
+        diagnostics.push(topology_diagnostic(
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.precision",
+            "unsupported_or_dynamic_exactness",
+        ));
+    }
+    if edge.precision == TopologyPrecision::ExactLockfile {
+        diagnostics.push(topology_diagnostic(
+            FactFamily::ImportToPackage,
+            edge.stable_key.as_str(),
+            "ImportToPackageFact.precision",
+            "exact_lockfile_requires_lockfile_or_checksum_row",
+        ));
+    }
+}
+
+fn check_topology_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    precision: TopologyPrecision,
+    status: TopologyStatus,
+) {
+    if precision == TopologyPrecision::ExactLockfile {
+        diagnostics.push(topology_diagnostic(
+            family,
+            stable_key,
+            field,
+            "exact_lockfile_requires_lockfile_or_checksum_row",
+        ));
+    }
+    if status == TopologyStatus::Unsupported
+        && matches!(
+            precision,
+            TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile
+        )
+    {
+        diagnostics.push(topology_diagnostic(
+            family,
+            stable_key,
+            field,
+            "unsupported_or_dynamic_exactness",
+        ));
+    }
+}
+
+fn declared_requirement_exists(
+    edge: &crate::module_graph::topology::ImportToPackageFact,
+    requirements: &[crate::module_graph::topology::DependencyRequirementFact],
+) -> bool {
+    let target = external_package_name(&edge.import_path);
+    requirements.iter().any(|requirement| {
+        requirement.target_name == target
+            && edge
+                .from_package
+                .is_none_or(|package| requirement.from_package == Some(package))
+    })
+}
+
+fn external_package_name(path: &str) -> &str {
+    if let Some(stripped) = path.strip_prefix('@') {
+        let mut parts = stripped.split('/');
+        let Some(scope_name) = parts.next() else {
+            return path;
+        };
+        let Some(package_name) = parts.next() else {
+            return path;
+        };
+        let end = 1 + scope_name.len() + 1 + package_name.len();
+        &path[..end]
+    } else {
+        path.split('/').next().unwrap_or(path)
+    }
+}
+
+fn topology_diagnostic(
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    reason: impl Into<String>,
+) -> Diagnostic {
+    internal_diagnostic(format!(
+        "Topology validation failed for {} stable key.",
+        family.label()
+    ))
+    .with_evidence("family", family.label())
+    .with_evidence("stable_key", stable_key.to_string())
+    .with_evidence("field", field)
+    .with_evidence("reason", reason.into())
 }
 
 fn is_semantic_fact_family(family: FactFamily) -> bool {

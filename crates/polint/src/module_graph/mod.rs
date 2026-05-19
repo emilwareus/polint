@@ -1255,8 +1255,15 @@ pub(crate) fn validate_module_topology_layer_payload(
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == MODULE_TOPOLOGY_LAYER_SCHEMA
+        && import_to_package_payload_stable_keys_are_unique(&payload.import_to_package_edges)
         && manifest.output_digest
             == module_topology_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn import_to_package_payload_stable_keys_are_unique(rows: &[ImportToPackageFact]) -> bool {
+    let mut seen = BTreeSet::new();
+    rows.iter()
+        .all(|row| seen.insert(row.stable_key.as_str().to_string()))
 }
 
 fn write_module_graph_layer_payload(
