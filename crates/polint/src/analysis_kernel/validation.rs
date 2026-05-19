@@ -279,6 +279,335 @@ mod semantic_index {
     }
 }
 
+#[cfg(test)]
+mod topology {
+    use super::validate_fact_metadata;
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNodeId, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Span,
+    };
+    use crate::module_graph::topology::{
+        DependencyRequirementFact, DependencyRequirementId, ImportContextKind, ImportToPackageFact,
+        ImportToPackageId, ImportToPackageStatus, RequirementKind, ResolvedDependencyEdgeFact,
+        ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact, SourceSetId,
+        SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
+        TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    };
+    use crate::symbol_graph::semantic::{
+        SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+    };
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn topology_validation_reports_invalid_refs_and_malformed_paths() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import './target';\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "./target".to_string(),
+            span: span(file),
+            language: Language::TypeScript,
+        });
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: file,
+                target_node: None,
+                status: ResolutionStatus::Unresolved,
+                precision: ResolutionPrecision::None,
+                reason: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![root("/absolute", "root:absolute")],
+            packages: vec![package(
+                "package:bad",
+                Some(WorkspaceRootId(404)),
+                Some(ModuleNodeId(404)),
+                "../escape",
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            )],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(404)),
+                root: Some(WorkspaceRootId(404)),
+                kind: SourceSetKind::Source,
+                path: r"src\app.ts".to_string(),
+                language: Some(Language::TypeScript),
+                files: vec![FileId(404)],
+                stable_key: "source-set:bad".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            import_to_package_edges: vec![import_edge(
+                "import-to-package:bad",
+                Some(ImportId(404)),
+                Some(ResolvedImportId(404)),
+                Some("semantic:missing".to_string()),
+                Some(FileId(404)),
+                ImportToPackageStatus::Resolved,
+                TopologyPrecision::ExactStatic,
+            )],
+            ..TopologyOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let topology = topology_diagnostics(&diagnostics);
+
+        assert!(
+            topology.len() >= 6,
+            "expected topology validation diagnostics: {diagnostics:#?}"
+        );
+        assert!(topology.iter().all(|diagnostic| {
+            let labels = evidence_labels(diagnostic);
+            labels.contains("family")
+                && labels.contains("stable_key")
+                && labels.contains("field")
+                && labels.contains("reason")
+        }));
+    }
+
+    #[test]
+    fn topology_stable_key_conflicts_reject_nonidentical_duplicate_rows() {
+        let mut db = AnalysisDb::new();
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![root(".", "root:repo")],
+            packages: vec![
+                package(
+                    "package:dup",
+                    Some(WorkspaceRootId(0)),
+                    None,
+                    "src/a",
+                    TopologyPrecision::ExactStatic,
+                    TopologyStatus::Present,
+                ),
+                package(
+                    "package:dup",
+                    Some(WorkspaceRootId(0)),
+                    None,
+                    "src/b",
+                    TopologyPrecision::ExactStatic,
+                    TopologyStatus::Present,
+                ),
+            ],
+            ..TopologyOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(topology_diagnostics(&diagnostics).iter().any(|diagnostic| {
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "reason" && evidence.value.contains("stable_key_conflict")
+            })
+        }));
+    }
+
+    #[test]
+    fn topology_validation_rejects_unsupported_or_dynamic_rows_claiming_exactness() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "import React from 'react';\n".to_string(),
+        );
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: "react".to_string(),
+            span: span(file),
+            language: Language::TypeScript,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: "react".to_string(),
+                local_name: None,
+                imported_name: None,
+                namespace: crate::core::SymbolNamespace::Value,
+                kind: SemanticImportKind::DynamicImport,
+                stable_key: "semantic:react".to_string(),
+                status: SemanticStatus::Dynamic,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_topology_facts(TopologyOutput {
+            dependency_requirements: vec![DependencyRequirementFact {
+                id: DependencyRequirementId(0),
+                from_package: None,
+                target_package: None,
+                target_name: "react".to_string(),
+                version_requirement: Some("^18".to_string()),
+                kind: RequirementKind::Runtime,
+                manifest_path: Some("package.json".to_string()),
+                stable_key: "requirement:react".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactLockfile,
+                status: TopologyStatus::Unsupported,
+            }],
+            resolved_dependency_edges: vec![ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(0),
+                requirement: Some(DependencyRequirementId(0)),
+                from_package: None,
+                to_package: None,
+                package_name: "react".to_string(),
+                resolved_version: None,
+                kind: ResolvedDependencyKind::Unknown,
+                stable_key: "resolved:react".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactLockfile,
+                status: TopologyStatus::Unsupported,
+            }],
+            import_to_package_edges: vec![import_edge(
+                "import-to-package:dynamic",
+                Some(import),
+                None,
+                Some("semantic:react".to_string()),
+                Some(file),
+                ImportToPackageStatus::Dynamic,
+                TopologyPrecision::ExactStatic,
+            )],
+            ..TopologyOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let reasons = topology_diagnostics(&diagnostics)
+            .iter()
+            .flat_map(|diagnostic| diagnostic.evidence.iter())
+            .filter(|evidence| evidence.label == "reason")
+            .map(|evidence| evidence.value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("unsupported_or_dynamic_exactness")),
+            "expected exactness rejection: {diagnostics:#?}"
+        );
+    }
+
+    fn root(path: &str, stable_key: &str) -> WorkspaceRootFact {
+        WorkspaceRootFact {
+            id: WorkspaceRootId(0),
+            kind: WorkspaceRootKind::Repository,
+            root_path: path.to_string(),
+            manifest_path: None,
+            language: None,
+            stable_key: stable_key.to_string(),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        }
+    }
+
+    fn package(
+        stable_key: &str,
+        workspace_root: Option<WorkspaceRootId>,
+        module_node: Option<ModuleNodeId>,
+        path: &str,
+        precision: TopologyPrecision,
+        status: TopologyStatus,
+    ) -> TopologyPackageFact {
+        TopologyPackageFact {
+            id: TopologyPackageId(0),
+            workspace_root,
+            package: None,
+            module_node,
+            kind: TopologyPackageKind::Workspace,
+            name: stable_key.to_string(),
+            version: None,
+            path: path.to_string(),
+            language: Some(Language::TypeScript),
+            stable_key: stable_key.to_string(),
+            producer_id: "test",
+            precision,
+            status,
+        }
+    }
+
+    fn import_edge(
+        stable_key: &str,
+        syntax_import: Option<ImportId>,
+        resolved_import: Option<ResolvedImportId>,
+        semantic_import_stable_key: Option<String>,
+        from_file: Option<FileId>,
+        status: ImportToPackageStatus,
+        precision: TopologyPrecision,
+    ) -> ImportToPackageFact {
+        ImportToPackageFact {
+            id: ImportToPackageId(0),
+            syntax_import,
+            resolved_import,
+            semantic_import_stable_key,
+            from_file,
+            from_package: Some(TopologyPackageId(404)),
+            to_package: None,
+            target_node: Some(ModuleNodeId(404)),
+            from_package_stable_key: None,
+            to_package_stable_key: None,
+            source_set_stable_key: None,
+            import_path: "react".to_string(),
+            context: ImportContextKind::Source,
+            stable_key: stable_key.to_string(),
+            producer_id: "test",
+            precision,
+            status,
+        }
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
+    }
+
+    fn topology_diagnostics(
+        diagnostics: &[crate::diagnostics::Diagnostic],
+    ) -> Vec<&crate::diagnostics::Diagnostic> {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.starts_with("Topology validation failed"))
+            .collect()
+    }
+
+    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
+        diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| evidence.label.as_str())
+            .collect()
+    }
+}
+
 #[derive(Debug, Default)]
 struct IdSets {
     files: BTreeSet<FileId>,

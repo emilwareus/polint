@@ -4402,8 +4402,12 @@ mod import_to_package {
 
 #[cfg(test)]
 mod module_topology_layer_cache {
-    use super::derive_module_topology_with_cache_stats;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use super::{
+        derive_module_topology_with_cache_stats, lifecycle_component_digest,
+        module_topology_layer_dependency_edges, module_topology_layer_key,
+        module_topology_layer_payload, write_module_topology_layer_payload,
+    };
+    use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::config::load_config;
@@ -4638,5 +4642,107 @@ mod module_topology_layer_cache {
                 .collect::<Vec<_>>(),
             first_keys
         );
+    }
+
+    #[test]
+    fn module_topology_layer_cache_rejects_duplicate_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut first = db_with_import_to_package_inputs();
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &first,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let module_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]);
+        let symbol_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]);
+        let derivation = derive_module_topology_with_cache_stats(
+            &mut first,
+            &cache,
+            &snapshot,
+            module_topology_manifest(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+        );
+        let mut payload = module_topology_layer_payload(&first, &derivation);
+        let mut duplicate = payload.import_to_package_edges[0].clone();
+        duplicate.id = crate::module_graph::topology::ImportToPackageId(99);
+        duplicate.import_path = "conflicting".to_string();
+        payload.import_to_package_edges.push(duplicate);
+
+        let config_digest = snapshot.config.digest.clone();
+        let go_lifecycle_digest = lifecycle_component_digest(
+            DigestKind::GoLifecycle,
+            "module_topology_go_lifecycle",
+            &snapshot.go_lifecycle.components,
+        );
+        let ts_js_lifecycle_digest = lifecycle_component_digest(
+            DigestKind::TsJsLifecycle,
+            "module_topology_ts_js_lifecycle",
+            &snapshot.ts_js_lifecycle.components,
+        );
+        let key = module_topology_layer_key(
+            &first,
+            module_topology_manifest(),
+            config_digest.clone(),
+            go_lifecycle_digest.clone(),
+            ts_js_lifecycle_digest.clone(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+        );
+        let dependencies = module_topology_layer_dependency_edges(
+            &first,
+            &key,
+            module_topology_manifest(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+        );
+        let store = crate::analysis_kernel::incremental::LayerCacheStore::new(
+            cache.layer_cache_dir(),
+            true,
+        );
+        let mut stats = CacheStats::default();
+        let mut diagnostics = Vec::new();
+        write_module_topology_layer_payload(
+            &store,
+            key,
+            &payload,
+            dependencies,
+            &mut stats,
+            &mut diagnostics,
+        )
+        .expect("corrupt module topology payload writes");
+
+        let mut second = db_with_import_to_package_inputs();
+        let second_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &second,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let second_result = derive_module_topology_with_cache_stats(
+            &mut second,
+            &cache,
+            &second_snapshot,
+            module_topology_manifest(),
+            module_digest,
+            symbol_digest,
+        );
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second.import_to_package_edges().len(), 1);
     }
 }
