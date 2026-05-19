@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-19T08:16:22.094Z"
+status: ready
+last_updated: "2026-05-19T08:36:48.115Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 32
-  completed_plans: 31
-  percent: 97
+  completed_plans: 32
+  percent: 100
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 26 — semantic-index-deepening
+**Current focus:** Phase 27 — layered-module-package-topology-graph
 
 ## Current Status
 
@@ -41,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 26 (semantic-index-deepening) — EXECUTING
-Plan: 5 of 6
+Phase: 27 (layered-module-package-topology-graph) — READY
+Plan: 0 of 0
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -55,7 +55,7 @@ Last activity: 2026-05-19
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
-| 26 | In Progress | 5/6 plans complete; semantic cache identity, payload persistence, restore validation, and stable export warm-reuse proof added; requirement SAE-SEM-01 |
+| 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
@@ -164,6 +164,9 @@ Last activity: 2026-05-19
 - [Phase 26-semantic-index-deepening]: Keep semantic cache identity and payload restore crate-private under the existing symbol graph provider.
 - [Phase 26-semantic-index-deepening]: Use schema symbol-graph-facts-2 for symbol graph layer payloads that include semantic_index rows.
 - [Phase 26-semantic-index-deepening]: Reject malformed semantic cache payloads before reuse instead of restoring partial or placeholder semantic facts.
+- [Phase 26-semantic-index-deepening]: Keep semantic eval support crate-private/test-facing; no public eval CLI, SDK view, or generic semantic graph API was added.
+- [Phase 26-semantic-index-deepening]: Represent semantic unknown statuses explicitly in eval reports so ambiguous, unresolved, dynamic, external, cycle, generated, setup-missing, and unsupported rows count as unknown evidence.
+- [Phase 26-semantic-index-deepening]: Document only existing Symbols<'_> and References<'_> behavior; scopes/import closure/resolution-step rows remain internal.
 
 ## Execution Metrics
 
@@ -190,12 +193,13 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 03 | 70 min | 3 | 5 |
 | 26-semantic-index-deepening | 04 | 23min | 3 | 6 |
 | 26-semantic-index-deepening | 05 | 13 min | 3 | 4 |
+| 26-semantic-index-deepening | 06 | 17 min | 3 | 14 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 26 Plan 05: Semantic-aware symbol graph cache identity, payload persistence, validation, and stable export restore proof.
-- Stopped at: Completed 26-05-PLAN.md; Phase 26 Plan 06 ready for execution.
+- Last activity: 2026-05-19 - Completed Phase 26 Plan 06: Semantic eval fixture coverage, public compatibility proof, and bounded symbol/reference docs.
+- Stopped at: Completed 26-06-PLAN.md; Phase 26 complete.
 
 ### Quick Tasks Completed
 
@@ -205,4 +209,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 26 Plan 06 is ready for execution.
+Phase 27 is ready for planning/execution.
