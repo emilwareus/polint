@@ -1587,3 +1587,326 @@ export function answer() {{
             .collect()
     }
 }
+
+#[cfg(test)]
+mod semantic_layer_payload {
+    use super::*;
+    use crate::analysis_kernel::incremental::LayerCacheManifest;
+    use crate::analysis_kernel::{FactFamily, FactRef};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode,
+        ModuleNodeId, ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, SymbolNamespace, span_from_byte_range,
+    };
+    use crate::symbol_graph::semantic::{
+        ExportFact, ExportId, ExportKind, ScopeFact, ScopeId, ScopeKind, SemanticIndexOutput,
+        SemanticStatus, StableExportId, StableExportIdentity,
+    };
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        std::fs::write(&path, source).expect("write fixture file");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn span_for(file: FileId, source: &str, needle: &str) -> Span {
+        let start = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing fixture text {needle:?}"));
+        span_from_byte_range(file, source, start, start + needle.len())
+    }
+
+    fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(0),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span_for(file, source, &format!("{path:?}")),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn fixture_db(root: &Path) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let app_source = r#"
+import { token as importedToken } from "./target";
+
+export function answer() {
+    return importedToken;
+}
+"#;
+        let target_source = "export const token = 42;\n";
+        let app = add_file(&mut db, root, "src/app.ts", app_source);
+        let target = add_file(&mut db, root, "src/target.ts", target_source);
+        let import = push_import(&mut db, app, app_source, "./target");
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: app,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(app),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::File,
+                    label: "src/target.ts".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        db
+    }
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn layer_key() -> LayerKey {
+        LayerKey::symbol_graph_layer_key(
+            manifest(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &["base"],
+            )],
+            semantic_provider_parameter_digest(),
+        )
+    }
+
+    fn cache_manifest_for(payload: &SymbolGraphLayerPayload) -> LayerCacheManifest {
+        let key = layer_key();
+        let payload_digest =
+            LayerCacheStore::payload_digest_for_json(payload).expect("payload digest");
+        let output_digest = symbol_graph_output_digest_for_payload(payload, Some(&key));
+        LayerCacheManifest::new(
+            key,
+            output_digest,
+            payload_digest,
+            Vec::new(),
+            PrecisionTier::SetupAware,
+            "native_trusted",
+            Vec::new(),
+        )
+    }
+
+    fn scope(file: FileId, stable_key: &str) -> ScopeFact {
+        ScopeFact {
+            id: ScopeId(0),
+            language: Language::TypeScript,
+            file: Some(file),
+            package: None,
+            module: None,
+            parent: None,
+            scope_path: vec!["module".to_string()],
+            kind: ScopeKind::Module,
+            stable_key: stable_key.to_string(),
+            status: SemanticStatus::Resolved,
+        }
+    }
+
+    fn stable_export(
+        file: FileId,
+        export_id: ExportId,
+        stable_key: &str,
+        symbol_key: &str,
+    ) -> StableExportIdentity {
+        StableExportIdentity {
+            id: StableExportId(0),
+            export: export_id,
+            language: Language::TypeScript,
+            package_key: None,
+            module_key: Some(format!("file:{}", file.0)),
+            export_name: "answer".to_string(),
+            namespace: SymbolNamespace::Value,
+            symbol_stable_key: symbol_key.to_string(),
+            generated_discriminator: None,
+            stable_key: stable_key.to_string(),
+            status: SemanticStatus::Resolved,
+        }
+    }
+
+    fn payload_with_semantic_index(file: FileId, semantic_index: SemanticIndexOutput) -> SymbolGraphLayerPayload {
+        SymbolGraphLayerPayload {
+            schema: SYMBOL_GRAPH_LAYER_SCHEMA.to_string(),
+            diagnostics: Vec::new(),
+            capability_support: Vec::new(),
+            symbols: Vec::new(),
+            definitions: Vec::new(),
+            references: Vec::new(),
+            semantic_index,
+        }
+    }
+
+    #[test]
+    fn cold_payload_writes_semantic_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("config");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut db = fixture_db(temp.path());
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config",
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let derivation = derive_requested_symbols_with_cache_stats(
+            &mut db,
+            &loaded,
+            &plan,
+            &cache,
+            &snapshot,
+            manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &["base"],
+            )],
+        );
+
+        let payload = symbol_graph_layer_payload(&db, &derivation);
+
+        assert!(!payload.semantic_index.scopes.is_empty());
+        assert!(!payload.semantic_index.stable_exports.is_empty());
+    }
+
+    #[test]
+    fn restore_replaces_semantic_rows_and_metadata() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "export const answer = 42;\n".to_string(),
+        );
+        let export = ExportFact {
+            id: ExportId(0),
+            language: Language::TypeScript,
+            file: Some(file),
+            package: None,
+            module: None,
+            scope: None,
+            symbol: None,
+            export_name: "answer".to_string(),
+            namespace: SymbolNamespace::Value,
+            kind: ExportKind::Named,
+            stable_key: "semantic:export:answer".to_string(),
+            status: SemanticStatus::Resolved,
+        };
+        let payload = payload_with_semantic_index(
+            file,
+            SemanticIndexOutput {
+                scopes: vec![scope(file, "semantic:scope:module")],
+                exports: vec![export],
+                stable_exports: vec![stable_export(
+                    file,
+                    ExportId(0),
+                    "semantic:stable-export:answer",
+                    "symbol:answer",
+                )],
+                ..SemanticIndexOutput::default()
+            },
+        );
+
+        restore_symbol_graph_layer_payload(&mut db, &payload);
+
+        assert_eq!(db.scopes().len(), 1);
+        assert_eq!(db.exports().len(), 1);
+        assert_eq!(db.stable_exports().len(), 1);
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::StableExport, 0))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn validation_rejects_missing_keys_absolute_paths_and_stable_export_conflicts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "export const answer = 42;\n".to_string(),
+        );
+        let valid_payload = payload_with_semantic_index(
+            file,
+            SemanticIndexOutput {
+                scopes: vec![scope(file, "semantic:scope:module")],
+                stable_exports: vec![stable_export(
+                    file,
+                    ExportId(0),
+                    "semantic:stable-export:answer",
+                    "symbol:answer",
+                )],
+                ..SemanticIndexOutput::default()
+            },
+        );
+        let valid_manifest = cache_manifest_for(&valid_payload);
+        assert!(validate_symbol_graph_layer_payload(
+            &valid_payload,
+            &valid_manifest
+        ));
+
+        let mut empty_key_payload = valid_payload.clone();
+        empty_key_payload.semantic_index.scopes[0].stable_key.clear();
+        assert!(!validate_symbol_graph_layer_payload(
+            &empty_key_payload,
+            &cache_manifest_for(&empty_key_payload)
+        ));
+
+        let mut absolute_path_payload = valid_payload.clone();
+        absolute_path_payload.semantic_index.stable_exports[0].module_key =
+            Some("/tmp/repo/src/app.ts".to_string());
+        assert!(!validate_symbol_graph_layer_payload(
+            &absolute_path_payload,
+            &cache_manifest_for(&absolute_path_payload)
+        ));
+
+        let mut conflict_payload = valid_payload.clone();
+        conflict_payload
+            .semantic_index
+            .stable_exports
+            .push(stable_export(
+                file,
+                ExportId(1),
+                "semantic:stable-export:answer",
+                "symbol:other",
+            ));
+        assert!(!validate_symbol_graph_layer_payload(
+            &conflict_payload,
+            &cache_manifest_for(&conflict_payload)
+        ));
+    }
+}
