@@ -703,6 +703,73 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_module_topology_row_carries_layer_cache_stats() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        )
+        .expect("write package");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "import React from 'react';\nexport function App() { return React.createElement('main'); }\n",
+        )
+        .expect("write app");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+        let disabled_cache = Cache::new("", false);
+        let disabled = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &disabled_cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("disabled-cache kernel run should succeed");
+
+        let first_module_topology = provider_output(&first, "polint.module_topology");
+        let second_module_topology = provider_output(&second, "polint.module_topology");
+        let disabled_module_topology = provider_output(&disabled, "polint.module_topology");
+
+        assert_eq!(first_module_topology.cache_stats.misses, 1);
+        assert_eq!(first_module_topology.cache_stats.recomputes, 1);
+        assert_eq!(first_module_topology.cache_stats.writes, 1);
+        assert!(!first_module_topology.output_digest.value.is_empty());
+        assert_eq!(second_module_topology.cache_stats.hits, 1);
+        assert_eq!(second_module_topology.cache_stats.verified_reuse, 1);
+        assert_eq!(second_module_topology.cache_stats.recomputes, 0);
+        assert_eq!(
+            first_module_topology.output_digest,
+            second_module_topology.output_digest
+        );
+        assert_eq!(disabled_module_topology.cache_stats.bypasses_disabled, 1);
+        assert_eq!(disabled_module_topology.cache_stats.recomputes, 1);
+        assert!(!disabled_module_topology.output_digest.value.is_empty());
+    }
+
+    #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(temp.path().join("src")).expect("create src");

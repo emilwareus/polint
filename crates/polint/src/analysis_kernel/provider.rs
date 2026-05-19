@@ -307,6 +307,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );

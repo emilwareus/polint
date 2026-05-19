@@ -590,6 +590,13 @@ mod tests {
             .expect("symbol graph provider manifest exists")
     }
 
+    fn module_topology_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_topology")
+            .expect("module topology provider manifest exists")
+    }
+
     fn symbol_graph_key(
         source_function_digest: Digest,
         import_shape_digest: Digest,
@@ -645,6 +652,26 @@ mod tests {
                 "metrics_parameters",
                 &["file_metrics", "function_metrics", "complexity_metrics"],
             ),
+        )
+    }
+
+    fn module_topology_key(
+        import_shape_digest: Digest,
+        base_topology_digest: Digest,
+        module_graph_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        semantic_parameter_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::module_topology_layer_key(
+            module_topology_manifest(),
+            vec![import_shape_digest],
+            vec![base_topology_digest],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            module_graph_output_digest,
+            symbol_graph_output_digest,
+            semantic_parameter_digest,
         )
     }
 
@@ -808,6 +835,82 @@ mod tests {
         ] {
             assert_ne!(base, changed);
         }
+    }
+
+    #[test]
+    fn module_topology_layer_key_changes_on_import_topology_module_symbol_and_semantic_inputs() {
+        let base = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_import = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["vue"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_topology = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:b"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_module = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_symbol = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["changed"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_semantic = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "semantic", &["changed"]),
+        );
+
+        assert_ne!(base, changed_import);
+        assert_ne!(base, changed_topology);
+        assert_ne!(base, changed_module);
+        assert_ne!(base, changed_symbol);
+        assert_ne!(base, changed_semantic);
     }
 
     #[test]

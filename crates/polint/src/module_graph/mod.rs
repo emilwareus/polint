@@ -3986,3 +3986,244 @@ mod import_to_package {
         }
     }
 }
+
+#[cfg(test)]
+mod module_topology_layer_cache {
+    use super::derive_module_topology_with_cache_stats;
+    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span,
+    };
+    use crate::module_graph::topology::{
+        SourceSetFact, SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact,
+        TopologyPackageId, TopologyPackageKind, TopologyPrecision, TopologyStatus,
+        WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    };
+    use crate::symbol_graph::semantic::{
+        SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn module_topology_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_topology")
+            .expect("module topology provider manifest exists")
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
+    }
+
+    fn add_file(db: &mut AnalysisDb, relative_path: &str) -> FileId {
+        db.add_source_file(
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            Language::TypeScript,
+            Arc::from(""),
+            format!("hash:{relative_path}"),
+        )
+    }
+
+    fn db_with_import_to_package_inputs() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts");
+        let target = add_file(&mut db, "src/target.ts");
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from),
+            language: Language::TypeScript,
+        });
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: from,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::Repository,
+                root_path: ".".to_string(),
+                manifest_path: None,
+                language: None,
+                stable_key: "root:repo".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(0)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "app".to_string(),
+                    version: None,
+                    path: ".".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(1)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "target".to_string(),
+                    version: None,
+                    path: "src/target.ts".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:target".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(0)),
+                root: Some(WorkspaceRootId(0)),
+                kind: SourceSetKind::Source,
+                path: ".".to_string(),
+                language: Some(Language::TypeScript),
+                files: vec![from, target],
+                stable_key: "source-set:source".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            ..TopologyOutput::default()
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::TypeScript,
+                file: Some(from),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: "./target".to_string(),
+                local_name: None,
+                imported_name: None,
+                namespace: crate::core::SymbolNamespace::Value,
+                kind: SemanticImportKind::StaticDefault,
+                stable_key: "semantic-import:target".to_string(),
+                status: SemanticStatus::Resolved,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db
+    }
+
+    #[test]
+    fn warm_cache_restore_preserves_import_to_package_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut first = db_with_import_to_package_inputs();
+        let first_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &first,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        let first_result = derive_module_topology_with_cache_stats(
+            &mut first,
+            &cache,
+            &first_snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+        );
+        let first_keys = first
+            .import_to_package_edges()
+            .iter()
+            .map(|row| row.stable_key.clone())
+            .collect::<Vec<_>>();
+
+        let mut second = db_with_import_to_package_inputs();
+        let second_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &second,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let second_result = derive_module_topology_with_cache_stats(
+            &mut second,
+            &cache,
+            &second_snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+        );
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert_eq!(first_result.cache_stats.writes, 1);
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(
+            second
+                .import_to_package_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect::<Vec<_>>(),
+            first_keys
+        );
+    }
+}
