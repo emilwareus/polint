@@ -28,7 +28,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 23 | 5/5 | Complete   | 2026-05-18 |
 | 24 | 5/5 | Complete    | 2026-05-18 |
 | 25 | 4/4 | Complete    | 2026-05-18 |
-| 26 | 4/6 | In Progress|  |
+| 26 | 5/6 | In Progress|  |
 | 27 | Layered Module/Package/Topology Graph | Expand topology facts for workspaces, packages, source sets, declared deps, lockfiles, and overlays. | SAE-SEM-02 |
 | 28 | Private Semantic MIR and Place Identity | Lower Go and TS/JS function bodies into private MIR with stable place identities. | SAE-SEM-03 |
 | 29 | Local CFG and Control Dependence | Build local CFG, dominance, postdominance, and control-dependence facts over MIR. | SAE-SEM-04 |
@@ -152,14 +152,14 @@ Plans:
 **Goal:** Deepen the semantic index with scopes, richer imports, resolution facts, aliases, generated symbols, unknowns, and stable export identities.
 **Requirements:** SAE-SEM-01
 **Research:** `research/semantic-index/FINAL-REPORT.md`, `research/semantic-index/RECOMMENDED_IMPLEMENTATION.md`, `research/semantic-index/VALIDATION.md`
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 - [x] 26-01-PLAN.md — Internal semantic fact contracts, AnalysisDb storage, metadata families, and provider manifest outputs
 - [x] 26-02-PLAN.md — TS/JS scopes, imports/exports, aliases, resolution rows, unknowns, and stable exports
 - [x] 26-03-PLAN.md — Go sidecar semantic output, normalized Go semantic rows, and setup-missing handling
 - [x] 26-04-PLAN.md — Alias/reexport closure, generated hooks, validation, and internal debug JSON
-- [ ] 26-05-PLAN.md — Semantic layer cache identity, payload persistence, restore validation, and stable export cache proof
+- [x] 26-05-PLAN.md — Semantic layer cache identity, payload persistence, restore validation, and stable export cache proof
 - [ ] 26-06-PLAN.md — Semantic eval fixtures, public no-leak proof, and bounded symbol/reference docs updates
 
 **Success criteria:**

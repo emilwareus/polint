@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T07:59:09.398Z"
+last_updated: "2026-05-19T08:16:22.094Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 6
   total_plans: 32
-  completed_plans: 30
-  percent: 94
+  completed_plans: 31
+  percent: 97
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 26 (semantic-index-deepening) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -55,7 +55,7 @@ Last activity: 2026-05-19
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
-| 26 | In Progress | 3/6 plans complete; Go sidecar semantic output, normalized Go semantic rows, setup-missing handling, and prior TS/JS semantic rows added; requirement SAE-SEM-01 |
+| 26 | In Progress | 5/6 plans complete; semantic cache identity, payload persistence, restore validation, and stable export warm-reuse proof added; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
@@ -161,6 +161,9 @@ Last activity: 2026-05-19
 - [Phase 26-semantic-index-deepening]: Keep semantic closure, generated hooks, validation, and debug JSON crate-private/test-only for plan 26-04.
 - [Phase 26-semantic-index-deepening]: Semantic metadata from polint.symbol_graph must not claim FactPrecision::Exact; setup-aware precision is enforced by validation.
 - [Phase 26-semantic-index-deepening]: Native generated hooks are polint.symbol_graph rows with source_stable_key, generated_discriminator, and GeneratedHintLookup provenance.
+- [Phase 26-semantic-index-deepening]: Keep semantic cache identity and payload restore crate-private under the existing symbol graph provider.
+- [Phase 26-semantic-index-deepening]: Use schema symbol-graph-facts-2 for symbol graph layer payloads that include semantic_index rows.
+- [Phase 26-semantic-index-deepening]: Reject malformed semantic cache payloads before reuse instead of restoring partial or placeholder semantic facts.
 
 ## Execution Metrics
 
@@ -186,12 +189,13 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 02 | 19 min | 3 | 2 |
 | 26-semantic-index-deepening | 03 | 70 min | 3 | 5 |
 | 26-semantic-index-deepening | 04 | 23min | 3 | 6 |
+| 26-semantic-index-deepening | 05 | 13 min | 3 | 4 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 26 Plan 04: Alias/reexport closure, native generated-symbol hooks, validation, and internal debug JSON.
-- Stopped at: Completed 26-04-PLAN.md; Phase 26 Plan 05 ready for execution.
+- Last activity: 2026-05-19 - Completed Phase 26 Plan 05: Semantic-aware symbol graph cache identity, payload persistence, validation, and stable export restore proof.
+- Stopped at: Completed 26-05-PLAN.md; Phase 26 Plan 06 ready for execution.
 
 ### Quick Tasks Completed
 
@@ -201,4 +205,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 26 Plan 05 is ready for execution.
+Phase 26 Plan 06 is ready for execution.
