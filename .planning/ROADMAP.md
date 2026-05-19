@@ -173,7 +173,7 @@ Plans:
 **Goal:** Expand module topology into workspace roots, packages/projects, source sets, declared requirements, lockfile/tool edges, import-to-package facts, and overlays.
 **Requirements:** SAE-SEM-02
 **Research:** `research/module-graph/FINAL-REPORT.md`, `research/module-graph/RECOMMENDED_IMPLEMENTATION.md`, `research/module-graph/VALIDATION.md`
-**Plans:** 6 plans
+**Plans:** 7 plans
 
 Plans:
 - [ ] 27-01-PLAN.md — Internal topology contracts, AnalysisDb storage, metadata families, and provider output labels
@@ -181,7 +181,8 @@ Plans:
 - [ ] 27-03-PLAN.md — TS/JS package, workspace, source-set, declared dependency, and lockfile topology
 - [ ] 27-04-PLAN.md — Base topology wiring into module graph payloads and cache identity
 - [ ] 27-05-PLAN.md — Semantic-aware import-to-package provider, cache, and validation
-- [ ] 27-06-PLAN.md — Topology eval fixtures, cache proof, public no-leak proof, and docs alignment
+- [ ] 27-06-PLAN.md — Topology eval fixtures and cache proof
+- [ ] 27-07-PLAN.md — Public no-leak proof, SDK compatibility, and docs alignment
 
 **Success criteria:**
 1. Go monorepo module-root inference works.
