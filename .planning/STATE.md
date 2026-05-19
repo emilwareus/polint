@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T07:31:54.782Z"
+last_updated: "2026-05-19T07:59:09.398Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 6
   total_plans: 32
-  completed_plans: 29
-  percent: 91
+  completed_plans: 30
+  percent: 94
 ---
 
 # State: polint
@@ -158,6 +158,9 @@ Last activity: 2026-05-19
 - [Phase 26-semantic-index-deepening]: Use the existing Go lifecycle and sidecar path, adding semantic rows without writing repository lifecycle files.
 - [Phase 26-semantic-index-deepening]: Keep Go semantic rows crate-private under symbol_graph::semantic with no SDK, runner, CLI, or crate-root public surface.
 - [Phase 26-semantic-index-deepening]: Represent Go setup gaps and unresolved sidecar references as UnknownFallback semantic rows while preserving polint/capability diagnostics.
+- [Phase 26-semantic-index-deepening]: Keep semantic closure, generated hooks, validation, and debug JSON crate-private/test-only for plan 26-04.
+- [Phase 26-semantic-index-deepening]: Semantic metadata from polint.symbol_graph must not claim FactPrecision::Exact; setup-aware precision is enforced by validation.
+- [Phase 26-semantic-index-deepening]: Native generated hooks are polint.symbol_graph rows with source_stable_key, generated_discriminator, and GeneratedHintLookup provenance.
 
 ## Execution Metrics
 
@@ -182,12 +185,13 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 01 | 12 min | 3 | 5 |
 | 26-semantic-index-deepening | 02 | 19 min | 3 | 2 |
 | 26-semantic-index-deepening | 03 | 70 min | 3 | 5 |
+| 26-semantic-index-deepening | 04 | 23min | 3 | 6 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 26 Plan 03: Go sidecar semantic output, normalized Go semantic rows, and setup-missing handling.
-- Stopped at: Completed 26-03-PLAN.md; Phase 26 Plan 04 ready for execution.
+- Last activity: 2026-05-19 - Completed Phase 26 Plan 04: Alias/reexport closure, native generated-symbol hooks, validation, and internal debug JSON.
+- Stopped at: Completed 26-04-PLAN.md; Phase 26 Plan 05 ready for execution.
 
 ### Quick Tasks Completed
 
@@ -197,4 +201,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 26 Plan 04 is ready for execution.
+Phase 26 Plan 05 is ready for execution.
