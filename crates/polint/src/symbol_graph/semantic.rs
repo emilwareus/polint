@@ -1088,3 +1088,128 @@ mod tests {
         assert_eq!(output.stable_exports.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod alias_reexport_closure_tests {
+    use super::*;
+    use crate::core::{FileId, Language, SymbolNamespace};
+
+    fn alias(source: &str, targets: &[&str], status: SemanticStatus) -> AliasFact {
+        AliasFact {
+            id: AliasId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            source_symbol_stable_key: source.to_string(),
+            target_symbol_stable_keys: targets.iter().map(|target| (*target).to_string()).collect(),
+            kind: AliasKind::Import,
+            stable_key: String::new(),
+            status,
+        }
+    }
+
+    fn star_export(stable_key: &str, status: SemanticStatus) -> ExportFact {
+        ExportFact {
+            id: ExportId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            scope: None,
+            symbol: None,
+            export_name: "*".to_string(),
+            namespace: SymbolNamespace::Module,
+            kind: ExportKind::StarReexport,
+            stable_key: stable_key.to_string(),
+            status,
+        }
+    }
+
+    fn stable_export(export_name: &str, symbol_key: &str) -> StableExportIdentity {
+        StableExportIdentity {
+            id: StableExportId(0),
+            export: ExportId(0),
+            language: Language::TypeScript,
+            package_key: None,
+            module_key: Some("src/mod.ts".to_string()),
+            export_name: export_name.to_string(),
+            namespace: SymbolNamespace::Value,
+            symbol_stable_key: symbol_key.to_string(),
+            generated_discriminator: Some("native".to_string()),
+            stable_key: format!("stable-export:{export_name}"),
+            status: SemanticStatus::Resolved,
+        }
+    }
+
+    #[test]
+    fn acyclic_import_alias_chains_resolve_to_deterministic_targets() {
+        let output = super::alias_reexport_closure(
+            &[alias("import:a", &["import:b"], SemanticStatus::Resolved), alias(
+                "import:b",
+                &["symbol:c"],
+                SemanticStatus::Resolved,
+            )],
+            &[],
+            &[],
+        );
+
+        let closure_alias = output
+            .aliases
+            .iter()
+            .find(|alias| alias.source_symbol_stable_key == "import:a")
+            .expect("closure contains source alias");
+
+        assert_eq!(closure_alias.status, SemanticStatus::Resolved);
+        assert_eq!(closure_alias.target_symbol_stable_keys, vec!["symbol:c"]);
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.source_stable_key == "import:a"
+                && resolution.target_stable_keys == vec!["symbol:c".to_string()]
+                && resolution.step == ResolutionStepKind::ImportAliasLookup
+                && resolution.status == SemanticStatus::Resolved
+        }));
+    }
+
+    #[test]
+    fn reexport_cycles_terminate_and_emit_cycle_rows() {
+        let output = super::alias_reexport_closure(
+            &[
+                alias("reexport:a", &["reexport:b"], SemanticStatus::Resolved),
+                alias("reexport:b", &["reexport:a"], SemanticStatus::Resolved),
+            ],
+            &[],
+            &[],
+        );
+
+        assert!(output.aliases.iter().any(|alias| {
+            alias.source_symbol_stable_key == "reexport:a" && alias.status == SemanticStatus::Cycle
+        }));
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.source_stable_key == "reexport:a"
+                && resolution.step == ResolutionStepKind::ImportAliasLookup
+                && resolution.status == SemanticStatus::Cycle
+        }));
+    }
+
+    #[test]
+    fn star_exports_with_incomplete_targets_emit_ambiguous_closure_rows() {
+        let output = super::alias_reexport_closure(
+            &[],
+            &[star_export("export:*:src/star.ts", SemanticStatus::Unresolved)],
+            &[stable_export("known", "symbol:known")],
+        );
+
+        let alias = output
+            .aliases
+            .iter()
+            .find(|alias| alias.source_symbol_stable_key == "export:*:src/star.ts")
+            .expect("star export gets conservative closure alias");
+
+        assert_eq!(alias.status, SemanticStatus::Ambiguous);
+        assert_eq!(alias.target_symbol_stable_keys, vec!["symbol:known"]);
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.source_stable_key == "export:*:src/star.ts"
+                && resolution.status == SemanticStatus::Ambiguous
+        }));
+    }
+}
