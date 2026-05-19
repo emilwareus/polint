@@ -4,6 +4,7 @@
 )]
 
 use crate::core::{FileId, ImportId, Language, ModuleNodeId, PackageId, ResolvedImportId};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct WorkspaceRootId(pub(crate) u64);
@@ -25,6 +26,28 @@ pub(crate) struct ImportToPackageId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RepoTopologyOverlayId(pub(crate) u64);
+
+macro_rules! impl_topology_id_from_u64 {
+    ($($id:ty),* $(,)?) => {
+        $(
+            impl From<u64> for $id {
+                fn from(value: u64) -> Self {
+                    Self(value)
+                }
+            }
+        )*
+    };
+}
+
+impl_topology_id_from_u64!(
+    WorkspaceRootId,
+    TopologyPackageId,
+    SourceSetId,
+    DependencyRequirementId,
+    ResolvedDependencyEdgeId,
+    ImportToPackageId,
+    RepoTopologyOverlayId,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceRootFact {
@@ -254,53 +277,102 @@ pub(crate) enum TopologyStatus {
 
 impl TopologyOutput {
     pub(crate) fn normalized(mut self) -> Self {
-        normalize_rows(
+        let root_ids = normalize_rows(
             &mut self.workspace_roots,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = WorkspaceRootId(id),
         );
-        normalize_rows(
+        let package_ids = normalize_rows(
             &mut self.packages,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = TopologyPackageId(id),
         );
-        normalize_rows(
+        let source_set_ids = normalize_rows(
             &mut self.source_sets,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = SourceSetId(id),
         );
-        normalize_rows(
+        let requirement_ids = normalize_rows(
             &mut self.dependency_requirements,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = DependencyRequirementId(id),
         );
         normalize_rows(
             &mut self.resolved_dependency_edges,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = ResolvedDependencyEdgeId(id),
         );
         normalize_rows(
             &mut self.import_to_package_edges,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = ImportToPackageId(id),
         );
         normalize_rows(
             &mut self.overlays,
+            |row| row.id,
             |row| &row.stable_key,
             |row, id| row.id = RepoTopologyOverlayId(id),
         );
+        for package in &mut self.packages {
+            remap_option(&mut package.workspace_root, &root_ids);
+        }
+        for source_set in &mut self.source_sets {
+            remap_option(&mut source_set.package, &package_ids);
+            remap_option(&mut source_set.root, &root_ids);
+        }
+        for requirement in &mut self.dependency_requirements {
+            remap_option(&mut requirement.from_package, &package_ids);
+            remap_option(&mut requirement.target_package, &package_ids);
+        }
+        for edge in &mut self.resolved_dependency_edges {
+            remap_option(&mut edge.requirement, &requirement_ids);
+            remap_option(&mut edge.from_package, &package_ids);
+            remap_option(&mut edge.to_package, &package_ids);
+        }
+        for edge in &mut self.import_to_package_edges {
+            remap_option(&mut edge.from_package, &package_ids);
+            remap_option(&mut edge.to_package, &package_ids);
+        }
+        for overlay in &mut self.overlays {
+            remap_option(&mut overlay.root, &root_ids);
+            remap_option(&mut overlay.package, &package_ids);
+            remap_option(&mut overlay.source_set, &source_set_ids);
+        }
         self
     }
 }
 
-fn normalize_rows<T>(
+fn normalize_rows<T, Id>(
     rows: &mut [T],
+    id: impl Fn(&T) -> Id,
     stable_key: impl Fn(&T) -> &str,
     mut assign_id: impl FnMut(&mut T, u64),
-) {
+) -> BTreeMap<Id, Id>
+where
+    Id: Copy + Ord + From<u64>,
+{
     rows.sort_by(|left, right| stable_key(left).cmp(stable_key(right)));
+    let mut ids = BTreeMap::new();
     for (index, row) in rows.iter_mut().enumerate() {
+        let old_id = id(row);
+        let new_id = Id::from(index as u64);
         assign_id(row, index as u64);
+        ids.insert(old_id, new_id);
+    }
+    ids
+}
+
+fn remap_option<Id: Copy + Ord>(value: &mut Option<Id>, ids: &BTreeMap<Id, Id>) {
+    if let Some(id) = value
+        && let Some(remapped) = ids.get(id)
+    {
+        *value = Some(*remapped);
     }
 }
 
