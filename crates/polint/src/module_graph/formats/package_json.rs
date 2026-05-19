@@ -47,9 +47,10 @@ pub(crate) fn parse_package_json(relative_path: &str, contents: &str) -> Package
         return manifest;
     };
     let Some(object) = value.as_object() else {
-        manifest
-            .unsupported
-            .push(unsupported(relative_path, "package.json root is not an object"));
+        manifest.unsupported.push(unsupported(
+            relative_path,
+            "package.json root is not an object",
+        ));
         return manifest;
     };
 
@@ -76,7 +77,13 @@ pub(crate) fn parse_package_json(relative_path: &str, contents: &str) -> Package
         ("optionalDependencies", RequirementKind::Optional),
         ("bundleDependencies", RequirementKind::Bundled),
     ] {
-        append_dependency_section(&mut manifest, relative_path, section, kind, object.get(section));
+        append_dependency_section(
+            &mut manifest,
+            relative_path,
+            section,
+            kind,
+            object.get(section),
+        );
     }
 
     manifest
@@ -115,7 +122,9 @@ fn evidence_entries(value: Option<&Value>) -> Vec<String> {
         Some(Value::Array(values)) => values.iter().filter_map(evidence_value).collect(),
         Some(Value::Object(object)) => object
             .iter()
-            .filter_map(|(key, value)| evidence_value(value).map(|rendered| format!("{key}:{rendered}")))
+            .filter_map(|(key, value)| {
+                evidence_value(value).map(|rendered| format!("{key}:{rendered}"))
+            })
             .collect(),
         _ => Vec::new(),
     };
@@ -141,8 +150,9 @@ fn append_dependency_section(
 ) {
     match value {
         Some(Value::Object(object)) => {
-            manifest.dependencies.extend(object.iter().filter_map(
-                |(target_name, requirement)| {
+            manifest
+                .dependencies
+                .extend(object.iter().filter_map(|(target_name, requirement)| {
                     requirement.as_str().map(|version| PackageJsonDependency {
                         target_name: target_name.clone(),
                         version_requirement: Some(version.to_string()),
@@ -153,8 +163,7 @@ fn append_dependency_section(
                         precision: TopologyPrecision::ExactStatic,
                         status: TopologyStatus::Present,
                     })
-                },
-            ));
+                }));
         }
         Some(Value::Array(entries)) if section == "bundleDependencies" => {
             manifest
@@ -293,6 +302,9 @@ mod tests {
 
         assert_eq!(manifest.unsupported.len(), 1);
         assert_eq!(manifest.unsupported[0].status, TopologyStatus::Unsupported);
-        assert_eq!(manifest.unsupported[0].precision, TopologyPrecision::Unknown);
+        assert_eq!(
+            manifest.unsupported[0].precision,
+            TopologyPrecision::Unknown
+        );
     }
 }

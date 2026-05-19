@@ -1,8 +1,8 @@
-use crate::core::{
-    AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision, SourceFile,
-    ResolutionStatus, UnresolvedReason,
-};
 use crate::config::LoadedConfig;
+use crate::core::{
+    AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision,
+    ResolutionStatus, SourceFile, UnresolvedReason,
+};
 use crate::module_graph::formats::package_json::{PackageJsonManifest, parse_package_json};
 use crate::module_graph::formats::package_lock::parse_package_lock;
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
@@ -11,8 +11,8 @@ use crate::module_graph::topology::{
     DependencyRequirementFact, DependencyRequirementId, RepoTopologyOverlayFact,
     RepoTopologyOverlayId, RepoTopologyOverlayKind, RequirementKind, ResolvedDependencyEdgeFact,
     ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact, SourceSetId, SourceSetKind,
-    TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
-    TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind, TopologyPrecision,
+    TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
 };
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
@@ -84,7 +84,11 @@ mod topology {
             "package.json",
             r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
         );
-        write_fixture(temp.path(), "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+        write_fixture(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            "packages:\n  - packages/*\n",
+        );
         write_fixture(temp.path(), "package-lock.json", r#"{"lockfileVersion":3}"#);
         write_fixture(temp.path(), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
         write_fixture(temp.path(), "yarn.lock", "# yarn lockfile\n");
@@ -124,8 +128,12 @@ mod topology {
             add_fixture_file(&mut db, temp.path(), "generated/client.ts", "export {};\n");
         let generated_named =
             add_fixture_file(&mut db, temp.path(), "src/api.generated.ts", "export {};\n");
-        let vendor =
-            add_fixture_file(&mut db, temp.path(), "node_modules/pkg/index.ts", "export {};\n");
+        let vendor = add_fixture_file(
+            &mut db,
+            temp.path(),
+            "node_modules/pkg/index.ts",
+            "export {};\n",
+        );
         let loaded = load_config(temp.path()).expect("config loads");
 
         let output = collect_ts_topology(&loaded, &db, None);
@@ -133,7 +141,11 @@ mod topology {
         assert!(source_set_for_file(&output, source, SourceSetKind::Source));
         assert!(source_set_for_file(&output, test, SourceSetKind::Test));
         assert!(source_set_for_file(&output, spec, SourceSetKind::Test));
-        assert!(source_set_for_file(&output, nested_test, SourceSetKind::Test));
+        assert!(source_set_for_file(
+            &output,
+            nested_test,
+            SourceSetKind::Test
+        ));
         assert!(source_set_for_file(
             &output,
             generated,
@@ -402,12 +414,7 @@ mod dependency_topology {
         path
     }
 
-    fn add_fixture_file(
-        db: &mut AnalysisDb,
-        root: &Path,
-        relative_path: &str,
-        source: &str,
-    ) {
+    fn add_fixture_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) {
         let path = write_fixture(root, relative_path, source);
         db.add_file(path, relative_path.to_string(), source.to_string());
     }
@@ -686,7 +693,8 @@ fn collect_package_manifests(
         package_paths.insert(".".to_string());
     }
     for file in ts_files {
-        if let Some(package_path) = nearest_package_root_for_relative_path(loaded, &file.relative_path)
+        if let Some(package_path) =
+            nearest_package_root_for_relative_path(loaded, &file.relative_path)
         {
             package_paths.insert(package_path);
         }
@@ -762,7 +770,9 @@ fn workspace_root_for_package<'a>(
 ) -> Option<&'a String> {
     workspace_roots
         .iter()
-        .filter(|root| package_path == root.as_str() || package_path.starts_with(&format!("{root}/")))
+        .filter(|root| {
+            package_path == root.as_str() || package_path.starts_with(&format!("{root}/"))
+        })
         .max_by_key(|root| root.len())
 }
 
@@ -800,7 +810,11 @@ fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, pa
             schema.to_string()
         } else {
             fs::read_to_string(loaded.root.join(&relative_path))
-                .map(|contents| parse_package_lock(&relative_path, &contents).schema_label.to_string())
+                .map(|contents| {
+                    parse_package_lock(&relative_path, &contents)
+                        .schema_label
+                        .to_string()
+                })
                 .unwrap_or_else(|_| "package-lock-unknown".to_string())
         };
         push_overlay(
@@ -1562,10 +1576,10 @@ mod tests {
 
     mod topology {
         use super::*;
+        use crate::core::FileId;
         use crate::module_graph::topology::{
             RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, WorkspaceRootKind,
         };
-        use crate::core::FileId;
 
         #[test]
         fn collect_ts_topology_emits_js_workspace_and_member_packages() {
@@ -1611,7 +1625,11 @@ mod tests {
                 "package.json",
                 r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
             );
-            write_fixture(temp.path(), "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+            write_fixture(
+                temp.path(),
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\n",
+            );
             write_fixture(temp.path(), "package-lock.json", r#"{"lockfileVersion":3}"#);
             write_fixture(temp.path(), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
             write_fixture(temp.path(), "yarn.lock", "# yarn lockfile\n");
@@ -1651,8 +1669,12 @@ mod tests {
                 add_fixture_file(&mut db, temp.path(), "generated/client.ts", "export {};\n");
             let generated_named =
                 add_fixture_file(&mut db, temp.path(), "src/api.generated.ts", "export {};\n");
-            let vendor =
-                add_fixture_file(&mut db, temp.path(), "node_modules/pkg/index.ts", "export {};\n");
+            let vendor = add_fixture_file(
+                &mut db,
+                temp.path(),
+                "node_modules/pkg/index.ts",
+                "export {};\n",
+            );
             let loaded = load_config(temp.path()).expect("config loads");
 
             let output = collect_ts_topology(&loaded, &db, None);
@@ -1660,7 +1682,11 @@ mod tests {
             assert!(source_set_for_file(&output, source, SourceSetKind::Source));
             assert!(source_set_for_file(&output, test, SourceSetKind::Test));
             assert!(source_set_for_file(&output, spec, SourceSetKind::Test));
-            assert!(source_set_for_file(&output, nested_test, SourceSetKind::Test));
+            assert!(source_set_for_file(
+                &output,
+                nested_test,
+                SourceSetKind::Test
+            ));
             assert!(source_set_for_file(
                 &output,
                 generated,
