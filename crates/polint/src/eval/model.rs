@@ -35,6 +35,8 @@ pub(crate) enum FixtureArea {
     Provenance,
     Cache,
     Extension,
+    #[serde(rename = "semantic-index")]
+    SemanticIndex,
     Facts,
     Graphs,
     Paths,

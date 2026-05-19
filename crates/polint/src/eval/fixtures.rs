@@ -268,6 +268,55 @@ pub(crate) fn run_layer_cache_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_semantic_index_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "resolved_imports",
+        "module_graph",
+        "symbols",
+        "references",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+
+    let mut observed = warm_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
+    observed.extend(tagged_layer_cache_invariants("warm", &warm_observed));
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -1206,6 +1255,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "layer-cache"
         {
             run_layer_cache_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::SemanticIndex
+            && fixture.manifest.case_id == "semantic-index-core"
+        {
+            run_semantic_index_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -1240,7 +1293,7 @@ mod semantic_index_core {
         let rendered = to_deterministic_json_pretty(&run);
 
         assert_eq!(case.case_id, "semantic-index-core");
-        assert_eq!(case.area, FixtureArea::Facts);
+        assert_eq!(case.area, FixtureArea::SemanticIndex);
         assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
         assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
         assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
