@@ -1870,6 +1870,59 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn module_graph_layer_key_topology_inputs_dependency_edges_include_manifest_lock_workspace_and_overlay_inputs()
+     {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for (path, source) in [
+            ("go.mod", "module example.com/repo\n"),
+            ("go.sum", "github.com/acme/lib v1.0.0 h1:abc\n"),
+            ("go.work", "go 1.22\nuse ./services/api\n"),
+            ("package.json", r#"{"name":"root"}"#),
+            ("package-lock.json", r#"{"lockfileVersion":3}"#),
+            ("pnpm-workspace.yaml", "packages:\n  - packages/*\n"),
+            ("tsconfig.json", r#"{"compilerOptions":{"baseUrl":"."}}"#),
+        ] {
+            write_file(temp.path(), path, source);
+        }
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+        let key = module_graph_key(&db);
+
+        let edges = super::module_graph_layer_dependency_edges(
+            &db,
+            &key,
+            module_graph_manifest(),
+            &[],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+        );
+
+        for file_name in [
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "package.json",
+            "package-lock.json",
+            "pnpm-workspace.yaml",
+            "tsconfig.json",
+        ] {
+            assert!(
+                edges.iter().any(|edge| matches!(
+                    (&edge.from, &edge.to, edge.kind, edge.required_shape),
+                    (
+                        CacheNode::Layer(layer),
+                        CacheNode::Input(input),
+                        DependencyKind::Input,
+                        ShapeKind::ModuleTopology
+                    ) if layer == &key && input.contains(file_name)
+                )),
+                "missing topology dependency edge for {file_name}"
+            );
+        }
+    }
+
     fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
         let id = id?;
         db.module_nodes()

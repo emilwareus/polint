@@ -446,6 +446,9 @@ pub(crate) fn semantic_provider_parameter_digest() -> Digest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::AnalysisDb;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     fn digest(label: &str, value: &str) -> Digest {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
@@ -562,6 +565,81 @@ mod tests {
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
         )
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_change_on_manifest_lock_workspace_and_tsconfig() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let topology_files = [
+            "go.mod",
+            "go.work",
+            "go.sum",
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "bun.lockb",
+            "tsconfig.json",
+        ];
+        for name in topology_files {
+            write_file(temp.path(), name, &format!("{name}: base\n"));
+        }
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digests(temp.path(), &db);
+        assert_eq!(base.len(), topology_files.len());
+
+        for changed_name in topology_files {
+            write_file(temp.path(), changed_name, &format!("{changed_name}: changed\n"));
+            let changed = module_graph_topology_input_digests(temp.path(), &db);
+            assert_ne!(base, changed, "{changed_name} should affect topology inputs");
+            write_file(temp.path(), changed_name, &format!("{changed_name}: base\n"));
+        }
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_include_absent_extension_placeholder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+        let topology_inputs = module_graph_topology_input_digests(temp.path(), &db);
+
+        let key = LayerKey::module_graph_layer_key(
+            module_graph_manifest(),
+            Vec::new(),
+            topology_inputs,
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Vec::new(),
+            Digest::from_parts(DigestKind::ProviderParameters, "module_graph", &["base"]),
+        );
+
+        assert!(key.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+    }
+
+    fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write file");
+        path
+    }
+
+    fn add_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_file(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
     #[test]
