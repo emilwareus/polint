@@ -20,7 +20,7 @@ use crate::core::{
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
-use semantic::{SemanticIndexOutput, alias_reexport_closure};
+use semantic::{SemanticIndexOutput, alias_reexport_closure, emit_native_generated_symbol_hooks};
 
 const SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -206,35 +206,43 @@ fn derive_requested_symbols_uncached(
 
     let mut builder = SymbolGraphBuilder::new();
     let mut derivation = SymbolGraphDerivation::default();
-    let mut semantic = SemanticIndexOutput::default();
+    let mut semantic_output = SemanticIndexOutput::default();
 
     merge_language_output(
         &mut derivation,
-        &mut semantic,
+        &mut semantic_output,
         ts::derive_ts_symbols(&mut builder, db, loaded, plan),
     );
     merge_language_output(
         &mut derivation,
-        &mut semantic,
+        &mut semantic_output,
         go::derive_go_symbols(&mut builder, db, loaded, plan),
     );
 
     let output = builder.finish();
     let closure = alias_reexport_closure(
-        &semantic.aliases,
-        &semantic.exports,
-        &semantic.stable_exports,
+        &semantic_output.aliases,
+        &semantic_output.exports,
+        &semantic_output.stable_exports,
     );
-    semantic.aliases = closure.aliases;
-    semantic.resolutions.extend(closure.resolutions);
+    semantic_output.aliases = closure.aliases;
+    semantic_output.resolutions.extend(closure.resolutions);
+    let generated_hooks = emit_native_generated_symbol_hooks(&semantic_output);
+    semantic_output
+        .generated_symbols
+        .extend(generated_hooks.generated_symbols);
+    semantic_output
+        .resolutions
+        .extend(generated_hooks.resolutions);
+    derivation.diagnostics.extend(generated_hooks.diagnostics);
     db.replace_semantic_index_facts(
-        semantic.scopes,
-        semantic.semantic_imports,
-        semantic.exports,
-        semantic.aliases,
-        semantic.resolutions,
-        semantic.generated_symbols,
-        semantic.stable_exports,
+        semantic_output.scopes,
+        semantic_output.semantic_imports,
+        semantic_output.exports,
+        semantic_output.aliases,
+        semantic_output.resolutions,
+        semantic_output.generated_symbols,
+        semantic_output.stable_exports,
     );
     db.replace_symbol_graph_facts(output.symbols, output.definitions, output.references);
     derivation.diagnostics.extend(output.diagnostics);

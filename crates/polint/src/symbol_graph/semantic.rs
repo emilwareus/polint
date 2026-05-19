@@ -1,7 +1,10 @@
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{FileId, Language, ModuleNodeId, PackageId, Span, SymbolId, SymbolNamespace};
+use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+const SYMBOL_GRAPH_PRODUCER_ID: &str = "polint.symbol_graph";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ScopeId(pub(crate) u64);
@@ -107,6 +110,8 @@ pub(crate) struct GeneratedSymbolFact {
     pub(crate) package: Option<PackageId>,
     pub(crate) module: Option<ModuleNodeId>,
     pub(crate) symbol_stable_key: String,
+    pub(crate) source_stable_key: String,
+    pub(crate) producer_id: String,
     pub(crate) generator: String,
     pub(crate) generated_discriminator: String,
     pub(crate) kind: GeneratedSymbolKind,
@@ -145,6 +150,13 @@ pub(crate) struct SemanticIndexOutput {
 pub(crate) struct AliasReexportClosureOutput {
     pub(crate) aliases: Vec<AliasFact>,
     pub(crate) resolutions: Vec<ResolutionFact>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct NativeGeneratedHooksOutput {
+    pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
+    pub(crate) resolutions: Vec<ResolutionFact>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -438,6 +450,88 @@ pub(crate) fn alias_reexport_closure(
     }
 }
 
+pub(crate) fn emit_native_generated_symbol_hooks(
+    semantic: &SemanticIndexOutput,
+) -> NativeGeneratedHooksOutput {
+    let mut generated = BTreeMap::<String, GeneratedSymbolFact>::new();
+    let mut resolutions = BTreeMap::<String, ResolutionFact>::new();
+    let mut diagnostics = BTreeMap::<String, Diagnostic>::new();
+
+    for stable_export in &semantic.stable_exports {
+        let Some(discriminator) = stable_export.generated_discriminator.as_ref() else {
+            continue;
+        };
+        let mut row = GeneratedSymbolFact {
+            id: GeneratedSymbolId(0),
+            language: stable_export.language,
+            file: None,
+            package: None,
+            module: None,
+            symbol_stable_key: stable_export.symbol_stable_key.clone(),
+            source_stable_key: stable_export.stable_key.clone(),
+            producer_id: SYMBOL_GRAPH_PRODUCER_ID.to_string(),
+            generator: SYMBOL_GRAPH_PRODUCER_ID.to_string(),
+            generated_discriminator: discriminator.clone(),
+            kind: GeneratedSymbolKind::Unknown,
+            span: None,
+            stable_key: String::new(),
+            status: SemanticStatus::Generated,
+        };
+        row.stable_key = row.computed_stable_key();
+
+        if let Some(existing) = generated.get(&row.stable_key) {
+            if existing != &row {
+                diagnostics
+                    .entry(row.stable_key.clone())
+                    .or_insert_with(|| generated_symbol_conflict_diagnostic(&row.stable_key));
+            }
+            continue;
+        }
+
+        let resolution = generated_hint_resolution(stable_export, &row);
+        resolutions.insert(resolution.stable_key.clone(), resolution);
+        generated.insert(row.stable_key.clone(), row);
+    }
+
+    NativeGeneratedHooksOutput {
+        generated_symbols: sort_rows(generated.into_values().collect(), generated_symbol_sort_key),
+        resolutions: sort_rows(resolutions.into_values().collect(), resolution_sort_key),
+        diagnostics: diagnostics.into_values().collect(),
+    }
+}
+
+fn generated_hint_resolution(
+    stable_export: &StableExportIdentity,
+    generated: &GeneratedSymbolFact,
+) -> ResolutionFact {
+    let mut resolution = ResolutionFact {
+        id: ResolutionId(0),
+        language: stable_export.language,
+        file: None,
+        package: None,
+        module: None,
+        source_stable_key: stable_export.stable_key.clone(),
+        target_stable_keys: vec![generated.stable_key.clone()],
+        step: ResolutionStepKind::GeneratedHintLookup,
+        stable_key: String::new(),
+        status: SemanticStatus::Generated,
+    };
+    resolution.stable_key = resolution.computed_stable_key();
+    resolution
+}
+
+fn generated_symbol_conflict_diagnostic(stable_key: &str) -> Diagnostic {
+    Diagnostic::error(
+        "polint/internal",
+        "<workspace>",
+        TextRange::point(1, 1),
+        "Generated symbol hook stable key has incompatible native rows.",
+    )
+    .with_evidence("family", FactFamily::GeneratedSymbol.label().to_string())
+    .with_evidence("stable_key", stable_key.to_string())
+    .with_evidence("reason", "duplicate_generated_stable_key".to_string())
+}
+
 fn resolve_alias_targets(
     alias: &AliasFact,
     alias_targets: &BTreeMap<&str, Vec<&str>>,
@@ -681,6 +775,8 @@ impl GeneratedSymbolFact {
                         .unwrap_or_else(none_value),
                 ),
                 ("symbol_stable_key", self.symbol_stable_key.clone()),
+                ("source_stable_key", self.source_stable_key.clone()),
+                ("producer_id", self.producer_id.clone()),
                 (
                     "generated_discriminator",
                     self.generated_discriminator.clone(),
@@ -1215,6 +1311,8 @@ mod tests {
             package: None,
             module: None,
             symbol_stable_key: "symbol:generated".to_string(),
+            source_stable_key: "stable-export:generated".to_string(),
+            producer_id: "polint.symbol_graph".to_string(),
             generator: "test".to_string(),
             generated_discriminator: "native".to_string(),
             kind: GeneratedSymbolKind::Unknown,
@@ -1378,14 +1476,19 @@ mod alias_reexport_closure_tests {
 mod native_generated_hooks {
     use super::*;
     use crate::analysis_kernel::{FactFamily, FactRef};
-    use crate::core::{AnalysisDb, FileId, Language, SymbolNamespace};
+    use crate::core::{AnalysisDb, Language, SymbolNamespace};
 
-    fn stable_export(language: Language, export_name: &str, generated: bool) -> StableExportIdentity {
+    fn stable_export(
+        language: Language,
+        export_name: &str,
+        generated: bool,
+    ) -> StableExportIdentity {
         StableExportIdentity {
             id: StableExportId(0),
             export: ExportId(0),
             language,
-            package_key: (language == Language::Go).then(|| "go:package:example.com/app".to_string()),
+            package_key: (language == Language::Go)
+                .then(|| "go:package:example.com/app".to_string()),
             module_key: (language != Language::Go).then(|| "src/mod.ts".to_string()),
             export_name: export_name.to_string(),
             namespace: SymbolNamespace::Value,
