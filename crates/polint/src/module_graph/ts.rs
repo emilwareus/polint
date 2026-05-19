@@ -215,6 +215,203 @@ mod topology {
     }
 }
 
+#[cfg(test)]
+mod dependency_topology {
+    use super::collect_ts_topology;
+    use crate::config::load_config;
+    use crate::core::AnalysisDb;
+    use crate::module_graph::topology::{
+        RequirementKind, ResolvedDependencyKind, TopologyPrecision, TopologyStatus,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn collect_ts_topology_emits_declared_dependency_requirement_kinds() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{
+  "name": "root",
+  "dependencies": { "react": "^18.0.0", "@acme/workspace": "workspace:*" },
+  "devDependencies": { "vitest": "^2.0.0" },
+  "peerDependencies": { "typescript": "^5.0.0" },
+  "optionalDependencies": { "fsevents": "^2.0.0" },
+  "bundleDependencies": ["left-pad"]
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let requirements = output
+            .dependency_requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.target_name.as_str(),
+                    requirement.version_requirement.as_deref(),
+                    requirement.kind,
+                    requirement.status,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(requirements.contains(&(
+            "react",
+            Some("^18.0.0"),
+            RequirementKind::Direct,
+            TopologyStatus::Present
+        )));
+        assert!(requirements.contains(&(
+            "@acme/workspace",
+            Some("workspace:*"),
+            RequirementKind::Workspace,
+            TopologyStatus::Present
+        )));
+        assert!(requirements.contains(&(
+            "vitest",
+            Some("^2.0.0"),
+            RequirementKind::Dev,
+            TopologyStatus::Present
+        )));
+        assert!(requirements.contains(&(
+            "typescript",
+            Some("^5.0.0"),
+            RequirementKind::Peer,
+            TopologyStatus::Present
+        )));
+        assert!(requirements.contains(&(
+            "fsevents",
+            Some("^2.0.0"),
+            RequirementKind::Optional,
+            TopologyStatus::Present
+        )));
+        assert!(requirements.contains(&(
+            "left-pad",
+            None,
+            RequirementKind::Bundled,
+            TopologyStatus::Present
+        )));
+    }
+
+    #[test]
+    fn collect_ts_topology_emits_package_lock_selected_versions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 3,
+  "packages": {
+    "": { "name": "root", "version": "1.0.0" },
+    "node_modules/react": { "version": "18.2.0" }
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "react"
+                && edge.resolved_version.as_deref() == Some("18.2.0")
+                && edge.kind == ResolvedDependencyKind::LockfileSelected
+                && edge.precision == TopologyPrecision::ExactLockfile
+                && edge.status == TopologyStatus::Resolved
+                && edge.stable_key.contains("source=package-lock.json")
+                && edge.stable_key.contains("schema=package-lock-v3")
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_marks_unsupported_and_missing_lockfile_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(temp.path(), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        write_fixture(temp.path(), "yarn.lock", "# yarn lockfile\n");
+        write_fixture(temp.path(), "bun.lock", "# bun lockfile\n");
+        write_fixture(temp.path(), "bun.lockb", "binary");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("pnpm-lock-present")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("yarn-lock-present")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("bun-lock-present")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("bun-lockb-present")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_marks_missing_lockfile_when_declared_external_deps_have_no_lockfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "react"
+                && edge.status == TopologyStatus::MissingLockfile
+                && edge.precision == TopologyPrecision::Unknown
+        }));
+    }
+
+    fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture");
+        path
+    }
+
+    fn add_fixture_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) {
+        let path = write_fixture(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string());
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TsResolverContext {
     resolver: Resolver,
