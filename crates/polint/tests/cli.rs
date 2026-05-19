@@ -1059,7 +1059,10 @@ fn semantic_index_internals_stay_private() {
     );
     let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
         .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
-    assert_eq!(inspect["rules"][0]["rule_id"], "local/semantic-public-probe");
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/semantic-public-probe"
+    );
 
     let test_json = stdout_string(
         polint_cmd()

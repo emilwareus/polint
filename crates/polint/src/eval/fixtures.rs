@@ -1334,18 +1334,22 @@ mod semantic_index_core {
                 "semantic fixture missing expected {required:?}: {expected_facts:#?}"
             );
         }
-        assert!(expected_facts.iter().any(|(_, status, precision, producer)| {
-            matches!(
-                status,
-                Some(
-                    ObservedStatus::Ambiguous
-                        | ObservedStatus::Unresolved
-                        | ObservedStatus::Dynamic
-                        | ObservedStatus::Generated
-                )
-            ) && precision.is_some()
-                && *producer == Some("polint.symbol_graph")
-        }));
+        assert!(
+            expected_facts
+                .iter()
+                .any(|(_, status, precision, producer)| {
+                    matches!(
+                        status,
+                        Some(
+                            ObservedStatus::Ambiguous
+                                | ObservedStatus::Unresolved
+                                | ObservedStatus::Dynamic
+                                | ObservedStatus::Generated
+                        )
+                    ) && precision.is_some()
+                        && *producer == Some("polint.symbol_graph")
+                })
+        );
     }
 
     #[test]
