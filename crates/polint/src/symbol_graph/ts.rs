@@ -2454,3 +2454,97 @@ const lazy = import(moduleName);
         }));
     }
 }
+
+#[cfg(test)]
+mod semantic_resolution {
+    use super::{derive_ts_semantic_index, parse_source_type};
+    use crate::core::{FileId, Language, SourceFile};
+    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticStatus};
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use std::path::PathBuf;
+
+    fn derive(source: &str) -> crate::symbol_graph::semantic::SemanticIndexOutput {
+        let file = SourceFile {
+            id: FileId(0),
+            path: PathBuf::from("src/resolution.ts"),
+            relative_path: "src/resolution.ts".to_string(),
+            language: Language::TypeScript,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        };
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+
+        derive_ts_semantic_index(
+            &file,
+            source,
+            &parsed.program,
+            semantic.scoping(),
+            semantic.nodes(),
+        )
+    }
+
+    #[test]
+    fn local_lexical_references_record_resolved_lookup_steps() {
+        let output = derive(
+            r#"
+const value = 1;
+export const doubled = value + value;
+"#,
+        );
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::LexicalLookup
+                && resolution.status == SemanticStatus::Resolved
+                && resolution.source_stable_key.contains("value")
+        }));
+    }
+
+    #[test]
+    fn import_alias_references_record_alias_and_module_lookup_steps() {
+        let output = derive(
+            r#"
+import { thing as localThing } from "./thing";
+export const used = localThing;
+"#,
+        );
+
+        assert!(
+            output
+                .resolutions
+                .iter()
+                .any(|resolution| resolution.step == ResolutionStepKind::ImportAliasLookup)
+        );
+        assert!(
+            output
+                .resolutions
+                .iter()
+                .any(|resolution| resolution.step == ResolutionStepKind::ModuleLookup)
+        );
+    }
+
+    #[test]
+    fn unresolved_references_record_unknown_fallback_steps() {
+        let output = derive("export const value = missingGlobal;\n");
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::UnknownFallback
+                && resolution.status == SemanticStatus::Unresolved
+                && resolution.source_stable_key.contains("missingGlobal")
+        }));
+    }
+
+    #[test]
+    fn stable_export_identities_use_native_discriminator() {
+        let output = derive("export const value = 1;\n");
+
+        assert!(output.stable_exports.iter().any(|identity| {
+            identity.export_name == "value"
+                && identity.generated_discriminator.as_deref() == Some("native")
+                && identity.symbol_stable_key.contains("value")
+        }));
+    }
+}
