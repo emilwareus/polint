@@ -17,7 +17,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const GO_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
-const GO_SYMBOL_SIDECAR_SCHEMA: &str = "polint-go-symbols-v1";
+const GO_SYMBOL_SIDECAR_SCHEMA: &str = "polint-go-symbols-semantic-1";
 const GO_SYMBOL_SIDECAR_ENV: &str = "POLINT_GO_SYMBOLS";
 const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
     (
@@ -63,6 +63,14 @@ struct GoSidecarOutput {
     definitions: Vec<GoSidecarDefinition>,
     #[serde(default, deserialize_with = "null_as_default_vec")]
     references: Vec<GoSidecarReference>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    scopes: Vec<GoSidecarScope>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    imports: Vec<GoSidecarImport>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    exports: Vec<GoSidecarExport>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    resolution_steps: Vec<GoSidecarResolutionStep>,
     #[serde(default, deserialize_with = "null_as_default_vec")]
     errors: Vec<GoSidecarPackageError>,
 }
@@ -120,6 +128,51 @@ struct GoSidecarReference {
     kind: String,
     span: GoSidecarSpan,
     precision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarScope {
+    key: String,
+    #[serde(default)]
+    parent_key: String,
+    kind: String,
+    package_path: String,
+    #[serde(default)]
+    file: String,
+    span: GoSidecarSpan,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarImport {
+    path: String,
+    #[serde(default)]
+    local_name: String,
+    alias_kind: String,
+    #[serde(default)]
+    file: String,
+    span: GoSidecarSpan,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarExport {
+    symbol_key: String,
+    export_name: String,
+    namespace: String,
+    object_path: String,
+    package_path: String,
+    #[serde(default)]
+    generated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarResolutionStep {
+    reference_key: String,
+    step: String,
+    status: String,
+    #[serde(default)]
+    target_key: String,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    candidate_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -514,6 +567,16 @@ fn validate_paths(
     for reference in &mut output.references {
         if !reference.file.is_empty() {
             reference.file = validate_sidecar_path(&reference.file, &file_ids)?;
+        }
+    }
+    for scope in &mut output.scopes {
+        if !scope.file.is_empty() {
+            scope.file = validate_sidecar_path(&scope.file, &file_ids)?;
+        }
+    }
+    for import in &mut output.imports {
+        if !import.file.is_empty() {
+            import.file = validate_sidecar_path(&import.file, &file_ids)?;
         }
     }
     Ok(output)
@@ -1329,12 +1392,16 @@ module_roots = ["services/payments"]
     fn sidecar_null_sequence_fields_parse_as_empty_vectors() {
         let output = parse_sidecar_output(
             br#"{
-  "schema":"polint-go-symbols-v1",
+  "schema":"polint-go-symbols-semantic-1",
   "go_version":"go1.24.13",
   "packages":[{"files":null}],
   "symbols":null,
   "definitions":null,
   "references":null,
+  "scopes":null,
+  "imports":null,
+  "exports":null,
+  "resolution_steps":null,
   "errors":null
 }"#,
         )
@@ -1345,6 +1412,10 @@ module_roots = ["services/payments"]
         assert!(output.symbols.is_empty());
         assert!(output.definitions.is_empty());
         assert!(output.references.is_empty());
+        assert!(output.scopes.is_empty());
+        assert!(output.imports.is_empty());
+        assert!(output.exports.is_empty());
+        assert!(output.resolution_steps.is_empty());
         assert!(output.errors.is_empty());
     }
 
@@ -1368,7 +1439,7 @@ module_roots = ["services/payments"]
             |_config| {
                 Ok(
                     br#"{
-  "schema":"polint-go-symbols-v1",
+  "schema":"polint-go-symbols-semantic-1",
   "go_version":"go1.26.2",
   "packages":[],
   "symbols":[{
