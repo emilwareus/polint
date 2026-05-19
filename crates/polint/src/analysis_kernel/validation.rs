@@ -9,6 +9,10 @@ use crate::core::{
     Span, SymbolId,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
+
+const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
+const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
@@ -25,11 +29,197 @@ pub(crate) fn validate_fact_metadata(
     validate_stable_key_conflicts(db, &mut diagnostics);
     validate_references(db, &ids, &mut diagnostics);
     validate_spans(db, &ids.files, &mut diagnostics);
+    validate_semantic_index(db, &ids, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+#[cfg(test)]
+mod semantic_index {
+    use super::validate_fact_metadata;
+    use crate::analysis_kernel::{
+        AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
+        ValidationStatus,
+    };
+    use crate::core::{
+        AnalysisDb, FileId, Language, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
+        SymbolPrecision,
+    };
+    use crate::symbol_graph::semantic::{
+        GeneratedSymbolFact, GeneratedSymbolId, GeneratedSymbolKind, SemanticStatus,
+    };
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn semantic_validation_reports_malformed_generated_rows_with_evidence() {
+        let mut db = semantic_db();
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![GeneratedSymbolFact {
+                id: GeneratedSymbolId(99),
+                language: Language::TypeScript,
+                file: Some(FileId(404)),
+                package: None,
+                module: None,
+                symbol_stable_key: "symbol:answer".to_string(),
+                source_stable_key: String::new(),
+                producer_id: String::new(),
+                generator: "test".to_string(),
+                generated_discriminator: String::new(),
+                kind: GeneratedSymbolKind::BuildGenerated,
+                span: Some(span(FileId(404), 0, 999)),
+                stable_key: "generated:bad".to_string(),
+                status: SemanticStatus::Resolved,
+            }],
+            Vec::new(),
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let semantic_diagnostics = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Semantic index validation failed")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            semantic_diagnostics.len() >= 4,
+            "expected generated-row validation diagnostics: {diagnostics:#?}"
+        );
+        assert!(
+            semantic_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "polint/internal")
+        );
+        assert!(semantic_diagnostics.iter().all(|diagnostic| {
+            let labels = evidence_labels(diagnostic);
+            labels.contains("family") && labels.contains("stable_key") && labels.contains("reason")
+        }));
+    }
+
+    #[test]
+    fn semantic_validation_rejects_symbol_graph_exact_semantic_metadata() {
+        let mut db = semantic_db();
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![GeneratedSymbolFact {
+                id: GeneratedSymbolId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                symbol_stable_key: "symbol:answer".to_string(),
+                source_stable_key: "symbol:answer".to_string(),
+                producer_id: "polint.symbol_graph".to_string(),
+                generator: "test".to_string(),
+                generated_discriminator: "entrypoint".to_string(),
+                kind: GeneratedSymbolKind::BuildGenerated,
+                span: Some(span(FileId(0), 0, 1)),
+                stable_key: "generated:answer".to_string(),
+                status: SemanticStatus::Generated,
+            }],
+            Vec::new(),
+        );
+        db.fact_meta_mut_for_test()
+            .remove_for_test(FactRef::new(FactFamily::GeneratedSymbol, 0));
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::GeneratedSymbol, 0),
+            FactMeta {
+                stable_key: "generated:answer".to_string(),
+                producer_id: "polint.symbol_graph",
+                layer_id: "polint.symbol_graph",
+                precision: FactPrecision::Exact,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:exact-generated".to_string(),
+            },
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Semantic index validation failed")
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "reason"
+                            && evidence.value.contains("provider precision ceiling")
+                    })
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "family" && evidence.value == "GeneratedSymbol"
+                    })
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "stable_key" && evidence.value == "generated:answer"
+                    })
+            }),
+            "expected semantic precision ceiling diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    fn semantic_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export const answer = 1;\n".to_string(),
+        );
+        db.replace_symbol_graph_facts(
+            vec![SymbolFact {
+                id: SymbolId(0),
+                language: Language::TypeScript,
+                name: "answer".to_string(),
+                qualified_name: "answer".to_string(),
+                kind: SymbolKind::Constant,
+                namespace: SymbolNamespace::Value,
+                file: Some(file),
+                package: None,
+                module: None,
+                owner: None,
+                primary_span: Some(span(file, 13, 19)),
+                is_exported: true,
+                stable_key: "symbol:answer".to_string(),
+                precision: SymbolPrecision::ExactLocal,
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        db
+    }
+
+    fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: end_byte + 1,
+        }
+    }
+
+    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
+        diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| evidence.label.as_str())
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -42,6 +232,9 @@ struct IdSets {
     resolved_imports: BTreeSet<ResolvedImportId>,
     module_nodes: BTreeSet<ModuleNodeId>,
     symbols: BTreeSet<SymbolId>,
+    scopes: BTreeSet<ScopeId>,
+    exports: BTreeSet<ExportId>,
+    symbol_stable_keys: BTreeSet<String>,
 }
 
 impl IdSets {
@@ -55,6 +248,13 @@ impl IdSets {
             resolved_imports: db.resolved_imports().iter().map(|fact| fact.id).collect(),
             module_nodes: db.module_nodes().iter().map(|fact| fact.id).collect(),
             symbols: db.symbols().iter().map(|fact| fact.id).collect(),
+            scopes: db.scopes().iter().map(|fact| fact.id).collect(),
+            exports: db.exports().iter().map(|fact| fact.id).collect(),
+            symbol_stable_keys: db
+                .symbols()
+                .iter()
+                .map(|fact| fact.stable_key.clone())
+                .collect(),
         }
     }
 }
@@ -724,6 +924,469 @@ fn validate_precision_ceilings(
     }
 }
 
+fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
+    let semantic_keys = semantic_reference_keys(db, ids);
+
+    for scope in db.scopes() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Scope,
+            scope.stable_key.as_str(),
+            "ScopeFact.file",
+            scope.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Scope,
+            scope.stable_key.as_str(),
+            "ScopeFact.package",
+            scope.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Scope,
+            scope.stable_key.as_str(),
+            "ScopeFact.module",
+            scope.module,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.scopes,
+            FactFamily::Scope,
+            scope.stable_key.as_str(),
+            "ScopeFact.parent",
+            scope.parent,
+        );
+    }
+
+    for import in db.semantic_imports() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::SemanticImport,
+            import.stable_key.as_str(),
+            "SemanticImportFact.file",
+            import.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::SemanticImport,
+            import.stable_key.as_str(),
+            "SemanticImportFact.package",
+            import.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::SemanticImport,
+            import.stable_key.as_str(),
+            "SemanticImportFact.module",
+            import.module,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.scopes,
+            FactFamily::SemanticImport,
+            import.stable_key.as_str(),
+            "SemanticImportFact.scope",
+            import.scope,
+        );
+    }
+
+    for export in db.exports() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Export,
+            export.stable_key.as_str(),
+            "ExportFact.file",
+            export.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Export,
+            export.stable_key.as_str(),
+            "ExportFact.package",
+            export.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Export,
+            export.stable_key.as_str(),
+            "ExportFact.module",
+            export.module,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.scopes,
+            FactFamily::Export,
+            export.stable_key.as_str(),
+            "ExportFact.scope",
+            export.scope,
+        );
+        if !semantic_status_allows_missing_references(export.status) {
+            check_semantic_optional_ref(
+                diagnostics,
+                &ids.symbols,
+                FactFamily::Export,
+                export.stable_key.as_str(),
+                "ExportFact.symbol",
+                export.symbol,
+            );
+        }
+    }
+
+    for alias in db.aliases() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Alias,
+            alias.stable_key.as_str(),
+            "AliasFact.file",
+            alias.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Alias,
+            alias.stable_key.as_str(),
+            "AliasFact.package",
+            alias.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Alias,
+            alias.stable_key.as_str(),
+            "AliasFact.module",
+            alias.module,
+        );
+        if !semantic_status_allows_missing_references(alias.status) {
+            check_semantic_key_ref(
+                diagnostics,
+                &semantic_keys,
+                FactFamily::Alias,
+                alias.stable_key.as_str(),
+                "AliasFact.source_symbol_stable_key",
+                alias.source_symbol_stable_key.as_str(),
+            );
+            for target in &alias.target_symbol_stable_keys {
+                check_semantic_key_ref(
+                    diagnostics,
+                    &semantic_keys,
+                    FactFamily::Alias,
+                    alias.stable_key.as_str(),
+                    "AliasFact.target_symbol_stable_keys",
+                    target.as_str(),
+                );
+            }
+        }
+    }
+
+    for resolution in db.resolution_facts() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::Resolution,
+            resolution.stable_key.as_str(),
+            "ResolutionFact.file",
+            resolution.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::Resolution,
+            resolution.stable_key.as_str(),
+            "ResolutionFact.package",
+            resolution.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::Resolution,
+            resolution.stable_key.as_str(),
+            "ResolutionFact.module",
+            resolution.module,
+        );
+        if !semantic_status_allows_missing_references(resolution.status) {
+            check_semantic_key_ref(
+                diagnostics,
+                &semantic_keys,
+                FactFamily::Resolution,
+                resolution.stable_key.as_str(),
+                "ResolutionFact.source_stable_key",
+                resolution.source_stable_key.as_str(),
+            );
+            for target in &resolution.target_stable_keys {
+                check_semantic_key_ref(
+                    diagnostics,
+                    &semantic_keys,
+                    FactFamily::Resolution,
+                    resolution.stable_key.as_str(),
+                    "ResolutionFact.target_stable_keys",
+                    target.as_str(),
+                );
+            }
+        }
+    }
+
+    for generated in db.generated_symbols() {
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::GeneratedSymbol,
+            generated.stable_key.as_str(),
+            "GeneratedSymbolFact.file",
+            generated.file,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.packages,
+            FactFamily::GeneratedSymbol,
+            generated.stable_key.as_str(),
+            "GeneratedSymbolFact.package",
+            generated.package,
+        );
+        check_semantic_optional_ref(
+            diagnostics,
+            &ids.module_nodes,
+            FactFamily::GeneratedSymbol,
+            generated.stable_key.as_str(),
+            "GeneratedSymbolFact.module",
+            generated.module,
+        );
+        check_semantic_key_ref(
+            diagnostics,
+            &semantic_keys,
+            FactFamily::GeneratedSymbol,
+            generated.stable_key.as_str(),
+            "GeneratedSymbolFact.source_stable_key",
+            generated.source_stable_key.as_str(),
+        );
+        if generated.producer_id != SYMBOL_GRAPH_PROVIDER_ID {
+            diagnostics.push(semantic_diagnostic(
+                FactFamily::GeneratedSymbol,
+                generated.stable_key.as_str(),
+                format!("GeneratedSymbolFact.producer_id must be {SYMBOL_GRAPH_PROVIDER_ID}"),
+            ));
+        }
+        if generated.generated_discriminator.is_empty() {
+            diagnostics.push(semantic_diagnostic(
+                FactFamily::GeneratedSymbol,
+                generated.stable_key.as_str(),
+                "GeneratedSymbolFact.generated_discriminator is empty",
+            ));
+        }
+        if generated.status != SemanticStatus::Generated {
+            diagnostics.push(semantic_diagnostic(
+                FactFamily::GeneratedSymbol,
+                generated.stable_key.as_str(),
+                "GeneratedSymbolFact.status must be Generated",
+            ));
+        }
+        if let Some(span) = &generated.span
+            && let Some(reason) = span_failure_reason(db, &ids.files, generated.file, span)
+        {
+            diagnostics.push(semantic_diagnostic(
+                FactFamily::GeneratedSymbol,
+                generated.stable_key.as_str(),
+                format!("GeneratedSymbolFact.span {reason}"),
+            ));
+        }
+    }
+
+    for stable_export in db.stable_exports() {
+        check_semantic_ref(
+            diagnostics,
+            &ids.exports,
+            FactFamily::StableExport,
+            stable_export.stable_key.as_str(),
+            "StableExportIdentity.export",
+            stable_export.export,
+        );
+        if stable_export.status != SemanticStatus::Generated
+            && !ids
+                .symbol_stable_keys
+                .contains(stable_export.symbol_stable_key.as_str())
+            && !semantic_keys.contains(stable_export.symbol_stable_key.as_str())
+        {
+            diagnostics.push(semantic_diagnostic(
+                FactFamily::StableExport,
+                stable_export.stable_key.as_str(),
+                format!(
+                    "StableExportIdentity.symbol_stable_key does not exist: {}",
+                    stable_export.symbol_stable_key
+                ),
+            ));
+        }
+    }
+
+    for (reference, metadata) in db.fact_meta().rows() {
+        if is_semantic_fact_family(reference.family)
+            && metadata.producer_id == SYMBOL_GRAPH_PROVIDER_ID
+            && metadata.precision == FactPrecision::Exact
+        {
+            diagnostics.push(semantic_diagnostic(
+                reference.family,
+                metadata.stable_key.as_str(),
+                "provider precision ceiling exceeded: semantic rows from polint.symbol_graph are setup-aware, not exact",
+            ));
+        }
+    }
+}
+
+fn is_semantic_fact_family(family: FactFamily) -> bool {
+    matches!(
+        family,
+        FactFamily::Scope
+            | FactFamily::SemanticImport
+            | FactFamily::Export
+            | FactFamily::Alias
+            | FactFamily::Resolution
+            | FactFamily::GeneratedSymbol
+            | FactFamily::StableExport
+    )
+}
+
+fn semantic_reference_keys(db: &AnalysisDb, ids: &IdSets) -> BTreeSet<String> {
+    let mut keys = ids.symbol_stable_keys.clone();
+    for scope in db.scopes() {
+        keys.insert(scope.stable_key.clone());
+    }
+    for import in db.semantic_imports() {
+        keys.insert(import.stable_key.clone());
+    }
+    for export in db.exports() {
+        keys.insert(export.stable_key.clone());
+    }
+    for alias in db.aliases() {
+        keys.insert(alias.stable_key.clone());
+        if !alias.source_symbol_stable_key.is_empty() {
+            keys.insert(alias.source_symbol_stable_key.clone());
+        }
+        keys.extend(
+            alias
+                .target_symbol_stable_keys
+                .iter()
+                .filter(|key| !key.is_empty())
+                .cloned(),
+        );
+    }
+    for resolution in db.resolution_facts() {
+        keys.insert(resolution.stable_key.clone());
+        if !resolution.source_stable_key.is_empty() {
+            keys.insert(resolution.source_stable_key.clone());
+        }
+        keys.extend(
+            resolution
+                .target_stable_keys
+                .iter()
+                .filter(|key| !key.is_empty())
+                .cloned(),
+        );
+    }
+    for generated in db.generated_symbols() {
+        keys.insert(generated.stable_key.clone());
+        if !generated.symbol_stable_key.is_empty() {
+            keys.insert(generated.symbol_stable_key.clone());
+        }
+    }
+    for stable_export in db.stable_exports() {
+        keys.insert(stable_export.stable_key.clone());
+        if !stable_export.symbol_stable_key.is_empty() {
+            keys.insert(stable_export.symbol_stable_key.clone());
+        }
+    }
+    keys
+}
+
+fn semantic_status_allows_missing_references(status: SemanticStatus) -> bool {
+    matches!(
+        status,
+        SemanticStatus::Generated
+            | SemanticStatus::External
+            | SemanticStatus::Unresolved
+            | SemanticStatus::Dynamic
+            | SemanticStatus::SetupMissing
+            | SemanticStatus::Unsupported
+    )
+}
+
+fn check_semantic_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: T,
+) where
+    T: Copy + Debug + Ord,
+{
+    if valid_ids.contains(&value) {
+        return;
+    }
+    diagnostics.push(semantic_diagnostic(
+        family,
+        stable_key,
+        format!("{field} does not exist: {value:?}"),
+    ));
+}
+
+fn check_semantic_optional_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: Option<T>,
+) where
+    T: Copy + Debug + Ord,
+{
+    let Some(value) = value else {
+        return;
+    };
+    check_semantic_ref(diagnostics, valid_ids, family, stable_key, field, value);
+}
+
+fn check_semantic_key_ref(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_keys: &BTreeSet<String>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: &str,
+) {
+    if !value.is_empty() && valid_keys.contains(value) {
+        return;
+    }
+    diagnostics.push(semantic_diagnostic(
+        family,
+        stable_key,
+        format!("{field} does not exist: {value}"),
+    ));
+}
+
+fn semantic_diagnostic(
+    family: FactFamily,
+    stable_key: &str,
+    reason: impl Into<String>,
+) -> Diagnostic {
+    let (family_label, stable_key_label, reason_label) = SEMANTIC_EVIDENCE_ORDER;
+    internal_diagnostic(format!(
+        "Semantic index validation failed for {} stable key.",
+        family.label()
+    ))
+    .with_evidence(family_label, family.label())
+    .with_evidence(stable_key_label, stable_key.to_string())
+    .with_evidence(reason_label, reason.into())
+}
+
 fn check_ref<T>(
     diagnostics: &mut Vec<Diagnostic>,
     valid_ids: &BTreeSet<T>,
@@ -944,11 +1607,7 @@ mod tests {
     use crate::core::{
         AnalysisDb, BranchId, BranchObligation, ComplexityMetricFact, FileId, FileMetricFact,
         FunctionFact, FunctionId, FunctionMetricFact, Language, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, PackageId, Span, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
-        SymbolPrecision, TestFact, TsComponentFact,
-    };
-    use crate::symbol_graph::semantic::{
-        GeneratedSymbolFact, GeneratedSymbolId, GeneratedSymbolKind, SemanticStatus,
+        ModuleNodeKind, PackageId, Span, TestFact, TsComponentFact,
     };
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -1217,159 +1876,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(provider_fields, BTreeSet::from(["layer_id", "producer_id"]));
-    }
-
-    mod semantic_index {
-        use super::*;
-
-        #[test]
-        fn semantic_validation_reports_malformed_generated_rows_with_evidence() {
-            let mut db = semantic_db();
-            db.replace_semantic_index_facts(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                vec![GeneratedSymbolFact {
-                    id: GeneratedSymbolId(99),
-                    language: Language::TypeScript,
-                    file: Some(FileId(404)),
-                    package: None,
-                    module: None,
-                    symbol_stable_key: "symbol:answer".to_string(),
-                    source_stable_key: String::new(),
-                    producer_id: String::new(),
-                    generator: "test".to_string(),
-                    generated_discriminator: String::new(),
-                    kind: GeneratedSymbolKind::BuildGenerated,
-                    span: Some(span(FileId(404), 0, 999)),
-                    stable_key: "generated:bad".to_string(),
-                    status: SemanticStatus::Resolved,
-                }],
-                Vec::new(),
-            );
-
-            let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
-            let semantic_diagnostics = diagnostics
-                .iter()
-                .filter(|diagnostic| {
-                    diagnostic
-                        .message
-                        .starts_with("Semantic index validation failed")
-                })
-                .collect::<Vec<_>>();
-
-            assert!(
-                semantic_diagnostics.len() >= 4,
-                "expected generated-row validation diagnostics: {diagnostics:#?}"
-            );
-            assert!(
-                semantic_diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.rule_id == "polint/internal")
-            );
-            assert!(semantic_diagnostics.iter().all(|diagnostic| {
-                let labels = evidence_labels(diagnostic);
-                labels.contains("family")
-                    && labels.contains("stable_key")
-                    && labels.contains("reason")
-            }));
-        }
-
-        #[test]
-        fn semantic_validation_rejects_symbol_graph_exact_semantic_metadata() {
-            let mut db = semantic_db();
-            db.replace_semantic_index_facts(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                vec![GeneratedSymbolFact {
-                    id: GeneratedSymbolId(0),
-                    language: Language::TypeScript,
-                    file: Some(FileId(0)),
-                    package: None,
-                    module: None,
-                    symbol_stable_key: "symbol:answer".to_string(),
-                    source_stable_key: "symbol:answer".to_string(),
-                    producer_id: "polint.symbol_graph".to_string(),
-                    generator: "test".to_string(),
-                    generated_discriminator: "entrypoint".to_string(),
-                    kind: GeneratedSymbolKind::BuildGenerated,
-                    span: Some(span(FileId(0), 0, 1)),
-                    stable_key: "generated:answer".to_string(),
-                    status: SemanticStatus::Generated,
-                }],
-                Vec::new(),
-            );
-            db.fact_meta_mut_for_test()
-                .remove_for_test(FactRef::new(FactFamily::GeneratedSymbol, 0));
-            db.fact_meta_mut_for_test().insert(
-                FactRef::new(FactFamily::GeneratedSymbol, 0),
-                FactMeta {
-                    stable_key: "generated:answer".to_string(),
-                    producer_id: "polint.symbol_graph",
-                    layer_id: "polint.symbol_graph",
-                    precision: FactPrecision::Exact,
-                    confidence: FactConfidence::High,
-                    validation: ValidationStatus::NativeTrusted,
-                    payload_digest: "payload:exact-generated".to_string(),
-                },
-            );
-
-            let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
-
-            assert!(
-                diagnostics.iter().any(|diagnostic| {
-                    diagnostic
-                        .message
-                        .starts_with("Semantic index validation failed")
-                        && diagnostic.evidence.iter().any(|evidence| {
-                            evidence.label == "reason"
-                                && evidence.value.contains("provider precision ceiling")
-                        })
-                        && diagnostic.evidence.iter().any(|evidence| {
-                            evidence.label == "family" && evidence.value == "GeneratedSymbol"
-                        })
-                        && diagnostic.evidence.iter().any(|evidence| {
-                            evidence.label == "stable_key" && evidence.value == "generated:answer"
-                        })
-                }),
-                "expected semantic precision ceiling diagnostic: {diagnostics:#?}"
-            );
-        }
-
-        fn semantic_db() -> AnalysisDb {
-            let mut db = AnalysisDb::new();
-            let file = db.add_file(
-                PathBuf::from("src/app.ts"),
-                "src/app.ts".to_string(),
-                "export const answer = 1;\n".to_string(),
-            );
-            db.replace_symbol_graph_facts(
-                vec![SymbolFact {
-                    id: SymbolId(0),
-                    language: Language::TypeScript,
-                    name: "answer".to_string(),
-                    qualified_name: "answer".to_string(),
-                    kind: SymbolKind::Constant,
-                    namespace: SymbolNamespace::Value,
-                    file: Some(file),
-                    package: None,
-                    module: None,
-                    owner: None,
-                    primary_span: Some(span(file, 13, 19)),
-                    is_exported: true,
-                    stable_key: "symbol:answer".to_string(),
-                    precision: SymbolPrecision::ExactLocal,
-                }],
-                Vec::new(),
-                Vec::new(),
-            );
-            db
-        }
     }
 
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {

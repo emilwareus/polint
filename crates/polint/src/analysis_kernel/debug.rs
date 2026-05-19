@@ -6,6 +6,7 @@ use crate::analysis_kernel::{
 use crate::core::{
     AnalysisDb, FileId, Language, ReferenceFact, Span, SymbolPrecision, SymbolResolutionStatus,
 };
+use crate::symbol_graph::semantic::SemanticStatus;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -15,6 +16,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         imports: import_rows(db),
         symbols: symbol_rows(db),
         references: reference_rows(db),
+        semantic: semantic_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -25,6 +27,7 @@ struct MetadataDebugReport<'a> {
     imports: Vec<ImportDebugRow<'a>>,
     symbols: Vec<SymbolDebugRow<'a>>,
     references: Vec<ReferenceDebugRow<'a>>,
+    semantic: SemanticDebugReport,
 }
 
 #[derive(Serialize)]
@@ -83,6 +86,43 @@ struct ReferenceDebugRow<'a> {
     path: Option<&'a str>,
     span: Option<DebugSpan>,
     fact_precision: &'static str,
+}
+
+#[derive(Serialize)]
+struct SemanticDebugReport {
+    scopes: Vec<SemanticDebugRow>,
+    imports: Vec<SemanticDebugRow>,
+    exports: Vec<SemanticDebugRow>,
+    aliases: Vec<SemanticDebugRow>,
+    resolutions: Vec<SemanticDebugRow>,
+    generated_symbols: Vec<SemanticDebugRow>,
+    stable_exports: Vec<SemanticDebugRow>,
+}
+
+#[derive(Serialize)]
+struct SemanticDebugRow {
+    family: &'static str,
+    run_id: u64,
+    stable_key: String,
+    producer_id: &'static str,
+    layer_id: &'static str,
+    status: &'static str,
+    fact_precision: &'static str,
+    metadata: SemanticMetadataDebugFields,
+    path: Option<String>,
+    span: Option<DebugSpan>,
+    name: Option<String>,
+    export_name: Option<String>,
+    source_stable_key: Option<String>,
+    target_stable_keys: Vec<String>,
+    generated_discriminator: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SemanticMetadataDebugFields {
+    precision: &'static str,
+    confidence: &'static str,
+    validation: &'static str,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -228,6 +268,240 @@ fn reference_rows(db: &AnalysisDb) -> Vec<ReferenceDebugRow<'_>> {
     rows
 }
 
+fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
+    let mut scopes = db
+        .scopes()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::Scope,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                None,
+                Some(fact.scope_path.join("::")),
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut imports = db
+        .semantic_imports()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::SemanticImport,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                None,
+                fact.local_name
+                    .as_ref()
+                    .or(fact.imported_name.as_ref())
+                    .cloned()
+                    .or_else(|| Some(fact.import_path.clone())),
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut exports = db
+        .exports()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::Export,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                None,
+                None,
+                Some(fact.export_name.clone()),
+                None,
+                Vec::new(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut aliases = db
+        .aliases()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::Alias,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                None,
+                None,
+                None,
+                Some(fact.source_symbol_stable_key.clone()),
+                fact.target_symbol_stable_keys.clone(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut resolutions = db
+        .resolution_facts()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::Resolution,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                None,
+                None,
+                None,
+                Some(fact.source_stable_key.clone()),
+                fact.target_stable_keys.clone(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut generated_symbols = db
+        .generated_symbols()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::GeneratedSymbol,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                fact.file,
+                fact.span.as_ref().map(debug_span),
+                Some(fact.symbol_stable_key.clone()),
+                None,
+                Some(fact.source_stable_key.clone()),
+                Vec::new(),
+                Some(fact.generated_discriminator.clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut stable_exports = db
+        .stable_exports()
+        .iter()
+        .filter_map(|fact| {
+            semantic_row(
+                db,
+                FactFamily::StableExport,
+                fact.id.0,
+                fact.stable_key.as_str(),
+                fact.status,
+                None,
+                None,
+                None,
+                Some(fact.export_name.clone()),
+                Some(fact.symbol_stable_key.clone()),
+                Vec::new(),
+                fact.generated_discriminator.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    sort_semantic_rows(&mut scopes);
+    sort_semantic_rows(&mut imports);
+    sort_semantic_rows(&mut exports);
+    sort_semantic_rows(&mut aliases);
+    sort_semantic_rows(&mut resolutions);
+    sort_semantic_rows(&mut generated_symbols);
+    sort_semantic_rows(&mut stable_exports);
+
+    SemanticDebugReport {
+        scopes,
+        imports,
+        exports,
+        aliases,
+        resolutions,
+        generated_symbols,
+        stable_exports,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "semantic debug rows normalize several distinct internal fact families"
+)]
+fn semantic_row(
+    db: &AnalysisDb,
+    family: FactFamily,
+    run_id: u64,
+    stable_key: &str,
+    status: SemanticStatus,
+    file: Option<FileId>,
+    span: Option<DebugSpan>,
+    name: Option<String>,
+    export_name: Option<String>,
+    source_stable_key: Option<String>,
+    target_stable_keys: Vec<String>,
+    generated_discriminator: Option<String>,
+) -> Option<SemanticDebugRow> {
+    let meta = db.metadata_for(FactRef::new(family, run_id))?;
+    Some(SemanticDebugRow {
+        family: family.label(),
+        run_id,
+        stable_key: stable_key.to_string(),
+        producer_id: meta.producer_id,
+        layer_id: meta.layer_id,
+        status: semantic_status_label(status),
+        fact_precision: fact_precision_label(meta.precision),
+        metadata: semantic_metadata_debug_fields(meta),
+        path: relative_path(db, file).map(str::to_string),
+        span,
+        name,
+        export_name,
+        source_stable_key,
+        target_stable_keys,
+        generated_discriminator,
+    })
+}
+
+fn semantic_metadata_debug_fields(meta: &FactMeta) -> SemanticMetadataDebugFields {
+    SemanticMetadataDebugFields {
+        precision: fact_precision_label(meta.precision),
+        confidence: fact_confidence_label(meta.confidence),
+        validation: validation_status_label(meta.validation),
+    }
+}
+
+fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
+    rows.sort_by(|left, right| {
+        (
+            left.path.as_deref().unwrap_or(""),
+            span_start(left.span),
+            left.name.as_deref().unwrap_or(""),
+            left.export_name.as_deref().unwrap_or(""),
+            left.status,
+            left.stable_key.as_str(),
+            left.run_id,
+        )
+            .cmp(&(
+                right.path.as_deref().unwrap_or(""),
+                span_start(right.span),
+                right.name.as_deref().unwrap_or(""),
+                right.export_name.as_deref().unwrap_or(""),
+                right.status,
+                right.stable_key.as_str(),
+                right.run_id,
+            ))
+    });
+}
+
 fn metadata_fields(
     db: &AnalysisDb,
     family: FactFamily,
@@ -339,6 +613,20 @@ fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static st
     }
 }
 
+fn semantic_status_label(status: SemanticStatus) -> &'static str {
+    match status {
+        SemanticStatus::Resolved => "resolved",
+        SemanticStatus::Ambiguous => "ambiguous",
+        SemanticStatus::Unresolved => "unresolved",
+        SemanticStatus::Cycle => "cycle",
+        SemanticStatus::Generated => "generated",
+        SemanticStatus::Dynamic => "dynamic",
+        SemanticStatus::External => "external",
+        SemanticStatus::SetupMissing => "setup_missing",
+        SemanticStatus::Unsupported => "unsupported",
+    }
+}
+
 fn symbol_kind_label(kind: crate::core::SymbolKind) -> &'static str {
     match kind {
         crate::core::SymbolKind::Package => "package",
@@ -371,6 +659,135 @@ fn symbol_namespace_label(namespace: crate::core::SymbolNamespace) -> &'static s
         crate::core::SymbolNamespace::Package => "package",
         crate::core::SymbolNamespace::Module => "module",
         crate::core::SymbolNamespace::Unknown => "unknown",
+    }
+}
+
+mod semantic_debug_json {
+    use super::super::{AnalysisKernel, KernelInput};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use serde_json::Value;
+    use std::fs;
+
+    #[test]
+    fn metadata_debug_json_contains_semantic_index_families() {
+        let report = debug_report_from_kernel_run();
+        let semantic = report["semantic"]
+            .as_object()
+            .unwrap_or_else(|| panic!("missing semantic debug object: {report:#?}"));
+
+        for key in [
+            "scopes",
+            "imports",
+            "exports",
+            "aliases",
+            "resolutions",
+            "generated_symbols",
+            "stable_exports",
+        ] {
+            assert!(
+                semantic
+                    .get(key)
+                    .and_then(serde_json::Value::as_array)
+                    .is_some(),
+                "semantic debug object missing `{key}` array: {semantic:#?}"
+            );
+        }
+        assert!(
+            !semantic["stable_exports"].as_array().unwrap().is_empty(),
+            "debug fixture should expose stable export identities: {semantic:#?}"
+        );
+        assert!(
+            !semantic["generated_symbols"].as_array().unwrap().is_empty(),
+            "debug fixture should expose native generated symbol hooks: {semantic:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata() {
+        let report = debug_report_from_kernel_run();
+        let row = report["semantic"]["generated_symbols"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .unwrap_or_else(|| panic!("missing generated symbol semantic debug row: {report:#?}"));
+
+        for field in [
+            "status",
+            "fact_precision",
+            "stable_key",
+            "producer_id",
+            "layer_id",
+        ] {
+            assert!(
+                row.get(field).is_some(),
+                "semantic generated row missing `{field}`: {row:#?}"
+            );
+        }
+        let metadata = row["metadata"]
+            .as_object()
+            .unwrap_or_else(|| panic!("missing nested metadata object: {row:#?}"));
+        for field in ["precision", "confidence", "validation"] {
+            assert!(
+                metadata.get(field).is_some(),
+                "semantic metadata missing `{field}`: {row:#?}"
+            );
+        }
+    }
+
+    fn debug_report_from_kernel_run() -> Value {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("src")).expect("create src directory");
+        fs::write(
+            temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+        )
+        .expect("write config");
+        fs::write(
+            temp.path().join("src/tokens.ts"),
+            r#"export const token = "ok";"#,
+        )
+        .expect("write tokens");
+        fs::write(
+            temp.path().join("src/app.ts"),
+            r#"import { token as importedToken } from "./tokens";
+
+export function answer() {
+  return importedToken;
+}
+
+export const value = answer();
+"#,
+        )
+        .expect("write app");
+
+        let loaded = load_config(temp.path()).expect("load config");
+        let cache = Cache::new("", false);
+        let plan =
+            AnalysisPlan::from_capability_names_for_test(&["imports", "symbols", "references"]);
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "semantic-debug-config",
+            rule_digest: "semantic-debug-rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel run");
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.rule_id != "polint/internal"),
+            "clean semantic debug fixture should not emit internal diagnostics: {:#?}",
+            output.diagnostics
+        );
+
+        AnalysisKernel::metadata_debug_json_for_test(&output.db)
     }
 }
 
@@ -499,77 +916,6 @@ export const value = answer();
                 .as_array()
                 .unwrap_or_else(|| panic!("missing debug array `{key}`: {report:#?}"));
             assert!(!rows.is_empty(), "debug array `{key}` should not be empty");
-        }
-    }
-
-    mod semantic_debug_json {
-        use super::*;
-
-        #[test]
-        fn metadata_debug_json_contains_semantic_index_families() {
-            let (_temp, report) = debug_report_from_kernel_run();
-            let semantic = report["semantic"]
-                .as_object()
-                .unwrap_or_else(|| panic!("missing semantic debug object: {report:#?}"));
-
-            for key in [
-                "scopes",
-                "imports",
-                "exports",
-                "aliases",
-                "resolutions",
-                "generated_symbols",
-                "stable_exports",
-            ] {
-                assert!(
-                    semantic
-                        .get(key)
-                        .and_then(serde_json::Value::as_array)
-                        .is_some(),
-                    "semantic debug object missing `{key}` array: {semantic:#?}"
-                );
-            }
-            assert!(
-                !semantic["stable_exports"].as_array().unwrap().is_empty(),
-                "debug fixture should expose stable export identities: {semantic:#?}"
-            );
-            assert!(
-                !semantic["generated_symbols"].as_array().unwrap().is_empty(),
-                "debug fixture should expose native generated symbol hooks: {semantic:#?}"
-            );
-        }
-
-        #[test]
-        fn semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata() {
-            let (_temp, report) = debug_report_from_kernel_run();
-            let row = report["semantic"]["generated_symbols"]
-                .as_array()
-                .and_then(|rows| rows.first())
-                .unwrap_or_else(|| {
-                    panic!("missing generated symbol semantic debug row: {report:#?}")
-                });
-
-            for field in [
-                "status",
-                "fact_precision",
-                "stable_key",
-                "producer_id",
-                "layer_id",
-            ] {
-                assert!(
-                    row.get(field).is_some(),
-                    "semantic generated row missing `{field}`: {row:#?}"
-                );
-            }
-            let metadata = row["metadata"]
-                .as_object()
-                .unwrap_or_else(|| panic!("missing nested metadata object: {row:#?}"));
-            for field in ["precision", "confidence", "validation"] {
-                assert!(
-                    metadata.get(field).is_some(),
-                    "semantic metadata missing `{field}`: {row:#?}"
-                );
-            }
         }
     }
 
