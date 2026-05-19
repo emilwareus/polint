@@ -29,7 +29,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 24 | 5/5 | Complete    | 2026-05-18 |
 | 25 | 4/4 | Complete    | 2026-05-18 |
 | 26 | 6/6 | Complete    | 2026-05-19 |
-| 27 | 7/7 | Complete   | 2026-05-19 |
+| 27 | 7/7 | Complete    | 2026-05-19 |
 | 28 | Private Semantic MIR and Place Identity | Lower Go and TS/JS function bodies into private MIR with stable place identities. | SAE-SEM-03 |
 | 29 | Local CFG and Control Dependence | Build local CFG, dominance, postdominance, and control-dependence facts over MIR. | SAE-SEM-04 |
 | 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
