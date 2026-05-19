@@ -771,7 +771,7 @@ mod tests {
         let mut changed_provider_version = base.clone();
         changed_provider_version.provider_version = "different-provider-version".to_string();
         let mut changed_schema = base.clone();
-        changed_schema.schema_version = "symbol-graph-facts-2:2".to_string();
+        changed_schema.schema_version = "symbol-graph-facts-2:changed".to_string();
 
         for changed in [
             changed_source,
