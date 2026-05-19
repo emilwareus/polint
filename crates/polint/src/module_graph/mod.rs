@@ -1146,7 +1146,8 @@ mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
+        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerCacheStore, LayerKey,
+        ShapeKind,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -1159,6 +1160,7 @@ mod tests {
         ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision, ResolutionStatus, Span,
         UnresolvedReason,
     };
+    use crate::module_graph::topology::WorkspaceRootId;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1283,6 +1285,35 @@ mod tests {
         )
     }
 
+    fn topology_stable_keys(db: &AnalysisDb) -> Vec<Vec<String>> {
+        vec![
+            db.workspace_roots()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.topology_packages()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.source_sets()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.dependency_requirements()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.resolved_dependency_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.repo_topology_overlays()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+        ]
+    }
+
     fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
         let path = root.join(relative_path);
         fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
@@ -1377,6 +1408,180 @@ mod tests {
         assert_eq!(
             second.resolved_imports()[0].status,
             ResolutionStatus::Resolved
+        );
+    }
+
+    #[test]
+    fn module_graph_layer_cache_topology_cold_warm_restores_identical_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut first, app, "react", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert!(!first.workspace_roots().is_empty());
+        let first_keys = topology_stable_keys(&first);
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut second, app, "react", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(topology_stable_keys(&second), first_keys);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_topology_payload_contains_schema_v2_and_normalized_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let result = derive_module_graph_with_cache(&mut db, &loaded, &cache, &plan, "config");
+
+        assert_eq!(result.cache_stats.writes, 1);
+        let payload_path = first_layer_file(&cache_root, "blobs");
+        let payload_text = fs::read_to_string(payload_path).expect("payload JSON readable");
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_text).expect("payload is JSON");
+        assert_eq!(payload["schema"], "module-graph-facts-v2");
+        for field in [
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "repo_topology_overlays",
+        ] {
+            assert!(
+                payload[field].as_array().is_some_and(|rows| !rows.is_empty()),
+                "{field} should contain normalized topology rows"
+            );
+        }
+        assert!(!payload_text.contains(temp.path().to_string_lossy().as_ref()));
+        assert!(!payload_text.contains("import React from 'react'"));
+    }
+
+    #[test]
+    fn module_graph_layer_cache_rejects_duplicate_topology_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut first = AnalysisDb::new();
+        add_file(&mut first, temp.path(), "src/app.ts", "export {};\n");
+        let loaded = loaded_config_for(temp.path());
+
+        let derivation = derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        let mut payload = super::module_graph_layer_payload(&first, &derivation);
+        let mut duplicate_root = payload.workspace_roots[0].clone();
+        duplicate_root.id = WorkspaceRootId(99);
+        duplicate_root.root_path = "conflicting-root".to_string();
+        payload.workspace_roots.push(duplicate_root);
+        let upstream = vec![
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["stable"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
+        ];
+        let snapshot = module_graph_input_snapshot(&loaded, &first, &plan, "config");
+        let config_digest = snapshot.config.digest.clone();
+        let go_lifecycle_digest = super::lifecycle_component_digest(
+            DigestKind::GoLifecycle,
+            "module_graph_go_lifecycle",
+            &snapshot.go_lifecycle.components,
+        );
+        let ts_js_lifecycle_digest = super::lifecycle_component_digest(
+            DigestKind::TsJsLifecycle,
+            "module_graph_ts_js_lifecycle",
+            &snapshot.ts_js_lifecycle.components,
+        );
+        let key = super::module_graph_layer_key(
+            &first,
+            module_graph_manifest(),
+            config_digest.clone(),
+            go_lifecycle_digest.clone(),
+            ts_js_lifecycle_digest.clone(),
+            upstream.clone(),
+        );
+        let dependencies = super::module_graph_layer_dependency_edges(
+            &first,
+            &key,
+            module_graph_manifest(),
+            &upstream,
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+        );
+        let store = LayerCacheStore::new(cache.layer_cache_dir(), true);
+        let mut stats = crate::analysis_kernel::incremental::CacheStats::default();
+        let mut diagnostics = Vec::new();
+        super::write_module_graph_layer_payload(
+            &store,
+            key,
+            &payload,
+            dependencies,
+            &mut stats,
+            &mut diagnostics,
+        )
+        .expect("corrupt payload writes");
+
+        let mut second = AnalysisDb::new();
+        add_file(&mut second, temp.path(), "src/app.ts", "export {};\n");
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(
+            second
+                .workspace_roots()
+                .iter()
+                .filter(|row| row.stable_key == "repository:.")
+                .count(),
+            1
         );
     }
 
