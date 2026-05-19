@@ -152,6 +152,15 @@ Plans:
 **Goal:** Deepen the semantic index with scopes, richer imports, resolution facts, aliases, generated symbols, unknowns, and stable export identities.
 **Requirements:** SAE-SEM-01
 **Research:** `research/semantic-index/FINAL-REPORT.md`, `research/semantic-index/RECOMMENDED_IMPLEMENTATION.md`, `research/semantic-index/VALIDATION.md`
+**Plans:** 6 plans
+
+Plans:
+- [ ] 26-01-PLAN.md — Internal semantic fact contracts, AnalysisDb storage, metadata families, and provider manifest outputs
+- [ ] 26-02-PLAN.md — TS/JS scopes, imports/exports, aliases, resolution rows, unknowns, and stable exports
+- [ ] 26-03-PLAN.md — Go sidecar semantic output, normalized Go semantic rows, and setup-missing handling
+- [ ] 26-04-PLAN.md — Alias/reexport closure, generated hooks, validation, and internal debug JSON
+- [ ] 26-05-PLAN.md — Semantic layer cache identity, payload persistence, restore validation, and stable export cache proof
+- [ ] 26-06-PLAN.md — Semantic eval fixtures, public no-leak proof, and bounded symbol/reference docs updates
 
 **Success criteria:**
 1. Fixtures cover resolved, ambiguous, unresolved, generated, alias, import/export, and cross-file references.
