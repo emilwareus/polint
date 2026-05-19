@@ -1020,6 +1020,104 @@ mod topology_monorepo {
 }
 
 #[cfg(test)]
+mod dependency_topology {
+    use super::*;
+    use crate::config::load_config;
+    use crate::module_graph::topology::{
+        RequirementKind, ResolvedDependencyKind, TopologyPrecision, TopologyStatus,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn dependency_topology_emits_direct_requirements_from_go_mod() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.dependency_requirements.iter().any(|requirement| {
+            requirement.target_name == "github.com/acme/lib"
+                && requirement.version_requirement.as_deref() == Some("v1.2.3")
+                && requirement.kind == RequirementKind::Direct
+                && requirement.manifest_path.as_deref() == Some("go.mod")
+                && requirement.precision == TopologyPrecision::ExactStatic
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_emits_go_sum_checksum_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.sum"),
+            "github.com/acme/lib v1.2.3 h1:abc\ngithub.com/acme/lib v1.2.3/go.mod h1:def\n",
+        )
+        .expect("write go.sum");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.resolved_version.as_deref() == Some("v1.2.3")
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.precision == TopologyPrecision::ExactLockfile
+                && edge.status == TopologyStatus::Resolved
+                && edge.stable_key.contains("go-sum-line")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_marks_external_requirements_missing_lockfile_when_go_sum_absent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.resolved_version.as_deref() == Some("v1.2.3")
+                && edge.status == TopologyStatus::MissingLockfile
+                && edge.precision == TopologyPrecision::Unknown
+                && edge.stable_key.contains("go.sum:absent")
+        }));
+    }
+
+    fn add_go_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> FileId {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("test fixture has parent"))
+            .expect("create parent dirs");
+        std::fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{GoCommandOutput, GoPackageIndex, resolve_go_import, seed_go_module_nodes};
     use crate::analysis_plan::AnalysisPlan;
