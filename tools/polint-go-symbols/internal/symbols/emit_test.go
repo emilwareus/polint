@@ -67,6 +67,60 @@ func Use() string {
 	}
 }
 
+func TestEmitSemanticRowsForScopesImportsAndExports(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
+		"widget.go": `package app
+
+import (
+	named "fmt"
+	. "strings"
+	_ "net/http/pprof"
+)
+
+type Widget struct {
+	Name string
+}
+
+func (w Widget) Label() string {
+	if w.Name == "" {
+		return named.Sprint(TrimSpace("fallback"))
+	}
+	return w.Name
+}
+`,
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	if out.Schema != "polint-go-symbols-semantic-1" {
+		t.Fatalf("schema = %q, want semantic schema", out.Schema)
+	}
+	for _, kind := range []string{"package", "file", "type", "method", "block"} {
+		if !hasScopeKind(out.Scopes, kind) {
+			t.Fatalf("scope kind %q missing from %#v", kind, out.Scopes)
+		}
+	}
+	for _, alias := range []string{"named", "dot", "blank"} {
+		if !hasImportAliasKind(out.Imports, alias) {
+			t.Fatalf("import alias kind %q missing from %#v", alias, out.Imports)
+		}
+	}
+	if !hasExportObjectPath(out.Exports, "Widget") {
+		t.Fatalf("Widget export with object path missing from %#v", out.Exports)
+	}
+	if !hasExportObjectPath(out.Exports, "Label") {
+		t.Fatalf("Label export with object path missing from %#v", out.Exports)
+	}
+}
+
 func TestEmitClassifiesAssignmentReferences(t *testing.T) {
 	root := writeModule(t, map[string]string{
 		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
@@ -358,6 +412,33 @@ func hasDefinition(definitions []DefinitionRow, symbolKey string) bool {
 func hasReference(references []ReferenceRow, targetKey string, kind string) bool {
 	for _, reference := range references {
 		if reference.TargetKey == targetKey && reference.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func hasScopeKind(scopes []ScopeRow, kind string) bool {
+	for _, scope := range scopes {
+		if scope.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImportAliasKind(imports []ImportRow, alias string) bool {
+	for _, imp := range imports {
+		if imp.AliasKind == alias {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExportObjectPath(exports []ExportRow, name string) bool {
+	for _, export := range exports {
+		if export.ExportName == name && export.ObjectPath != "" && export.PackagePath == "example.com/app" {
 			return true
 		}
 	}

@@ -918,6 +918,87 @@ fn package_error_diagnostics(errors: &[GoSidecarPackageError]) -> Vec<Diagnostic
 }
 
 #[cfg(test)]
+mod sidecar_semantic_output {
+    use super::*;
+
+    #[test]
+    fn semantic_schema_defaults_missing_arrays_to_empty() {
+        let output = parse_sidecar_output(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":null,
+  "imports":null,
+  "exports":null,
+  "resolution_steps":null,
+  "errors":null
+}"#,
+        )
+        .expect("semantic sidecar output parses");
+
+        assert!(output.scopes.is_empty());
+        assert!(output.imports.is_empty());
+        assert!(output.exports.is_empty());
+        assert!(output.resolution_steps.is_empty());
+    }
+
+    #[test]
+    fn semantic_schema_parses_scopes_imports_exports_and_resolution_steps() {
+        let output = parse_sidecar_output(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[{
+    "key":"go:scope:package:example.com/app",
+    "parent_key":"",
+    "kind":"package",
+    "package_path":"example.com/app",
+    "file":"",
+    "span":{"start_byte":0,"end_byte":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}
+  }],
+  "imports":[{
+    "path":"fmt",
+    "local_name":"named",
+    "alias_kind":"named",
+    "file":"main.go",
+    "span":{"start_byte":8,"end_byte":11,"start_line":3,"start_column":8,"end_line":3,"end_column":11}
+  }],
+  "exports":[{
+    "symbol_key":"go:package|package:example.com/app|name:Build",
+    "export_name":"Build",
+    "namespace":"value",
+    "object_path":"Build",
+    "package_path":"example.com/app",
+    "generated":false
+  }],
+  "resolution_steps":[{
+    "reference_key":"go:reference:main.go:Build",
+    "step":"LexicalLookup",
+    "status":"resolved",
+    "target_key":"go:package|package:example.com/app|name:Build",
+    "candidate_keys":["go:package|package:example.com/app|name:Build"]
+  }],
+  "errors":[]
+}"#,
+        )
+        .expect("semantic sidecar output parses");
+
+        assert_eq!(output.scopes[0].kind, "package");
+        assert_eq!(output.imports[0].alias_kind, "named");
+        assert_eq!(output.exports[0].object_path, "Build");
+        assert_eq!(output.resolution_steps[0].candidate_keys.len(), 1);
+    }
+}
+
+#[cfg(test)]
 mod symbol_graph_go_setup {
     use super::*;
     use crate::core::{
