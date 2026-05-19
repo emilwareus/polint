@@ -8,10 +8,11 @@ use crate::module_graph::formats::package_lock::parse_package_lock;
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
 use crate::module_graph::paths::{normalize_path, normalize_repo_relative};
 use crate::module_graph::topology::{
-    RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind, SourceSetFact,
-    SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
-    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId,
-    WorkspaceRootKind,
+    DependencyRequirementFact, DependencyRequirementId, RepoTopologyOverlayFact,
+    RepoTopologyOverlayId, RepoTopologyOverlayKind, RequirementKind, ResolvedDependencyEdgeFact,
+    ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact, SourceSetId, SourceSetKind,
+    TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
+    TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
 };
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
@@ -630,6 +631,14 @@ pub(crate) fn collect_ts_topology(
     for (package_path, manifest) in &package_manifests {
         emit_package_manager_overlays(&mut output, package_path, manifest);
         emit_lockfile_overlays(&mut output, loaded, package_path);
+        if let Some(package_id) = package_ids_by_path.get(package_path).copied() {
+            emit_package_requirements(&mut output, package_id, package_path, manifest);
+        }
+    }
+    for (package_path, package_id) in &package_ids_by_path {
+        emit_package_lock_edges(&mut output, loaded, package_path, *package_id);
+        emit_unsupported_lockfile_edges(&mut output, loaded, package_path, *package_id);
+        emit_missing_lockfile_edges(&mut output, loaded, package_path, *package_id);
     }
     emit_pnpm_workspace_overlays(&mut output, loaded);
     emit_tsconfig_overlays(&mut output, loaded, &ts_files);
@@ -811,6 +820,202 @@ fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, pa
             },
         );
     }
+}
+
+fn emit_package_requirements(
+    output: &mut TopologyOutput,
+    package_id: TopologyPackageId,
+    package_path: &str,
+    manifest: &PackageJsonManifest,
+) {
+    for dependency in &manifest.dependencies {
+        let kind = if dependency
+            .version_requirement
+            .as_deref()
+            .is_some_and(|requirement| requirement.starts_with("workspace:"))
+        {
+            RequirementKind::Workspace
+        } else {
+            dependency.kind
+        };
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(package_id),
+                target_package: None,
+                target_name: dependency.target_name.clone(),
+                version_requirement: dependency.version_requirement.clone(),
+                kind,
+                manifest_path: Some(package_manifest_path(package_path)),
+                stable_key: format!(
+                    "js-require:{package_path}:{}:{}:{}",
+                    dependency.section,
+                    dependency.target_name,
+                    dependency.version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: TS_TOPOLOGY_PROVIDER_ID,
+                precision: dependency.precision,
+                status: dependency.status,
+            });
+    }
+}
+
+fn emit_package_lock_edges(
+    output: &mut TopologyOutput,
+    loaded: &LoadedConfig,
+    package_path: &str,
+    package_id: TopologyPackageId,
+) {
+    let relative_path = package_relative_path(package_path, "package-lock.json");
+    let Ok(contents) = fs::read_to_string(loaded.root.join(&relative_path)) else {
+        return;
+    };
+    let manifest = parse_package_lock(&relative_path, &contents);
+    for package in manifest
+        .packages
+        .iter()
+        .filter(|package| !package.path.is_empty())
+    {
+        let Some(package_name) = package.name.clone() else {
+            continue;
+        };
+        let Some(resolved_version) = package.version.clone() else {
+            continue;
+        };
+        output
+            .resolved_dependency_edges
+            .push(ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                requirement: requirement_id_for(output, package_id, &package_name),
+                from_package: Some(package_id),
+                to_package: None,
+                package_name: package_name.clone(),
+                resolved_version: Some(resolved_version.clone()),
+                kind: ResolvedDependencyKind::LockfileSelected,
+                stable_key: format!(
+                    "js-lock-selected:{package_path}:{package_name}:{resolved_version}:source=package-lock.json:schema={}",
+                    manifest.schema_label
+                ),
+                producer_id: TS_TOPOLOGY_PROVIDER_ID,
+                precision: TopologyPrecision::ExactLockfile,
+                status: TopologyStatus::Resolved,
+            });
+    }
+}
+
+fn emit_unsupported_lockfile_edges(
+    output: &mut TopologyOutput,
+    loaded: &LoadedConfig,
+    package_path: &str,
+    package_id: TopologyPackageId,
+) {
+    for (file_name, schema) in [
+        ("pnpm-lock.yaml", "pnpm-lock-present"),
+        ("yarn.lock", "yarn-lock-present"),
+        ("bun.lock", "bun-lock-present"),
+        ("bun.lockb", "bun-lockb-present"),
+    ] {
+        let relative_path = package_relative_path(package_path, file_name);
+        if !loaded.root.join(&relative_path).is_file() {
+            continue;
+        }
+        output
+            .resolved_dependency_edges
+            .push(ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                requirement: None,
+                from_package: Some(package_id),
+                to_package: None,
+                package_name: String::new(),
+                resolved_version: None,
+                kind: ResolvedDependencyKind::LockfileSelected,
+                stable_key: format!(
+                    "js-lock-unsupported:{package_path}:{file_name}:source={file_name}:schema={schema}"
+                ),
+                producer_id: TS_TOPOLOGY_PROVIDER_ID,
+                precision: TopologyPrecision::Unsupported,
+                status: TopologyStatus::Unsupported,
+            });
+    }
+}
+
+fn emit_missing_lockfile_edges(
+    output: &mut TopologyOutput,
+    loaded: &LoadedConfig,
+    package_path: &str,
+    package_id: TopologyPackageId,
+) {
+    if has_any_js_lockfile(loaded, package_path) {
+        return;
+    }
+    let requirements = output
+        .dependency_requirements
+        .iter()
+        .filter(|requirement| {
+            requirement.from_package == Some(package_id)
+                && requirement.kind != RequirementKind::Workspace
+                && requirement.status == TopologyStatus::Present
+        })
+        .map(|requirement| {
+            (
+                requirement.id,
+                requirement.target_name.clone(),
+                requirement.version_requirement.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (requirement_id, target_name, version_requirement) in requirements {
+        output
+            .resolved_dependency_edges
+            .push(ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                requirement: Some(requirement_id),
+                from_package: Some(package_id),
+                to_package: None,
+                package_name: target_name.clone(),
+                resolved_version: version_requirement.clone(),
+                kind: ResolvedDependencyKind::LockfileSelected,
+                stable_key: format!(
+                    "js-lock-missing:{package_path}:{target_name}:{}:source=package-lock.json",
+                    version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: TS_TOPOLOGY_PROVIDER_ID,
+                precision: TopologyPrecision::Unknown,
+                status: TopologyStatus::MissingLockfile,
+            });
+    }
+}
+
+fn has_any_js_lockfile(loaded: &LoadedConfig, package_path: &str) -> bool {
+    [
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        "bun.lockb",
+    ]
+    .iter()
+    .any(|file_name| {
+        loaded
+            .root
+            .join(package_relative_path(package_path, file_name))
+            .is_file()
+    })
+}
+
+fn requirement_id_for(
+    output: &TopologyOutput,
+    package_id: TopologyPackageId,
+    target_name: &str,
+) -> Option<DependencyRequirementId> {
+    output
+        .dependency_requirements
+        .iter()
+        .find(|requirement| {
+            requirement.from_package == Some(package_id) && requirement.target_name == target_name
+        })
+        .map(|requirement| requirement.id)
 }
 
 fn package_relative_path(package_path: &str, file_name: &str) -> String {
