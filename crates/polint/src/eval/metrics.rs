@@ -121,13 +121,22 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                 }
             }
             MatchItemKind::Fact => match summary.observed_status {
-                Some(crate::eval::model::ObservedStatus::Present) => metrics.facts_present += 1,
+                Some(
+                    crate::eval::model::ObservedStatus::Present
+                    | crate::eval::model::ObservedStatus::Resolved,
+                ) => metrics.facts_present += 1,
                 Some(crate::eval::model::ObservedStatus::Accepted) => metrics.facts_accepted += 1,
                 Some(crate::eval::model::ObservedStatus::Rejected) => metrics.facts_rejected += 1,
                 Some(
                     crate::eval::model::ObservedStatus::Unknown
+                    | crate::eval::model::ObservedStatus::Unresolved
+                    | crate::eval::model::ObservedStatus::Ambiguous
+                    | crate::eval::model::ObservedStatus::Dynamic
                     | crate::eval::model::ObservedStatus::SetupMissing
-                    | crate::eval::model::ObservedStatus::Unsupported,
+                    | crate::eval::model::ObservedStatus::Unsupported
+                    | crate::eval::model::ObservedStatus::External
+                    | crate::eval::model::ObservedStatus::Cycle
+                    | crate::eval::model::ObservedStatus::Generated,
                 )
                 | None => {}
             },

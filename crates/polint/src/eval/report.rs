@@ -347,9 +347,16 @@ fn mode_key(mode: AssertionMode) -> &'static str {
 fn status_key(status: ObservedStatus) -> &'static str {
     match status {
         ObservedStatus::Present => "present",
+        ObservedStatus::Resolved => "resolved",
         ObservedStatus::Unknown => "unknown",
+        ObservedStatus::Unresolved => "unresolved",
+        ObservedStatus::Ambiguous => "ambiguous",
+        ObservedStatus::Dynamic => "dynamic",
         ObservedStatus::SetupMissing => "setup_missing",
         ObservedStatus::Unsupported => "unsupported",
+        ObservedStatus::External => "external",
+        ObservedStatus::Cycle => "cycle",
+        ObservedStatus::Generated => "generated",
         ObservedStatus::Rejected => "rejected",
         ObservedStatus::Accepted => "accepted",
     }
@@ -681,6 +688,7 @@ mod tests {
                 provenance: Some("metadata-sidecar".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
+                payload: None,
             }),
             ObservedItem::Fact(ObservedFact {
                 family: "symbols".to_string(),
@@ -690,6 +698,7 @@ mod tests {
                 provenance: Some("native-provider".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
+                payload: None,
             }),
             ObservedItem::Diagnostic(ObservedDiagnostic {
                 rule_id: "local/rule".to_string(),

@@ -1,6 +1,7 @@
 pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod query;
+pub(crate) mod semantic;
 pub(crate) mod stable_id;
 pub(crate) mod ts;
 
@@ -9,6 +10,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -19,6 +21,11 @@ use crate::core::{
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
+use semantic::{
+    AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
+    SemanticIndexOutput, StableExportIdentity, alias_reexport_closure,
+    emit_native_generated_symbol_hooks,
+};
 
 const SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -52,6 +59,7 @@ impl SymbolGraphDerivation {
 pub(crate) struct LanguageSymbolOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) semantic: SemanticIndexOutput,
 }
 
 #[cfg_attr(
@@ -203,17 +211,44 @@ fn derive_requested_symbols_uncached(
 
     let mut builder = SymbolGraphBuilder::new();
     let mut derivation = SymbolGraphDerivation::default();
+    let mut semantic_output = SemanticIndexOutput::default();
 
     merge_language_output(
         &mut derivation,
+        &mut semantic_output,
         ts::derive_ts_symbols(&mut builder, db, loaded, plan),
     );
     merge_language_output(
         &mut derivation,
+        &mut semantic_output,
         go::derive_go_symbols(&mut builder, db, loaded, plan),
     );
 
     let output = builder.finish();
+    let closure = alias_reexport_closure(
+        &semantic_output.aliases,
+        &semantic_output.exports,
+        &semantic_output.stable_exports,
+    );
+    semantic_output.aliases = closure.aliases;
+    semantic_output.resolutions.extend(closure.resolutions);
+    let generated_hooks = emit_native_generated_symbol_hooks(&semantic_output);
+    semantic_output
+        .generated_symbols
+        .extend(generated_hooks.generated_symbols);
+    semantic_output
+        .resolutions
+        .extend(generated_hooks.resolutions);
+    derivation.diagnostics.extend(generated_hooks.diagnostics);
+    db.replace_semantic_index_facts(
+        semantic_output.scopes,
+        semantic_output.semantic_imports,
+        semantic_output.exports,
+        semantic_output.aliases,
+        semantic_output.resolutions,
+        semantic_output.generated_symbols,
+        semantic_output.stable_exports,
+    );
     db.replace_symbol_graph_facts(output.symbols, output.definitions, output.references);
     derivation.diagnostics.extend(output.diagnostics);
     derivation
@@ -435,10 +470,17 @@ fn symbol_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
 }
 
 fn symbol_graph_parameter_digest() -> Digest {
-    Digest::from_parts(
+    Digest::from_unordered(
         DigestKind::ProviderParameters,
         "symbol_graph_parameters",
-        &["output=symbols", "output=definitions", "output=references"],
+        vec![
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "symbol_graph_outputs",
+                &["output=symbols", "output=definitions", "output=references"],
+            ),
+            semantic_provider_parameter_digest(),
+        ],
     )
 }
 
@@ -460,6 +502,7 @@ fn symbol_graph_layer_payload(
         symbols,
         definitions,
         references,
+        semantic_index: semantic_index_payload(db),
     }
 }
 
@@ -471,6 +514,15 @@ fn restore_symbol_graph_layer_payload(db: &mut AnalysisDb, payload: &SymbolGraph
     sort_definition_facts(&mut definitions);
     sort_reference_facts(&mut references);
     db.replace_symbol_graph_facts(symbols, definitions, references);
+    db.replace_semantic_index_facts(
+        payload.semantic_index.scopes.clone(),
+        payload.semantic_index.semantic_imports.clone(),
+        payload.semantic_index.exports.clone(),
+        payload.semantic_index.aliases.clone(),
+        payload.semantic_index.resolutions.clone(),
+        payload.semantic_index.generated_symbols.clone(),
+        payload.semantic_index.stable_exports.clone(),
+    );
 }
 
 fn validate_symbol_graph_layer_payload(
@@ -478,8 +530,125 @@ fn validate_symbol_graph_layer_payload(
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == SYMBOL_GRAPH_LAYER_SCHEMA
+        && semantic_payload_rows_are_valid(&payload.semantic_index)
         && manifest.output_digest
             == symbol_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn semantic_index_payload(db: &AnalysisDb) -> SemanticIndexOutput {
+    SemanticIndexOutput {
+        scopes: sorted_semantic_rows(db.scopes().to_vec(), scope_payload_sort_key),
+        semantic_imports: sorted_semantic_rows(
+            db.semantic_imports().to_vec(),
+            semantic_import_payload_sort_key,
+        ),
+        exports: sorted_semantic_rows(db.exports().to_vec(), export_payload_sort_key),
+        aliases: sorted_semantic_rows(db.aliases().to_vec(), alias_payload_sort_key),
+        resolutions: sorted_semantic_rows(
+            db.resolution_facts().to_vec(),
+            resolution_payload_sort_key,
+        ),
+        generated_symbols: sorted_semantic_rows(
+            db.generated_symbols().to_vec(),
+            generated_symbol_payload_sort_key,
+        ),
+        stable_exports: sorted_semantic_rows(
+            db.stable_exports().to_vec(),
+            stable_export_payload_sort_key,
+        ),
+    }
+}
+
+fn semantic_payload_rows_are_valid(semantic: &SemanticIndexOutput) -> bool {
+    semantic.scopes.iter().all(scope_payload_row_is_valid)
+        && semantic
+            .semantic_imports
+            .iter()
+            .all(semantic_import_payload_row_is_valid)
+        && semantic.exports.iter().all(export_payload_row_is_valid)
+        && semantic.aliases.iter().all(alias_payload_row_is_valid)
+        && semantic
+            .resolutions
+            .iter()
+            .all(resolution_payload_row_is_valid)
+        && semantic
+            .generated_symbols
+            .iter()
+            .all(generated_symbol_payload_row_is_valid)
+        && semantic
+            .stable_exports
+            .iter()
+            .all(stable_export_payload_row_is_valid)
+        && stable_export_identities_are_consistent(&semantic.stable_exports)
+}
+
+fn scope_payload_row_is_valid(row: &ScopeFact) -> bool {
+    !row.stable_key.is_empty()
+        && row
+            .scope_path
+            .iter()
+            .all(|part| !is_absolute_path_like(part))
+}
+
+fn semantic_import_payload_row_is_valid(row: &SemanticImportFact) -> bool {
+    !row.stable_key.is_empty() && !is_absolute_path_like(&row.import_path)
+}
+
+fn export_payload_row_is_valid(row: &ExportFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn alias_payload_row_is_valid(row: &AliasFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn resolution_payload_row_is_valid(row: &ResolutionFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn generated_symbol_payload_row_is_valid(row: &GeneratedSymbolFact) -> bool {
+    !row.stable_key.is_empty()
+}
+
+fn stable_export_payload_row_is_valid(row: &StableExportIdentity) -> bool {
+    !row.stable_key.is_empty()
+        && row
+            .package_key
+            .as_deref()
+            .is_none_or(|package_key| !is_absolute_path_like(package_key))
+        && row
+            .module_key
+            .as_deref()
+            .is_none_or(|module_key| !is_absolute_path_like(module_key))
+}
+
+fn stable_export_identities_are_consistent(rows: &[StableExportIdentity]) -> bool {
+    let mut targets_by_stable_key = std::collections::BTreeMap::<&str, &str>::new();
+    for row in rows {
+        if let Some(existing) = targets_by_stable_key.get(row.stable_key.as_str()) {
+            if *existing != row.symbol_stable_key {
+                return false;
+            }
+        } else {
+            targets_by_stable_key.insert(row.stable_key.as_str(), row.symbol_stable_key.as_str());
+        }
+    }
+    true
+}
+
+fn is_absolute_path_like(value: &str) -> bool {
+    std::path::Path::new(value).is_absolute()
+        || value.starts_with('/')
+        || value.starts_with("\\\\")
+        || is_windows_drive_absolute(value)
+}
+
+fn is_windows_drive_absolute(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 fn write_symbol_graph_layer_payload(
@@ -731,6 +900,43 @@ fn sort_reference_facts(references: &mut [ReferenceFact]) {
     });
 }
 
+fn sorted_semantic_rows<T, K: Ord>(mut rows: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T> {
+    rows.sort_by_key(key);
+    rows
+}
+
+fn scope_payload_sort_key(row: &ScopeFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn semantic_import_payload_sort_key(
+    row: &SemanticImportFact,
+) -> (String, Option<crate::core::FileId>, String) {
+    (row.stable_key.clone(), row.file, row.import_path.clone())
+}
+
+fn export_payload_sort_key(row: &ExportFact) -> (String, Option<crate::core::FileId>, String) {
+    (row.stable_key.clone(), row.file, row.export_name.clone())
+}
+
+fn alias_payload_sort_key(row: &AliasFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn resolution_payload_sort_key(row: &ResolutionFact) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn generated_symbol_payload_sort_key(
+    row: &GeneratedSymbolFact,
+) -> (String, Option<crate::core::FileId>) {
+    (row.stable_key.clone(), row.file)
+}
+
+fn stable_export_payload_sort_key(row: &StableExportIdentity) -> (String, String) {
+    (row.stable_key.clone(), row.symbol_stable_key.clone())
+}
+
 fn fact_order_key<'a>(
     stable_key: &'a str,
     file: Option<crate::core::FileId>,
@@ -743,11 +949,16 @@ fn fact_order_key<'a>(
     (stable_key, file, start_byte, end_byte, name)
 }
 
-fn merge_language_output(derivation: &mut SymbolGraphDerivation, output: LanguageSymbolOutput) {
+fn merge_language_output(
+    derivation: &mut SymbolGraphDerivation,
+    semantic: &mut SemanticIndexOutput,
+    output: LanguageSymbolOutput,
+) {
     derivation.diagnostics.extend(output.diagnostics);
     derivation
         .capability_support
         .extend(output.capability_support);
+    semantic.extend(output.semantic);
 }
 
 fn capability_diagnostics(support: &[CapabilitySupport]) -> Vec<Diagnostic> {
@@ -1542,5 +1753,454 @@ export function answer() {{
                 )
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod semantic_layer_payload {
+    use super::*;
+    use crate::analysis_kernel::incremental::LayerCacheManifest;
+    use crate::analysis_kernel::{FactFamily, FactRef};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, SymbolNamespace, span_from_byte_range,
+    };
+    use crate::symbol_graph::semantic::{
+        ExportFact, ExportId, ExportKind, ScopeFact, ScopeId, ScopeKind, SemanticIndexOutput,
+        SemanticStatus, StableExportId, StableExportIdentity,
+    };
+    use std::path::Path;
+
+    fn add_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        std::fs::write(&path, source).expect("write fixture file");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn span_for(file: FileId, source: &str, needle: &str) -> Span {
+        let start = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing fixture text {needle:?}"));
+        span_from_byte_range(file, source, start, start + needle.len())
+    }
+
+    fn push_import(db: &mut AnalysisDb, file: FileId, source: &str, path: &str) -> ImportId {
+        db.push_import(ImportFact {
+            id: ImportId(0),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span_for(file, source, &format!("{path:?}")),
+            language: Language::TypeScript,
+        })
+    }
+
+    fn fixture_db(root: &Path) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let app_source = r#"
+import { token as importedToken } from "./target";
+
+export function answer() {
+    return importedToken;
+}
+"#;
+        let target_source = "export const token = 42;\n";
+        let app = add_file(&mut db, root, "src/app.ts", app_source);
+        let target = add_file(&mut db, root, "src/target.ts", target_source);
+        let import = push_import(&mut db, app, app_source, "./target");
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: app,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::File,
+                    label: "src/app.ts".to_string(),
+                    file: Some(app),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::File,
+                    label: "src/target.ts".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        db
+    }
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn layer_key() -> LayerKey {
+        LayerKey::symbol_graph_layer_key(
+            manifest(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &["base"],
+            )],
+            semantic_provider_parameter_digest(),
+        )
+    }
+
+    fn cache_manifest_for(payload: &SymbolGraphLayerPayload) -> LayerCacheManifest {
+        let key = layer_key();
+        let payload_digest =
+            LayerCacheStore::payload_digest_for_json(payload).expect("payload digest");
+        let output_digest = symbol_graph_output_digest_for_payload(payload, Some(&key));
+        LayerCacheManifest::new(
+            key,
+            output_digest,
+            payload_digest,
+            Vec::new(),
+            PrecisionTier::SetupAware,
+            "native_trusted",
+            Vec::new(),
+        )
+    }
+
+    fn scope(file: FileId, stable_key: &str) -> ScopeFact {
+        ScopeFact {
+            id: ScopeId(0),
+            language: Language::TypeScript,
+            file: Some(file),
+            package: None,
+            module: None,
+            parent: None,
+            scope_path: vec!["module".to_string()],
+            kind: ScopeKind::Module,
+            stable_key: stable_key.to_string(),
+            status: SemanticStatus::Resolved,
+        }
+    }
+
+    fn stable_export(
+        file: FileId,
+        export_id: ExportId,
+        stable_key: &str,
+        symbol_key: &str,
+    ) -> StableExportIdentity {
+        StableExportIdentity {
+            id: StableExportId(0),
+            export: export_id,
+            language: Language::TypeScript,
+            package_key: None,
+            module_key: Some(format!("file:{}", file.0)),
+            export_name: "answer".to_string(),
+            namespace: SymbolNamespace::Value,
+            symbol_stable_key: symbol_key.to_string(),
+            generated_discriminator: None,
+            stable_key: stable_key.to_string(),
+            status: SemanticStatus::Resolved,
+        }
+    }
+
+    fn payload_with_semantic_index(semantic_index: SemanticIndexOutput) -> SymbolGraphLayerPayload {
+        SymbolGraphLayerPayload {
+            schema: SYMBOL_GRAPH_LAYER_SCHEMA.to_string(),
+            diagnostics: Vec::new(),
+            capability_support: Vec::new(),
+            symbols: Vec::new(),
+            definitions: Vec::new(),
+            references: Vec::new(),
+            semantic_index,
+        }
+    }
+
+    #[test]
+    fn cold_payload_writes_semantic_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("config");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut db = fixture_db(temp.path());
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config",
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let derivation = derive_requested_symbols_with_cache_stats(
+            &mut db,
+            &loaded,
+            &plan,
+            &cache,
+            &snapshot,
+            manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &["base"],
+            )],
+        );
+
+        let payload = symbol_graph_layer_payload(&db, &derivation);
+
+        assert!(!payload.semantic_index.scopes.is_empty());
+        assert!(!payload.semantic_index.stable_exports.is_empty());
+    }
+
+    #[test]
+    fn restore_replaces_semantic_rows_and_metadata() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "export const answer = 42;\n".to_string(),
+        );
+        let export = ExportFact {
+            id: ExportId(0),
+            language: Language::TypeScript,
+            file: Some(file),
+            package: None,
+            module: None,
+            scope: None,
+            symbol: None,
+            export_name: "answer".to_string(),
+            namespace: SymbolNamespace::Value,
+            kind: ExportKind::Named,
+            stable_key: "semantic:export:answer".to_string(),
+            status: SemanticStatus::Resolved,
+        };
+        let payload = payload_with_semantic_index(SemanticIndexOutput {
+            scopes: vec![scope(file, "semantic:scope:module")],
+            exports: vec![export],
+            stable_exports: vec![stable_export(
+                file,
+                ExportId(0),
+                "semantic:stable-export:answer",
+                "symbol:answer",
+            )],
+            ..SemanticIndexOutput::default()
+        });
+
+        restore_symbol_graph_layer_payload(&mut db, &payload);
+
+        assert_eq!(db.scopes().len(), 1);
+        assert_eq!(db.exports().len(), 1);
+        assert_eq!(db.stable_exports().len(), 1);
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::StableExport, 0))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn validation_rejects_missing_keys_absolute_paths_and_stable_export_conflicts() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            Path::new("src/app.ts").to_path_buf(),
+            "src/app.ts".to_string(),
+            "export const answer = 42;\n".to_string(),
+        );
+        let valid_payload = payload_with_semantic_index(SemanticIndexOutput {
+            scopes: vec![scope(file, "semantic:scope:module")],
+            stable_exports: vec![stable_export(
+                file,
+                ExportId(0),
+                "semantic:stable-export:answer",
+                "symbol:answer",
+            )],
+            ..SemanticIndexOutput::default()
+        });
+        let valid_manifest = cache_manifest_for(&valid_payload);
+        assert!(validate_symbol_graph_layer_payload(
+            &valid_payload,
+            &valid_manifest
+        ));
+
+        let mut empty_key_payload = valid_payload.clone();
+        empty_key_payload.semantic_index.scopes[0]
+            .stable_key
+            .clear();
+        assert!(!validate_symbol_graph_layer_payload(
+            &empty_key_payload,
+            &cache_manifest_for(&empty_key_payload)
+        ));
+
+        let mut absolute_path_payload = valid_payload.clone();
+        absolute_path_payload.semantic_index.stable_exports[0].module_key =
+            Some("/tmp/repo/src/app.ts".to_string());
+        assert!(!validate_symbol_graph_layer_payload(
+            &absolute_path_payload,
+            &cache_manifest_for(&absolute_path_payload)
+        ));
+
+        let mut conflict_payload = valid_payload;
+        conflict_payload
+            .semantic_index
+            .stable_exports
+            .push(stable_export(
+                file,
+                ExportId(1),
+                "semantic:stable-export:answer",
+                "symbol:other",
+            ));
+        assert!(!validate_symbol_graph_layer_payload(
+            &conflict_payload,
+            &cache_manifest_for(&conflict_payload)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod semantic_cache_restore {
+    use crate::analysis_kernel::{AnalysisKernel, KernelInput, KernelOutput};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::symbol_graph::semantic::SemanticStatus;
+    use std::path::Path;
+
+    fn requested_symbol_plan() -> AnalysisPlan {
+        AnalysisPlan::from_capability_names_for_test(&["symbols", "references"])
+    }
+
+    fn run_kernel(root: &Path, cache: &Cache, plan: &AnalysisPlan) -> KernelOutput {
+        let loaded = load_config(root).expect("default config loads");
+        AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan,
+            parallel: false,
+        })
+        .expect("kernel run should succeed")
+    }
+
+    fn symbol_graph_output(
+        output: &KernelOutput,
+    ) -> &crate::analysis_kernel::incremental::ProviderOutputMeta {
+        output
+            .run_report
+            .provider_outputs
+            .iter()
+            .find(|row| row.provider_id == "polint.symbol_graph")
+            .expect("symbol graph provider output exists")
+    }
+
+    fn stable_export_keys(output: &KernelOutput) -> Vec<String> {
+        let has_empty_key = output.db.stable_exports().iter().any(stable_key_is_empty);
+        assert!(!has_empty_key);
+        let mut keys = output
+            .db
+            .stable_exports()
+            .iter()
+            .map(|row| row.stable_key.clone())
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    fn stable_key_is_empty(row: &crate::symbol_graph::semantic::StableExportIdentity) -> bool {
+        row.stable_key.is_empty()
+    }
+
+    fn assert_warm_symbol_graph_reuse(output: &KernelOutput) {
+        let warm = symbol_graph_output(output);
+        assert_eq!(warm.cache_stats.hits, 1);
+        assert_eq!(warm.cache_stats.verified_reuse, 1);
+        assert_eq!(warm.cache_stats.recomputes, 0);
+    }
+
+    #[test]
+    fn ts_stable_exports_survive_warm_cache_restore() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(
+            temp.path().join("src/app.ts"),
+            "import { token } from './tokens';\nexport function answer() { return token; }\n",
+        )
+        .expect("write app");
+        std::fs::write(
+            temp.path().join("src/tokens.ts"),
+            "export const token = 42;\n",
+        )
+        .expect("write tokens");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+
+        let cold = run_kernel(temp.path(), &cache, &plan);
+        let warm = run_kernel(temp.path(), &cache, &plan);
+
+        assert_warm_symbol_graph_reuse(&warm);
+        let cold_keys = stable_export_keys(&cold);
+        let warm_keys = stable_export_keys(&warm);
+        assert!(!cold_keys.is_empty());
+        assert_eq!(cold_keys, warm_keys);
+    }
+
+    #[test]
+    fn go_stable_exports_survive_warm_cache_restore_when_setup_succeeds() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/cache\n\ngo 1.24\n",
+        )
+        .expect("write go.mod");
+        std::fs::create_dir_all(temp.path().join("pkg")).expect("create pkg");
+        std::fs::write(
+            temp.path().join("pkg/cache.go"),
+            "package pkg\n\nfunc Answer() int { return 42 }\n",
+        )
+        .expect("write go file");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = requested_symbol_plan();
+
+        let cold = run_kernel(temp.path(), &cache, &plan);
+        let warm = run_kernel(temp.path(), &cache, &plan);
+
+        assert_warm_symbol_graph_reuse(&warm);
+        let cold_keys = stable_export_keys(&cold);
+        let warm_keys = stable_export_keys(&warm);
+        if cold_keys.is_empty() {
+            assert!(cold.db.resolution_facts().iter().any(|row| {
+                matches!(
+                    row.status,
+                    SemanticStatus::SetupMissing | SemanticStatus::Unsupported
+                )
+            }));
+            assert!(cold.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic
+                        .message
+                        .contains("symbol graph provider support is setup_missing")
+            }));
+        } else {
+            assert_eq!(cold_keys, warm_keys);
+        }
     }
 }

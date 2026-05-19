@@ -35,6 +35,17 @@ use crate::eval::model::{
 };
 
 #[cfg(test)]
+const SEMANTIC_DEBUG_SECTIONS: &[&str] = &[
+    "scopes",
+    "imports",
+    "exports",
+    "aliases",
+    "resolutions",
+    "generated_symbols",
+    "stable_exports",
+];
+
+#[cfg(test)]
 pub(crate) fn observe_kernel_fixture(fixture: &NativeFixture) -> anyhow::Result<Vec<ObservedItem>> {
     let temp = copy_fixture_repo_for_test(fixture)?;
     observe_kernel_fixture_repo_for_test(fixture, temp.path(), true)
@@ -406,10 +417,28 @@ fn bool_string(value: bool) -> &'static str {
 }
 
 #[cfg(test)]
+pub(crate) fn metadata_debug_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    metadata_debug_facts(debug_json)
+}
+
+#[cfg(test)]
 fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     let mut facts = Vec::new();
     for section in ["files", "imports", "symbols", "references"] {
         let Some(rows) = debug_json.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = metadata_debug_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    let Some(semantic) = debug_json.get("semantic").and_then(Value::as_object) else {
+        return facts;
+    };
+    for &section in SEMANTIC_DEBUG_SECTIONS {
+        let Some(rows) = semantic.get(section).and_then(Value::as_array) else {
             continue;
         };
         for row in rows {
@@ -437,10 +466,30 @@ fn metadata_debug_fact(row: &Value) -> Option<ObservedFact> {
             .map(str::to_string),
         precision: row
             .get("precision")
+            .or_else(|| row.pointer("/metadata/precision"))
             .and_then(Value::as_str)
             .map(str::to_string),
         status: Some(observed_status_from_metadata(row)),
+        payload: observed_fact_payload(row),
     })
+}
+
+#[cfg(test)]
+fn observed_fact_payload(row: &Value) -> Option<String> {
+    let payload = serde_json::json!({
+        "path": row.get("path").cloned(),
+        "span": row.get("span").cloned(),
+        "name": row.get("name").cloned(),
+        "export_name": row.get("export_name").cloned(),
+        "source_stable_key": row.get("source_stable_key").cloned(),
+        "target_stable_keys": row.get("target_stable_keys").cloned(),
+        "generated_discriminator": row.get("generated_discriminator").cloned(),
+    });
+    let object = payload.as_object()?;
+    if object.values().all(Value::is_null) {
+        return None;
+    }
+    Some(payload.to_string())
 }
 
 #[cfg(test)]
@@ -460,9 +509,16 @@ fn observed_status_from_metadata(row: &Value) -> ObservedStatus {
 #[cfg(test)]
 fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
     match label {
-        "unknown" | "unresolved" | "ambiguous" => Some(ObservedStatus::Unknown),
+        "resolved" => Some(ObservedStatus::Resolved),
+        "unknown" => Some(ObservedStatus::Unknown),
+        "unresolved" => Some(ObservedStatus::Unresolved),
+        "ambiguous" => Some(ObservedStatus::Ambiguous),
+        "dynamic" => Some(ObservedStatus::Dynamic),
         "setup_missing" => Some(ObservedStatus::SetupMissing),
         "unsupported" => Some(ObservedStatus::Unsupported),
+        "external" => Some(ObservedStatus::External),
+        "cycle" => Some(ObservedStatus::Cycle),
+        "generated" => Some(ObservedStatus::Generated),
         _ => None,
     }
 }

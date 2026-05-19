@@ -315,7 +315,17 @@ fn extra_observed_outcome(observed: &ObservedItem, expected: &[ExpectedItem]) ->
 fn observed_unknown_outcome(observed: &ObservedItem) -> bool {
     matches!(
         observed_status(observed),
-        Some(ObservedStatus::Unknown | ObservedStatus::SetupMissing | ObservedStatus::Unsupported)
+        Some(
+            ObservedStatus::Unknown
+                | ObservedStatus::Unresolved
+                | ObservedStatus::Ambiguous
+                | ObservedStatus::Dynamic
+                | ObservedStatus::SetupMissing
+                | ObservedStatus::Unsupported
+                | ObservedStatus::External
+                | ObservedStatus::Cycle
+                | ObservedStatus::Generated
+        )
     )
 }
 
@@ -820,6 +830,7 @@ mod tests {
             provenance: None,
             precision: None,
             status: Some(status),
+            payload: None,
         }
     }
 

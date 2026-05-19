@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-18T18:21:47.332Z"
-last_activity: 2026-05-18
+last_updated: "2026-05-19T09:59:09.000Z"
+last_activity: 2026-05-19
 progress:
   total_phases: 22
-  completed_phases: 6
-  total_plans: 26
-  completed_plans: 26
+  completed_phases: 7
+  total_plans: 32
+  completed_plans: 32
   percent: 100
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 25 — Rule Manifest, Inspect, and Test Skeleton
+**Current focus:** Phase 27 — layered-module-package-topology-graph
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 25
-Phase: 26
+Status: Ready to execute
+Phase: 27
 Plan: Not started
-Last activity: 2026-05-18
+Last activity: 2026-05-19
 
 ## Phase Progress
 
@@ -55,7 +55,7 @@ Last activity: 2026-05-18
 | 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
-| 26 | Pending | Semantic index deepening; requirement SAE-SEM-01 |
+| 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
@@ -148,6 +148,25 @@ Last activity: 2026-05-18
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: LayerCacheStore rejects invalid manifests before payload reads, including dependency-index schema drift and derived-layer manifests without dependency rows.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: Layer-cache internals remain test/eval-facing only; public JSON, CLI help, SDK, runner, and crate-root surfaces are guarded by integration tests.
 - [Phase 24-persistent-layer-cache-for-existing-cheap-facts]: The public cache status contract includes the managed layers category but still does not expose layer-cache internals or provider stats.
+- [Phase 26]: Phase 26 context gathered at .planning/phases/26-semantic-index-deepening/26-CONTEXT.md
+- [Phase 26-semantic-index-deepening]: Keep semantic index rows crate-private under symbol_graph::semantic with no SDK, runner, CLI, or crate-root public surface.
+- [Phase 26-semantic-index-deepening]: Use polint.symbol_graph as producer/layer id for semantic metadata rows.
+- [Phase 26-semantic-index-deepening]: Assign semantic run-local IDs by sorted stable keys while keeping stable keys separate from IDs.
+- [Phase 26-semantic-index-deepening]: Keep TS/JS semantic rows crate-private under symbol_graph::semantic with no SDK, runner, CLI, or crate-root public surface.
+- [Phase 26-semantic-index-deepening]: Use Oxc scopes and references as the TS/JS semantic source, with conservative rows for unresolved, dynamic, external, and unsupported forms.
+- [Phase 26-semantic-index-deepening]: Represent TS/JS stable export identities with a native generated discriminator while future plans decide DB/cache publication.
+- [Phase 26-semantic-index-deepening]: Use the existing Go lifecycle and sidecar path, adding semantic rows without writing repository lifecycle files.
+- [Phase 26-semantic-index-deepening]: Keep Go semantic rows crate-private under symbol_graph::semantic with no SDK, runner, CLI, or crate-root public surface.
+- [Phase 26-semantic-index-deepening]: Represent Go setup gaps and unresolved sidecar references as UnknownFallback semantic rows while preserving polint/capability diagnostics.
+- [Phase 26-semantic-index-deepening]: Keep semantic closure, generated hooks, validation, and debug JSON crate-private/test-only for plan 26-04.
+- [Phase 26-semantic-index-deepening]: Semantic metadata from polint.symbol_graph must not claim FactPrecision::Exact; setup-aware precision is enforced by validation.
+- [Phase 26-semantic-index-deepening]: Native generated hooks are polint.symbol_graph rows with source_stable_key, generated_discriminator, and GeneratedHintLookup provenance.
+- [Phase 26-semantic-index-deepening]: Keep semantic cache identity and payload restore crate-private under the existing symbol graph provider.
+- [Phase 26-semantic-index-deepening]: Use schema symbol-graph-facts-2 for symbol graph layer payloads that include semantic_index rows.
+- [Phase 26-semantic-index-deepening]: Reject malformed semantic cache payloads before reuse instead of restoring partial or placeholder semantic facts.
+- [Phase 26-semantic-index-deepening]: Keep semantic eval support crate-private/test-facing; no public eval CLI, SDK view, or generic semantic graph API was added.
+- [Phase 26-semantic-index-deepening]: Represent semantic unknown statuses explicitly in eval reports so ambiguous, unresolved, dynamic, external, cycle, generated, setup-missing, and unsupported rows count as unknown evidence.
+- [Phase 26-semantic-index-deepening]: Document only existing Symbols<'_> and References<'_> behavior; scopes/import closure/resolution-step rows remain internal.
 
 ## Execution Metrics
 
@@ -169,19 +188,27 @@ Last activity: 2026-05-18
 | 24-persistent-layer-cache-for-existing-cheap-facts | 03 | 16 min | 2 | 6 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 04 | 19 min | 2 | 7 |
 | 24-persistent-layer-cache-for-existing-cheap-facts | 05 | 28 min | 3 | 17 |
+| 26-semantic-index-deepening | 01 | 12 min | 3 | 5 |
+| 26-semantic-index-deepening | 02 | 19 min | 3 | 2 |
+| 26-semantic-index-deepening | 03 | 70 min | 3 | 5 |
+| 26-semantic-index-deepening | 04 | 23min | 3 | 6 |
+| 26-semantic-index-deepening | 05 | 13 min | 3 | 4 |
+| 26-semantic-index-deepening | 06 | 17 min | 3 | 14 |
 
 ## Session
 
-- Last session: 2026-05-18
-- Last activity: 2026-05-18 - Implemented quick task 260518-qzd: AI-friendly polint check output format.
-- Stopped at: Completed Phase 24 verification; Phase 25 ready for planning.
+- Last session: 2026-05-19
+- Last activity: 2026-05-19 - Fixed attached Phase 26 CI failures for the active PR.
+- Stopped at: Phase 26 CI fixes ready for verification and PR update; Phase 27 remains ready for planning/execution.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260519-ci | Fix attached Phase 26 CI failures for manifest version, cross-platform path validation, and layer-cache eval budget | 2026-05-19 | implemented | [260519-ci-fix-phase-26-ci-failures](./quick/260519-ci-fix-phase-26-ci-failures/) |
+| 260519-fqg | Fix PR review findings for semantic index keys, validation, lint failures, and rerun deep review | 2026-05-19 | implemented | [260519-fqg-fix-pr-review-findings-for-semantic-inde](./quick/260519-fqg-fix-pr-review-findings-for-semantic-inde/) |
 | 260518-qzd | Research and plan ai-friendly polint check output format | 2026-05-18 | implemented | [260518-qzd-research-and-plan-ai-friendly-polint-che](./quick/260518-qzd-research-and-plan-ai-friendly-polint-che/) |
 
 ## Next Action
 
-Phase 25 is ready for planning.
+Phase 27 is ready for planning/execution.

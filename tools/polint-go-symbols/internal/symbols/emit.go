@@ -17,7 +17,7 @@ import (
 	"golang.org/x/tools/go/types/objectpath"
 )
 
-const SchemaVersion = "polint-go-symbols-v1"
+const SchemaVersion = "polint-go-symbols-semantic-1"
 
 type Config struct {
 	Root         string
@@ -28,14 +28,18 @@ type Config struct {
 }
 
 type Output struct {
-	Schema      string          `json:"schema"`
-	GoVersion   string          `json:"go_version"`
-	ModulePath  string          `json:"module_path,omitempty"`
-	Packages    []PackageRow    `json:"packages"`
-	Symbols     []SymbolRow     `json:"symbols"`
-	Definitions []DefinitionRow `json:"definitions"`
-	References  []ReferenceRow  `json:"references"`
-	Errors      []PackageError  `json:"errors,omitempty"`
+	Schema          string              `json:"schema"`
+	GoVersion       string              `json:"go_version"`
+	ModulePath      string              `json:"module_path,omitempty"`
+	Packages        []PackageRow        `json:"packages"`
+	Symbols         []SymbolRow         `json:"symbols"`
+	Definitions     []DefinitionRow     `json:"definitions"`
+	References      []ReferenceRow      `json:"references"`
+	Scopes          []ScopeRow          `json:"scopes"`
+	Imports         []ImportRow         `json:"imports"`
+	Exports         []ExportRow         `json:"exports"`
+	ResolutionSteps []ResolutionStepRow `json:"resolution_steps"`
+	Errors          []PackageError      `json:"errors,omitempty"`
 }
 
 type PackageRow struct {
@@ -85,6 +89,40 @@ type ReferenceRow struct {
 	Precision string `json:"precision"`
 }
 
+type ScopeRow struct {
+	Key         string `json:"key"`
+	ParentKey   string `json:"parent_key"`
+	Kind        string `json:"kind"`
+	PackagePath string `json:"package_path"`
+	File        string `json:"file,omitempty"`
+	Span        Span   `json:"span"`
+}
+
+type ImportRow struct {
+	Path      string `json:"path"`
+	LocalName string `json:"local_name,omitempty"`
+	AliasKind string `json:"alias_kind"`
+	File      string `json:"file,omitempty"`
+	Span      Span   `json:"span"`
+}
+
+type ExportRow struct {
+	SymbolKey   string `json:"symbol_key"`
+	ExportName  string `json:"export_name"`
+	Namespace   string `json:"namespace"`
+	ObjectPath  string `json:"object_path"`
+	PackagePath string `json:"package_path"`
+	Generated   bool   `json:"generated"`
+}
+
+type ResolutionStepRow struct {
+	ReferenceKey  string   `json:"reference_key"`
+	Step          string   `json:"step"`
+	Status        string   `json:"status"`
+	TargetKey     string   `json:"target_key,omitempty"`
+	CandidateKeys []string `json:"candidate_keys"`
+}
+
 type PackageError struct {
 	PackageID   string `json:"package_id"`
 	PackagePath string `json:"package_path"`
@@ -108,6 +146,10 @@ type emitter struct {
 	symbolRows  map[string]SymbolRow
 	defRows     map[string]DefinitionRow
 	refRows     map[string]ReferenceRow
+	scopeRows   map[string]ScopeRow
+	importRows  map[string]ImportRow
+	exportRows  map[string]ExportRow
+	stepRows    map[string]ResolutionStepRow
 	kindByPos   map[token.Pos]string
 	parents     map[ast.Node]ast.Node
 	ownerRanges []ownerRange
@@ -171,18 +213,26 @@ func Emit(config Config) (Output, error) {
 		root: root,
 		fset: fset,
 		out: Output{
-			Schema:      SchemaVersion,
-			GoVersion:   runtime.Version(),
-			Packages:    []PackageRow{},
-			Symbols:     []SymbolRow{},
-			Definitions: []DefinitionRow{},
-			References:  []ReferenceRow{},
-			Errors:      []PackageError{},
+			Schema:          SchemaVersion,
+			GoVersion:       runtime.Version(),
+			Packages:        []PackageRow{},
+			Symbols:         []SymbolRow{},
+			Definitions:     []DefinitionRow{},
+			References:      []ReferenceRow{},
+			Scopes:          []ScopeRow{},
+			Imports:         []ImportRow{},
+			Exports:         []ExportRow{},
+			ResolutionSteps: []ResolutionStepRow{},
+			Errors:          []PackageError{},
 		},
 		symbols:    make(map[types.Object]string),
 		symbolRows: make(map[string]SymbolRow),
 		defRows:    make(map[string]DefinitionRow),
 		refRows:    make(map[string]ReferenceRow),
+		scopeRows:  make(map[string]ScopeRow),
+		importRows: make(map[string]ImportRow),
+		exportRows: make(map[string]ExportRow),
+		stepRows:   make(map[string]ResolutionStepRow),
 		kindByPos:  make(map[token.Pos]string),
 		parents:    make(map[ast.Node]ast.Node),
 	}
@@ -194,6 +244,7 @@ func Emit(config Config) (Output, error) {
 		e.indexSyntax(pkg)
 		e.emitPackage(pkg)
 		e.emitPackageErrors(pkg)
+		e.emitScopesAndImports(pkg)
 		e.emitDefinitions(pkg)
 		e.emitImplicits(pkg)
 		e.emitUses(pkg)
@@ -503,6 +554,89 @@ func (e *emitter) emitPackageErrors(pkg *packages.Package) {
 	}
 }
 
+func (e *emitter) emitScopesAndImports(pkg *packages.Package) {
+	packageKey := scopeKey(pkg.PkgPath, "", "package", 0, pkg.PkgPath)
+	e.addScope(packageKey, "", "package", pkg.PkgPath, "", Span{})
+
+	for _, file := range pkg.Syntax {
+		filePath := e.fileForPos(file.Pos())
+		fileKey := scopeKey(pkg.PkgPath, filePath, "file", 0, filePath)
+		e.addScope(fileKey, packageKey, "file", pkg.PkgPath, filePath, e.span(file.Pos(), file.End()))
+		for _, spec := range file.Imports {
+			e.addImport(spec)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.FuncDecl:
+				kind := "function"
+				name := n.Name.Name
+				if recv := receiverName(n.Recv); recv != "" {
+					kind = "method"
+					name = recv + "." + n.Name.Name
+				}
+				key := scopeKey(pkg.PkgPath, filePath, kind, e.fileRelativeOffset(n.Pos()), name)
+				e.addScope(key, fileKey, kind, pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
+			case *ast.FuncLit:
+				key := scopeKey(pkg.PkgPath, filePath, "function", e.fileRelativeOffset(n.Pos()), "literal")
+				e.addScope(key, fileKey, "function", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
+			case *ast.TypeSpec:
+				key := scopeKey(pkg.PkgPath, filePath, "type", e.fileRelativeOffset(n.Pos()), n.Name.Name)
+				e.addScope(key, fileKey, "type", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
+			case *ast.BlockStmt:
+				offset := e.fileRelativeOffset(n.Pos())
+				key := scopeKey(pkg.PkgPath, filePath, "block", offset, fmt.Sprintf("%d", offset))
+				parent := e.enclosingScopeKey(pkg, filePath, fileKey, n.Pos())
+				e.addScope(key, parent, "block", pkg.PkgPath, filePath, e.span(n.Pos(), n.End()))
+			}
+			return true
+		})
+	}
+}
+
+func (e *emitter) addScope(key string, parentKey string, kind string, packagePath string, file string, span Span) {
+	if key == "" {
+		return
+	}
+	e.scopeRows[key] = ScopeRow{
+		Key:         key,
+		ParentKey:   parentKey,
+		Kind:        kind,
+		PackagePath: packagePath,
+		File:        file,
+		Span:        span,
+	}
+}
+
+func (e *emitter) addImport(spec *ast.ImportSpec) {
+	path, err := strconv.Unquote(spec.Path.Value)
+	if err != nil {
+		path = strings.Trim(spec.Path.Value, `"`)
+	}
+	localName := ""
+	aliasKind := "implicit"
+	if spec.Name != nil {
+		localName = spec.Name.Name
+		switch spec.Name.Name {
+		case ".":
+			aliasKind = "dot"
+		case "_":
+			aliasKind = "blank"
+		default:
+			aliasKind = "named"
+		}
+	}
+	file := e.fileForPos(spec.Pos())
+	span := e.span(spec.Pos(), spec.End())
+	key := strings.Join([]string{file, path, localName, aliasKind, fmt.Sprintf("%d", span.StartByte)}, "|")
+	e.importRows[key] = ImportRow{
+		Path:      path,
+		LocalName: localName,
+		AliasKind: aliasKind,
+		File:      file,
+		Span:      span,
+	}
+}
+
 func (e *emitter) emitDefinitions(pkg *packages.Package) {
 	type item struct {
 		ident *ast.Ident
@@ -669,6 +803,7 @@ func (e *emitter) ensureSymbol(pkg *packages.Package, ident *ast.Ident, obj type
 	}
 	e.symbols[obj] = key
 	e.symbolRows[key] = row
+	e.addExport(row)
 	return key
 }
 
@@ -690,6 +825,22 @@ func (e *emitter) upgradeSymbolLocation(pkg *packages.Package, ident *ast.Ident,
 		row.OwnerChain = nil
 	}
 	e.symbolRows[key] = row
+	e.addExport(row)
+}
+
+func (e *emitter) addExport(row SymbolRow) {
+	if !row.Exported || row.ObjectPath == "" || row.PackagePath == "" {
+		return
+	}
+	key := strings.Join([]string{row.PackagePath, row.Namespace, row.Name, row.ObjectPath, row.Key}, "|")
+	e.exportRows[key] = ExportRow{
+		SymbolKey:   row.Key,
+		ExportName:  row.Name,
+		Namespace:   row.Namespace,
+		ObjectPath:  row.ObjectPath,
+		PackagePath: row.PackagePath,
+		Generated:   false,
+	}
 }
 
 func (e *emitter) symbolKind(obj types.Object, ident *ast.Ident) string {
@@ -919,6 +1070,19 @@ func (e *emitter) addReference(packageID string, file string, name string, targe
 		Span:      span,
 		Precision: "exact_semantic",
 	}
+	candidates := []string{}
+	status := "unresolved"
+	if targetKey != "" {
+		candidates = []string{targetKey}
+		status = "resolved"
+	}
+	e.stepRows[key] = ResolutionStepRow{
+		ReferenceKey:  key,
+		Step:          "LexicalLookup",
+		Status:        status,
+		TargetKey:     targetKey,
+		CandidateKeys: candidates,
+	}
 }
 
 func (e *emitter) ownerChainAt(pkg *packages.Package, pos token.Pos) []string {
@@ -954,6 +1118,18 @@ func (e *emitter) finish() {
 	for _, row := range e.refRows {
 		e.out.References = append(e.out.References, row)
 	}
+	for _, row := range e.scopeRows {
+		e.out.Scopes = append(e.out.Scopes, row)
+	}
+	for _, row := range e.importRows {
+		e.out.Imports = append(e.out.Imports, row)
+	}
+	for _, row := range e.exportRows {
+		e.out.Exports = append(e.out.Exports, row)
+	}
+	for _, row := range e.stepRows {
+		e.out.ResolutionSteps = append(e.out.ResolutionSteps, row)
+	}
 	sort.Slice(e.out.Packages, func(i, j int) bool { return e.out.Packages[i].ID < e.out.Packages[j].ID })
 	sort.Slice(e.out.Symbols, func(i, j int) bool { return e.out.Symbols[i].Key < e.out.Symbols[j].Key })
 	sort.Slice(e.out.Definitions, func(i, j int) bool {
@@ -962,12 +1138,49 @@ func (e *emitter) finish() {
 	sort.Slice(e.out.References, func(i, j int) bool {
 		return referenceOrderKey(e.out.References[i]) < referenceOrderKey(e.out.References[j])
 	})
+	sort.Slice(e.out.Scopes, func(i, j int) bool { return scopeOrderKey(e.out.Scopes[i]) < scopeOrderKey(e.out.Scopes[j]) })
+	sort.Slice(e.out.Imports, func(i, j int) bool { return importOrderKey(e.out.Imports[i]) < importOrderKey(e.out.Imports[j]) })
+	sort.Slice(e.out.Exports, func(i, j int) bool { return exportOrderKey(e.out.Exports[i]) < exportOrderKey(e.out.Exports[j]) })
+	sort.Slice(e.out.ResolutionSteps, func(i, j int) bool {
+		return resolutionStepOrderKey(e.out.ResolutionSteps[i]) < resolutionStepOrderKey(e.out.ResolutionSteps[j])
+	})
 	sort.Slice(e.out.Errors, func(i, j int) bool {
 		left := e.out.Errors[i]
 		right := e.out.Errors[j]
 		return strings.Join([]string{left.PackageID, left.PackagePath, left.Message}, "\x00") <
 			strings.Join([]string{right.PackageID, right.PackagePath, right.Message}, "\x00")
 	})
+}
+
+func (e *emitter) enclosingScopeKey(pkg *packages.Package, filePath string, fileKey string, pos token.Pos) string {
+	var best ownerRange
+	found := false
+	for _, owner := range e.ownerRanges {
+		if owner.start <= pos && pos <= owner.end {
+			if !found || owner.start > best.start {
+				best = owner
+				found = true
+			}
+		}
+	}
+	if !found {
+		return fileKey
+	}
+	kind := "function"
+	name := best.name
+	switch {
+	case strings.HasPrefix(name, "type "):
+		kind = "type"
+		name = strings.TrimPrefix(name, "type ")
+	case strings.HasPrefix(name, "method "):
+		kind = "method"
+		name = strings.TrimPrefix(name, "method ")
+	case strings.HasPrefix(name, "func "):
+		name = strings.TrimPrefix(name, "func ")
+	case strings.HasPrefix(name, "func@"):
+		name = "literal"
+	}
+	return scopeKey(pkg.PkgPath, filePath, kind, e.fileRelativeOffset(best.start), name)
 }
 
 func (e *emitter) identSpan(ident *ast.Ident) Span {
@@ -988,6 +1201,17 @@ func (e *emitter) span(start token.Pos, end token.Pos) Span {
 		EndLine:     endPos.Line,
 		EndColumn:   endPos.Column,
 	}
+}
+
+func (e *emitter) fileRelativeOffset(pos token.Pos) int {
+	if pos == token.NoPos {
+		return 0
+	}
+	offset := e.fset.PositionFor(pos, false).Offset
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func (e *emitter) fileForPos(pos token.Pos) string {
@@ -1133,5 +1357,56 @@ func referenceOrderKey(row ReferenceRow) string {
 		row.Name,
 		row.Kind,
 		row.TargetKey,
+	}, "\x00")
+}
+
+func scopeKey(packagePath string, file string, kind string, offset int, name string) string {
+	return strings.Join([]string{
+		"go:scope",
+		"package:" + packagePath,
+		"file:" + file,
+		"kind:" + kind,
+		"name:" + name,
+		fmt.Sprintf("offset:%d", offset),
+	}, "|")
+}
+
+func scopeOrderKey(row ScopeRow) string {
+	return strings.Join([]string{
+		row.Key,
+		row.ParentKey,
+		row.Kind,
+		row.PackagePath,
+		row.File,
+	}, "\x00")
+}
+
+func importOrderKey(row ImportRow) string {
+	return strings.Join([]string{
+		row.File,
+		fmt.Sprintf("%d", row.Span.StartByte),
+		row.Path,
+		row.LocalName,
+		row.AliasKind,
+	}, "\x00")
+}
+
+func exportOrderKey(row ExportRow) string {
+	return strings.Join([]string{
+		row.PackagePath,
+		row.Namespace,
+		row.ExportName,
+		row.ObjectPath,
+		row.SymbolKey,
+	}, "\x00")
+}
+
+func resolutionStepOrderKey(row ResolutionStepRow) string {
+	return strings.Join([]string{
+		row.ReferenceKey,
+		row.Step,
+		row.Status,
+		row.TargetKey,
+		strings.Join(row.CandidateKeys, "\x01"),
 	}, "\x00")
 }

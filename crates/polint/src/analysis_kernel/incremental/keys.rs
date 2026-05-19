@@ -425,6 +425,24 @@ pub(crate) fn dependency_layer_digest(output_digest: Digest) -> Digest {
     )
 }
 
+pub(crate) fn semantic_provider_parameter_digest() -> Digest {
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "semantic_provider_parameters",
+        &[
+            "scopes=enabled",
+            "semantic_imports=enabled",
+            "exports=enabled",
+            "aliases=enabled",
+            "resolution_facts=enabled",
+            "generated_symbols=enabled",
+            "stable_exports=enabled",
+            "alias_closure=max_input_plus_one",
+            "generated_hooks=native_rows_only",
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,7 +771,7 @@ mod tests {
         let mut changed_provider_version = base.clone();
         changed_provider_version.provider_version = "different-provider-version".to_string();
         let mut changed_schema = base.clone();
-        changed_schema.schema_version = "symbol-graph-facts-2:2".to_string();
+        changed_schema.schema_version = "symbol-graph-facts-2:changed".to_string();
 
         for changed in [
             changed_source,
@@ -772,6 +790,138 @@ mod tests {
             DigestKind::ExtensionCode,
             "extension_digest_absent"
         )));
+    }
+
+    mod symbol_graph_semantic_layer_key {
+        use super::*;
+
+        #[test]
+        fn includes_semantic_provider_parameters() {
+            assert_eq!(
+                semantic_provider_parameter_digest(),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "semantic_provider_parameters",
+                    &[
+                        "scopes=enabled",
+                        "semantic_imports=enabled",
+                        "exports=enabled",
+                        "aliases=enabled",
+                        "resolution_facts=enabled",
+                        "generated_symbols=enabled",
+                        "stable_exports=enabled",
+                        "alias_closure=max_input_plus_one",
+                        "generated_hooks=native_rows_only",
+                    ],
+                )
+            );
+        }
+
+        #[test]
+        fn key_changes_when_semantic_parameters_change() {
+            let base = symbol_graph_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+            );
+            let changed = LayerKey::symbol_graph_layer_key(
+                symbol_graph_manifest(),
+                vec![Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                )],
+                vec![Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "package_context",
+                    &["src/app.ts", "pkg"],
+                )],
+                vec![Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                )],
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                vec![Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &["base"],
+                )],
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "symbol_graph_parameters",
+                    &[
+                        "output=symbols",
+                        "output=definitions",
+                        "output=references",
+                        "scopes=disabled",
+                    ],
+                ),
+            );
+
+            assert_ne!(base.parameter_digest, changed.parameter_digest);
+            assert_ne!(base, changed);
+        }
+
+        #[test]
+        fn key_tracks_provider_schema_and_absent_extension_digest() {
+            let base = symbol_graph_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "import_shape",
+                    &["./target"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+            );
+            let mut changed_schema = base.clone();
+            changed_schema.schema_version = "symbol-graph-facts-3:3".to_string();
+
+            assert_ne!(base, changed_schema);
+            assert!(base.extension_digests.contains(&Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent"
+            )));
+            assert!(
+                base.dependency_layer_digests
+                    .contains(&dependency_layer_digest(Digest::from_parts(
+                        DigestKind::ProviderOutput,
+                        "module_graph",
+                        &["base"]
+                    )))
+            );
+            assert!(
+                base.dependency_layer_digests
+                    .contains(&dependency_layer_digest(Digest::from_parts(
+                        DigestKind::ProviderOutput,
+                        "ts_syntax",
+                        &["base"]
+                    )))
+            );
+        }
     }
 
     #[test]
@@ -1117,5 +1267,112 @@ mod tests {
         value["value"]
             .as_str()
             .expect("serialized digest should have a string value")
+    }
+}
+
+#[cfg(test)]
+mod symbol_graph_semantic_layer_key {
+    use super::*;
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.symbol_graph")
+            .expect("symbol graph provider manifest exists")
+    }
+
+    fn key(parameter_digest: Digest) -> LayerKey {
+        LayerKey::symbol_graph_layer_key(
+            manifest(),
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", "base"],
+            )],
+            vec![Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "package_context",
+                &["src/app.ts", "pkg"],
+            )],
+            vec![Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "import_shape",
+                &["./target"],
+            )],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &["base"],
+            )],
+            parameter_digest,
+        )
+    }
+
+    #[test]
+    fn includes_semantic_provider_parameters() {
+        assert_eq!(
+            semantic_provider_parameter_digest(),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "semantic_provider_parameters",
+                &[
+                    "scopes=enabled",
+                    "semantic_imports=enabled",
+                    "exports=enabled",
+                    "aliases=enabled",
+                    "resolution_facts=enabled",
+                    "generated_symbols=enabled",
+                    "stable_exports=enabled",
+                    "alias_closure=max_input_plus_one",
+                    "generated_hooks=native_rows_only",
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn changes_when_semantic_provider_parameters_change() {
+        let enabled = key(semantic_provider_parameter_digest());
+        let disabled = key(Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "semantic_provider_parameters",
+            &["scopes=disabled"],
+        ));
+
+        assert_ne!(enabled.parameter_digest, disabled.parameter_digest);
+        assert_ne!(enabled, disabled);
+    }
+
+    #[test]
+    fn tracks_schema_upstream_outputs_and_absent_extension_digest() {
+        let base = key(semantic_provider_parameter_digest());
+        let mut changed_schema = base.clone();
+        changed_schema.schema_version = "symbol-graph-facts-3:3".to_string();
+
+        assert_ne!(base, changed_schema);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+        assert!(
+            base.dependency_layer_digests
+                .contains(&dependency_layer_digest(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "module_graph",
+                    &["base"]
+                )))
+        );
+        assert!(
+            base.dependency_layer_digests
+                .contains(&dependency_layer_digest(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &["base"]
+                )))
+        );
     }
 }

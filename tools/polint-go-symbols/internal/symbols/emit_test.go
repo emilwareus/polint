@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,116 @@ func Use() string {
 	}
 	if !hasReference(out.References, field.Key, "field") {
 		t.Fatalf("Name field selector reference missing from %#v", out.References)
+	}
+}
+
+func TestEmitSemanticRowsForScopesImportsAndExports(t *testing.T) {
+	root := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
+		"widget.go": `package app
+
+import (
+	named "fmt"
+	. "strings"
+	_ "net/http/pprof"
+)
+
+type Widget struct {
+	Name string
+}
+
+func (w Widget) Label() string {
+	if w.Name == "" {
+		return named.Sprint(TrimSpace("fallback"))
+	}
+	return w.Name
+}
+`,
+	})
+
+	out, err := Emit(Config{
+		Root:         root,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	if out.Schema != "polint-go-symbols-semantic-1" {
+		t.Fatalf("schema = %q, want semantic schema", out.Schema)
+	}
+	for _, kind := range []string{"package", "file", "type", "method", "block"} {
+		if !hasScopeKind(out.Scopes, kind) {
+			t.Fatalf("scope kind %q missing from %#v", kind, out.Scopes)
+		}
+	}
+	for _, alias := range []string{"named", "dot", "blank"} {
+		if !hasImportAliasKind(out.Imports, alias) {
+			t.Fatalf("import alias kind %q missing from %#v", alias, out.Imports)
+		}
+	}
+	if !hasExportObjectPath(out.Exports, "Widget") {
+		t.Fatalf("Widget export with object path missing from %#v", out.Exports)
+	}
+	if !hasExportObjectPath(out.Exports, "Label") {
+		t.Fatalf("Label export with object path missing from %#v", out.Exports)
+	}
+}
+
+func TestEmitScopeKeysUseFileRelativeOffsets(t *testing.T) {
+	widget := `package app
+
+type Widget struct {
+	Name string
+}
+
+func Use() string {
+	w := Widget{Name: "ok"}
+	return w.Name
+}
+`
+	baseRoot := writeModule(t, map[string]string{
+		"go.mod":    "module example.com/app\n\ngo 1.24.0\n",
+		"widget.go": widget,
+	})
+	expandedRoot := writeModule(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.24.0\n",
+		"aaa.go": `package app
+
+func Earlier() int {
+	return 1
+}
+`,
+		"widget.go": widget,
+	})
+
+	base, err := Emit(Config{
+		Root:         baseRoot,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("base Emit returned error: %v", err)
+	}
+	expanded, err := Emit(Config{
+		Root:         expandedRoot,
+		Patterns:     []string{"./..."},
+		IncludeTests: false,
+	})
+	if err != nil {
+		t.Fatalf("expanded Emit returned error: %v", err)
+	}
+
+	baseKeys := scopeKeysForFile(base.Scopes, "widget.go")
+	expandedKeys := scopeKeysForFile(expanded.Scopes, "widget.go")
+	if !reflect.DeepEqual(baseKeys, expandedKeys) {
+		t.Fatalf("widget.go scope keys changed after adding unrelated file:\nbase: %#v\nexpanded: %#v", baseKeys, expandedKeys)
+	}
+	for _, key := range expandedKeys {
+		if strings.Contains(key, "pos:") || !strings.Contains(key, "offset:") {
+			t.Fatalf("scope key %q should use file-relative offset labels", key)
+		}
 	}
 }
 
@@ -358,6 +469,43 @@ func hasDefinition(definitions []DefinitionRow, symbolKey string) bool {
 func hasReference(references []ReferenceRow, targetKey string, kind string) bool {
 	for _, reference := range references {
 		if reference.TargetKey == targetKey && reference.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func hasScopeKind(scopes []ScopeRow, kind string) bool {
+	for _, scope := range scopes {
+		if scope.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeKeysForFile(scopes []ScopeRow, file string) []string {
+	keys := make([]string, 0)
+	for _, scope := range scopes {
+		if scope.File == file {
+			keys = append(keys, scope.Key)
+		}
+	}
+	return keys
+}
+
+func hasImportAliasKind(imports []ImportRow, alias string) bool {
+	for _, imp := range imports {
+		if imp.AliasKind == alias {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExportObjectPath(exports []ExportRow, name string) bool {
+	for _, export := range exports {
+		if export.ExportName == name && export.ObjectPath != "" && export.PackagePath == "example.com/app" {
 			return true
 		}
 	}

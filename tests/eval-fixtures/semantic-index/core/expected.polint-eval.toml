@@ -1,0 +1,48 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "semantic-index-core"
+area = "semantic-index"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 90000
+
+[[expected]]
+fact = { family = "Scope", stable_key = "src/app.ts", mode = "partial", producer_id = "polint.symbol_graph", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "SemanticImport", stable_key = "dynamic", mode = "partial", producer_id = "polint.symbol_graph", precision = "heuristic", status = "dynamic" }
+
+[[expected]]
+fact = { family = "Export", stable_key = "handler", mode = "partial", producer_id = "polint.symbol_graph", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "Alias", stable_key = "strings", mode = "partial", producer_id = "polint.symbol_graph", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "Resolution", stable_key = "missingSymbol", mode = "partial", producer_id = "polint.symbol_graph", precision = "unresolved", status = "unresolved" }
+
+[[expected]]
+fact = { family = "GeneratedSymbol", stable_key = "handler", mode = "partial", producer_id = "polint.symbol_graph", precision = "setup_aware", status = "generated" }
+
+[[expected]]
+fact = { family = "StableExport", stable_key = "handler", mode = "partial", producer_id = "polint.symbol_graph", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "Reference", stable_key = "namespace", mode = "partial", producer_id = "polint.symbol_graph", precision = "ambiguous", status = "ambiguous" }
+
+[[expected]]
+fact = { family = "Reference", stable_key = "missingSymbol", mode = "partial", producer_id = "polint.symbol_graph", precision = "unresolved", status = "unresolved" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.misses", value = "cold=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.symbol_graph.verified_reuse", value = "warm=1", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "semantic-index-core", max_runtime_ms = 90000, mode = "exact" }

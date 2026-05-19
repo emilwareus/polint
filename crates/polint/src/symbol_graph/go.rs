@@ -2,13 +2,20 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, DefinitionKind, FileId, Language,
-    ReferenceKind, SourceFile, Span, SymbolKind, SymbolNamespace, SymbolPrecision,
+    ReferenceKind, SourceFile, Span, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
     span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::go::lifecycle::{self, GoAnalysisConfig};
 use crate::symbol_graph::model::SymbolGraphBuilder;
 use crate::symbol_graph::model::{DefinitionDraft, ReferenceDraft, SymbolDraft};
+use crate::symbol_graph::semantic::{
+    AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ResolutionFact, ResolutionId,
+    ResolutionStepKind, ScopeFact, ScopeId, ScopeKind, SemanticImportFact, SemanticImportId,
+    SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus, StableExportId,
+    StableExportIdentity,
+};
+use crate::symbol_graph::stable_id::{StableReferenceKey, StableSymbolKey};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const GO_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
-const GO_SYMBOL_SIDECAR_SCHEMA: &str = "polint-go-symbols-v1";
+const GO_SYMBOL_SIDECAR_SCHEMA: &str = "polint-go-symbols-semantic-1";
 const GO_SYMBOL_SIDECAR_ENV: &str = "POLINT_GO_SYMBOLS";
 const EMBEDDED_GO_SIDECAR_FILES: &[(&str, &str)] = &[
     (
@@ -63,6 +70,14 @@ struct GoSidecarOutput {
     definitions: Vec<GoSidecarDefinition>,
     #[serde(default, deserialize_with = "null_as_default_vec")]
     references: Vec<GoSidecarReference>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    scopes: Vec<GoSidecarScope>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    imports: Vec<GoSidecarImport>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    exports: Vec<GoSidecarExport>,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    resolution_steps: Vec<GoSidecarResolutionStep>,
     #[serde(default, deserialize_with = "null_as_default_vec")]
     errors: Vec<GoSidecarPackageError>,
 }
@@ -112,6 +127,7 @@ struct GoSidecarDefinition {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoSidecarReference {
+    package_id: String,
     #[serde(default)]
     file: String,
     name: String,
@@ -120,6 +136,51 @@ struct GoSidecarReference {
     kind: String,
     span: GoSidecarSpan,
     precision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarScope {
+    key: String,
+    #[serde(default)]
+    parent_key: String,
+    kind: String,
+    package_path: String,
+    #[serde(default)]
+    file: String,
+    span: GoSidecarSpan,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarImport {
+    path: String,
+    #[serde(default)]
+    local_name: String,
+    alias_kind: String,
+    #[serde(default)]
+    file: String,
+    span: GoSidecarSpan,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarExport {
+    symbol_key: String,
+    export_name: String,
+    namespace: String,
+    object_path: String,
+    package_path: String,
+    #[serde(default)]
+    generated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GoSidecarResolutionStep {
+    reference_key: String,
+    step: String,
+    status: String,
+    #[serde(default)]
+    target_key: String,
+    #[serde(default, deserialize_with = "null_as_default_vec")]
+    candidate_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,7 +288,9 @@ fn derive_go_symbols_with_runner(
     output
         .capability_support
         .extend(supported_language_support(plan, &files));
-    convert_sidecar_output(builder, db, &sidecar);
+    output
+        .semantic
+        .extend(convert_sidecar_output(builder, db, &sidecar));
     output
         .diagnostics
         .extend(package_error_diagnostics(&sidecar.errors));
@@ -516,6 +579,16 @@ fn validate_paths(
             reference.file = validate_sidecar_path(&reference.file, &file_ids)?;
         }
     }
+    for scope in &mut output.scopes {
+        if !scope.file.is_empty() {
+            scope.file = validate_sidecar_path(&scope.file, &file_ids)?;
+        }
+    }
+    for import in &mut output.imports {
+        if !import.file.is_empty() {
+            import.file = validate_sidecar_path(&import.file, &file_ids)?;
+        }
+    }
     Ok(output)
 }
 
@@ -576,6 +649,7 @@ fn setup_missing_output(
     reason: &str,
     hint: &str,
 ) -> LanguageSymbolOutput {
+    let mut output = LanguageSymbolOutput::default();
     if !plan
         .rules_for_capability_matching_files("references", files)
         .is_empty()
@@ -588,9 +662,11 @@ fn setup_missing_output(
                 "<setup-missing>",
             );
         }
+        output
+            .semantic
+            .extend(setup_missing_semantic_index_for_files(files));
     }
 
-    let mut output = LanguageSymbolOutput::default();
     output
         .capability_support
         .extend(setup_support(plan, files, reason, hint));
@@ -667,7 +743,7 @@ fn convert_sidecar_output(
     builder: &mut SymbolGraphBuilder,
     db: &AnalysisDb,
     sidecar: &GoSidecarOutput,
-) {
+) -> SemanticIndexOutput {
     let files = go_files_by_path(db);
     let symbol_rows = sidecar
         .symbols
@@ -675,10 +751,22 @@ fn convert_sidecar_output(
         .map(|symbol| (symbol.key.as_str(), symbol))
         .collect::<BTreeMap<_, _>>();
     let mut symbols = BTreeMap::new();
+    let mut symbol_stable_keys = BTreeMap::new();
+    let mut symbol_key_inputs = BTreeMap::new();
+    let mut reference_stable_keys = BTreeMap::new();
+    let resolution_steps = sidecar
+        .resolution_steps
+        .iter()
+        .map(|step| (step.reference_key.as_str(), step))
+        .collect::<BTreeMap<_, _>>();
 
     for symbol in &sidecar.symbols {
+        let stable_key_input = go_stable_symbol_key(symbol, &files);
+        let stable_key = stable_key_input.stable_key();
         let id = builder.add_symbol(symbol_draft(symbol, &files));
         symbols.insert(symbol.key.clone(), id);
+        symbol_stable_keys.insert(symbol.key.clone(), stable_key);
+        symbol_key_inputs.insert(symbol.key.clone(), stable_key_input);
     }
 
     for definition in &sidecar.definitions {
@@ -690,13 +778,179 @@ fn convert_sidecar_output(
     }
 
     for reference in &sidecar.references {
-        let draft = reference_draft(reference, &files);
+        let mut draft = reference_draft(reference, &files);
+        reference_stable_keys.insert(
+            go_reference_key(reference),
+            go_stable_reference_key(reference, &files, &symbol_key_inputs),
+        );
         if let Some(target) = symbols.get(&reference.target_key).copied() {
             builder.add_reference(target, draft);
         } else {
-            builder.add_unresolved_reference(draft);
+            let candidates = resolution_steps
+                .get(go_reference_key(reference).as_str())
+                .map(|step| semantic_candidate_symbol_ids(step, &symbols))
+                .unwrap_or_default();
+            if candidates.len() > 1 {
+                draft.precision = SymbolPrecision::Ambiguous;
+                builder.add_ambiguous_reference(candidates, draft);
+            } else if let Some(candidate) = candidates.first().copied() {
+                builder.add_reference(candidate, draft);
+            } else {
+                draft.precision = SymbolPrecision::Unresolved;
+                builder.add_unresolved_reference(draft);
+            }
         }
     }
+
+    derive_go_semantic_index(sidecar, &files, &symbol_stable_keys, &reference_stable_keys)
+}
+
+fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticIndexOutput {
+    let mut builder = SemanticIndexBuilder::new();
+    for file in files {
+        let source_key = format!("go:setup-missing|file:{}", file.relative_path);
+        builder.add_resolution(ResolutionFact {
+            id: ResolutionId(0),
+            language: Language::Go,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            source_stable_key: source_key.clone(),
+            target_stable_keys: Vec::new(),
+            step: ResolutionStepKind::UnknownFallback,
+            stable_key: format!("{source_key}|step:UnknownFallback|status:setup_missing"),
+            status: SemanticStatus::SetupMissing,
+        });
+    }
+    builder.finish()
+}
+
+fn derive_go_semantic_index(
+    sidecar: &GoSidecarOutput,
+    files: &BTreeMap<&str, &SourceFile>,
+    symbol_stable_keys: &BTreeMap<String, String>,
+    reference_stable_keys: &BTreeMap<String, String>,
+) -> SemanticIndexOutput {
+    let mut builder = SemanticIndexBuilder::new();
+    let mut scope_ids = BTreeMap::new();
+
+    for scope in &sidecar.scopes {
+        let id = builder.add_scope(ScopeFact {
+            id: ScopeId(0),
+            language: Language::Go,
+            file: file_for_path(files, &scope.file).map(|file| file.id),
+            package: None,
+            module: None,
+            parent: scope_ids.get(scope.parent_key.as_str()).copied(),
+            scope_path: go_scope_path(scope),
+            kind: go_scope_kind(&scope.kind),
+            stable_key: scope.key.clone(),
+            status: SemanticStatus::Resolved,
+        });
+        scope_ids.insert(scope.key.as_str(), id);
+    }
+
+    let resolution_steps = sidecar
+        .resolution_steps
+        .iter()
+        .map(|step| (step.reference_key.as_str(), step))
+        .collect::<BTreeMap<_, _>>();
+
+    for import in &sidecar.imports {
+        let source_key = go_import_stable_key(import);
+        let resolution = resolution_steps.get(source_key.as_str()).copied();
+        let status = go_import_status(import, resolution);
+        builder.add_semantic_import(SemanticImportFact {
+            id: SemanticImportId(0),
+            language: Language::Go,
+            file: file_for_path(files, &import.file).map(|file| file.id),
+            package: None,
+            module: None,
+            scope: None,
+            import_path: import.path.clone(),
+            local_name: go_import_local_name(import),
+            imported_name: None,
+            namespace: SymbolNamespace::Package,
+            kind: go_import_kind(&import.alias_kind),
+            stable_key: source_key.clone(),
+            status,
+        });
+        if let Some(alias) = go_import_alias_fact(import, resolution, status, symbol_stable_keys) {
+            builder.add_alias(alias);
+        }
+    }
+
+    for export in &sidecar.exports {
+        let export_id = builder.add_export_identity(ExportFact {
+            id: ExportId(0),
+            language: Language::Go,
+            file: None,
+            package: None,
+            module: None,
+            scope: None,
+            symbol: None,
+            export_name: export.export_name.clone(),
+            namespace: symbol_namespace(&export.namespace),
+            kind: ExportKind::Named,
+            stable_key: go_export_stable_key(export),
+            status: if export.generated {
+                SemanticStatus::Generated
+            } else {
+                SemanticStatus::Resolved
+            },
+        });
+        builder.add_stable_export(StableExportIdentity {
+            id: StableExportId(0),
+            export: export_id,
+            language: Language::Go,
+            package_key: Some(format!("go:package:{}", export.package_path)),
+            module_key: None,
+            export_name: export.export_name.clone(),
+            namespace: symbol_namespace(&export.namespace),
+            symbol_stable_key: mapped_symbol_key(symbol_stable_keys, &export.symbol_key),
+            generated_discriminator: Some("native".to_string()),
+            stable_key: go_stable_export_key(export),
+            status: SemanticStatus::Resolved,
+        });
+    }
+
+    for step in &sidecar.resolution_steps {
+        let target_stable_keys = mapped_candidate_keys(step, symbol_stable_keys);
+        builder.add_resolution(ResolutionFact {
+            id: ResolutionId(0),
+            language: Language::Go,
+            file: None,
+            package: None,
+            module: None,
+            source_stable_key: mapped_reference_key(reference_stable_keys, &step.reference_key),
+            target_stable_keys,
+            step: go_resolution_step_kind(&step.step),
+            stable_key: go_resolution_stable_key(step),
+            status: semantic_status(&step.status),
+        });
+    }
+    for reference in &sidecar.references {
+        let reference_key = go_reference_key(reference);
+        if resolution_steps.contains_key(reference_key.as_str()) {
+            continue;
+        }
+        if reference.target_key.is_empty() {
+            builder.add_resolution(ResolutionFact {
+                id: ResolutionId(0),
+                language: Language::Go,
+                file: file_for_path(files, &reference.file).map(|file| file.id),
+                package: None,
+                module: None,
+                source_stable_key: mapped_reference_key(reference_stable_keys, &reference_key),
+                target_stable_keys: Vec::new(),
+                step: ResolutionStepKind::UnknownFallback,
+                stable_key: go_reference_unknown_fallback_key(reference),
+                status: SemanticStatus::Unresolved,
+            });
+        }
+    }
+
+    builder.finish()
 }
 
 fn go_files_by_path(db: &AnalysisDb) -> BTreeMap<&str, &SourceFile> {
@@ -705,6 +959,282 @@ fn go_files_by_path(db: &AnalysisDb) -> BTreeMap<&str, &SourceFile> {
         .filter(|file| file.language == Language::Go)
         .map(|file| (file.relative_path.as_str(), file))
         .collect()
+}
+
+fn go_scope_path(scope: &GoSidecarScope) -> Vec<String> {
+    [
+        format!("package:{}", scope.package_path),
+        format!("file:{}", scope.file),
+        format!("kind:{}", scope.kind),
+        format!("span:{}-{}", scope.span.start_byte, scope.span.end_byte),
+        scope.key.clone(),
+    ]
+    .into_iter()
+    .filter(|part| !part.ends_with(':'))
+    .collect()
+}
+
+fn go_scope_kind(kind: &str) -> ScopeKind {
+    match kind {
+        "package" => ScopeKind::Package,
+        "file" => ScopeKind::File,
+        "function" => ScopeKind::Function,
+        "method" => ScopeKind::Method,
+        "block" => ScopeKind::Block,
+        "type" => ScopeKind::Type,
+        _ => ScopeKind::Unknown,
+    }
+}
+
+fn go_import_kind(alias_kind: &str) -> SemanticImportKind {
+    match alias_kind {
+        "named" => SemanticImportKind::GoNamed,
+        "dot" => SemanticImportKind::GoDot,
+        "blank" => SemanticImportKind::GoBlank,
+        "implicit" => SemanticImportKind::GoImplicit,
+        _ => SemanticImportKind::Unknown,
+    }
+}
+
+fn go_import_status(
+    import: &GoSidecarImport,
+    resolution: Option<&GoSidecarResolutionStep>,
+) -> SemanticStatus {
+    if import.alias_kind == "dot" {
+        let candidates = resolution
+            .map(normalized_candidate_keys)
+            .unwrap_or_default();
+        if candidates.len() == 1 {
+            SemanticStatus::Resolved
+        } else {
+            SemanticStatus::Ambiguous
+        }
+    } else {
+        resolution
+            .map(|step| semantic_status(&step.status))
+            .unwrap_or(SemanticStatus::Resolved)
+    }
+}
+
+fn go_import_local_name(import: &GoSidecarImport) -> Option<String> {
+    if import.local_name.is_empty() {
+        None
+    } else {
+        Some(import.local_name.clone())
+    }
+}
+
+fn go_import_alias_fact(
+    import: &GoSidecarImport,
+    resolution: Option<&GoSidecarResolutionStep>,
+    status: SemanticStatus,
+    symbol_stable_keys: &BTreeMap<String, String>,
+) -> Option<AliasFact> {
+    if import.alias_kind == "blank" || import.alias_kind == "implicit" {
+        return None;
+    }
+    let source_key = go_import_stable_key(import);
+    Some(AliasFact {
+        id: AliasId(0),
+        language: Language::Go,
+        file: None,
+        package: None,
+        module: None,
+        source_symbol_stable_key: source_key.clone(),
+        target_symbol_stable_keys: resolution
+            .map(|step| mapped_candidate_keys(step, symbol_stable_keys))
+            .unwrap_or_default(),
+        kind: AliasKind::ImportAlias,
+        stable_key: format!("{source_key}|alias"),
+        status,
+    })
+}
+
+fn go_import_stable_key(import: &GoSidecarImport) -> String {
+    format!(
+        "go:import|file:{}|path:{}|local:{}|span:{}-{}",
+        import.file, import.path, import.local_name, import.span.start_byte, import.span.end_byte
+    )
+}
+
+fn go_export_stable_key(export: &GoSidecarExport) -> String {
+    format!(
+        "go:export|package:{}|namespace:{}|name:{}|object_path:{}",
+        export.package_path, export.namespace, export.export_name, export.object_path
+    )
+}
+
+fn go_stable_export_key(export: &GoSidecarExport) -> String {
+    format!(
+        "{}|symbol:{}|discriminator:native",
+        go_export_stable_key(export),
+        export.symbol_key
+    )
+}
+
+fn go_resolution_stable_key(step: &GoSidecarResolutionStep) -> String {
+    format!(
+        "go:resolution|reference:{}|step:{}|status:{}",
+        step.reference_key, step.step, step.status
+    )
+}
+
+fn go_reference_key(reference: &GoSidecarReference) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        reference.package_id,
+        reference.file,
+        reference.name,
+        reference.target_key,
+        reference.kind,
+        reference.span.start_byte,
+        reference.span.end_byte
+    )
+}
+
+fn go_reference_unknown_fallback_key(reference: &GoSidecarReference) -> String {
+    format!(
+        "go:resolution|reference:{}|step:UnknownFallback|status:unresolved",
+        go_reference_key(reference)
+    )
+}
+
+fn semantic_candidate_symbol_ids(
+    step: &GoSidecarResolutionStep,
+    symbols: &BTreeMap<String, SymbolId>,
+) -> Vec<SymbolId> {
+    normalized_candidate_keys(step)
+        .into_iter()
+        .filter_map(|key| symbols.get(&key).copied())
+        .collect()
+}
+
+fn go_resolution_step_kind(step: &str) -> ResolutionStepKind {
+    match step {
+        "LexicalLookup" | "lexical" => ResolutionStepKind::LexicalLookup,
+        "ImportAliasLookup" | "import_alias" => ResolutionStepKind::ImportAliasLookup,
+        "Package" | "package" => ResolutionStepKind::Package,
+        "ModuleLookup" | "module" => ResolutionStepKind::ModuleLookup,
+        "MemberLookup" | "member" => ResolutionStepKind::MemberLookup,
+        "GeneratedHintLookup" | "generated" => ResolutionStepKind::GeneratedHintLookup,
+        "UnknownFallback" | "unknown_fallback" => ResolutionStepKind::UnknownFallback,
+        "external" => ResolutionStepKind::External,
+        "unsupported" => ResolutionStepKind::Unsupported,
+        _ => ResolutionStepKind::UnknownFallback,
+    }
+}
+
+fn semantic_status(status: &str) -> SemanticStatus {
+    match status {
+        "resolved" => SemanticStatus::Resolved,
+        "ambiguous" => SemanticStatus::Ambiguous,
+        "unresolved" => SemanticStatus::Unresolved,
+        "cycle" => SemanticStatus::Cycle,
+        "generated" => SemanticStatus::Generated,
+        "dynamic" => SemanticStatus::Dynamic,
+        "external" => SemanticStatus::External,
+        "setup_missing" => SemanticStatus::SetupMissing,
+        "unsupported" => SemanticStatus::Unsupported,
+        _ => SemanticStatus::Unresolved,
+    }
+}
+
+fn normalized_candidate_keys(step: &GoSidecarResolutionStep) -> Vec<String> {
+    let mut keys = step.candidate_keys.clone();
+    if !step.target_key.is_empty() {
+        keys.push(step.target_key.clone());
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn mapped_candidate_keys(
+    step: &GoSidecarResolutionStep,
+    symbol_stable_keys: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if symbol_stable_keys.is_empty() {
+        return normalized_candidate_keys(step);
+    }
+    let mut keys = normalized_candidate_keys(step)
+        .into_iter()
+        .filter_map(|key| mapped_candidate_key(symbol_stable_keys, key))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn mapped_candidate_key(
+    symbol_stable_keys: &BTreeMap<String, String>,
+    key: String,
+) -> Option<String> {
+    if let Some(mapped) = symbol_stable_keys.get(&key) {
+        Some(mapped.clone())
+    } else if key.starts_with("go:builtin|") {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+fn mapped_symbol_key(symbol_stable_keys: &BTreeMap<String, String>, key: &str) -> String {
+    symbol_stable_keys
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.to_string())
+}
+
+fn mapped_reference_key(reference_stable_keys: &BTreeMap<String, String>, key: &str) -> String {
+    reference_stable_keys
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.to_string())
+}
+
+fn go_stable_symbol_key(
+    symbol: &GoSidecarSymbol,
+    files: &BTreeMap<&str, &SourceFile>,
+) -> StableSymbolKey {
+    StableSymbolKey::new(
+        Language::Go,
+        (!symbol.package_path.is_empty()).then(|| format!("go:module:{}", symbol.package_path)),
+        Some(format!("go:sidecar:{}", symbol.key)),
+        None,
+        symbol.owner_chain.clone(),
+        symbol_namespace(&symbol.namespace),
+        symbol_kind(&symbol.kind),
+        symbol.name.clone(),
+        if symbol.key.starts_with("go:local") {
+            span_for_file(files, &symbol.file, &symbol.span)
+        } else {
+            None
+        },
+    )
+}
+
+fn go_stable_reference_key(
+    reference: &GoSidecarReference,
+    files: &BTreeMap<&str, &SourceFile>,
+    symbol_key_inputs: &BTreeMap<String, StableSymbolKey>,
+) -> String {
+    let span = span_for_file(files, &reference.file, &reference.span)
+        .unwrap_or_else(|| Span::point(FileId(u32::MAX), 1, 1));
+    symbol_key_inputs
+        .get(&reference.target_key)
+        .cloned()
+        .map_or_else(
+            || {
+                StableReferenceKey::unresolved(
+                    Language::Go,
+                    reference.file.clone(),
+                    reference.name.clone(),
+                    span.clone(),
+                )
+            },
+            |target| StableReferenceKey::resolved(target, reference.file.clone(), span.clone()),
+        )
+        .stable_key()
 }
 
 fn symbol_draft(symbol: &GoSidecarSymbol, files: &BTreeMap<&str, &SourceFile>) -> SymbolDraft {
@@ -915,6 +1445,361 @@ fn package_error_diagnostics(errors: &[GoSidecarPackageError]) -> Vec<Diagnostic
             ))
     });
     diagnostics
+}
+
+#[cfg(test)]
+mod sidecar_semantic_output {
+    use super::*;
+
+    #[test]
+    fn semantic_schema_defaults_missing_arrays_to_empty() {
+        let output = parse_sidecar_output(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":null,
+  "imports":null,
+  "exports":null,
+  "resolution_steps":null,
+  "errors":null
+}"#,
+        )
+        .expect("semantic sidecar output parses");
+
+        assert!(output.scopes.is_empty());
+        assert!(output.imports.is_empty());
+        assert!(output.exports.is_empty());
+        assert!(output.resolution_steps.is_empty());
+    }
+
+    #[test]
+    fn semantic_schema_parses_scopes_imports_exports_and_resolution_steps() {
+        let output = parse_sidecar_output(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[{
+    "key":"go:scope:package:example.com/app",
+    "parent_key":"",
+    "kind":"package",
+    "package_path":"example.com/app",
+    "file":"",
+    "span":{"start_byte":0,"end_byte":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}
+  }],
+  "imports":[{
+    "path":"fmt",
+    "local_name":"named",
+    "alias_kind":"named",
+    "file":"main.go",
+    "span":{"start_byte":8,"end_byte":11,"start_line":3,"start_column":8,"end_line":3,"end_column":11}
+  }],
+  "exports":[{
+    "symbol_key":"go:package|package:example.com/app|name:Build",
+    "export_name":"Build",
+    "namespace":"value",
+    "object_path":"Build",
+    "package_path":"example.com/app",
+    "generated":false
+  }],
+  "resolution_steps":[{
+    "reference_key":"go:reference:main.go:Build",
+    "step":"LexicalLookup",
+    "status":"resolved",
+    "target_key":"go:package|package:example.com/app|name:Build",
+    "candidate_keys":["go:package|package:example.com/app|name:Build"]
+  }],
+  "errors":[]
+}"#,
+        )
+        .expect("semantic sidecar output parses");
+
+        assert_eq!(output.scopes[0].kind, "package");
+        assert_eq!(output.imports[0].alias_kind, "named");
+        assert_eq!(output.exports[0].object_path, "Build");
+        assert_eq!(output.resolution_steps[0].candidate_keys.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod semantic_conversion {
+    use super::*;
+    use crate::core::{FileId, SourceFile};
+    use crate::symbol_graph::semantic::{AliasKind, ScopeKind, SemanticImportKind, SemanticStatus};
+    use std::path::PathBuf;
+
+    fn source_file(relative_path: &str, source: &str) -> SourceFile {
+        SourceFile {
+            id: FileId(0),
+            path: PathBuf::from(relative_path),
+            relative_path: relative_path.to_string(),
+            language: Language::Go,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        }
+    }
+
+    fn derive(json: &[u8]) -> crate::symbol_graph::semantic::SemanticIndexOutput {
+        let file = source_file("main.go", "package app\n");
+        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
+        let sidecar = parse_sidecar_output(json).expect("sidecar fixture parses");
+
+        derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new())
+    }
+
+    #[test]
+    fn converts_go_scope_rows_with_parent_links() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[
+    {"key":"pkg","parent_key":"","kind":"package","package_path":"example.com/app","file":"","span":{"start_byte":0,"end_byte":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}},
+    {"key":"file","parent_key":"pkg","kind":"file","package_path":"example.com/app","file":"main.go","span":{"start_byte":0,"end_byte":11,"start_line":1,"start_column":1,"end_line":1,"end_column":12}}
+  ],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        let package = output
+            .scopes
+            .iter()
+            .find(|scope| scope.kind == ScopeKind::Package)
+            .expect("package scope");
+        let file = output
+            .scopes
+            .iter()
+            .find(|scope| scope.kind == ScopeKind::File)
+            .expect("file scope");
+
+        assert_eq!(file.parent, Some(package.id));
+    }
+
+    #[test]
+    fn converts_go_import_alias_rows_with_honest_statuses() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[],
+  "imports":[
+    {"path":"fmt","local_name":"named","alias_kind":"named","file":"main.go","span":{"start_byte":15,"end_byte":26,"start_line":3,"start_column":2,"end_line":3,"end_column":13}},
+    {"path":"strings","local_name":"","alias_kind":"implicit","file":"main.go","span":{"start_byte":27,"end_byte":36,"start_line":4,"start_column":2,"end_line":4,"end_column":11}},
+    {"path":"math","local_name":".","alias_kind":"dot","file":"main.go","span":{"start_byte":37,"end_byte":45,"start_line":5,"start_column":2,"end_line":5,"end_column":10}},
+    {"path":"net/http/pprof","local_name":"_","alias_kind":"blank","file":"main.go","span":{"start_byte":46,"end_byte":64,"start_line":6,"start_column":2,"end_line":6,"end_column":20}}
+  ],
+  "exports":[],
+  "resolution_steps":[
+    {"reference_key":"go:import|file:main.go|path:fmt|local:named|span:15-26","step":"Package","status":"resolved","target_key":"fmt.Println","candidate_keys":["fmt.Println"]},
+    {"reference_key":"go:import|file:main.go|path:math|local:.|span:37-45","step":"Package","status":"ambiguous","target_key":"","candidate_keys":["math.Max","math.Min"]}
+  ],
+  "errors":[]
+}"#,
+        );
+
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoNamed && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoDot && fact.status == SemanticStatus::Ambiguous
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoBlank && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoImplicit && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.aliases.iter().any(|alias| {
+            alias.kind == AliasKind::ImportAlias
+                && alias.status == SemanticStatus::Resolved
+                && alias.target_symbol_stable_keys == vec!["fmt.Println".to_string()]
+        }));
+        assert!(output.aliases.iter().any(|alias| {
+            alias.kind == AliasKind::ImportAlias && alias.status == SemanticStatus::Ambiguous
+        }));
+    }
+
+    #[test]
+    fn converts_go_exports_to_stable_export_identities() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[],
+  "imports":[],
+  "exports":[{
+    "symbol_key":"go:package|package:example.com/app|name:Build",
+    "export_name":"Build",
+    "namespace":"value",
+    "object_path":"Build",
+    "package_path":"example.com/app",
+    "generated":false
+  }],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        assert!(output.stable_exports.iter().any(|export| {
+            export.export_name == "Build"
+                && export.package_key.as_deref() == Some("go:package:example.com/app")
+                && export.symbol_stable_key == "go:package|package:example.com/app|name:Build"
+                && export.generated_discriminator.as_deref() == Some("native")
+        }));
+    }
+}
+
+#[cfg(test)]
+mod semantic_setup_missing {
+    use super::*;
+    use crate::core::{FileId, ReferenceKind, SourceFile, SymbolResolutionStatus};
+    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticStatus};
+    use std::path::PathBuf;
+
+    fn source_file(relative_path: &str, source: &str) -> SourceFile {
+        SourceFile {
+            id: FileId(0),
+            path: PathBuf::from(relative_path),
+            relative_path: relative_path.to_string(),
+            language: Language::Go,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        }
+    }
+
+    fn parse(json: &[u8]) -> GoSidecarOutput {
+        parse_sidecar_output(json).expect("sidecar fixture parses")
+    }
+
+    #[test]
+    fn setup_missing_files_get_unknown_fallback_semantic_rows() {
+        let file = source_file("main.go", "package app\n");
+        let files = vec![&file];
+
+        let output = setup_missing_semantic_index_for_files(&files);
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::UnknownFallback
+                && resolution.status == SemanticStatus::SetupMissing
+                && resolution.source_stable_key.contains("main.go")
+        }));
+    }
+
+    #[test]
+    fn sidecar_reference_without_target_or_candidates_gets_unresolved_unknown_fallback() {
+        let file = source_file("main.go", "package app\n");
+        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
+        let sidecar = parse(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[{
+    "package_id":"example.com/app",
+    "file":"main.go",
+    "name":"Missing",
+    "target_key":"",
+    "kind":"call",
+    "span":{"start_byte":12,"end_byte":19,"start_line":3,"start_column":2,"end_line":3,"end_column":9},
+    "precision":"exact_semantic"
+  }],
+  "scopes":[],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        let output = derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new());
+
+        assert!(output.resolutions.iter().any(|resolution| {
+            resolution.step == ResolutionStepKind::UnknownFallback
+                && resolution.status == SemanticStatus::Unresolved
+                && resolution.source_stable_key.contains("Missing")
+        }));
+    }
+
+    #[test]
+    fn sidecar_candidate_sets_become_ambiguous_public_references() {
+        let file = source_file("main.go", "package app\nfunc Use() { Thing() }\n");
+        let sidecar = parse(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[
+    {"key":"one","package_id":"example.com/app","package_path":"example.com/app","test_variant":"regular","file":"main.go","name":"Thing","qualified_name":"Thing","namespace":"value","kind":"function","span":{"start_byte":12,"end_byte":17,"start_line":2,"start_column":6,"end_line":2,"end_column":11},"exported":true},
+    {"key":"two","package_id":"example.com/app","package_path":"example.com/app","test_variant":"regular","file":"main.go","name":"Thing","qualified_name":"Thing","namespace":"value","kind":"function","span":{"start_byte":18,"end_byte":23,"start_line":2,"start_column":12,"end_line":2,"end_column":17},"exported":true}
+  ],
+  "definitions":[],
+  "references":[{
+    "package_id":"example.com/app",
+    "file":"main.go",
+    "name":"Thing",
+    "target_key":"",
+    "kind":"call",
+    "span":{"start_byte":26,"end_byte":31,"start_line":2,"start_column":20,"end_line":2,"end_column":25},
+    "precision":"exact_semantic"
+  }],
+  "scopes":[],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[{
+    "reference_key":"example.com/app|main.go|Thing||call|26|31",
+    "step":"UnknownFallback",
+    "status":"ambiguous",
+    "target_key":"",
+    "candidate_keys":["one","two"]
+  }],
+  "errors":[]
+}"#,
+        );
+        let mut builder = SymbolGraphBuilder::new();
+
+        convert_sidecar_output(&mut builder, &analysis_db_with(file), &sidecar);
+        let graph = builder.finish();
+
+        assert!(graph.references.iter().any(|reference| {
+            reference.kind == ReferenceKind::Call
+                && reference.status == SymbolResolutionStatus::Ambiguous
+                && reference.candidates.len() == 2
+        }));
+    }
+
+    fn analysis_db_with(file: SourceFile) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            file.path.clone(),
+            file.relative_path.clone(),
+            file.source.to_string(),
+        );
+        db
+    }
 }
 
 #[cfg(test)]
@@ -1248,12 +2133,16 @@ module_roots = ["services/payments"]
     fn sidecar_null_sequence_fields_parse_as_empty_vectors() {
         let output = parse_sidecar_output(
             br#"{
-  "schema":"polint-go-symbols-v1",
+  "schema":"polint-go-symbols-semantic-1",
   "go_version":"go1.24.13",
   "packages":[{"files":null}],
   "symbols":null,
   "definitions":null,
   "references":null,
+  "scopes":null,
+  "imports":null,
+  "exports":null,
+  "resolution_steps":null,
   "errors":null
 }"#,
         )
@@ -1264,6 +2153,10 @@ module_roots = ["services/payments"]
         assert!(output.symbols.is_empty());
         assert!(output.definitions.is_empty());
         assert!(output.references.is_empty());
+        assert!(output.scopes.is_empty());
+        assert!(output.imports.is_empty());
+        assert!(output.exports.is_empty());
+        assert!(output.resolution_steps.is_empty());
         assert!(output.errors.is_empty());
     }
 
@@ -1287,7 +2180,7 @@ module_roots = ["services/payments"]
             |_config| {
                 Ok(
                     br#"{
-  "schema":"polint-go-symbols-v1",
+  "schema":"polint-go-symbols-semantic-1",
   "go_version":"go1.26.2",
   "packages":[],
   "symbols":[{
