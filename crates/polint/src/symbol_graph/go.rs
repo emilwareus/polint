@@ -1062,6 +1062,151 @@ mod sidecar_semantic_output {
 }
 
 #[cfg(test)]
+mod semantic_conversion {
+    use super::*;
+    use crate::core::{FileId, SourceFile};
+    use crate::symbol_graph::semantic::{
+        AliasKind, ScopeKind, SemanticImportKind, SemanticStatus,
+    };
+    use std::path::PathBuf;
+
+    fn source_file(relative_path: &str, source: &str) -> SourceFile {
+        SourceFile {
+            id: FileId(0),
+            path: PathBuf::from(relative_path),
+            relative_path: relative_path.to_string(),
+            language: Language::Go,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        }
+    }
+
+    fn derive(json: &[u8]) -> crate::symbol_graph::semantic::SemanticIndexOutput {
+        let file = source_file("main.go", "package app\n");
+        let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
+        let sidecar = parse_sidecar_output(json).expect("sidecar fixture parses");
+
+        derive_go_semantic_index(&sidecar, &files)
+    }
+
+    #[test]
+    fn converts_go_scope_rows_with_parent_links() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[
+    {"key":"pkg","parent_key":"","kind":"package","package_path":"example.com/app","file":"","span":{"start_byte":0,"end_byte":0,"start_line":1,"start_column":1,"end_line":1,"end_column":1}},
+    {"key":"file","parent_key":"pkg","kind":"file","package_path":"example.com/app","file":"main.go","span":{"start_byte":0,"end_byte":11,"start_line":1,"start_column":1,"end_line":1,"end_column":12}}
+  ],
+  "imports":[],
+  "exports":[],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        let package = output
+            .scopes
+            .iter()
+            .find(|scope| scope.kind == ScopeKind::Package)
+            .expect("package scope");
+        let file = output
+            .scopes
+            .iter()
+            .find(|scope| scope.kind == ScopeKind::File)
+            .expect("file scope");
+
+        assert_eq!(file.parent, Some(package.id));
+    }
+
+    #[test]
+    fn converts_go_import_alias_rows_with_honest_statuses() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[],
+  "imports":[
+    {"path":"fmt","local_name":"named","alias_kind":"named","file":"main.go","span":{"start_byte":15,"end_byte":26,"start_line":3,"start_column":2,"end_line":3,"end_column":13}},
+    {"path":"strings","local_name":"","alias_kind":"implicit","file":"main.go","span":{"start_byte":27,"end_byte":36,"start_line":4,"start_column":2,"end_line":4,"end_column":11}},
+    {"path":"math","local_name":".","alias_kind":"dot","file":"main.go","span":{"start_byte":37,"end_byte":45,"start_line":5,"start_column":2,"end_line":5,"end_column":10}},
+    {"path":"net/http/pprof","local_name":"_","alias_kind":"blank","file":"main.go","span":{"start_byte":46,"end_byte":64,"start_line":6,"start_column":2,"end_line":6,"end_column":20}}
+  ],
+  "exports":[],
+  "resolution_steps":[
+    {"reference_key":"go:import|file:main.go|path:fmt|local:named","step":"Package","status":"resolved","target_key":"fmt.Println","candidate_keys":["fmt.Println"]},
+    {"reference_key":"go:import|file:main.go|path:math|local:.","step":"Package","status":"ambiguous","target_key":"","candidate_keys":["math.Max","math.Min"]}
+  ],
+  "errors":[]
+}"#,
+        );
+
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoNamed && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoDot && fact.status == SemanticStatus::Ambiguous
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoBlank && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.semantic_imports.iter().any(|fact| {
+            fact.kind == SemanticImportKind::GoImplicit && fact.status == SemanticStatus::Resolved
+        }));
+        assert!(output.aliases.iter().any(|alias| {
+            alias.kind == AliasKind::ImportAlias
+                && alias.status == SemanticStatus::Resolved
+                && alias.target_symbol_stable_keys == vec!["fmt.Println".to_string()]
+        }));
+        assert!(output.aliases.iter().any(|alias| {
+            alias.kind == AliasKind::ImportAlias && alias.status == SemanticStatus::Ambiguous
+        }));
+    }
+
+    #[test]
+    fn converts_go_exports_to_stable_export_identities() {
+        let output = derive(
+            br#"{
+  "schema":"polint-go-symbols-semantic-1",
+  "go_version":"go1.24.13",
+  "packages":[],
+  "symbols":[],
+  "definitions":[],
+  "references":[],
+  "scopes":[],
+  "imports":[],
+  "exports":[{
+    "symbol_key":"go:package|package:example.com/app|name:Build",
+    "export_name":"Build",
+    "namespace":"value",
+    "object_path":"Build",
+    "package_path":"example.com/app",
+    "generated":false
+  }],
+  "resolution_steps":[],
+  "errors":[]
+}"#,
+        );
+
+        assert!(output.stable_exports.iter().any(|export| {
+            export.export_name == "Build"
+                && export.package_key.as_deref() == Some("go:package:example.com/app")
+                && export.symbol_stable_key == "go:package|package:example.com/app|name:Build"
+                && export.generated_discriminator.as_deref() == Some("native")
+        }));
+    }
+}
+
+#[cfg(test)]
 mod symbol_graph_go_setup {
     use super::*;
     use crate::core::{
