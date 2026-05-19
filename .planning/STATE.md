@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T11:58:19.831Z"
+last_updated: "2026-05-19T12:15:51.355Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 39
-  completed_plans: 33
-  percent: 85
+  completed_plans: 34
+  percent: 87
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 27 (Layered Module/Package/Topology Graph) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -56,7 +56,7 @@ Last activity: 2026-05-19
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
-| 27 | In Progress | 1/7 plans complete; internal topology contracts, AnalysisDb storage, metadata families, and provider outputs done; requirement SAE-SEM-02 |
+| 27 | In Progress | 2/7 plans complete; internal topology contracts plus Go module/package/source-set/requirement/go.sum topology rows done; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
@@ -170,6 +170,9 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Keep topology contracts crate-private under module_graph::topology with no SDK, runner, CLI, crate-root, or public docs promotion.
 - [Phase 27-layered-module-package-topology-graph]: Use polint.module_graph for base topology metadata and polint.module_topology for import-to-package metadata.
 - [Phase 27-layered-module-package-topology-graph]: Advertise only base topology outputs on the existing polint.module_graph provider; import_to_package_edges remains deferred to the later semantic-aware module topology pass.
+- [Phase 27-layered-module-package-topology-graph]: Go module topology reuses GoAnalysisConfig::from_loaded so configured module_roots take precedence and nearest go.mod discovery remains centralized.
+- [Phase 27-layered-module-package-topology-graph]: go.mod requirements, replace/exclude directives, and go.sum checksum rows remain separate topology facts rather than import or DependsOn edges.
+- [Phase 27-layered-module-package-topology-graph]: Missing go.sum evidence for external requirements is represented as explicit MissingLockfile topology uncertainty.
 
 ## Execution Metrics
 
@@ -198,12 +201,13 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 05 | 13 min | 3 | 4 |
 | 26-semantic-index-deepening | 06 | 17 min | 3 | 14 |
 | 27-layered-module-package-topology-graph | 01 | 12 min | 3 | 8 |
+| 27-layered-module-package-topology-graph | 02 | 14 min | 3 | 5 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 27 Plan 01 internal topology contract layer.
-- Stopped at: Completed 27-layered-module-package-topology-graph-01-PLAN.md; Phase 27 Plan 02 is ready.
+- Last activity: 2026-05-19 - Completed Phase 27 Plan 02 Go module/package/dependency topology.
+- Stopped at: Completed 27-layered-module-package-topology-graph-02-PLAN.md; Phase 27 Plan 03 is ready.
 
 ### Quick Tasks Completed
 
@@ -215,4 +219,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 27 Plan 02 is ready for execution.
+Phase 27 Plan 03 is ready for execution.
