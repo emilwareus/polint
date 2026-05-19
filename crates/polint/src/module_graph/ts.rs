@@ -1,10 +1,18 @@
 use crate::core::{
-    AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision,
+    AnalysisDb, FileId, Language, ModuleEdgeKind, ModuleNodeId, ResolutionPrecision, SourceFile,
     ResolutionStatus, UnresolvedReason,
 };
+use crate::config::LoadedConfig;
+use crate::module_graph::formats::package_json::{PackageJsonManifest, parse_package_json};
+use crate::module_graph::formats::package_lock::parse_package_lock;
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
-use crate::module_graph::paths::normalize_path;
-use crate::module_graph::topology::TopologyOutput;
+use crate::module_graph::paths::{normalize_path, normalize_repo_relative};
+use crate::module_graph::topology::{
+    RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind, SourceSetFact,
+    SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
+    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId,
+    WorkspaceRootKind,
+};
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
 use serde::Deserialize;
@@ -359,11 +367,466 @@ fn external_draft(label: String, language: Language) -> ResolvedImportDraft {
 }
 
 pub(crate) fn collect_ts_topology(
-    _loaded: &crate::config::LoadedConfig,
-    _db: &AnalysisDb,
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
     _resolver: Option<&TsResolverContext>,
 ) -> TopologyOutput {
-    TopologyOutput::default()
+    let mut output = TopologyOutput::default();
+    let ts_files = db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+        .collect::<Vec<_>>();
+    let package_manifests = collect_package_manifests(loaded, &ts_files);
+    let workspace_roots = package_manifests
+        .iter()
+        .filter(|(_, manifest)| !manifest.workspaces.is_empty())
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut root_ids_by_path = BTreeMap::new();
+    for package_path in &workspace_roots {
+        let id = WorkspaceRootId(output.workspace_roots.len() as u64);
+        output.workspace_roots.push(WorkspaceRootFact {
+            id,
+            kind: WorkspaceRootKind::JsWorkspace,
+            root_path: package_path.clone(),
+            manifest_path: Some(package_manifest_path(package_path)),
+            language: Some(Language::TypeScript),
+            stable_key: format!("js-workspace:{package_path}"),
+            producer_id: TS_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        root_ids_by_path.insert(package_path.clone(), id);
+    }
+
+    let mut package_ids_by_path = BTreeMap::new();
+    for (package_path, manifest) in &package_manifests {
+        let id = TopologyPackageId(output.packages.len() as u64);
+        let workspace_root = workspace_root_for_package(package_path, &workspace_roots)
+            .and_then(|root| root_ids_by_path.get(root).copied());
+        output.packages.push(TopologyPackageFact {
+            id,
+            workspace_root,
+            package: None,
+            module_node: None,
+            kind: TopologyPackageKind::JsPackage,
+            name: manifest
+                .name
+                .clone()
+                .unwrap_or_else(|| package_path.clone()),
+            version: manifest.version.clone(),
+            path: package_path.clone(),
+            language: Some(Language::TypeScript),
+            stable_key: format!(
+                "js-package:{package_path}:{}",
+                manifest.name.as_deref().unwrap_or("")
+            ),
+            producer_id: TS_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        package_ids_by_path.insert(package_path.clone(), id);
+    }
+
+    for (package_path, manifest) in &package_manifests {
+        emit_package_manager_overlays(&mut output, package_path, manifest);
+        emit_lockfile_overlays(&mut output, loaded, package_path);
+    }
+    emit_pnpm_workspace_overlays(&mut output, loaded);
+    emit_tsconfig_overlays(&mut output, loaded, &ts_files);
+
+    for file in ts_files {
+        let package_path = nearest_package_root_for_relative_path(loaded, &file.relative_path);
+        let package = package_path
+            .as_ref()
+            .and_then(|path| package_ids_by_path.get(path).copied());
+        let root = package_path
+            .as_ref()
+            .and_then(|path| workspace_root_for_package(path, &workspace_roots))
+            .and_then(|path| root_ids_by_path.get(path).copied());
+        let kind = classify_ts_source_set(file);
+        output.source_sets.push(SourceSetFact {
+            id: SourceSetId(output.source_sets.len() as u64),
+            package,
+            root,
+            kind,
+            path: file.relative_path.clone(),
+            language: Some(file.language),
+            files: vec![file.id],
+            stable_key: format!(
+                "ts-source-set:{}:{}",
+                source_set_kind_label(kind),
+                file.relative_path
+            ),
+            producer_id: TS_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+    }
+
+    output.normalized()
+}
+
+const TS_TOPOLOGY_PROVIDER_ID: &str = "polint.module_graph";
+
+fn collect_package_manifests(
+    loaded: &LoadedConfig,
+    ts_files: &[&SourceFile],
+) -> BTreeMap<String, PackageJsonManifest> {
+    let mut package_paths = BTreeSet::new();
+    if loaded.root.join("package.json").is_file() {
+        package_paths.insert(".".to_string());
+    }
+    for file in ts_files {
+        if let Some(package_path) = nearest_package_root_for_relative_path(loaded, &file.relative_path)
+        {
+            package_paths.insert(package_path);
+        }
+    }
+
+    let mut manifests = BTreeMap::new();
+    for package_path in package_paths {
+        if let Some(manifest) = read_package_manifest(loaded, &package_path) {
+            for workspace in &manifest.workspaces {
+                for member in expand_workspace_glob(&loaded.root, workspace) {
+                    if let Some(member_manifest) = read_package_manifest(loaded, &member) {
+                        manifests.insert(member, member_manifest);
+                    }
+                }
+            }
+            manifests.insert(package_path, manifest);
+        }
+    }
+    manifests
+}
+
+fn read_package_manifest(loaded: &LoadedConfig, package_path: &str) -> Option<PackageJsonManifest> {
+    let manifest_path = package_manifest_path(package_path);
+    let contents = fs::read_to_string(loaded.root.join(&manifest_path)).ok()?;
+    Some(parse_package_json(&manifest_path, &contents))
+}
+
+fn package_manifest_path(package_path: &str) -> String {
+    if package_path == "." {
+        "package.json".to_string()
+    } else {
+        format!("{package_path}/package.json")
+    }
+}
+
+fn nearest_package_root_for_relative_path(
+    loaded: &LoadedConfig,
+    relative_path: &str,
+) -> Option<String> {
+    let mut path = Path::new(relative_path).parent()?.to_path_buf();
+    loop {
+        let package_path = normalize_repo_relative(path.to_string_lossy())?;
+        let manifest_path = package_manifest_path(&package_path);
+        if loaded.root.join(manifest_path).is_file() {
+            return Some(package_path);
+        }
+        if !path.pop() {
+            return None;
+        }
+    }
+}
+
+fn expand_workspace_glob(root: &Path, pattern: &str) -> Vec<String> {
+    let Some(base) = pattern.strip_suffix("/*") else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(root.join(base)) else {
+        return Vec::new();
+    };
+    let mut members = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_type().ok()?.is_dir().then_some(entry.path()))
+        .filter(|path| path.join("package.json").is_file())
+        .filter_map(|path| crate::module_graph::paths::normalize_repo_relative_path(root, &path))
+        .collect::<Vec<_>>();
+    members.sort();
+    members
+}
+
+fn workspace_root_for_package<'a>(
+    package_path: &str,
+    workspace_roots: &'a BTreeSet<String>,
+) -> Option<&'a String> {
+    workspace_roots
+        .iter()
+        .filter(|root| package_path == root.as_str() || package_path.starts_with(&format!("{root}/")))
+        .max_by_key(|root| root.len())
+}
+
+fn emit_package_manager_overlays(
+    output: &mut TopologyOutput,
+    package_path: &str,
+    manifest: &PackageJsonManifest,
+) {
+    if let Some(manager) = &manifest.package_manager {
+        push_overlay(
+            output,
+            package_path,
+            format!("packageManager:{manager}"),
+            Some(package_manifest_path(package_path)),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+}
+
+fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, package_path: &str) {
+    let lockfiles = [
+        ("package-lock.json", None),
+        ("pnpm-lock.yaml", Some("pnpm-lock-present")),
+        ("yarn.lock", Some("yarn-lock-present")),
+        ("bun.lock", Some("bun-lock-present")),
+        ("bun.lockb", Some("bun-lockb-present")),
+    ];
+    for (file_name, unsupported_schema) in lockfiles {
+        let relative_path = package_relative_path(package_path, file_name);
+        if !loaded.root.join(&relative_path).is_file() {
+            continue;
+        }
+        let schema = if let Some(schema) = unsupported_schema {
+            schema.to_string()
+        } else {
+            fs::read_to_string(loaded.root.join(&relative_path))
+                .map(|contents| parse_package_lock(&relative_path, &contents).schema_label.to_string())
+                .unwrap_or_else(|_| "package-lock-unknown".to_string())
+        };
+        push_overlay(
+            output,
+            package_path,
+            format!("lockfile:{file_name}:{schema}"),
+            Some(relative_path),
+            if unsupported_schema.is_some() {
+                TopologyPrecision::Unsupported
+            } else {
+                TopologyPrecision::ExactLockfile
+            },
+            if unsupported_schema.is_some() {
+                TopologyStatus::Unsupported
+            } else {
+                TopologyStatus::Present
+            },
+        );
+    }
+}
+
+fn package_relative_path(package_path: &str, file_name: &str) -> String {
+    if package_path == "." {
+        file_name.to_string()
+    } else {
+        format!("{package_path}/{file_name}")
+    }
+}
+
+fn emit_pnpm_workspace_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig) {
+    let relative_path = "pnpm-workspace.yaml";
+    let Ok(contents) = fs::read_to_string(loaded.root.join(relative_path)) else {
+        return;
+    };
+    for workspace in parse_pnpm_workspace_packages(&contents) {
+        push_overlay(
+            output,
+            ".",
+            format!("pnpm-workspace.yaml:{workspace}"),
+            Some(relative_path.to_string()),
+            TopologyPrecision::Heuristic,
+            TopologyStatus::Present,
+        );
+    }
+}
+
+fn parse_pnpm_workspace_packages(contents: &str) -> Vec<String> {
+    let mut in_packages = false;
+    let mut packages = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed == "packages:" {
+            in_packages = true;
+            continue;
+        }
+        if !in_packages {
+            continue;
+        }
+        let Some(entry) = trimmed.strip_prefix('-') else {
+            if !trimmed.is_empty() && !line.starts_with(' ') {
+                break;
+            }
+            continue;
+        };
+        packages.push(entry.trim().trim_matches(['"', '\'']).to_string());
+    }
+    packages.sort();
+    packages.dedup();
+    packages
+}
+
+fn emit_tsconfig_overlays(
+    output: &mut TopologyOutput,
+    loaded: &LoadedConfig,
+    ts_files: &[&SourceFile],
+) {
+    let mut configs = BTreeSet::new();
+    for file in ts_files {
+        let absolute = if file.path.is_absolute() {
+            file.path.clone()
+        } else {
+            loaded.root.join(&file.relative_path)
+        };
+        if let Some(config) = nearest_tsconfig_path(&loaded.root, &absolute)
+            && let Some(relative) =
+                crate::module_graph::paths::normalize_repo_relative_path(&loaded.root, &config)
+        {
+            configs.insert(relative);
+        }
+    }
+    for config in configs {
+        let Some(value) = read_json_with_comments(&loaded.root.join(&config)) else {
+            continue;
+        };
+        let Some(object) = value.as_object() else {
+            continue;
+        };
+        if let Some(options) = object
+            .get("compilerOptions")
+            .and_then(serde_json::Value::as_object)
+        {
+            if let Some(base_url) = options.get("baseUrl").and_then(serde_json::Value::as_str) {
+                push_overlay(
+                    output,
+                    ".",
+                    format!("tsconfig:baseUrl:{base_url}"),
+                    Some(config.clone()),
+                    TopologyPrecision::ExactStatic,
+                    TopologyStatus::Present,
+                );
+            }
+            if let Some(paths) = options.get("paths").and_then(serde_json::Value::as_object) {
+                for pattern in paths.keys() {
+                    push_overlay(
+                        output,
+                        ".",
+                        format!("tsconfig:paths:{pattern}"),
+                        Some(config.clone()),
+                        TopologyPrecision::ExactStatic,
+                        TopologyStatus::Present,
+                    );
+                }
+            }
+            if let Some(root_dirs) = options
+                .get("rootDirs")
+                .and_then(serde_json::Value::as_array)
+            {
+                for root_dir in root_dirs.iter().filter_map(serde_json::Value::as_str) {
+                    push_overlay(
+                        output,
+                        ".",
+                        format!("tsconfig:rootDirs:{root_dir}"),
+                        Some(config.clone()),
+                        TopologyPrecision::ExactStatic,
+                        TopologyStatus::Present,
+                    );
+                }
+            }
+        }
+        if let Some(references) = object
+            .get("references")
+            .and_then(serde_json::Value::as_array)
+        {
+            for reference in references
+                .iter()
+                .filter_map(serde_json::Value::as_object)
+                .filter_map(|reference| reference.get("path").and_then(serde_json::Value::as_str))
+            {
+                push_overlay(
+                    output,
+                    ".",
+                    format!("tsconfig:reference:{reference}"),
+                    Some(config.clone()),
+                    TopologyPrecision::ExactStatic,
+                    TopologyStatus::Present,
+                );
+            }
+        }
+    }
+}
+
+fn read_json_with_comments(path: &Path) -> Option<serde_json::Value> {
+    let mut source = fs::read_to_string(path).ok()?;
+    if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        source = stripped.to_string();
+    }
+    json_strip_comments::strip(&mut source).ok()?;
+    serde_json::from_str(&source).ok()
+}
+
+fn classify_ts_source_set(file: &SourceFile) -> SourceSetKind {
+    let path = file.relative_path.replace('\\', "/");
+    if path.contains("/node_modules/") || path.starts_with("node_modules/") {
+        return SourceSetKind::Vendor;
+    }
+    if path.contains("/generated/")
+        || path.starts_with("generated/")
+        || path.contains("/gen/")
+        || path.starts_with("gen/")
+        || path.contains(".generated.")
+    {
+        return SourceSetKind::Generated;
+    }
+    if path.contains("/__tests__/")
+        || path.starts_with("__tests__/")
+        || path.contains("/test/")
+        || path.starts_with("test/")
+        || path.contains("/tests/")
+        || path.starts_with("tests/")
+        || path.contains(".test.")
+        || path.contains(".spec.")
+    {
+        return SourceSetKind::Test;
+    }
+    SourceSetKind::Source
+}
+
+fn source_set_kind_label(kind: SourceSetKind) -> &'static str {
+    match kind {
+        SourceSetKind::Source => "source",
+        SourceSetKind::Test => "test",
+        SourceSetKind::Generated => "generated",
+        SourceSetKind::Vendor => "vendor",
+        SourceSetKind::External => "external",
+        SourceSetKind::Unknown => "unknown",
+    }
+}
+
+fn push_overlay(
+    output: &mut TopologyOutput,
+    package_path: &str,
+    label: String,
+    path: Option<String>,
+    precision: TopologyPrecision,
+    status: TopologyStatus,
+) {
+    output.overlays.push(RepoTopologyOverlayFact {
+        id: RepoTopologyOverlayId(output.overlays.len() as u64),
+        root: None,
+        package: None,
+        source_set: None,
+        kind: RepoTopologyOverlayKind::SourceOfTruthDirectory,
+        stable_key: format!(
+            "ts-overlay:{package_path}:{label}:{}",
+            path.as_deref().unwrap_or("")
+        ),
+        label,
+        path,
+        producer_id: TS_TOPOLOGY_PROVIDER_ID,
+        precision,
+        status,
+    });
 }
 
 fn is_external_package_specifier(specifier: &str) -> bool {
