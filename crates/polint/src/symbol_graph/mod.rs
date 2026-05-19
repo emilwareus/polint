@@ -10,6 +10,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -465,10 +466,17 @@ fn symbol_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
 }
 
 fn symbol_graph_parameter_digest() -> Digest {
-    Digest::from_parts(
+    Digest::from_unordered(
         DigestKind::ProviderParameters,
         "symbol_graph_parameters",
-        &["output=symbols", "output=definitions", "output=references"],
+        vec![
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "symbol_graph_outputs",
+                &["output=symbols", "output=definitions", "output=references"],
+            ),
+            semantic_provider_parameter_digest(),
+        ],
     )
 }
 

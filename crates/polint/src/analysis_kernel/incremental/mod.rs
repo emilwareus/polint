@@ -93,7 +93,7 @@ pub(crate) use invalidation::{
 )]
 pub(crate) use keys::{
     DiagnosticKey, LayerKey, LayerKind, PrecisionTier, QueryKey, SummaryKey,
-    dependency_layer_digest,
+    dependency_layer_digest, semantic_provider_parameter_digest,
 };
 #[cfg_attr(
     test,
