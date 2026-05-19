@@ -3228,3 +3228,460 @@ mod topology_overlay_categories {
         assert_eq!(kinds.len(), 7);
     }
 }
+
+#[cfg(test)]
+mod import_to_package {
+    use super::derive_import_to_package_edges;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, UnresolvedReason,
+    };
+    use crate::module_graph::topology::{
+        DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
+        ImportToPackageStatus, RequirementKind, SourceSetFact, SourceSetId, SourceSetKind,
+        TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
+        TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    };
+    use crate::symbol_graph::semantic::{
+        SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn span(file: FileId, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 1,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: start_byte + 2,
+        }
+    }
+
+    fn add_file(db: &mut AnalysisDb, relative_path: &str, language: Language) -> FileId {
+        db.add_source_file(
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            language,
+            Arc::from(""),
+            format!("hash:{relative_path}"),
+        )
+    }
+
+    fn push_import(
+        db: &mut AnalysisDb,
+        file: FileId,
+        path: &str,
+        language: Language,
+        status: SemanticStatus,
+        kind: SemanticImportKind,
+    ) -> ImportId {
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span(file, 0),
+            language,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![SemanticImportFact {
+                id: SemanticImportId(0),
+                language,
+                file: Some(file),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: path.to_string(),
+                local_name: None,
+                imported_name: None,
+                namespace: crate::core::SymbolNamespace::Value,
+                kind,
+                stable_key: format!("semantic-import:{path}"),
+                status,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        import
+    }
+
+    fn replace_graph(
+        db: &mut AnalysisDb,
+        import: ImportId,
+        from_file: FileId,
+        target_node: Option<ModuleNodeId>,
+        status: ResolutionStatus,
+        reason: Option<UnresolvedReason>,
+        nodes: Vec<ModuleNode>,
+    ) {
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file,
+                target_node,
+                status,
+                precision: ResolutionPrecision::ExactFile,
+                reason,
+            }],
+            nodes,
+            Vec::new(),
+        );
+    }
+
+    fn replace_topology(
+        db: &mut AnalysisDb,
+        from_file: FileId,
+        target_file: Option<FileId>,
+        context: SourceSetKind,
+        requirements: Vec<DependencyRequirementFact>,
+        extra_packages: Vec<TopologyPackageFact>,
+    ) {
+        let mut packages = vec![TopologyPackageFact {
+            id: TopologyPackageId(0),
+            workspace_root: Some(WorkspaceRootId(0)),
+            package: None,
+            module_node: Some(ModuleNodeId(0)),
+            kind: TopologyPackageKind::Workspace,
+            name: "app".to_string(),
+            version: None,
+            path: ".".to_string(),
+            language: Some(Language::TypeScript),
+            stable_key: "package:app".to_string(),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        }];
+        packages.push(TopologyPackageFact {
+            id: TopologyPackageId(1),
+            workspace_root: Some(WorkspaceRootId(0)),
+            package: None,
+            module_node: Some(ModuleNodeId(1)),
+            kind: TopologyPackageKind::Workspace,
+            name: "target".to_string(),
+            version: None,
+            path: "src/target.ts".to_string(),
+            language: Some(Language::TypeScript),
+            stable_key: "package:target".to_string(),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        packages.extend(extra_packages);
+        let mut source_files = vec![from_file];
+        if let Some(target_file) = target_file {
+            source_files.push(target_file);
+        }
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::Repository,
+                root_path: ".".to_string(),
+                manifest_path: None,
+                language: None,
+                stable_key: "root:repo".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages,
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(0)),
+                root: Some(WorkspaceRootId(0)),
+                kind: context,
+                path: ".".to_string(),
+                language: Some(Language::TypeScript),
+                files: source_files,
+                stable_key: format!("source-set:{context:?}"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            dependency_requirements: requirements,
+            ..TopologyOutput::default()
+        });
+    }
+
+    fn external_requirement(target: &str) -> DependencyRequirementFact {
+        DependencyRequirementFact {
+            id: DependencyRequirementId(0),
+            from_package: Some(TopologyPackageId(0)),
+            target_package: None,
+            target_name: target.to_string(),
+            version_requirement: Some("^1.0.0".to_string()),
+            kind: RequirementKind::Runtime,
+            manifest_path: Some("package.json".to_string()),
+            stable_key: format!("requirement:{target}"),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        }
+    }
+
+    #[test]
+    fn static_ts_import_to_workspace_package_emits_resolved_source_edge() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let import = push_import(
+            &mut db,
+            from,
+            "./target",
+            Language::TypeScript,
+            SemanticStatus::Resolved,
+            SemanticImportKind::StaticDefault,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::Resolved,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        let edge = &edges[0];
+        assert_eq!(edge.syntax_import, Some(import));
+        assert_eq!(edge.resolved_import, Some(ResolvedImportId(0)));
+        assert_eq!(
+            edge.semantic_import_stable_key.as_deref(),
+            Some("semantic-import:./target")
+        );
+        assert_eq!(edge.from_package_stable_key.as_deref(), Some("package:app"));
+        assert_eq!(
+            edge.to_package_stable_key.as_deref(),
+            Some("package:target")
+        );
+        assert_eq!(
+            edge.source_set_stable_key.as_deref(),
+            Some("source-set:Source")
+        );
+        assert_eq!(edge.context, ImportContextKind::Source);
+        assert_eq!(edge.status, ImportToPackageStatus::Resolved);
+    }
+
+    #[test]
+    fn source_set_ownership_classifies_test_generated_and_vendor_contexts() {
+        for (path, source_set, expected) in [
+            (
+                "pkg/service_test.go",
+                SourceSetKind::Test,
+                ImportContextKind::Test,
+            ),
+            (
+                "src/app.generated.ts",
+                SourceSetKind::Generated,
+                ImportContextKind::Generated,
+            ),
+            (
+                "vendor/lib/index.ts",
+                SourceSetKind::Vendor,
+                ImportContextKind::Vendor,
+            ),
+        ] {
+            let mut db = AnalysisDb::new();
+            let from = add_file(&mut db, path, Language::TypeScript);
+            let import = push_import(
+                &mut db,
+                from,
+                "./missing",
+                Language::TypeScript,
+                SemanticStatus::Unresolved,
+                SemanticImportKind::StaticDefault,
+            );
+            replace_graph(
+                &mut db,
+                import,
+                from,
+                None,
+                ResolutionStatus::Unresolved,
+                Some(UnresolvedReason::NotFound),
+                vec![ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                }],
+            );
+            replace_topology(&mut db, from, None, source_set, Vec::new(), Vec::new());
+
+            let edges = derive_import_to_package_edges(&db);
+
+            assert_eq!(edges[0].context, expected);
+        }
+    }
+
+    #[test]
+    fn uncertainty_statuses_cover_dynamic_unresolved_undeclared_outside_and_ambiguous() {
+        let cases = [
+            (
+                ResolutionStatus::Dynamic,
+                SemanticStatus::Dynamic,
+                None,
+                None,
+                Vec::new(),
+                ImportToPackageStatus::Dynamic,
+            ),
+            (
+                ResolutionStatus::Unresolved,
+                SemanticStatus::Unresolved,
+                None,
+                Some(UnresolvedReason::NotFound),
+                Vec::new(),
+                ImportToPackageStatus::Unresolved,
+            ),
+            (
+                ResolutionStatus::External,
+                SemanticStatus::External,
+                Some(ModuleNodeId(1)),
+                None,
+                Vec::new(),
+                ImportToPackageStatus::Undeclared,
+            ),
+            (
+                ResolutionStatus::Resolved,
+                SemanticStatus::Resolved,
+                Some(ModuleNodeId(1)),
+                Some(UnresolvedReason::OutsideWorkspace),
+                Vec::new(),
+                ImportToPackageStatus::OutsideWorkspace,
+            ),
+            (
+                ResolutionStatus::Resolved,
+                SemanticStatus::Resolved,
+                Some(ModuleNodeId(1)),
+                None,
+                vec![TopologyPackageFact {
+                    id: TopologyPackageId(2),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(1)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "second-target".to_string(),
+                    version: None,
+                    path: "src/target.ts".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:second-target".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                }],
+                ImportToPackageStatus::Ambiguous,
+            ),
+        ];
+
+        for (index, (resolution, semantic, target_node, reason, extra_packages, expected)) in
+            cases.into_iter().enumerate()
+        {
+            let mut db = AnalysisDb::new();
+            let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+            let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+            let path = if resolution == ResolutionStatus::External {
+                "react"
+            } else {
+                "./target"
+            };
+            let import = push_import(
+                &mut db,
+                from,
+                path,
+                Language::TypeScript,
+                semantic,
+                if resolution == ResolutionStatus::Dynamic {
+                    SemanticImportKind::DynamicImport
+                } else {
+                    SemanticImportKind::StaticDefault
+                },
+            );
+            replace_graph(
+                &mut db,
+                import,
+                from,
+                target_node,
+                resolution,
+                reason,
+                vec![
+                    ModuleNode {
+                        id: ModuleNodeId(0),
+                        kind: ModuleNodeKind::Package,
+                        label: "app".to_string(),
+                        file: None,
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                    ModuleNode {
+                        id: ModuleNodeId(1),
+                        kind: if resolution == ResolutionStatus::External {
+                            ModuleNodeKind::External
+                        } else {
+                            ModuleNodeKind::Package
+                        },
+                        label: path.to_string(),
+                        file: Some(target),
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                ],
+            );
+            let requirements = if expected == ImportToPackageStatus::Undeclared {
+                Vec::new()
+            } else if resolution == ResolutionStatus::External {
+                vec![external_requirement(path)]
+            } else {
+                Vec::new()
+            };
+            replace_topology(
+                &mut db,
+                from,
+                Some(target),
+                SourceSetKind::Source,
+                requirements,
+                extra_packages,
+            );
+
+            let edges = derive_import_to_package_edges(&db);
+
+            assert_eq!(edges[0].status, expected, "case {index}");
+        }
+    }
+}
