@@ -199,6 +199,7 @@ pub(crate) enum SourceSetKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum RequirementKind {
+    Direct,
     Runtime,
     Development,
     Peer,
@@ -206,6 +207,8 @@ pub(crate) enum RequirementKind {
     Build,
     Test,
     Tool,
+    Replace,
+    Exclude,
     Unknown,
 }
 
