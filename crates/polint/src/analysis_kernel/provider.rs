@@ -158,8 +158,8 @@ const MODULE_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const SYMBOL_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "symbol-graph-facts-1",
-    version: 1,
+    name: "symbol-graph-facts-2",
+    version: 2,
 }];
 
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -237,7 +237,18 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "module_edges",
             "functions",
         ],
-        outputs: &["symbols", "definitions", "references"],
+        outputs: &[
+            "symbols",
+            "definitions",
+            "references",
+            "scopes",
+            "semantic_imports",
+            "exports",
+            "aliases",
+            "resolution_facts",
+            "generated_symbols",
+            "stable_exports",
+        ],
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SYMBOL_GRAPH_SCHEMA,
@@ -394,7 +405,18 @@ mod tests {
                         "module_edges",
                         "functions",
                     ],
-                    outputs: vec!["symbols", "definitions", "references"],
+                    outputs: vec![
+                        "symbols",
+                        "definitions",
+                        "references",
+                        "scopes",
+                        "semantic_imports",
+                        "exports",
+                        "aliases",
+                        "resolution_facts",
+                        "generated_symbols",
+                        "stable_exports",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",
