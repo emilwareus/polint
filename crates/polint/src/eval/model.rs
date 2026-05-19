@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const SEMANTIC_FACT_FAMILIES: &[&str] = &[
+    "Scope",
+    "SemanticImport",
+    "Export",
+    "Alias",
+    "Resolution",
+    "GeneratedSymbol",
+    "StableExport",
+];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -113,6 +123,8 @@ pub(crate) struct ObservedFact {
     pub(crate) provenance: Option<String>,
     pub(crate) precision: Option<String>,
     pub(crate) status: Option<ObservedStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) payload: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -201,9 +213,16 @@ pub(crate) struct ObservedRuntimeBudget {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ObservedStatus {
     Present,
+    Resolved,
     Unknown,
+    Unresolved,
+    Ambiguous,
+    Dynamic,
     SetupMissing,
     Unsupported,
+    External,
+    Cycle,
+    Generated,
     Rejected,
     Accepted,
 }
@@ -276,6 +295,7 @@ mod tests {
                 provenance: Some("metadata-sidecar".to_string()),
                 precision: Some("syntactic".to_string()),
                 status: Some(ObservedStatus::Present),
+                payload: None,
             }),
             ObservedItem::GraphEdge(ObservedGraphEdge {
                 graph: "module".to_string(),
@@ -372,6 +392,7 @@ mod tests {
                 provenance: Some("metadata-sidecar".to_string()),
                 precision: Some("setup_aware".to_string()),
                 status: Some(ObservedStatus::SetupMissing),
+                payload: None,
             }),
             ObservedItem::Fact(ObservedFact {
                 family: "call_graph".to_string(),
@@ -381,6 +402,7 @@ mod tests {
                 provenance: None,
                 precision: None,
                 status: Some(ObservedStatus::Unsupported),
+                payload: None,
             }),
         ];
 

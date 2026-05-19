@@ -23,15 +23,20 @@ mod semantic_rows {
 
     #[test]
     fn eval_expected_facts_accept_semantic_families_and_statuses() {
-        for (family, status) in [
-            ("Scope", "resolved"),
-            ("SemanticImport", "dynamic"),
-            ("Export", "resolved"),
-            ("Alias", "ambiguous"),
-            ("Resolution", "unresolved"),
-            ("GeneratedSymbol", "generated"),
-            ("StableExport", "external"),
-        ] {
+        let cases = crate::eval::model::SEMANTIC_FACT_FAMILIES
+            .iter()
+            .copied()
+            .zip([
+                "resolved",
+                "dynamic",
+                "resolved",
+                "ambiguous",
+                "unresolved",
+                "generated",
+                "external",
+            ]);
+
+        for (family, status) in cases {
             let manifest = format!(
                 r#"
 schema_version = "polint-eval-fixture-1"
@@ -90,7 +95,7 @@ fact = {{ family = "{family}", stable_key = "semantic:{family}", mode = "partial
                     && fact.producer_id.as_deref() == Some("polint.symbol_graph")
                     && fact.provenance.as_deref() == Some("polint.symbol_graph")
                     && fact.precision.as_deref() == Some("setup_aware")
-                    && fact.status == Some(ObservedStatus::Present)
+                    && fact.status == Some(ObservedStatus::Resolved)
                     && fact.payload.as_deref().is_some_and(|payload| {
                         payload.contains("\"path\":\"src/app.ts\"")
                             && payload.contains("\"start_byte\":0")
