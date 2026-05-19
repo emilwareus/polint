@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T12:53:01.629Z"
+last_updated: "2026-05-19T13:19:29.259Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 39
-  completed_plans: 36
-  percent: 92
+  completed_plans: 37
+  percent: 95
 ---
 
 # State: polint
@@ -179,6 +179,9 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Base topology is stored by the existing polint.module_graph provider immediately after resolved imports, module nodes, and module edges are replaced.
 - [Phase 27-layered-module-package-topology-graph]: Module graph layer payload schema v2 persists base topology rows but keeps import_to_package_edges out for the later semantic-aware topology pass.
 - [Phase 27-layered-module-package-topology-graph]: Topology cache identity hashes checked-in manifest, lockfile, workspace, and tsconfig files under topology-relevant roots while preserving absent-only extension handling.
+- [Phase 27-layered-module-package-topology-graph]: Add semantic-aware import-to-package facts in crate-private polint.module_topology instead of widening public module graph contracts.
+- [Phase 27-layered-module-package-topology-graph]: Run module topology after polint.symbol_graph so semantic import rows are available without creating a provider cycle.
+- [Phase 27-layered-module-package-topology-graph]: Reject duplicate cached import-to-package stable keys before restore so stale or conflicting topology payloads are recomputed.
 
 ## Execution Metrics
 
@@ -210,12 +213,13 @@ Last activity: 2026-05-19
 | 27-layered-module-package-topology-graph | 02 | 14 min | 3 | 5 |
 | 27-layered-module-package-topology-graph | 03 | 16 min | 3 | 5 |
 | 27-layered-module-package-topology-graph | 04 | 14 min | 3 | 6 |
+| 27-layered-module-package-topology-graph | 05 | 23 min | 3 | 12 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 27 Plan 04 module graph topology wiring, payload persistence, and cache identity.
-- Stopped at: Completed 27-layered-module-package-topology-graph-04-PLAN.md; Phase 27 Plan 05 is ready.
+- Last activity: 2026-05-19 - Completed Phase 27 Plan 05 semantic-aware import-to-package provider, cache, and validation.
+- Stopped at: Completed 27-layered-module-package-topology-graph-05-PLAN.md; Phase 27 Plan 06 is ready.
 
 ### Quick Tasks Completed
 
@@ -227,4 +231,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 27 Plan 04 is ready for execution.
+Phase 27 Plan 06 is ready for execution.

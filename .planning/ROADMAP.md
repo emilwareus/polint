@@ -29,7 +29,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 24 | 5/5 | Complete    | 2026-05-18 |
 | 25 | 4/4 | Complete    | 2026-05-18 |
 | 26 | 6/6 | Complete    | 2026-05-19 |
-| 27 | 4/7 | In Progress|  |
+| 27 | 5/7 | In Progress|  |
 | 28 | Private Semantic MIR and Place Identity | Lower Go and TS/JS function bodies into private MIR with stable place identities. | SAE-SEM-03 |
 | 29 | Local CFG and Control Dependence | Build local CFG, dominance, postdominance, and control-dependence facts over MIR. | SAE-SEM-04 |
 | 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
@@ -173,14 +173,14 @@ Plans:
 **Goal:** Expand module topology into workspace roots, packages/projects, source sets, declared requirements, lockfile/tool edges, import-to-package facts, and overlays.
 **Requirements:** SAE-SEM-02
 **Research:** `research/module-graph/FINAL-REPORT.md`, `research/module-graph/RECOMMENDED_IMPLEMENTATION.md`, `research/module-graph/VALIDATION.md`
-**Plans:** 4/7 plans executed
+**Plans:** 5/7 plans executed
 
 Plans:
 - [x] 27-01-PLAN.md — Internal topology contracts, AnalysisDb storage, metadata families, and provider output labels
 - [x] 27-02-PLAN.md — Go module-root, package, source-set, requirement, and lock-evidence topology
 - [x] 27-03-PLAN.md — TS/JS package, workspace, source-set, declared dependency, and lockfile topology
 - [x] 27-04-PLAN.md — Base topology wiring into module graph payloads and cache identity
-- [ ] 27-05-PLAN.md — Semantic-aware import-to-package provider, cache, and validation
+- [x] 27-05-PLAN.md — Semantic-aware import-to-package provider, cache, and validation
 - [ ] 27-06-PLAN.md — Topology eval fixtures and cache proof
 - [ ] 27-07-PLAN.md — Public no-leak proof, SDK compatibility, and docs alignment
 
