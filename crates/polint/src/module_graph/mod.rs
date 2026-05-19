@@ -6,21 +6,23 @@ pub(crate) mod query;
 pub(crate) mod topology;
 pub(crate) mod ts;
 
-use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
 };
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
-    ImportFact, Language, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
+    ImportFact, Language, ModuleNodeId, ModuleNodeKind, ResolutionStatus, ResolvedImportId,
+    SourceFile, UnresolvedReason,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::symbol_graph::semantic::{SemanticImportFact, SemanticImportKind, SemanticStatus};
 use model::{
     MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
     sort_packages,
@@ -30,9 +32,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use topology::{
-    DependencyRequirementFact, RepoTopologyOverlayFact, RepoTopologyOverlayId,
-    RepoTopologyOverlayKind, ResolvedDependencyEdgeFact, SourceSetFact, SourceSetKind,
-    TopologyOutput, TopologyPackageFact, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
+    DependencyRequirementFact, ImportContextKind, ImportToPackageFact, ImportToPackageId,
+    ImportToPackageStatus, RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind,
+    ResolvedDependencyEdgeFact, SourceSetFact, SourceSetKind, TopologyOutput, TopologyPackageFact,
+    TopologyPrecision, TopologyStatus, WorkspaceRootFact,
 };
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
@@ -291,6 +294,304 @@ pub(crate) fn derive_requested_module_graph(
     plan: &AnalysisPlan,
 ) -> ModuleGraphDerivation {
     derive_requested_module_graph_uncached(db, loaded, plan)
+}
+
+pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPackageFact> {
+    let resolved_by_import = db
+        .resolved_imports()
+        .iter()
+        .map(|fact| (fact.import, fact))
+        .collect::<BTreeMap<_, _>>();
+    let semantic_by_file_path = semantic_imports_by_file_path(db.semantic_imports());
+    let source_sets_by_file = source_sets_by_file(db.source_sets());
+
+    sorted_imports(db)
+        .into_iter()
+        .enumerate()
+        .map(|(index, import)| {
+            let resolved = resolved_by_import.get(&import.id).copied();
+            let semantic = semantic_by_file_path
+                .get(&(import.file, import.path.clone()))
+                .copied();
+            let source_set = source_sets_by_file.get(&import.file).and_then(|sets| {
+                sets.iter()
+                    .filter_map(|id| source_set_by_id(db.source_sets(), *id))
+                    .min_by_key(|set| set.stable_key.as_str())
+            });
+            let from_package = source_set
+                .and_then(|set| set.package)
+                .and_then(|id| topology_package_by_id(db.topology_packages(), id));
+            let target_node = resolved.and_then(|fact| fact.target_node);
+            let mut candidates = target_node
+                .map(|node| package_candidates_for_node(db, node))
+                .unwrap_or_default();
+            if candidates.is_empty()
+                && let Some(node) = target_node.and_then(|id| module_node_by_id(db, id))
+                && let Some(file) = node.file
+            {
+                candidates.extend(package_candidates_for_file(db, file));
+            }
+            candidates.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            candidates.dedup_by_key(|package| package.id);
+
+            let status = import_to_package_status(
+                import,
+                resolved,
+                semantic,
+                target_node.and_then(|id| module_node_by_id(db, id)),
+                &candidates,
+                from_package,
+                db.dependency_requirements(),
+            );
+            let to_package = if status == ImportToPackageStatus::Resolved && candidates.len() == 1 {
+                candidates.first().copied()
+            } else {
+                None
+            };
+            let import_path = semantic
+                .map(|fact| fact.import_path.clone())
+                .unwrap_or_else(|| import.path.clone());
+            let from_package_stable_key = from_package.map(|package| package.stable_key.clone());
+            let to_package_stable_key = to_package.map(|package| package.stable_key.clone());
+            let source_set_stable_key = source_set.map(|set| set.stable_key.clone());
+            let stable_key = stable_key_from_parts(
+                FactFamily::ImportToPackage,
+                &[
+                    ("import_id", import.id.0.to_string()),
+                    ("path", import_path.clone()),
+                    ("from_file", db.path_for(import.file)),
+                    ("status", import_to_package_status_label(status).to_string()),
+                ],
+            );
+
+            ImportToPackageFact {
+                id: ImportToPackageId(index as u64),
+                syntax_import: Some(import.id),
+                resolved_import: resolved.map(|fact| fact.id),
+                semantic_import_stable_key: semantic.map(|fact| fact.stable_key.clone()),
+                from_file: Some(import.file),
+                from_package: from_package.map(|package| package.id),
+                to_package: to_package.map(|package| package.id),
+                target_node,
+                from_package_stable_key,
+                to_package_stable_key,
+                source_set_stable_key,
+                import_path,
+                context: import_context_for_source_set(source_set, db.file(import.file)),
+                stable_key,
+                producer_id: "polint.module_topology",
+                precision: import_to_package_precision(status),
+                status,
+            }
+        })
+        .collect()
+}
+
+fn semantic_imports_by_file_path(
+    semantic_imports: &[SemanticImportFact],
+) -> BTreeMap<(FileId, String), &SemanticImportFact> {
+    let mut imports = semantic_imports.iter().collect::<Vec<_>>();
+    imports.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    let mut by_file_path = BTreeMap::new();
+    for import in imports {
+        if let Some(file) = import.file {
+            by_file_path
+                .entry((file, import.import_path.clone()))
+                .or_insert(import);
+        }
+    }
+    by_file_path
+}
+
+fn source_sets_by_file(
+    source_sets: &[SourceSetFact],
+) -> BTreeMap<FileId, Vec<topology::SourceSetId>> {
+    let mut by_file = BTreeMap::<FileId, Vec<_>>::new();
+    for source_set in source_sets {
+        for file in &source_set.files {
+            by_file.entry(*file).or_default().push(source_set.id);
+        }
+    }
+    by_file
+}
+
+fn source_set_by_id(
+    source_sets: &[SourceSetFact],
+    id: topology::SourceSetId,
+) -> Option<&SourceSetFact> {
+    source_sets.iter().find(|source_set| source_set.id == id)
+}
+
+fn topology_package_by_id(
+    packages: &[TopologyPackageFact],
+    id: topology::TopologyPackageId,
+) -> Option<&TopologyPackageFact> {
+    packages.iter().find(|package| package.id == id)
+}
+
+fn module_node_by_id(db: &AnalysisDb, id: ModuleNodeId) -> Option<&crate::core::ModuleNode> {
+    db.module_nodes().iter().find(|node| node.id == id)
+}
+
+fn package_candidates_for_node(db: &AnalysisDb, node: ModuleNodeId) -> Vec<&TopologyPackageFact> {
+    db.topology_packages()
+        .iter()
+        .filter(|package| package.module_node == Some(node))
+        .collect()
+}
+
+fn package_candidates_for_file(db: &AnalysisDb, file: FileId) -> Vec<&TopologyPackageFact> {
+    db.source_sets()
+        .iter()
+        .filter(|source_set| source_set.files.contains(&file))
+        .filter_map(|source_set| source_set.package)
+        .filter_map(|package| topology_package_by_id(db.topology_packages(), package))
+        .collect()
+}
+
+fn import_to_package_status(
+    import: &ImportFact,
+    resolved: Option<&crate::core::ResolvedImportFact>,
+    semantic: Option<&SemanticImportFact>,
+    target_node: Option<&crate::core::ModuleNode>,
+    candidates: &[&TopologyPackageFact],
+    from_package: Option<&TopologyPackageFact>,
+    requirements: &[DependencyRequirementFact],
+) -> ImportToPackageStatus {
+    if resolved.is_some_and(|fact| fact.reason == Some(UnresolvedReason::OutsideWorkspace)) {
+        return ImportToPackageStatus::OutsideWorkspace;
+    }
+    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Dynamic)
+        || semantic.is_some_and(|fact| {
+            matches!(
+                fact.kind,
+                SemanticImportKind::DynamicImport | SemanticImportKind::Dynamic
+            )
+        })
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Dynamic)
+    {
+        return ImportToPackageStatus::Dynamic;
+    }
+    if semantic.is_some_and(|fact| fact.status == SemanticStatus::SetupMissing)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::SetupMissing)
+    {
+        return ImportToPackageStatus::SetupMissing;
+    }
+    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Unsupported)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Unsupported)
+    {
+        return ImportToPackageStatus::Unsupported;
+    }
+    if semantic.is_some_and(|fact| fact.status == SemanticStatus::Ambiguous) || candidates.len() > 1
+    {
+        return ImportToPackageStatus::Ambiguous;
+    }
+    if target_node.is_none() || resolved.is_none_or(|fact| fact.target_node.is_none()) {
+        return ImportToPackageStatus::Unresolved;
+    }
+    if target_node.is_some_and(|node| node.kind == ModuleNodeKind::External)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::External)
+        || semantic.is_some_and(|fact| fact.status == SemanticStatus::External)
+    {
+        if declared_requirement_exists(import, from_package, requirements) {
+            ImportToPackageStatus::External
+        } else {
+            ImportToPackageStatus::Undeclared
+        }
+    } else if candidates.len() == 1 {
+        ImportToPackageStatus::Resolved
+    } else {
+        ImportToPackageStatus::Unresolved
+    }
+}
+
+fn declared_requirement_exists(
+    import: &ImportFact,
+    from_package: Option<&TopologyPackageFact>,
+    requirements: &[DependencyRequirementFact],
+) -> bool {
+    let target = external_package_name(&import.path);
+    requirements.iter().any(|requirement| {
+        requirement.target_name == target
+            && from_package.is_none_or(|package| requirement.from_package == Some(package.id))
+    })
+}
+
+fn external_package_name(path: &str) -> &str {
+    if let Some(stripped) = path.strip_prefix('@') {
+        let mut parts = stripped.split('/');
+        let Some(scope_name) = parts.next() else {
+            return path;
+        };
+        let Some(package_name) = parts.next() else {
+            return path;
+        };
+        let end = 1 + scope_name.len() + 1 + package_name.len();
+        &path[..end]
+    } else {
+        path.split('/').next().unwrap_or(path)
+    }
+}
+
+fn import_context_for_source_set(
+    source_set: Option<&SourceSetFact>,
+    file: Option<&SourceFile>,
+) -> ImportContextKind {
+    match source_set.map(|set| set.kind) {
+        Some(SourceSetKind::Test) => ImportContextKind::Test,
+        Some(SourceSetKind::Generated) => ImportContextKind::Generated,
+        Some(SourceSetKind::Vendor) => ImportContextKind::Vendor,
+        Some(SourceSetKind::External) => ImportContextKind::External,
+        Some(SourceSetKind::Source) => ImportContextKind::Source,
+        Some(SourceSetKind::Unknown) | None => file
+            .map(|file| path_context(&file.relative_path))
+            .unwrap_or(ImportContextKind::Unknown),
+    }
+}
+
+fn path_context(relative_path: &str) -> ImportContextKind {
+    let normalized = relative_path.replace('\\', "/");
+    if normalized.contains("/vendor/") || normalized.starts_with("vendor/") {
+        ImportContextKind::Vendor
+    } else if normalized.contains(".generated.") || normalized.contains("/generated/") {
+        ImportContextKind::Generated
+    } else if normalized.ends_with("_test.go")
+        || normalized.contains(".test.")
+        || normalized.contains(".spec.")
+    {
+        ImportContextKind::Test
+    } else {
+        ImportContextKind::Source
+    }
+}
+
+fn import_to_package_precision(status: ImportToPackageStatus) -> TopologyPrecision {
+    match status {
+        ImportToPackageStatus::Resolved | ImportToPackageStatus::External => {
+            TopologyPrecision::ExactStatic
+        }
+        ImportToPackageStatus::Unsupported => TopologyPrecision::Unsupported,
+        ImportToPackageStatus::Ambiguous => TopologyPrecision::Heuristic,
+        ImportToPackageStatus::Unresolved
+        | ImportToPackageStatus::SetupMissing
+        | ImportToPackageStatus::Dynamic
+        | ImportToPackageStatus::Undeclared
+        | ImportToPackageStatus::OutsideWorkspace => TopologyPrecision::Unknown,
+    }
+}
+
+fn import_to_package_status_label(status: ImportToPackageStatus) -> &'static str {
+    match status {
+        ImportToPackageStatus::Resolved => "resolved",
+        ImportToPackageStatus::External => "external",
+        ImportToPackageStatus::Unresolved => "unresolved",
+        ImportToPackageStatus::SetupMissing => "setup-missing",
+        ImportToPackageStatus::Unsupported => "unsupported",
+        ImportToPackageStatus::Dynamic => "dynamic",
+        ImportToPackageStatus::Ambiguous => "ambiguous",
+        ImportToPackageStatus::Undeclared => "undeclared",
+        ImportToPackageStatus::OutsideWorkspace => "outside-workspace",
+    }
 }
 
 pub(crate) fn derive_requested_module_graph_with_cache_stats(

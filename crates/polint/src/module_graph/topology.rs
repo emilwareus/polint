@@ -128,15 +128,20 @@ pub(crate) struct ResolvedDependencyEdgeFact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ImportToPackageFact {
     pub(crate) id: ImportToPackageId,
-    pub(crate) import: Option<ImportId>,
+    pub(crate) syntax_import: Option<ImportId>,
     pub(crate) resolved_import: Option<ResolvedImportId>,
+    pub(crate) semantic_import_stable_key: Option<String>,
     pub(crate) from_file: Option<FileId>,
     pub(crate) from_package: Option<TopologyPackageId>,
     pub(crate) to_package: Option<TopologyPackageId>,
     pub(crate) target_node: Option<ModuleNodeId>,
+    pub(crate) from_package_stable_key: Option<String>,
+    pub(crate) to_package_stable_key: Option<String>,
+    pub(crate) source_set_stable_key: Option<String>,
+    pub(crate) import_path: String,
     pub(crate) context: ImportContextKind,
     pub(crate) stable_key: String,
-    #[serde(skip_deserializing, default = "module_graph_producer_id")]
+    #[serde(skip_deserializing, default = "module_topology_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
     pub(crate) status: ImportToPackageStatus,
@@ -408,6 +413,10 @@ fn module_graph_producer_id() -> &'static str {
     "polint.module_graph"
 }
 
+fn module_topology_producer_id() -> &'static str {
+    "polint.module_topology"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,12 +504,17 @@ mod tests {
     fn import_edge(key: &str, id: u64) -> ImportToPackageFact {
         ImportToPackageFact {
             id: ImportToPackageId(id),
-            import: Some(ImportId(0)),
+            syntax_import: Some(ImportId(0)),
             resolved_import: Some(ResolvedImportId(0)),
+            semantic_import_stable_key: None,
             from_file: Some(FileId(0)),
             from_package: Some(TopologyPackageId(0)),
             to_package: None,
             target_node: Some(ModuleNodeId(0)),
+            from_package_stable_key: None,
+            to_package_stable_key: None,
+            source_set_stable_key: None,
+            import_path: "example".to_string(),
             context: ImportContextKind::Source,
             stable_key: key.to_string(),
             producer_id: "test",
