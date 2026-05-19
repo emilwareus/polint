@@ -171,6 +171,13 @@ pub(crate) enum ScopeKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum SemanticImportKind {
+    StaticNamed,
+    StaticDefault,
+    StaticNamespace,
+    SideEffect,
+    TypeOnly,
+    CommonJsRequire,
+    DynamicImport,
     GoDefault,
     GoNamed,
     GoDot,
@@ -189,6 +196,9 @@ pub(crate) enum ExportKind {
     Named,
     Default,
     Namespace,
+    StarReexport,
+    CommonJsModuleExports,
+    CommonJsExportsProperty,
     ReExport,
     Star,
     Generated,
@@ -750,6 +760,13 @@ fn stable_export_sort_key(
 
 fn semantic_import_kind_label(kind: SemanticImportKind) -> &'static str {
     match kind {
+        SemanticImportKind::StaticNamed => "static_named",
+        SemanticImportKind::StaticDefault => "static_default",
+        SemanticImportKind::StaticNamespace => "static_namespace",
+        SemanticImportKind::SideEffect => "side_effect",
+        SemanticImportKind::TypeOnly => "type_only",
+        SemanticImportKind::CommonJsRequire => "commonjs_require",
+        SemanticImportKind::DynamicImport => "dynamic_import",
         SemanticImportKind::GoDefault => "go_default",
         SemanticImportKind::GoNamed => "go_named",
         SemanticImportKind::GoDot => "go_dot",
@@ -769,6 +786,9 @@ fn export_kind_label(kind: ExportKind) -> &'static str {
         ExportKind::Named => "named",
         ExportKind::Default => "default",
         ExportKind::Namespace => "namespace",
+        ExportKind::StarReexport => "star_reexport",
+        ExportKind::CommonJsModuleExports => "commonjs_module_exports",
+        ExportKind::CommonJsExportsProperty => "commonjs_exports_property",
         ExportKind::ReExport => "re_export",
         ExportKind::Star => "star",
         ExportKind::Generated => "generated",

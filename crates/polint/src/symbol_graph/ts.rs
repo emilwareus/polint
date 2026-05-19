@@ -11,13 +11,16 @@ use crate::symbol_graph::model::{
     DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
 };
 use crate::symbol_graph::semantic::{
-    ScopeFact, ScopeId, ScopeKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus,
+    AliasFact, AliasId, AliasKind, ExportFact, ExportId, ExportKind, ScopeFact, ScopeId, ScopeKind,
+    SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticIndexBuilder,
+    SemanticIndexOutput, SemanticStatus,
 };
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind,
-    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
+    Argument, AssignmentTarget, BindingIdentifier, BindingPattern, Declaration,
+    ExportDefaultDeclarationKind, Expression, ImportDeclarationSpecifier, ImportOrExportKind,
+    ModuleExportName, Program, Statement,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{
@@ -270,8 +273,8 @@ fn derive_ts_file_symbols(
 
 fn derive_ts_semantic_index(
     file: &SourceFile,
-    _source: &str,
-    _program: &Program<'_>,
+    source: &str,
+    program: &Program<'_>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
 ) -> SemanticIndexOutput {
@@ -353,7 +356,531 @@ fn derive_ts_semantic_index(
         ids_by_stable_key.insert(stable_key, id);
     }
 
+    add_ts_semantic_import_export_rows(&mut builder, file, source, program, module_scope_id);
+
     builder.finish()
+}
+
+fn add_ts_semantic_import_export_rows(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    source: &str,
+    program: &Program<'_>,
+    module_scope: Option<ScopeId>,
+) {
+    for statement in &program.body {
+        match statement {
+            Statement::ImportDeclaration(import) => {
+                add_import_declaration_rows(builder, file, module_scope, import);
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                add_export_named_rows(builder, file, module_scope, export);
+            }
+            Statement::ExportDefaultDeclaration(export) => {
+                add_export_row(
+                    builder,
+                    file,
+                    module_scope,
+                    "default".to_string(),
+                    SymbolNamespace::Value,
+                    ExportKind::Default,
+                    SemanticStatus::Resolved,
+                );
+                collect_commonjs_from_export_default(builder, file, source, module_scope, export);
+            }
+            Statement::ExportAllDeclaration(export) => {
+                add_export_row(
+                    builder,
+                    file,
+                    module_scope,
+                    module_export_source_name(export.source.value.as_str()),
+                    SymbolNamespace::Module,
+                    ExportKind::StarReexport,
+                    SemanticStatus::Unresolved,
+                );
+                add_alias_row(
+                    builder,
+                    file,
+                    "export:*".to_string(),
+                    vec![format!("module:{}", export.source.value.as_str())],
+                    AliasKind::ReExport,
+                    SemanticStatus::Unresolved,
+                );
+            }
+            Statement::ExpressionStatement(statement) => {
+                collect_commonjs_from_expression(
+                    builder,
+                    file,
+                    source,
+                    module_scope,
+                    &statement.expression,
+                );
+            }
+            Statement::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    if let Some(init) = &declarator.init {
+                        collect_commonjs_from_expression(builder, file, source, module_scope, init);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn add_import_declaration_rows(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    module_scope: Option<ScopeId>,
+    import: &oxc_ast::ast::ImportDeclaration<'_>,
+) {
+    let import_path = import.source.value.to_string();
+    let status = import_status_for_path(&import_path);
+    let Some(specifiers) = &import.specifiers else {
+        add_import_row(
+            builder,
+            file,
+            module_scope,
+            import_path,
+            None,
+            None,
+            SymbolNamespace::Module,
+            SemanticImportKind::SideEffect,
+            status,
+        );
+        return;
+    };
+
+    for specifier in specifiers {
+        match specifier {
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                add_import_row(
+                    builder,
+                    file,
+                    module_scope,
+                    import_path.clone(),
+                    Some(default.local.name.to_string()),
+                    Some("default".to_string()),
+                    SymbolNamespace::Value,
+                    SemanticImportKind::StaticDefault,
+                    status,
+                );
+            }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                add_import_row(
+                    builder,
+                    file,
+                    module_scope,
+                    import_path.clone(),
+                    Some(namespace.local.name.to_string()),
+                    Some("*".to_string()),
+                    SymbolNamespace::Namespace,
+                    SemanticImportKind::StaticNamespace,
+                    status,
+                );
+            }
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                let is_type_import = matches!(import.import_kind, ImportOrExportKind::Type)
+                    || matches!(named.import_kind, ImportOrExportKind::Type);
+                let local_name = named.local.name.to_string();
+                add_import_row(
+                    builder,
+                    file,
+                    module_scope,
+                    import_path.clone(),
+                    Some(local_name.clone()),
+                    Some(module_export_name_text(&named.imported)),
+                    if is_type_import {
+                        SymbolNamespace::Type
+                    } else {
+                        SymbolNamespace::Value
+                    },
+                    if is_type_import {
+                        SemanticImportKind::TypeOnly
+                    } else {
+                        SemanticImportKind::StaticNamed
+                    },
+                    status,
+                );
+                add_alias_row(
+                    builder,
+                    file,
+                    format!("import:{local_name}"),
+                    Vec::new(),
+                    if is_type_import {
+                        AliasKind::TypeOnly
+                    } else {
+                        AliasKind::Import
+                    },
+                    status,
+                );
+            }
+        }
+    }
+}
+
+fn add_export_named_rows(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    module_scope: Option<ScopeId>,
+    export: &oxc_ast::ast::ExportNamedDeclaration<'_>,
+) {
+    if let Some(source) = &export.source {
+        for specifier in &export.specifiers {
+            add_export_row(
+                builder,
+                file,
+                module_scope,
+                module_export_name_text(&specifier.exported),
+                SymbolNamespace::Module,
+                ExportKind::Namespace,
+                SemanticStatus::Unresolved,
+            );
+            add_alias_row(
+                builder,
+                file,
+                format!("reexport:{}", module_export_name_text(&specifier.exported)),
+                vec![format!(
+                    "{}:{}",
+                    source.value.as_str(),
+                    module_export_name_text(&specifier.local)
+                )],
+                AliasKind::ReExport,
+                SemanticStatus::Unresolved,
+            );
+        }
+        return;
+    }
+
+    if let Some(declaration) = &export.declaration {
+        let mut declarations = Vec::new();
+        collect_declaration_symbols(declaration, &mut declarations);
+        for (_, name) in declarations {
+            add_export_row(
+                builder,
+                file,
+                module_scope,
+                name,
+                SymbolNamespace::Value,
+                ExportKind::Named,
+                SemanticStatus::Resolved,
+            );
+        }
+    }
+    for specifier in &export.specifiers {
+        add_export_row(
+            builder,
+            file,
+            module_scope,
+            module_export_name_text(&specifier.exported),
+            SymbolNamespace::Value,
+            ExportKind::Named,
+            SemanticStatus::Resolved,
+        );
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "semantic import rows mirror the normalized internal fact fields"
+)]
+fn add_import_row(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    scope: Option<ScopeId>,
+    import_path: String,
+    local_name: Option<String>,
+    imported_name: Option<String>,
+    namespace: SymbolNamespace,
+    kind: SemanticImportKind,
+    status: SemanticStatus,
+) -> SemanticImportId {
+    builder.add_semantic_import(SemanticImportFact {
+        id: SemanticImportId(0),
+        language: file.language,
+        file: Some(file.id),
+        package: None,
+        module: None,
+        scope,
+        import_path,
+        local_name,
+        imported_name,
+        namespace,
+        kind,
+        stable_key: String::new(),
+        status,
+    })
+}
+
+fn add_export_row(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    scope: Option<ScopeId>,
+    export_name: String,
+    namespace: SymbolNamespace,
+    kind: ExportKind,
+    status: SemanticStatus,
+) -> ExportId {
+    builder.add_export_identity(ExportFact {
+        id: ExportId(0),
+        language: file.language,
+        file: Some(file.id),
+        package: None,
+        module: None,
+        scope,
+        symbol: None,
+        export_name,
+        namespace,
+        kind,
+        stable_key: String::new(),
+        status,
+    })
+}
+
+fn add_alias_row(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    source_symbol_stable_key: String,
+    target_symbol_stable_keys: Vec<String>,
+    kind: AliasKind,
+    status: SemanticStatus,
+) -> AliasId {
+    builder.add_alias(AliasFact {
+        id: AliasId(0),
+        language: file.language,
+        file: Some(file.id),
+        package: None,
+        module: None,
+        source_symbol_stable_key,
+        target_symbol_stable_keys,
+        kind,
+        stable_key: String::new(),
+        status,
+    })
+}
+
+fn collect_commonjs_from_export_default(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    source: &str,
+    module_scope: Option<ScopeId>,
+    export: &oxc_ast::ast::ExportDefaultDeclaration<'_>,
+) {
+    if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
+        collect_commonjs_from_call(builder, file, source, module_scope, call);
+    }
+}
+
+fn collect_commonjs_from_expression(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    source: &str,
+    module_scope: Option<ScopeId>,
+    expression: &Expression<'_>,
+) {
+    match expression {
+        Expression::CallExpression(call) => {
+            collect_commonjs_from_call(builder, file, source, module_scope, call);
+            for argument in &call.arguments {
+                if let Some(expression) = argument.as_expression() {
+                    collect_commonjs_from_expression(
+                        builder,
+                        file,
+                        source,
+                        module_scope,
+                        expression,
+                    );
+                }
+            }
+        }
+        Expression::ImportExpression(import) => {
+            let (import_path, status) = match &import.source {
+                Expression::StringLiteral(path) => (
+                    path.value.to_string(),
+                    import_status_for_path(path.value.as_str()),
+                ),
+                _ => ("<dynamic>".to_string(), SemanticStatus::Dynamic),
+            };
+            add_import_row(
+                builder,
+                file,
+                module_scope,
+                import_path,
+                None,
+                None,
+                SymbolNamespace::Module,
+                SemanticImportKind::DynamicImport,
+                status,
+            );
+        }
+        Expression::AssignmentExpression(assignment) => {
+            if let Some(kind) = commonjs_export_kind(&assignment.left) {
+                add_export_row(
+                    builder,
+                    file,
+                    module_scope,
+                    commonjs_export_name(&assignment.left),
+                    SymbolNamespace::Value,
+                    kind,
+                    SemanticStatus::Unsupported,
+                );
+            }
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &assignment.right,
+            );
+        }
+        Expression::AwaitExpression(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.argument,
+            );
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.expression,
+            );
+        }
+        Expression::TSAsExpression(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.expression,
+            );
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.expression,
+            );
+        }
+        Expression::TSNonNullExpression(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.expression,
+            );
+        }
+        Expression::TSTypeAssertion(expression) => {
+            collect_commonjs_from_expression(
+                builder,
+                file,
+                source,
+                module_scope,
+                &expression.expression,
+            );
+        }
+        _ => {
+            let _ = source;
+        }
+    }
+}
+
+fn collect_commonjs_from_call(
+    builder: &mut SemanticIndexBuilder,
+    file: &SourceFile,
+    _source: &str,
+    module_scope: Option<ScopeId>,
+    call: &oxc_ast::ast::CallExpression<'_>,
+) {
+    if callee_text(&call.callee).as_deref() != Some("require") {
+        return;
+    }
+    let (import_path, status) = match call.arguments.first() {
+        Some(Argument::StringLiteral(path)) => (
+            path.value.to_string(),
+            import_status_for_path(path.value.as_str()),
+        ),
+        _ => ("<dynamic>".to_string(), SemanticStatus::Dynamic),
+    };
+    add_import_row(
+        builder,
+        file,
+        module_scope,
+        import_path,
+        None,
+        None,
+        SymbolNamespace::Module,
+        SemanticImportKind::CommonJsRequire,
+        status,
+    );
+}
+
+fn commonjs_export_kind(target: &AssignmentTarget<'_>) -> Option<ExportKind> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member)
+            if expression_text(&member.object).as_deref() == Some("module")
+                && member.property.name == "exports" =>
+        {
+            Some(ExportKind::CommonJsModuleExports)
+        }
+        AssignmentTarget::StaticMemberExpression(member)
+            if expression_text(&member.object).as_deref() == Some("exports") =>
+        {
+            Some(ExportKind::CommonJsExportsProperty)
+        }
+        _ => None,
+    }
+}
+
+fn commonjs_export_name(target: &AssignmentTarget<'_>) -> String {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member)
+            if expression_text(&member.object).as_deref() == Some("exports") =>
+        {
+            member.property.name.to_string()
+        }
+        _ => "module.exports".to_string(),
+    }
+}
+
+fn import_status_for_path(path: &str) -> SemanticStatus {
+    if path == "<dynamic>" {
+        SemanticStatus::Dynamic
+    } else if path.starts_with('.') || path.starts_with('/') || path.starts_with('#') {
+        SemanticStatus::Unresolved
+    } else {
+        SemanticStatus::External
+    }
+}
+
+fn module_export_source_name(path: &str) -> String {
+    format!("* from {path}")
+}
+
+fn callee_text(expression: &Expression<'_>) -> Option<String> {
+    expression_text(expression)
+}
+
+fn expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StaticMemberExpression(member) => expression_text(&member.object)
+            .map(|object| format!("{object}.{}", member.property.name)),
+        Expression::ParenthesizedExpression(expression) => expression_text(&expression.expression),
+        Expression::TSAsExpression(expression) => expression_text(&expression.expression),
+        Expression::TSSatisfiesExpression(expression) => expression_text(&expression.expression),
+        Expression::TSNonNullExpression(expression) => expression_text(&expression.expression),
+        Expression::TSTypeAssertion(expression) => expression_text(&expression.expression),
+        _ => None,
+    }
 }
 
 fn scope_stable_key(
