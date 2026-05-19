@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T13:19:29.259Z"
+last_updated: "2026-05-19T13:40:05.788Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 39
-  completed_plans: 37
-  percent: 95
+  completed_plans: 38
+  percent: 97
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 27 (Layered Module/Package/Topology Graph) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -182,6 +182,9 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Add semantic-aware import-to-package facts in crate-private polint.module_topology instead of widening public module graph contracts.
 - [Phase 27-layered-module-package-topology-graph]: Run module topology after polint.symbol_graph so semantic import rows are available without creating a provider cycle.
 - [Phase 27-layered-module-package-topology-graph]: Reject duplicate cached import-to-package stable keys before restore so stale or conflicting topology payloads are recomputed.
+- [Phase 27-layered-module-package-topology-graph]: Kept topology eval observation crate-private and test-facing, with no SDK, runner, CLI, or public crate-root topology API.
+- [Phase 27-layered-module-package-topology-graph]: Represented topology expected rows through stable keys, status labels, precision labels, and compact payload fragments instead of raw source or absolute paths.
+- [Phase 27-layered-module-package-topology-graph]: Updated existing layer-cache expectations so polint.module_topology is part of the managed provider cache proof.
 
 ## Execution Metrics
 
