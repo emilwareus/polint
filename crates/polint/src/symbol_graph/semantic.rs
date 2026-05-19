@@ -129,7 +129,29 @@ pub(crate) struct StableExportIdentity {
     pub(crate) status: SemanticStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SemanticIndexOutput {
+    pub(crate) scopes: Vec<ScopeFact>,
+    pub(crate) semantic_imports: Vec<SemanticImportFact>,
+    pub(crate) exports: Vec<ExportFact>,
+    pub(crate) aliases: Vec<AliasFact>,
+    pub(crate) resolutions: Vec<ResolutionFact>,
+    pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
+    pub(crate) stable_exports: Vec<StableExportIdentity>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SemanticIndexBuilder {
+    scopes: Vec<ScopeFact>,
+    semantic_imports: Vec<SemanticImportFact>,
+    exports: Vec<ExportFact>,
+    aliases: Vec<AliasFact>,
+    resolutions: Vec<ResolutionFact>,
+    generated_symbols: Vec<GeneratedSymbolFact>,
+    stable_exports: Vec<StableExportIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ScopeKind {
     Workspace,
     Package,
@@ -138,11 +160,16 @@ pub(crate) enum ScopeKind {
     Class,
     Function,
     Block,
+    Catch,
+    Loop,
+    Switch,
+    Type,
+    Namespace,
     Generated,
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum SemanticImportKind {
     GoDefault,
     GoNamed,
@@ -157,7 +184,7 @@ pub(crate) enum SemanticImportKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ExportKind {
     Named,
     Default,
@@ -168,7 +195,7 @@ pub(crate) enum ExportKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum AliasKind {
     Import,
     Export,
@@ -178,7 +205,7 @@ pub(crate) enum AliasKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ResolutionStepKind {
     Lexical,
     ImportAlias,
@@ -191,7 +218,7 @@ pub(crate) enum ResolutionStepKind {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum SemanticStatus {
     Resolved,
     Ambiguous,
@@ -204,7 +231,7 @@ pub(crate) enum SemanticStatus {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum GeneratedSymbolKind {
     FrameworkEntrypoint,
     Route,
@@ -212,6 +239,97 @@ pub(crate) enum GeneratedSymbolKind {
     BuildGenerated,
     ExtensionProvided,
     Unknown,
+}
+
+impl SemanticIndexBuilder {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn add_scope(&mut self, mut fact: ScopeFact) -> ScopeId {
+        let id = ScopeId(self.scopes.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.scopes.push(fact);
+        id
+    }
+
+    pub(crate) fn add_semantic_import(&mut self, mut fact: SemanticImportFact) -> SemanticImportId {
+        let id = SemanticImportId(self.semantic_imports.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.semantic_imports.push(fact);
+        id
+    }
+
+    pub(crate) fn add_export_identity(&mut self, mut fact: ExportFact) -> ExportId {
+        let id = ExportId(self.exports.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.exports.push(fact);
+        id
+    }
+
+    pub(crate) fn add_alias(&mut self, mut fact: AliasFact) -> AliasId {
+        let id = AliasId(self.aliases.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.aliases.push(fact);
+        id
+    }
+
+    pub(crate) fn add_resolution(&mut self, mut fact: ResolutionFact) -> ResolutionId {
+        let id = ResolutionId(self.resolutions.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.resolutions.push(fact);
+        id
+    }
+
+    pub(crate) fn add_generated_symbol(
+        &mut self,
+        mut fact: GeneratedSymbolFact,
+    ) -> GeneratedSymbolId {
+        let id = GeneratedSymbolId(self.generated_symbols.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.generated_symbols.push(fact);
+        id
+    }
+
+    pub(crate) fn add_stable_export(&mut self, mut fact: StableExportIdentity) -> StableExportId {
+        let id = StableExportId(self.stable_exports.len() as u64);
+        fact.id = id;
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+        self.stable_exports.push(fact);
+        id
+    }
+
+    pub(crate) fn finish(self) -> SemanticIndexOutput {
+        SemanticIndexOutput {
+            scopes: sort_rows(self.scopes, scope_sort_key),
+            semantic_imports: sort_rows(self.semantic_imports, semantic_import_sort_key),
+            exports: sort_rows(self.exports, export_sort_key),
+            aliases: sort_rows(self.aliases, alias_sort_key),
+            resolutions: sort_rows(self.resolutions, resolution_sort_key),
+            generated_symbols: sort_rows(self.generated_symbols, generated_symbol_sort_key),
+            stable_exports: sort_rows(self.stable_exports, stable_export_sort_key),
+        }
+    }
 }
 
 impl ScopeFact {
@@ -482,9 +600,152 @@ fn scope_kind_label(kind: ScopeKind) -> &'static str {
         ScopeKind::Class => "class",
         ScopeKind::Function => "function",
         ScopeKind::Block => "block",
+        ScopeKind::Catch => "catch",
+        ScopeKind::Loop => "loop",
+        ScopeKind::Switch => "switch",
+        ScopeKind::Type => "type",
+        ScopeKind::Namespace => "namespace",
         ScopeKind::Generated => "generated",
         ScopeKind::Unknown => "unknown",
     }
+}
+
+fn sort_rows<T, K: Ord>(mut rows: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T> {
+    rows.sort_by_key(key);
+    rows
+}
+
+fn scope_sort_key(fact: &ScopeFact) -> (String, Vec<String>, Option<FileId>, ScopeKind) {
+    (
+        fact.stable_key.clone(),
+        fact.scope_path.clone(),
+        fact.file,
+        fact.kind,
+    )
+}
+
+fn semantic_import_sort_key(
+    fact: &SemanticImportFact,
+) -> (
+    String,
+    Option<FileId>,
+    String,
+    Option<String>,
+    SemanticImportKind,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.file,
+        fact.import_path.clone(),
+        fact.local_name.clone(),
+        fact.kind,
+        fact.status,
+    )
+}
+
+fn export_sort_key(
+    fact: &ExportFact,
+) -> (
+    String,
+    Option<FileId>,
+    String,
+    String,
+    ExportKind,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.file,
+        fact.export_name.clone(),
+        namespace_label(fact.namespace).to_string(),
+        fact.kind,
+        fact.status,
+    )
+}
+
+fn alias_sort_key(
+    fact: &AliasFact,
+) -> (
+    String,
+    Option<FileId>,
+    String,
+    Vec<String>,
+    AliasKind,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.file,
+        fact.source_symbol_stable_key.clone(),
+        fact.target_symbol_stable_keys.clone(),
+        fact.kind,
+        fact.status,
+    )
+}
+
+fn resolution_sort_key(
+    fact: &ResolutionFact,
+) -> (
+    String,
+    Option<FileId>,
+    String,
+    Vec<String>,
+    ResolutionStepKind,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.file,
+        fact.source_stable_key.clone(),
+        fact.target_stable_keys.clone(),
+        fact.step,
+        fact.status,
+    )
+}
+
+fn generated_symbol_sort_key(
+    fact: &GeneratedSymbolFact,
+) -> (
+    String,
+    Option<FileId>,
+    String,
+    String,
+    GeneratedSymbolKind,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.file,
+        fact.symbol_stable_key.clone(),
+        fact.generated_discriminator.clone(),
+        fact.kind,
+        fact.status,
+    )
+}
+
+fn stable_export_sort_key(
+    fact: &StableExportIdentity,
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    String,
+    Option<String>,
+    SemanticStatus,
+) {
+    (
+        fact.stable_key.clone(),
+        fact.package_key.clone(),
+        fact.module_key.clone(),
+        fact.export_name.clone(),
+        namespace_label(fact.namespace).to_string(),
+        fact.symbol_stable_key.clone(),
+        fact.generated_discriminator.clone(),
+        fact.status,
+    )
 }
 
 fn semantic_import_kind_label(kind: SemanticImportKind) -> &'static str {
@@ -693,5 +954,99 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a-scope", "z-scope"]
         );
+    }
+
+    #[test]
+    fn semantic_index_builder_collects_all_row_families() {
+        let mut builder = SemanticIndexBuilder::new();
+        builder.add_semantic_import(SemanticImportFact {
+            id: SemanticImportId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            scope: None,
+            import_path: "./target".to_string(),
+            local_name: Some("target".to_string()),
+            imported_name: Some("default".to_string()),
+            namespace: SymbolNamespace::Value,
+            kind: SemanticImportKind::EsDefault,
+            stable_key: String::new(),
+            status: SemanticStatus::Resolved,
+        });
+        let export = builder.add_export_identity(ExportFact {
+            id: ExportId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            scope: None,
+            symbol: None,
+            export_name: "target".to_string(),
+            namespace: SymbolNamespace::Value,
+            kind: ExportKind::Default,
+            stable_key: String::new(),
+            status: SemanticStatus::Resolved,
+        });
+        builder.add_alias(AliasFact {
+            id: AliasId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            source_symbol_stable_key: "alias:source".to_string(),
+            target_symbol_stable_keys: vec!["alias:target".to_string()],
+            kind: AliasKind::Import,
+            stable_key: String::new(),
+            status: SemanticStatus::Resolved,
+        });
+        builder.add_resolution(ResolutionFact {
+            id: ResolutionId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            source_stable_key: "ref:source".to_string(),
+            target_stable_keys: vec!["symbol:target".to_string()],
+            step: ResolutionStepKind::Lexical,
+            stable_key: String::new(),
+            status: SemanticStatus::Resolved,
+        });
+        builder.add_generated_symbol(GeneratedSymbolFact {
+            id: GeneratedSymbolId(0),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            package: None,
+            module: None,
+            symbol_stable_key: "symbol:generated".to_string(),
+            generator: "test".to_string(),
+            generated_discriminator: "native".to_string(),
+            kind: GeneratedSymbolKind::Unknown,
+            span: None,
+            stable_key: String::new(),
+            status: SemanticStatus::Generated,
+        });
+        builder.add_stable_export(StableExportIdentity {
+            id: StableExportId(0),
+            export,
+            language: Language::TypeScript,
+            package_key: None,
+            module_key: Some("src/target.ts".to_string()),
+            export_name: "target".to_string(),
+            namespace: SymbolNamespace::Value,
+            symbol_stable_key: "symbol:target".to_string(),
+            generated_discriminator: Some("native".to_string()),
+            stable_key: String::new(),
+            status: SemanticStatus::Resolved,
+        });
+
+        let output = builder.finish();
+
+        assert_eq!(output.semantic_imports.len(), 1);
+        assert_eq!(output.exports.len(), 1);
+        assert_eq!(output.aliases.len(), 1);
+        assert_eq!(output.resolutions.len(), 1);
+        assert_eq!(output.generated_symbols.len(), 1);
+        assert_eq!(output.stable_exports.len(), 1);
     }
 }

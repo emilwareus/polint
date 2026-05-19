@@ -10,6 +10,9 @@ use crate::symbol_graph::LanguageSymbolOutput;
 use crate::symbol_graph::model::{
     DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
 };
+use crate::symbol_graph::semantic::{
+    ScopeFact, ScopeId, ScopeKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus,
+};
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -178,6 +181,7 @@ fn derive_ts_file_symbols(
     let semantic = semantic_return.semantic;
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
+    let _semantic_index = derive_ts_semantic_index(file, source, &parsed.program, scoping, nodes);
     let export_names = collect_export_names(&parsed.program, scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
     let mut summary = TsFileSymbolSummary {
@@ -262,6 +266,204 @@ fn derive_ts_file_symbols(
     }
 
     summary
+}
+
+fn derive_ts_semantic_index(
+    file: &SourceFile,
+    _source: &str,
+    _program: &Program<'_>,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) -> SemanticIndexOutput {
+    let mut builder = SemanticIndexBuilder::new();
+    let mut ids_by_stable_key = BTreeMap::<String, ScopeId>::new();
+
+    for scope_id in scoping.scope_descendants_from_root() {
+        let node_id = scoping.get_node_id(scope_id);
+        let kind = scope_kind_for_ast(nodes.kind(node_id));
+        let stable_key = scope_stable_key(file, scoping, nodes, scope_id);
+        if ids_by_stable_key.contains_key(&stable_key) {
+            continue;
+        }
+        let parent = scoping.scope_parent_id(scope_id).and_then(|parent| {
+            let parent_key = scope_stable_key(file, scoping, nodes, parent);
+            ids_by_stable_key.get(&parent_key).copied()
+        });
+        let id = builder.add_scope(ScopeFact {
+            id: ScopeId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            parent,
+            scope_path: scope_path_for_scope(file, scoping, nodes, scope_id),
+            kind,
+            stable_key: stable_key.clone(),
+            status: SemanticStatus::Resolved,
+        });
+        ids_by_stable_key.insert(stable_key, id);
+    }
+
+    let module_scope_id = ids_by_stable_key
+        .get(&scope_stable_key(
+            file,
+            scoping,
+            nodes,
+            scoping.root_scope_id(),
+        ))
+        .copied();
+    let mut semantic_nodes = nodes
+        .iter_enumerated()
+        .filter_map(|(node_id, node)| {
+            let kind = semantic_scope_kind_for_ast(node.kind())?;
+            let span = node.kind().span();
+            Some((span.start, span.end, node_id, kind))
+        })
+        .collect::<Vec<_>>();
+    semantic_nodes.sort_by_key(|(start, end, _, kind)| (*start, *end, *kind));
+
+    for (_, _, node_id, kind) in semantic_nodes {
+        let scope_path = scope_path_for_node(file, nodes, node_id);
+        let stable_key = ScopeFact::stable_key_for(
+            file.language,
+            &scope_path,
+            Some(file.relative_path.clone()),
+            None,
+            None,
+            kind,
+            SemanticStatus::Resolved,
+        );
+        if ids_by_stable_key.contains_key(&stable_key) {
+            continue;
+        }
+        let parent = nearest_semantic_scope_parent(file, nodes, node_id, &ids_by_stable_key)
+            .or(module_scope_id);
+        let id = builder.add_scope(ScopeFact {
+            id: ScopeId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            parent,
+            scope_path,
+            kind,
+            stable_key: stable_key.clone(),
+            status: SemanticStatus::Resolved,
+        });
+        ids_by_stable_key.insert(stable_key, id);
+    }
+
+    builder.finish()
+}
+
+fn scope_stable_key(
+    file: &SourceFile,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    scope_id: oxc_semantic::ScopeId,
+) -> String {
+    let kind = scope_kind_for_ast(nodes.kind(scoping.get_node_id(scope_id)));
+    ScopeFact::stable_key_for(
+        file.language,
+        &scope_path_for_scope(file, scoping, nodes, scope_id),
+        Some(file.relative_path.clone()),
+        None,
+        None,
+        kind,
+        SemanticStatus::Resolved,
+    )
+}
+
+fn reference_scope_stable_key(
+    file: &SourceFile,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    reference_id: OxcReferenceId,
+) -> String {
+    let reference = scoping.get_reference(reference_id);
+    scope_stable_key(file, scoping, nodes, reference.scope_id())
+}
+
+fn scope_path_for_scope(
+    file: &SourceFile,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    scope_id: oxc_semantic::ScopeId,
+) -> Vec<String> {
+    let mut ancestors = scoping.scope_ancestors(scope_id).collect::<Vec<_>>();
+    ancestors.reverse();
+    let mut path = vec![file.relative_path.clone()];
+    path.extend(ancestors.into_iter().map(|scope| {
+        let kind = nodes.kind(scoping.get_node_id(scope));
+        scope_path_segment(kind)
+    }));
+    path
+}
+
+fn scope_path_for_node(
+    file: &SourceFile,
+    nodes: &AstNodes<'_>,
+    node_id: oxc_semantic::NodeId,
+) -> Vec<String> {
+    let mut ancestors = nodes
+        .ancestors_enumerated(node_id)
+        .filter_map(|(_, node)| semantic_scope_kind_for_ast(node.kind()).map(|_| node.kind()))
+        .collect::<Vec<_>>();
+    ancestors.reverse();
+    let mut path = vec![file.relative_path.clone()];
+    path.extend(ancestors.into_iter().map(scope_path_segment));
+    path.push(scope_path_segment(nodes.kind(node_id)));
+    path
+}
+
+fn nearest_semantic_scope_parent(
+    file: &SourceFile,
+    nodes: &AstNodes<'_>,
+    node_id: oxc_semantic::NodeId,
+    ids_by_stable_key: &BTreeMap<String, ScopeId>,
+) -> Option<ScopeId> {
+    nodes.ancestors_enumerated(node_id).find_map(|(_, node)| {
+        let kind = semantic_scope_kind_for_ast(node.kind())?;
+        let scope_path = scope_path_for_node(file, nodes, node.id());
+        let stable_key = ScopeFact::stable_key_for(
+            file.language,
+            &scope_path,
+            Some(file.relative_path.clone()),
+            None,
+            None,
+            kind,
+            SemanticStatus::Resolved,
+        );
+        ids_by_stable_key.get(&stable_key).copied()
+    })
+}
+
+fn semantic_scope_kind_for_ast(kind: AstKind<'_>) -> Option<ScopeKind> {
+    match kind {
+        AstKind::Program(_) => Some(ScopeKind::Module),
+        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => Some(ScopeKind::Function),
+        AstKind::Class(_) => Some(ScopeKind::Class),
+        AstKind::BlockStatement(_) => Some(ScopeKind::Block),
+        AstKind::CatchClause(_) => Some(ScopeKind::Catch),
+        AstKind::ForStatement(_) | AstKind::ForInStatement(_) | AstKind::ForOfStatement(_) => {
+            Some(ScopeKind::Loop)
+        }
+        AstKind::SwitchStatement(_) => Some(ScopeKind::Switch),
+        AstKind::TSInterfaceDeclaration(_)
+        | AstKind::TSTypeAliasDeclaration(_)
+        | AstKind::TSEnumDeclaration(_) => Some(ScopeKind::Type),
+        AstKind::TSModuleDeclaration(_) => Some(ScopeKind::Namespace),
+        _ => None,
+    }
+}
+
+fn scope_kind_for_ast(kind: AstKind<'_>) -> ScopeKind {
+    semantic_scope_kind_for_ast(kind).unwrap_or(ScopeKind::Block)
+}
+
+fn scope_path_segment(kind: AstKind<'_>) -> String {
+    let span = kind.span();
+    format!("{}@{}-{}", ast_kind_label(kind), span.start, span.end)
 }
 
 fn add_ts_references(
