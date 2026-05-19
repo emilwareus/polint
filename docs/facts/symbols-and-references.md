@@ -257,6 +257,12 @@ Uncertain states are data, not hidden failures. Rules should decide explicitly
 how to handle unresolved, ambiguous, setup-missing, unsupported, and heuristic
 facts.
 
+The precision and status values may reflect lexical, module-linked, ambiguous,
+unresolved, setup-missing, unsupported, generated or external semantic evidence.
+These labels describe the existing `Symbols<'_>` and `References<'_>` facts
+only; scopes/import closure/resolution-step rows remain internal and are not
+separate rule-author fact views.
+
 ## Language Coverage
 
 ### TypeScript And JavaScript
