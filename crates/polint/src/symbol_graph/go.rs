@@ -15,6 +15,7 @@ use crate::symbol_graph::semantic::{
     SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus, StableExportId,
     StableExportIdentity,
 };
+use crate::symbol_graph::stable_id::{StableReferenceKey, StableSymbolKey};
 use crate::symbol_graph::{LanguageSymbolOutput, SYMBOL_FACTS_DOCS_PATH};
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -750,6 +751,9 @@ fn convert_sidecar_output(
         .map(|symbol| (symbol.key.as_str(), symbol))
         .collect::<BTreeMap<_, _>>();
     let mut symbols = BTreeMap::new();
+    let mut symbol_stable_keys = BTreeMap::new();
+    let mut symbol_key_inputs = BTreeMap::new();
+    let mut reference_stable_keys = BTreeMap::new();
     let resolution_steps = sidecar
         .resolution_steps
         .iter()
@@ -757,8 +761,12 @@ fn convert_sidecar_output(
         .collect::<BTreeMap<_, _>>();
 
     for symbol in &sidecar.symbols {
+        let stable_key_input = go_stable_symbol_key(symbol, &files);
+        let stable_key = stable_key_input.stable_key();
         let id = builder.add_symbol(symbol_draft(symbol, &files));
         symbols.insert(symbol.key.clone(), id);
+        symbol_stable_keys.insert(symbol.key.clone(), stable_key);
+        symbol_key_inputs.insert(symbol.key.clone(), stable_key_input);
     }
 
     for definition in &sidecar.definitions {
@@ -771,6 +779,10 @@ fn convert_sidecar_output(
 
     for reference in &sidecar.references {
         let mut draft = reference_draft(reference, &files);
+        reference_stable_keys.insert(
+            go_reference_key(reference),
+            go_stable_reference_key(reference, &files, &symbol_key_inputs),
+        );
         if let Some(target) = symbols.get(&reference.target_key).copied() {
             builder.add_reference(target, draft);
         } else {
@@ -790,7 +802,7 @@ fn convert_sidecar_output(
         }
     }
 
-    derive_go_semantic_index(sidecar, &files)
+    derive_go_semantic_index(sidecar, &files, &symbol_stable_keys, &reference_stable_keys)
 }
 
 fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticIndexOutput {
@@ -816,6 +828,8 @@ fn setup_missing_semantic_index_for_files(files: &[&SourceFile]) -> SemanticInde
 fn derive_go_semantic_index(
     sidecar: &GoSidecarOutput,
     files: &BTreeMap<&str, &SourceFile>,
+    symbol_stable_keys: &BTreeMap<String, String>,
+    reference_stable_keys: &BTreeMap<String, String>,
 ) -> SemanticIndexOutput {
     let mut builder = SemanticIndexBuilder::new();
     let mut scope_ids = BTreeMap::new();
@@ -861,7 +875,7 @@ fn derive_go_semantic_index(
             stable_key: source_key.clone(),
             status,
         });
-        if let Some(alias) = go_import_alias_fact(import, resolution, status) {
+        if let Some(alias) = go_import_alias_fact(import, resolution, status, symbol_stable_keys) {
             builder.add_alias(alias);
         }
     }
@@ -893,7 +907,7 @@ fn derive_go_semantic_index(
             module_key: None,
             export_name: export.export_name.clone(),
             namespace: symbol_namespace(&export.namespace),
-            symbol_stable_key: export.symbol_key.clone(),
+            symbol_stable_key: mapped_symbol_key(symbol_stable_keys, &export.symbol_key),
             generated_discriminator: Some("native".to_string()),
             stable_key: go_stable_export_key(export),
             status: SemanticStatus::Resolved,
@@ -901,14 +915,15 @@ fn derive_go_semantic_index(
     }
 
     for step in &sidecar.resolution_steps {
+        let target_stable_keys = mapped_candidate_keys(step, symbol_stable_keys);
         builder.add_resolution(ResolutionFact {
             id: ResolutionId(0),
             language: Language::Go,
             file: None,
             package: None,
             module: None,
-            source_stable_key: step.reference_key.clone(),
-            target_stable_keys: normalized_candidate_keys(step),
+            source_stable_key: mapped_reference_key(reference_stable_keys, &step.reference_key),
+            target_stable_keys,
             step: go_resolution_step_kind(&step.step),
             stable_key: go_resolution_stable_key(step),
             status: semantic_status(&step.status),
@@ -926,7 +941,7 @@ fn derive_go_semantic_index(
                 file: file_for_path(files, &reference.file).map(|file| file.id),
                 package: None,
                 module: None,
-                source_stable_key: reference_key,
+                source_stable_key: mapped_reference_key(reference_stable_keys, &reference_key),
                 target_stable_keys: Vec::new(),
                 step: ResolutionStepKind::UnknownFallback,
                 stable_key: go_reference_unknown_fallback_key(reference),
@@ -1013,6 +1028,7 @@ fn go_import_alias_fact(
     import: &GoSidecarImport,
     resolution: Option<&GoSidecarResolutionStep>,
     status: SemanticStatus,
+    symbol_stable_keys: &BTreeMap<String, String>,
 ) -> Option<AliasFact> {
     if import.alias_kind == "blank" || import.alias_kind == "implicit" {
         return None;
@@ -1026,7 +1042,7 @@ fn go_import_alias_fact(
         module: None,
         source_symbol_stable_key: source_key.clone(),
         target_symbol_stable_keys: resolution
-            .map(normalized_candidate_keys)
+            .map(|step| mapped_candidate_keys(step, symbol_stable_keys))
             .unwrap_or_default(),
         kind: AliasKind::ImportAlias,
         stable_key: format!("{source_key}|alias"),
@@ -1131,6 +1147,94 @@ fn normalized_candidate_keys(step: &GoSidecarResolutionStep) -> Vec<String> {
     keys.sort();
     keys.dedup();
     keys
+}
+
+fn mapped_candidate_keys(
+    step: &GoSidecarResolutionStep,
+    symbol_stable_keys: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if symbol_stable_keys.is_empty() {
+        return normalized_candidate_keys(step);
+    }
+    let mut keys = normalized_candidate_keys(step)
+        .into_iter()
+        .filter_map(|key| mapped_candidate_key(symbol_stable_keys, key))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn mapped_candidate_key(
+    symbol_stable_keys: &BTreeMap<String, String>,
+    key: String,
+) -> Option<String> {
+    if let Some(mapped) = symbol_stable_keys.get(&key) {
+        Some(mapped.clone())
+    } else if key.starts_with("go:builtin|") {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+fn mapped_symbol_key(symbol_stable_keys: &BTreeMap<String, String>, key: &str) -> String {
+    symbol_stable_keys
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.to_string())
+}
+
+fn mapped_reference_key(reference_stable_keys: &BTreeMap<String, String>, key: &str) -> String {
+    reference_stable_keys
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.to_string())
+}
+
+fn go_stable_symbol_key(
+    symbol: &GoSidecarSymbol,
+    files: &BTreeMap<&str, &SourceFile>,
+) -> StableSymbolKey {
+    StableSymbolKey::new(
+        Language::Go,
+        (!symbol.package_path.is_empty()).then(|| format!("go:module:{}", symbol.package_path)),
+        Some(format!("go:sidecar:{}", symbol.key)),
+        None,
+        symbol.owner_chain.clone(),
+        symbol_namespace(&symbol.namespace),
+        symbol_kind(&symbol.kind),
+        symbol.name.clone(),
+        if symbol.key.starts_with("go:local") {
+            span_for_file(files, &symbol.file, &symbol.span)
+        } else {
+            None
+        },
+    )
+}
+
+fn go_stable_reference_key(
+    reference: &GoSidecarReference,
+    files: &BTreeMap<&str, &SourceFile>,
+    symbol_key_inputs: &BTreeMap<String, StableSymbolKey>,
+) -> String {
+    let span = span_for_file(files, &reference.file, &reference.span)
+        .unwrap_or_else(|| Span::point(FileId(u32::MAX), 1, 1));
+    symbol_key_inputs
+        .get(&reference.target_key)
+        .cloned()
+        .map_or_else(
+            || {
+                StableReferenceKey::unresolved(
+                    Language::Go,
+                    reference.file.clone(),
+                    reference.name.clone(),
+                    span.clone(),
+                )
+            },
+            |target| StableReferenceKey::resolved(target, reference.file.clone(), span.clone()),
+        )
+        .stable_key()
 }
 
 fn symbol_draft(symbol: &GoSidecarSymbol, files: &BTreeMap<&str, &SourceFile>) -> SymbolDraft {
@@ -1447,7 +1551,7 @@ mod semantic_conversion {
         let files = BTreeMap::from([(file.relative_path.as_str(), &file)]);
         let sidecar = parse_sidecar_output(json).expect("sidecar fixture parses");
 
-        derive_go_semantic_index(&sidecar, &files)
+        derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new())
     }
 
     #[test]
@@ -1631,7 +1735,7 @@ mod semantic_setup_missing {
 }"#,
         );
 
-        let output = derive_go_semantic_index(&sidecar, &files);
+        let output = derive_go_semantic_index(&sidecar, &files, &BTreeMap::new(), &BTreeMap::new());
 
         assert!(output.resolutions.iter().any(|resolution| {
             resolution.step == ResolutionStepKind::UnknownFallback

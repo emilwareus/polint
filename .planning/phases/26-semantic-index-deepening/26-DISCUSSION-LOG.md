@@ -64,4 +64,3 @@
 ## Deferred Ideas
 
 - Public `Scopes<'_>`, richer public `Imports<'_>`, semantic export, extension activation, xref search, MIR, CFG, call graph, data-flow, and broad query builders.
-

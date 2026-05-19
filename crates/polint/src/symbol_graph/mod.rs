@@ -2047,7 +2047,7 @@ export function answer() {
             &cache_manifest_for(&absolute_path_payload)
         ));
 
-        let mut conflict_payload = valid_payload.clone();
+        let mut conflict_payload = valid_payload;
         conflict_payload
             .semantic_index
             .stable_exports

@@ -49,7 +49,8 @@ mod semantic_index {
         SymbolPrecision,
     };
     use crate::symbol_graph::semantic::{
-        GeneratedSymbolFact, GeneratedSymbolId, GeneratedSymbolKind, SemanticStatus,
+        ExportFact, ExportId, ExportKind, GeneratedSymbolFact, GeneratedSymbolId,
+        GeneratedSymbolKind, SemanticStatus, StableExportId, StableExportIdentity,
     };
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -171,6 +172,62 @@ mod semantic_index {
         );
     }
 
+    #[test]
+    fn semantic_validation_rejects_missing_stable_export_symbol_key() {
+        let mut db = semantic_db();
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            Vec::new(),
+            vec![ExportFact {
+                id: ExportId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(0)),
+                package: None,
+                module: None,
+                scope: None,
+                symbol: None,
+                export_name: "answer".to_string(),
+                namespace: SymbolNamespace::Value,
+                kind: ExportKind::Named,
+                stable_key: "export:answer".to_string(),
+                status: SemanticStatus::Resolved,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![StableExportIdentity {
+                id: StableExportId(0),
+                export: ExportId(0),
+                language: Language::TypeScript,
+                package_key: None,
+                module_key: Some("src/app.ts".to_string()),
+                export_name: "answer".to_string(),
+                namespace: SymbolNamespace::Value,
+                symbol_stable_key: "symbol:missing".to_string(),
+                generated_discriminator: Some("native".to_string()),
+                stable_key: "stable-export:answer".to_string(),
+                status: SemanticStatus::Resolved,
+            }],
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Semantic index validation failed")
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "reason"
+                            && evidence
+                                .value
+                                .contains("StableExportIdentity.symbol_stable_key does not exist")
+                    })
+            }),
+            "expected missing stable export symbol diagnostic: {diagnostics:#?}"
+        );
+    }
+
     fn semantic_db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
@@ -235,6 +292,7 @@ struct IdSets {
     scopes: BTreeSet<ScopeId>,
     exports: BTreeSet<ExportId>,
     symbol_stable_keys: BTreeSet<String>,
+    reference_stable_keys: BTreeSet<String>,
 }
 
 impl IdSets {
@@ -252,6 +310,11 @@ impl IdSets {
             exports: db.exports().iter().map(|fact| fact.id).collect(),
             symbol_stable_keys: db
                 .symbols()
+                .iter()
+                .map(|fact| fact.stable_key.clone())
+                .collect(),
+            reference_stable_keys: db
+                .references()
                 .iter()
                 .map(|fact| fact.stable_key.clone())
                 .collect(),
@@ -1256,6 +1319,7 @@ fn is_semantic_fact_family(family: FactFamily) -> bool {
 
 fn semantic_reference_keys(db: &AnalysisDb, ids: &IdSets) -> BTreeSet<String> {
     let mut keys = ids.symbol_stable_keys.clone();
+    keys.extend(ids.reference_stable_keys.iter().cloned());
     for scope in db.scopes() {
         keys.insert(scope.stable_key.clone());
     }
@@ -1267,41 +1331,15 @@ fn semantic_reference_keys(db: &AnalysisDb, ids: &IdSets) -> BTreeSet<String> {
     }
     for alias in db.aliases() {
         keys.insert(alias.stable_key.clone());
-        if !alias.source_symbol_stable_key.is_empty() {
-            keys.insert(alias.source_symbol_stable_key.clone());
-        }
-        keys.extend(
-            alias
-                .target_symbol_stable_keys
-                .iter()
-                .filter(|key| !key.is_empty())
-                .cloned(),
-        );
     }
     for resolution in db.resolution_facts() {
         keys.insert(resolution.stable_key.clone());
-        if !resolution.source_stable_key.is_empty() {
-            keys.insert(resolution.source_stable_key.clone());
-        }
-        keys.extend(
-            resolution
-                .target_stable_keys
-                .iter()
-                .filter(|key| !key.is_empty())
-                .cloned(),
-        );
     }
     for generated in db.generated_symbols() {
         keys.insert(generated.stable_key.clone());
-        if !generated.symbol_stable_key.is_empty() {
-            keys.insert(generated.symbol_stable_key.clone());
-        }
     }
     for stable_export in db.stable_exports() {
         keys.insert(stable_export.stable_key.clone());
-        if !stable_export.symbol_stable_key.is_empty() {
-            keys.insert(stable_export.symbol_stable_key.clone());
-        }
     }
     keys
 }

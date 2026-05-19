@@ -1,3 +1,4 @@
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::config::LoadedConfig;
 use crate::core::{
@@ -16,6 +17,7 @@ use crate::symbol_graph::semantic::{
     SemanticImportKind, SemanticIndexBuilder, SemanticIndexOutput, SemanticStatus, StableExportId,
     StableExportIdentity,
 };
+use crate::symbol_graph::stable_id::{StableReferenceKey, StableSymbolKey};
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -191,6 +193,7 @@ fn derive_ts_file_symbols(
         &parsed.program,
         scoping,
         nodes,
+        requests_references,
     ));
     let export_names = collect_export_names(&parsed.program, scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
@@ -284,9 +287,12 @@ fn derive_ts_semantic_index(
     program: &Program<'_>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
+    requests_references: bool,
 ) -> SemanticIndexOutput {
     let mut builder = SemanticIndexBuilder::new();
     let mut ids_by_stable_key = BTreeMap::<String, ScopeId>::new();
+    let export_symbol_stable_keys =
+        export_symbol_stable_keys(file, source, program, scoping, nodes);
 
     for scope_id in scoping.scope_descendants_from_root() {
         let node_id = scoping.get_node_id(scope_id);
@@ -363,10 +369,81 @@ fn derive_ts_semantic_index(
         ids_by_stable_key.insert(stable_key, id);
     }
 
-    add_ts_semantic_import_export_rows(&mut builder, file, source, program, module_scope_id);
-    add_ts_semantic_resolution_rows(&mut builder, file, scoping, nodes);
+    add_ts_semantic_import_export_rows(
+        &mut builder,
+        file,
+        source,
+        program,
+        module_scope_id,
+        &export_symbol_stable_keys,
+    );
+    if requests_references {
+        add_ts_semantic_resolution_rows(&mut builder, file, source, scoping, nodes);
+    }
 
     builder.finish()
+}
+
+fn export_symbol_stable_keys(
+    file: &SourceFile,
+    source: &str,
+    program: &Program<'_>,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) -> BTreeMap<String, String> {
+    let export_names = collect_export_names(program, scoping);
+    let parameter_symbols = collect_parameter_symbols(nodes);
+    let mut keys = BTreeMap::new();
+
+    for (oxc_symbol, export_names) in export_names {
+        let key =
+            ts_symbol_stable_key(file, source, scoping, nodes, oxc_symbol, &parameter_symbols);
+        for export_name in export_names {
+            keys.insert(export_name, key.clone());
+        }
+    }
+
+    keys
+}
+
+fn ts_symbol_stable_key(
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    oxc_symbol: OxcSymbolId,
+    parameter_symbols: &BTreeSet<OxcSymbolId>,
+) -> String {
+    ts_symbol_stable_key_input(file, source, scoping, nodes, oxc_symbol, parameter_symbols)
+        .stable_key()
+}
+
+fn ts_symbol_stable_key_input(
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    oxc_symbol: OxcSymbolId,
+    parameter_symbols: &BTreeSet<OxcSymbolId>,
+) -> StableSymbolKey {
+    let name = scoping.symbol_name(oxc_symbol).to_string();
+    let flags = scoping.symbol_flags(oxc_symbol);
+    let kind = symbol_kind(flags, parameter_symbols.contains(&oxc_symbol));
+    let namespace = symbol_namespace(flags);
+    let owner_chain = owner_chain(scoping, nodes, scoping.symbol_scope_id(oxc_symbol));
+    let primary_span = span_from_oxc(file.id, source, scoping.symbol_span(oxc_symbol));
+
+    StableSymbolKey::new(
+        file.language,
+        None,
+        None,
+        Some(file.relative_path.clone()),
+        owner_chain,
+        namespace,
+        kind,
+        name,
+        Some(primary_span),
+    )
 }
 
 fn add_ts_semantic_import_export_rows(
@@ -375,6 +452,7 @@ fn add_ts_semantic_import_export_rows(
     source: &str,
     program: &Program<'_>,
     module_scope: Option<ScopeId>,
+    export_symbol_stable_keys: &BTreeMap<String, String>,
 ) {
     for statement in &program.body {
         match statement {
@@ -382,7 +460,13 @@ fn add_ts_semantic_import_export_rows(
                 add_import_declaration_rows(builder, file, module_scope, import);
             }
             Statement::ExportNamedDeclaration(export) => {
-                add_export_named_rows(builder, file, module_scope, export);
+                add_export_named_rows(
+                    builder,
+                    file,
+                    module_scope,
+                    export_symbol_stable_keys,
+                    export,
+                );
             }
             Statement::ExportDefaultDeclaration(export) => {
                 add_export_row(
@@ -392,6 +476,7 @@ fn add_ts_semantic_import_export_rows(
                     "default".to_string(),
                     SymbolNamespace::Value,
                     ExportKind::Default,
+                    export_symbol_stable_keys.get("default").cloned(),
                     SemanticStatus::Resolved,
                 );
                 collect_commonjs_from_export_default(builder, file, source, module_scope, export);
@@ -404,6 +489,7 @@ fn add_ts_semantic_import_export_rows(
                     module_export_source_name(export.source.value.as_str()),
                     SymbolNamespace::Module,
                     ExportKind::StarReexport,
+                    None,
                     SemanticStatus::Unresolved,
                 );
                 add_alias_row(
@@ -536,6 +622,7 @@ fn add_export_named_rows(
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
+    export_symbol_stable_keys: &BTreeMap<String, String>,
     export: &oxc_ast::ast::ExportNamedDeclaration<'_>,
 ) {
     if let Some(source) = &export.source {
@@ -547,6 +634,7 @@ fn add_export_named_rows(
                 module_export_name_text(&specifier.exported),
                 SymbolNamespace::Module,
                 ExportKind::Namespace,
+                None,
                 SemanticStatus::Unresolved,
             );
             add_alias_row(
@@ -573,21 +661,24 @@ fn add_export_named_rows(
                 builder,
                 file,
                 module_scope,
-                name,
+                name.clone(),
                 SymbolNamespace::Value,
                 ExportKind::Named,
+                export_symbol_stable_keys.get(&name).cloned(),
                 SemanticStatus::Resolved,
             );
         }
     }
     for specifier in &export.specifiers {
+        let export_name = module_export_name_text(&specifier.exported);
         add_export_row(
             builder,
             file,
             module_scope,
-            module_export_name_text(&specifier.exported),
+            export_name.clone(),
             SymbolNamespace::Value,
             ExportKind::Named,
+            export_symbol_stable_keys.get(&export_name).cloned(),
             SemanticStatus::Resolved,
         );
     }
@@ -608,6 +699,15 @@ fn add_import_row(
     kind: SemanticImportKind,
     status: SemanticStatus,
 ) -> SemanticImportId {
+    let stable_key = ts_semantic_import_stable_key(
+        file,
+        &import_path,
+        local_name.as_deref(),
+        imported_name.as_deref(),
+        namespace,
+        kind,
+        status,
+    );
     builder.add_semantic_import(SemanticImportFact {
         id: SemanticImportId(0),
         language: file.language,
@@ -620,11 +720,15 @@ fn add_import_row(
         imported_name,
         namespace,
         kind,
-        stable_key: String::new(),
+        stable_key,
         status,
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "semantic export rows mirror the normalized internal fact fields"
+)]
 fn add_export_row(
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
@@ -632,8 +736,10 @@ fn add_export_row(
     export_name: String,
     namespace: SymbolNamespace,
     kind: ExportKind,
+    symbol_stable_key: Option<String>,
     status: SemanticStatus,
 ) -> ExportId {
+    let stable_key = ts_export_stable_key(file, &export_name, namespace, kind, status);
     let export = builder.add_export_identity(ExportFact {
         id: ExportId(0),
         language: file.language,
@@ -645,7 +751,7 @@ fn add_export_row(
         export_name: export_name.clone(),
         namespace,
         kind,
-        stable_key: String::new(),
+        stable_key,
         status,
     });
     if status == SemanticStatus::Resolved
@@ -653,8 +759,17 @@ fn add_export_row(
             kind,
             ExportKind::Named | ExportKind::Default | ExportKind::Namespace
         )
+        && let Some(symbol_stable_key) = symbol_stable_key
     {
-        add_stable_export_identity(builder, file, export, &export_name, namespace, status);
+        add_stable_export_identity(
+            builder,
+            file,
+            export,
+            &export_name,
+            namespace,
+            symbol_stable_key,
+            status,
+        );
     }
     export
 }
@@ -667,6 +782,13 @@ fn add_alias_row(
     kind: AliasKind,
     status: SemanticStatus,
 ) -> AliasId {
+    let stable_key = ts_alias_stable_key(
+        file,
+        &source_symbol_stable_key,
+        &target_symbol_stable_keys,
+        kind,
+        status,
+    );
     builder.add_alias(AliasFact {
         id: AliasId(0),
         language: file.language,
@@ -676,7 +798,7 @@ fn add_alias_row(
         source_symbol_stable_key,
         target_symbol_stable_keys,
         kind,
-        stable_key: String::new(),
+        stable_key,
         status,
     })
 }
@@ -689,6 +811,8 @@ fn add_resolution_row(
     step: ResolutionStepKind,
     status: SemanticStatus,
 ) -> ResolutionId {
+    let stable_key =
+        ts_resolution_stable_key(file, &source_stable_key, &target_stable_keys, step, status);
     builder.add_resolution(ResolutionFact {
         id: ResolutionId(0),
         language: file.language,
@@ -698,7 +822,7 @@ fn add_resolution_row(
         source_stable_key,
         target_stable_keys,
         step,
-        stable_key: String::new(),
+        stable_key,
         status,
     })
 }
@@ -735,6 +859,7 @@ fn add_stable_export_identity(
     export: ExportId,
     export_name: &str,
     namespace: SymbolNamespace,
+    symbol_stable_key: String,
     status: SemanticStatus,
 ) -> StableExportId {
     builder.add_stable_export(StableExportIdentity {
@@ -745,11 +870,104 @@ fn add_stable_export_identity(
         module_key: Some(file.relative_path.clone()),
         export_name: export_name.to_string(),
         namespace,
-        symbol_stable_key: format!("{}::export::{export_name}", file.relative_path),
+        symbol_stable_key,
         generated_discriminator: Some("native".to_string()),
         stable_key: String::new(),
         status,
     })
+}
+
+fn ts_semantic_import_stable_key(
+    file: &SourceFile,
+    import_path: &str,
+    local_name: Option<&str>,
+    imported_name: Option<&str>,
+    namespace: SymbolNamespace,
+    kind: SemanticImportKind,
+    status: SemanticStatus,
+) -> String {
+    stable_key_from_parts(
+        FactFamily::SemanticImport,
+        &[
+            ("language", format!("{:?}", file.language)),
+            ("file", file.relative_path.clone()),
+            ("import_path", import_path.to_string()),
+            ("local_name", local_name.unwrap_or("<none>").to_string()),
+            (
+                "imported_name",
+                imported_name.unwrap_or("<none>").to_string(),
+            ),
+            ("namespace", format!("{namespace:?}")),
+            ("kind", format!("{kind:?}")),
+            ("status", format!("{status:?}")),
+        ],
+    )
+}
+
+fn ts_export_stable_key(
+    file: &SourceFile,
+    export_name: &str,
+    namespace: SymbolNamespace,
+    kind: ExportKind,
+    status: SemanticStatus,
+) -> String {
+    stable_key_from_parts(
+        FactFamily::Export,
+        &[
+            ("language", format!("{:?}", file.language)),
+            ("file", file.relative_path.clone()),
+            ("export_name", export_name.to_string()),
+            ("namespace", format!("{namespace:?}")),
+            ("kind", format!("{kind:?}")),
+            ("status", format!("{status:?}")),
+        ],
+    )
+}
+
+fn ts_alias_stable_key(
+    file: &SourceFile,
+    source_symbol_stable_key: &str,
+    target_symbol_stable_keys: &[String],
+    kind: AliasKind,
+    status: SemanticStatus,
+) -> String {
+    let mut targets = target_symbol_stable_keys.to_vec();
+    targets.sort();
+    targets.dedup();
+    stable_key_from_parts(
+        FactFamily::Alias,
+        &[
+            ("language", format!("{:?}", file.language)),
+            ("file", file.relative_path.clone()),
+            ("source", source_symbol_stable_key.to_string()),
+            ("targets", targets.join("\n")),
+            ("kind", format!("{kind:?}")),
+            ("status", format!("{status:?}")),
+        ],
+    )
+}
+
+fn ts_resolution_stable_key(
+    file: &SourceFile,
+    source_stable_key: &str,
+    target_stable_keys: &[String],
+    step: ResolutionStepKind,
+    status: SemanticStatus,
+) -> String {
+    let mut targets = target_stable_keys.to_vec();
+    targets.sort();
+    targets.dedup();
+    stable_key_from_parts(
+        FactFamily::Resolution,
+        &[
+            ("language", format!("{:?}", file.language)),
+            ("file", file.relative_path.clone()),
+            ("source", source_stable_key.to_string()),
+            ("targets", targets.join("\n")),
+            ("step", format!("{step:?}")),
+            ("status", format!("{status:?}")),
+        ],
+    )
 }
 
 fn collect_commonjs_from_export_default(
@@ -815,6 +1033,7 @@ fn collect_commonjs_from_expression(
                     commonjs_export_name(&assignment.left),
                     SymbolNamespace::Value,
                     kind,
+                    None,
                     SemanticStatus::Unsupported,
                 );
             }
@@ -994,6 +1213,7 @@ fn scope_stable_key(
     )
 }
 
+#[cfg(test)]
 fn reference_scope_stable_key(
     file: &SourceFile,
     scoping: &Scoping,
@@ -1007,9 +1227,11 @@ fn reference_scope_stable_key(
 fn add_ts_semantic_resolution_rows(
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
+    source: &str,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
 ) {
+    let parameter_symbols = collect_parameter_symbols(nodes);
     let mut resolved = scoping
         .symbol_ids()
         .flat_map(|symbol| {
@@ -1026,12 +1248,13 @@ fn add_ts_semantic_resolution_rows(
 
     for (symbol, reference_id) in resolved {
         let reference = scoping.get_reference(reference_id);
-        let name = reference_name(nodes, reference);
+        let target_key =
+            ts_symbol_stable_key_input(file, source, scoping, nodes, symbol, &parameter_symbols);
         add_resolution_row(
             builder,
             file,
-            semantic_reference_key(file, scoping, nodes, reference_id, &name),
-            vec![semantic_symbol_key(file, scoping, symbol)],
+            semantic_resolved_reference_key(file, source, nodes, reference, target_key.clone()),
+            vec![target_key.stable_key()],
             ResolutionStepKind::LexicalLookup,
             SemanticStatus::Resolved,
         );
@@ -1052,7 +1275,7 @@ fn add_ts_semantic_resolution_rows(
         add_resolution_row(
             builder,
             file,
-            semantic_reference_key(file, scoping, nodes, reference_id, &name),
+            semantic_unresolved_reference_key(file, source, nodes, reference, &name),
             Vec::new(),
             ResolutionStepKind::UnknownFallback,
             SemanticStatus::Unresolved,
@@ -1060,33 +1283,35 @@ fn add_ts_semantic_resolution_rows(
     }
 }
 
-fn semantic_reference_key(
+fn semantic_resolved_reference_key(
     file: &SourceFile,
-    scoping: &Scoping,
+    source: &str,
     nodes: &AstNodes<'_>,
-    reference_id: OxcReferenceId,
-    name: &str,
+    reference: &Reference,
+    target: StableSymbolKey,
 ) -> String {
-    let reference = scoping.get_reference(reference_id);
-    let span = nodes.kind(reference.node_id()).span();
-    format!(
-        "{}::ref::{name}@{}-{}::scope:{}",
-        file.relative_path,
-        span.start,
-        span.end,
-        reference_scope_stable_key(file, scoping, nodes, reference_id)
+    StableReferenceKey::resolved(
+        target,
+        file.relative_path.clone(),
+        span_from_oxc(file.id, source, nodes.kind(reference.node_id()).span()),
     )
+    .stable_key()
 }
 
-fn semantic_symbol_key(file: &SourceFile, scoping: &Scoping, symbol: OxcSymbolId) -> String {
-    let span = scoping.symbol_span(symbol);
-    format!(
-        "{}::symbol::{}@{}-{}",
-        file.relative_path,
-        scoping.symbol_name(symbol),
-        span.start,
-        span.end
+fn semantic_unresolved_reference_key(
+    file: &SourceFile,
+    source: &str,
+    nodes: &AstNodes<'_>,
+    reference: &Reference,
+    name: &str,
+) -> String {
+    StableReferenceKey::unresolved(
+        file.language,
+        file.relative_path.clone(),
+        name.to_string(),
+        span_from_oxc(file.id, source, nodes.kind(reference.node_id()).span()),
     )
+    .stable_key()
 }
 
 fn scope_path_for_scope(
@@ -2498,6 +2723,7 @@ class Widget {
             &parsed.program,
             semantic.scoping(),
             semantic.nodes(),
+            false,
         );
         let kinds = output
             .scopes
@@ -2559,6 +2785,7 @@ mod semantic_imports_exports {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     fn derive(source: &str) -> crate::symbol_graph::semantic::SemanticIndexOutput {
@@ -2580,6 +2807,7 @@ mod semantic_imports_exports {
             &parsed.program,
             semantic.scoping(),
             semantic.nodes(),
+            false,
         )
     }
 
@@ -2604,6 +2832,24 @@ import "./side-effect";
         assert!(kinds.contains(&SemanticImportKind::StaticNamespace));
         assert!(kinds.contains(&SemanticImportKind::SideEffect));
         assert!(kinds.contains(&SemanticImportKind::TypeOnly));
+    }
+
+    #[test]
+    fn side_effect_import_stable_keys_include_import_path() {
+        let output = derive(
+            r#"
+import "./setup-a";
+import "./setup-b";
+"#,
+        );
+        let side_effect_keys = output
+            .semantic_imports
+            .iter()
+            .filter(|fact| fact.kind == SemanticImportKind::SideEffect)
+            .map(|fact| fact.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(side_effect_keys.len(), 2);
     }
 
     #[test]
@@ -2633,6 +2879,24 @@ export { named as reexported } from "./mod";
                 .iter()
                 .any(|alias| alias.status == SemanticStatus::Unresolved)
         );
+    }
+
+    #[test]
+    fn star_reexport_alias_stable_keys_include_reexport_target() {
+        let output = derive(
+            r#"
+export * from "./a";
+export * from "./b";
+"#,
+        );
+        let reexport_keys = output
+            .aliases
+            .iter()
+            .filter(|alias| alias.source_symbol_stable_key == "export:*")
+            .map(|alias| alias.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(reexport_keys.len(), 2);
     }
 
     #[test]
@@ -2666,9 +2930,10 @@ const lazy = import(moduleName);
 
 #[cfg(test)]
 mod semantic_resolution {
-    use super::{derive_ts_semantic_index, parse_source_type};
-    use crate::core::{FileId, Language, SourceFile};
-    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticStatus};
+    use super::{derive_ts_file_symbols, derive_ts_semantic_index, parse_source_type};
+    use crate::core::{FileId, Language, SourceFile, SymbolFact};
+    use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticIndexOutput, SemanticStatus};
+    use crate::symbol_graph::{LanguageSymbolOutput, model::SymbolGraphBuilder};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
@@ -2693,7 +2958,26 @@ mod semantic_resolution {
             &parsed.program,
             semantic.scoping(),
             semantic.nodes(),
+            true,
         )
+    }
+
+    fn derive_symbols_and_semantic(source: &str) -> (Vec<SymbolFact>, SemanticIndexOutput) {
+        let file = SourceFile {
+            id: FileId(0),
+            path: PathBuf::from("src/resolution.ts"),
+            relative_path: "src/resolution.ts".to_string(),
+            language: Language::TypeScript,
+            source: source.to_string().into(),
+            content_hash: "test-hash".to_string(),
+        };
+        let mut builder = SymbolGraphBuilder::new();
+        let mut output = LanguageSymbolOutput::default();
+
+        derive_ts_file_symbols(&mut builder, &mut output, &file, false);
+        let symbol_output = builder.finish();
+
+        (symbol_output.symbols, output.semantic)
     }
 
     #[test]
@@ -2755,5 +3039,29 @@ export const used = localThing;
                 && identity.generated_discriminator.as_deref() == Some("native")
                 && identity.symbol_stable_key.contains("value")
         }));
+    }
+
+    #[test]
+    fn stable_export_symbol_key_matches_exported_symbol_fact_key() {
+        let (symbols, semantic) = derive_symbols_and_semantic("export const value = 1;\n");
+        let exported_symbol = symbols
+            .iter()
+            .find(|symbol| symbol.name == "value" && symbol.is_exported)
+            .expect("exported symbol exists");
+        let stable_export = semantic
+            .stable_exports
+            .iter()
+            .find(|identity| identity.export_name == "value")
+            .expect("stable export exists");
+
+        assert_eq!(stable_export.symbol_stable_key, exported_symbol.stable_key);
+    }
+
+    #[test]
+    fn symbols_only_semantic_derivation_does_not_emit_reference_keyed_resolutions() {
+        let (_symbols, semantic) =
+            derive_symbols_and_semantic("const value = 1;\nexport const doubled = value;\n");
+
+        assert!(semantic.resolutions.is_empty());
     }
 }

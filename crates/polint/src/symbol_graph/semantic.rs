@@ -334,6 +334,7 @@ impl SemanticIndexBuilder {
         id
     }
 
+    #[cfg(test)]
     pub(crate) fn add_generated_symbol(
         &mut self,
         mut fact: GeneratedSymbolFact,
@@ -409,7 +410,7 @@ pub(crate) fn alias_reexport_closure(
         let mut closure = alias.clone();
         closure.target_symbol_stable_keys = targets.into_iter().collect();
         closure.status = closure_status(alias.status, status);
-        closure.stable_key = closure.computed_stable_key();
+        closure.stable_key = closure_alias_stable_key(alias, &closure);
         let resolution = closure_resolution_for_alias(&closure);
         closure_resolutions.insert(resolution.stable_key.clone(), resolution);
         closure_aliases.insert(closure.stable_key.clone(), closure);
@@ -586,6 +587,20 @@ fn closure_status(original: SemanticStatus, resolved: SemanticStatus) -> Semanti
     }
 }
 
+fn closure_alias_stable_key(original: &AliasFact, closure: &AliasFact) -> String {
+    stable_key_from_parts(
+        FactFamily::Alias,
+        &[
+            ("base_alias", original.stable_key.clone()),
+            (
+                "targets",
+                sorted_repeated_value(&closure.target_symbol_stable_keys),
+            ),
+            ("status", semantic_status_label(closure.status).to_string()),
+        ],
+    )
+}
+
 fn closure_resolution_for_alias(alias: &AliasFact) -> ResolutionFact {
     let mut resolution = ResolutionFact {
         id: ResolutionId(0),
@@ -661,6 +676,8 @@ impl SemanticImportFact {
                         .unwrap_or_else(none_value),
                 ),
                 ("name", option_key(self.local_name.clone())),
+                ("import_path", self.import_path.clone()),
+                ("imported_name", option_key(self.imported_name.clone())),
                 ("namespace", namespace_label(self.namespace).to_string()),
                 ("kind", semantic_import_kind_label(self.kind).to_string()),
                 ("status", semantic_status_label(self.status).to_string()),
@@ -719,6 +736,10 @@ impl AliasFact {
                         .unwrap_or_else(none_value),
                 ),
                 ("symbol_stable_key", self.source_symbol_stable_key.clone()),
+                (
+                    "target_symbol_stable_keys",
+                    sorted_repeated_value(&self.target_symbol_stable_keys),
+                ),
                 ("kind", alias_kind_label(self.kind).to_string()),
                 ("status", semantic_status_label(self.status).to_string()),
             ],
@@ -747,6 +768,10 @@ impl ResolutionFact {
                         .unwrap_or_else(none_value),
                 ),
                 ("symbol_stable_key", self.source_stable_key.clone()),
+                (
+                    "target_stable_keys",
+                    sorted_repeated_value(&self.target_stable_keys),
+                ),
                 ("kind", resolution_step_kind_label(self.step).to_string()),
                 ("status", semantic_status_label(self.status).to_string()),
             ],
@@ -998,9 +1023,7 @@ fn generated_symbol_sort_key(
     )
 }
 
-fn stable_export_sort_key(
-    fact: &StableExportIdentity,
-) -> (
+type StableExportSortKey = (
     String,
     Option<String>,
     Option<String>,
@@ -1009,7 +1032,9 @@ fn stable_export_sort_key(
     String,
     Option<String>,
     SemanticStatus,
-) {
+);
+
+fn stable_export_sort_key(fact: &StableExportIdentity) -> StableExportSortKey {
     (
         fact.stable_key.clone(),
         fact.package_key.clone(),
@@ -1188,7 +1213,7 @@ mod tests {
             SemanticStatus::Unsupported,
         ];
 
-        let aliases = statuses
+        let alias_count = statuses
             .into_iter()
             .enumerate()
             .map(|(index, status)| AliasFact {
@@ -1203,9 +1228,9 @@ mod tests {
                 stable_key: format!("alias-key:{index}"),
                 status,
             })
-            .collect::<Vec<_>>();
+            .count();
 
-        assert_eq!(aliases.len(), 9);
+        assert_eq!(alias_count, 9);
     }
 
     #[test]
@@ -1351,7 +1376,7 @@ mod alias_reexport_closure_tests {
     use crate::core::{FileId, Language, SymbolNamespace};
 
     fn alias(source: &str, targets: &[&str], status: SemanticStatus) -> AliasFact {
-        AliasFact {
+        let mut fact = AliasFact {
             id: AliasId(0),
             language: Language::TypeScript,
             file: Some(FileId(0)),
@@ -1362,7 +1387,9 @@ mod alias_reexport_closure_tests {
             kind: AliasKind::Import,
             stable_key: String::new(),
             status,
-        }
+        };
+        fact.stable_key = fact.computed_stable_key();
+        fact
     }
 
     fn star_export(stable_key: &str, status: SemanticStatus) -> ExportFact {
@@ -1469,6 +1496,25 @@ mod alias_reexport_closure_tests {
             resolution.source_stable_key == "export:*:src/star.ts"
                 && resolution.status == SemanticStatus::Ambiguous
         }));
+    }
+
+    #[test]
+    fn star_reexport_closure_keys_include_original_export_key() {
+        let output = super::alias_reexport_closure(
+            &[],
+            &[
+                star_export("export:*:src/a.ts", SemanticStatus::Unresolved),
+                star_export("export:*:src/b.ts", SemanticStatus::Unresolved),
+            ],
+            &[stable_export("known", "symbol:known")],
+        );
+        let stable_keys = output
+            .aliases
+            .iter()
+            .map(|alias| alias.stable_key.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(stable_keys.len(), 2);
     }
 }
 
