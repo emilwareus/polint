@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "Topology contracts are populated by later Phase 27 collectors."
+)]
+
 use crate::core::{FileId, ImportId, Language, ModuleNodeId, PackageId, ResolvedImportId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -24,6 +29,10 @@ pub(crate) struct RepoTopologyOverlayId(pub(crate) u64);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceRootFact {
     pub(crate) id: WorkspaceRootId,
+    pub(crate) kind: WorkspaceRootKind,
+    pub(crate) root_path: String,
+    pub(crate) manifest_path: Option<String>,
+    pub(crate) language: Option<Language>,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -33,6 +42,14 @@ pub(crate) struct WorkspaceRootFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TopologyPackageFact {
     pub(crate) id: TopologyPackageId,
+    pub(crate) workspace_root: Option<WorkspaceRootId>,
+    pub(crate) package: Option<PackageId>,
+    pub(crate) module_node: Option<ModuleNodeId>,
+    pub(crate) kind: TopologyPackageKind,
+    pub(crate) name: String,
+    pub(crate) version: Option<String>,
+    pub(crate) path: String,
+    pub(crate) language: Option<Language>,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -42,6 +59,12 @@ pub(crate) struct TopologyPackageFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceSetFact {
     pub(crate) id: SourceSetId,
+    pub(crate) package: Option<TopologyPackageId>,
+    pub(crate) root: Option<WorkspaceRootId>,
+    pub(crate) kind: SourceSetKind,
+    pub(crate) path: String,
+    pub(crate) language: Option<Language>,
+    pub(crate) files: Vec<FileId>,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -51,6 +74,12 @@ pub(crate) struct SourceSetFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DependencyRequirementFact {
     pub(crate) id: DependencyRequirementId,
+    pub(crate) from_package: Option<TopologyPackageId>,
+    pub(crate) target_package: Option<TopologyPackageId>,
+    pub(crate) target_name: String,
+    pub(crate) version_requirement: Option<String>,
+    pub(crate) kind: RequirementKind,
+    pub(crate) manifest_path: Option<String>,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -60,6 +89,12 @@ pub(crate) struct DependencyRequirementFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedDependencyEdgeFact {
     pub(crate) id: ResolvedDependencyEdgeId,
+    pub(crate) requirement: Option<DependencyRequirementId>,
+    pub(crate) from_package: Option<TopologyPackageId>,
+    pub(crate) to_package: Option<TopologyPackageId>,
+    pub(crate) package_name: String,
+    pub(crate) resolved_version: Option<String>,
+    pub(crate) kind: ResolvedDependencyKind,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -69,6 +104,13 @@ pub(crate) struct ResolvedDependencyEdgeFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportToPackageFact {
     pub(crate) id: ImportToPackageId,
+    pub(crate) import: Option<ImportId>,
+    pub(crate) resolved_import: Option<ResolvedImportId>,
+    pub(crate) from_file: Option<FileId>,
+    pub(crate) from_package: Option<TopologyPackageId>,
+    pub(crate) to_package: Option<TopologyPackageId>,
+    pub(crate) target_node: Option<ModuleNodeId>,
+    pub(crate) context: ImportContextKind,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -78,6 +120,12 @@ pub(crate) struct ImportToPackageFact {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepoTopologyOverlayFact {
     pub(crate) id: RepoTopologyOverlayId,
+    pub(crate) root: Option<WorkspaceRootId>,
+    pub(crate) package: Option<TopologyPackageId>,
+    pub(crate) source_set: Option<SourceSetId>,
+    pub(crate) kind: RepoTopologyOverlayKind,
+    pub(crate) label: String,
+    pub(crate) path: Option<String>,
     pub(crate) stable_key: String,
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -205,8 +253,54 @@ pub(crate) enum TopologyStatus {
 }
 
 impl TopologyOutput {
-    pub(crate) fn normalized(self) -> Self {
+    pub(crate) fn normalized(mut self) -> Self {
+        normalize_rows(
+            &mut self.workspace_roots,
+            |row| &row.stable_key,
+            |row, id| row.id = WorkspaceRootId(id),
+        );
+        normalize_rows(
+            &mut self.packages,
+            |row| &row.stable_key,
+            |row, id| row.id = TopologyPackageId(id),
+        );
+        normalize_rows(
+            &mut self.source_sets,
+            |row| &row.stable_key,
+            |row, id| row.id = SourceSetId(id),
+        );
+        normalize_rows(
+            &mut self.dependency_requirements,
+            |row| &row.stable_key,
+            |row, id| row.id = DependencyRequirementId(id),
+        );
+        normalize_rows(
+            &mut self.resolved_dependency_edges,
+            |row| &row.stable_key,
+            |row, id| row.id = ResolvedDependencyEdgeId(id),
+        );
+        normalize_rows(
+            &mut self.import_to_package_edges,
+            |row| &row.stable_key,
+            |row, id| row.id = ImportToPackageId(id),
+        );
+        normalize_rows(
+            &mut self.overlays,
+            |row| &row.stable_key,
+            |row, id| row.id = RepoTopologyOverlayId(id),
+        );
         self
+    }
+}
+
+fn normalize_rows<T>(
+    rows: &mut [T],
+    stable_key: impl Fn(&T) -> &str,
+    mut assign_id: impl FnMut(&mut T, u64),
+) {
+    rows.sort_by(|left, right| stable_key(left).cmp(stable_key(right)));
+    for (index, row) in rows.iter_mut().enumerate() {
+        assign_id(row, index as u64);
     }
 }
 
@@ -217,6 +311,10 @@ mod tests {
     fn root(key: &str, id: u64) -> WorkspaceRootFact {
         WorkspaceRootFact {
             id: WorkspaceRootId(id),
+            kind: WorkspaceRootKind::Repository,
+            root_path: ".".to_string(),
+            manifest_path: None,
+            language: None,
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
@@ -227,6 +325,14 @@ mod tests {
     fn package(key: &str, id: u64) -> TopologyPackageFact {
         TopologyPackageFact {
             id: TopologyPackageId(id),
+            workspace_root: Some(WorkspaceRootId(0)),
+            package: Some(PackageId(0)),
+            module_node: Some(ModuleNodeId(0)),
+            kind: TopologyPackageKind::Workspace,
+            name: key.to_string(),
+            version: None,
+            path: ".".to_string(),
+            language: Some(Language::TypeScript),
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
@@ -237,6 +343,12 @@ mod tests {
     fn source_set(key: &str, id: u64) -> SourceSetFact {
         SourceSetFact {
             id: SourceSetId(id),
+            package: Some(TopologyPackageId(0)),
+            root: Some(WorkspaceRootId(0)),
+            kind: SourceSetKind::Source,
+            path: "src".to_string(),
+            language: Some(Language::TypeScript),
+            files: vec![FileId(0)],
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
@@ -247,6 +359,12 @@ mod tests {
     fn requirement(key: &str, id: u64) -> DependencyRequirementFact {
         DependencyRequirementFact {
             id: DependencyRequirementId(id),
+            from_package: Some(TopologyPackageId(0)),
+            target_package: None,
+            target_name: key.to_string(),
+            version_requirement: Some("^1.0.0".to_string()),
+            kind: RequirementKind::Runtime,
+            manifest_path: Some("package.json".to_string()),
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
@@ -257,6 +375,12 @@ mod tests {
     fn resolved_edge(key: &str, id: u64) -> ResolvedDependencyEdgeFact {
         ResolvedDependencyEdgeFact {
             id: ResolvedDependencyEdgeId(id),
+            requirement: Some(DependencyRequirementId(0)),
+            from_package: Some(TopologyPackageId(0)),
+            to_package: None,
+            package_name: key.to_string(),
+            resolved_version: Some("1.0.0".to_string()),
+            kind: ResolvedDependencyKind::Lockfile,
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactLockfile,
@@ -267,6 +391,13 @@ mod tests {
     fn import_edge(key: &str, id: u64) -> ImportToPackageFact {
         ImportToPackageFact {
             id: ImportToPackageId(id),
+            import: Some(ImportId(0)),
+            resolved_import: Some(ResolvedImportId(0)),
+            from_file: Some(FileId(0)),
+            from_package: Some(TopologyPackageId(0)),
+            to_package: None,
+            target_node: Some(ModuleNodeId(0)),
+            context: ImportContextKind::Source,
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
@@ -277,6 +408,12 @@ mod tests {
     fn overlay(key: &str, id: u64) -> RepoTopologyOverlayFact {
         RepoTopologyOverlayFact {
             id: RepoTopologyOverlayId(id),
+            root: Some(WorkspaceRootId(0)),
+            package: Some(TopologyPackageId(0)),
+            source_set: Some(SourceSetId(0)),
+            kind: RepoTopologyOverlayKind::Ownership,
+            label: key.to_string(),
+            path: Some("src".to_string()),
             stable_key: key.to_string(),
             producer_id: "test",
             precision: TopologyPrecision::Heuristic,
@@ -289,7 +426,10 @@ mod tests {
         let output = TopologyOutput {
             workspace_roots: vec![root("root:z", 99), root("root:a", 42)],
             packages: vec![package("package:z", 99), package("package:a", 42)],
-            source_sets: vec![source_set("source-set:z", 99), source_set("source-set:a", 42)],
+            source_sets: vec![
+                source_set("source-set:z", 99),
+                source_set("source-set:a", 42),
+            ],
             dependency_requirements: vec![
                 requirement("requirement:z", 99),
                 requirement("requirement:a", 42),

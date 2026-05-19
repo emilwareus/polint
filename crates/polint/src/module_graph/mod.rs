@@ -1,5 +1,5 @@
-pub(crate) mod go;
 pub(crate) mod formats;
+pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod paths;
 pub(crate) mod query;
