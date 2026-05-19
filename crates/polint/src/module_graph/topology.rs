@@ -171,6 +171,7 @@ pub(crate) enum WorkspaceRootKind {
     Repository,
     GoModule,
     GoWorkspace,
+    JsWorkspace,
     PackageWorkspace,
     TsProject,
     Virtual,
@@ -180,6 +181,7 @@ pub(crate) enum WorkspaceRootKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum TopologyPackageKind {
     Workspace,
+    JsPackage,
     Project,
     Package,
     External,
@@ -201,9 +203,12 @@ pub(crate) enum SourceSetKind {
 pub(crate) enum RequirementKind {
     Direct,
     Runtime,
+    Dev,
     Development,
     Peer,
     Optional,
+    Bundled,
+    Workspace,
     Build,
     Test,
     Tool,
@@ -215,6 +220,7 @@ pub(crate) enum RequirementKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ResolvedDependencyKind {
     Lockfile,
+    LockfileSelected,
     ChecksumEvidence,
     ToolResolved,
     LocalReplacement,

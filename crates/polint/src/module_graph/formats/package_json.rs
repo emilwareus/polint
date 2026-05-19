@@ -1,4 +1,5 @@
 use crate::module_graph::topology::{RequirementKind, TopologyPrecision, TopologyStatus};
+use serde_json::Value;
 
 pub(crate) const PACKAGE_JSON_SOURCE_LABEL: &str = "package.json";
 
@@ -37,7 +38,51 @@ pub(crate) struct PackageJsonUnsupported {
     pub(crate) status: TopologyStatus,
 }
 
-pub(crate) fn parse_package_json(relative_path: &str, _contents: &str) -> PackageJsonManifest {
+pub(crate) fn parse_package_json(relative_path: &str, contents: &str) -> PackageJsonManifest {
+    let mut manifest = empty_manifest(relative_path);
+    let Ok(value) = serde_json::from_str::<Value>(contents) else {
+        manifest
+            .unsupported
+            .push(unsupported(relative_path, "malformed json"));
+        return manifest;
+    };
+    let Some(object) = value.as_object() else {
+        manifest
+            .unsupported
+            .push(unsupported(relative_path, "package.json root is not an object"));
+        return manifest;
+    };
+
+    manifest.name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    manifest.version = object
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    manifest.package_manager = object
+        .get("packageManager")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    manifest.workspaces = parse_workspaces(object.get("workspaces"));
+    manifest.exports = evidence_entries(object.get("exports"));
+    manifest.imports = evidence_entries(object.get("imports"));
+
+    for (section, kind) in [
+        ("dependencies", RequirementKind::Direct),
+        ("devDependencies", RequirementKind::Dev),
+        ("peerDependencies", RequirementKind::Peer),
+        ("optionalDependencies", RequirementKind::Optional),
+        ("bundleDependencies", RequirementKind::Bundled),
+    ] {
+        append_dependency_section(&mut manifest, relative_path, section, kind, object.get(section));
+    }
+
+    manifest
+}
+
+fn empty_manifest(relative_path: &str) -> PackageJsonManifest {
     PackageJsonManifest {
         relative_path: relative_path.to_string(),
         source_label: PACKAGE_JSON_SOURCE_LABEL,
@@ -49,6 +94,106 @@ pub(crate) fn parse_package_json(relative_path: &str, _contents: &str) -> Packag
         imports: Vec::new(),
         dependencies: Vec::new(),
         unsupported: Vec::new(),
+    }
+}
+
+fn parse_workspaces(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(entries)) => string_array(entries),
+        Some(Value::Object(object)) => object
+            .get("packages")
+            .and_then(Value::as_array)
+            .map(|entries| string_array(entries))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn evidence_entries(value: Option<&Value>) -> Vec<String> {
+    let mut entries = match value {
+        Some(Value::String(text)) => vec![text.clone()],
+        Some(Value::Array(values)) => values.iter().filter_map(evidence_value).collect(),
+        Some(Value::Object(object)) => object
+            .iter()
+            .filter_map(|(key, value)| evidence_value(value).map(|rendered| format!("{key}:{rendered}")))
+            .collect(),
+        _ => Vec::new(),
+    };
+    entries.sort();
+    entries
+}
+
+fn evidence_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => serde_json::to_string(text).ok(),
+        Value::Array(_) | Value::Object(_) | Value::Bool(_) | Value::Number(_) | Value::Null => {
+            serde_json::to_string(value).ok()
+        }
+    }
+}
+
+fn append_dependency_section(
+    manifest: &mut PackageJsonManifest,
+    relative_path: &str,
+    section: &'static str,
+    kind: RequirementKind,
+    value: Option<&Value>,
+) {
+    match value {
+        Some(Value::Object(object)) => {
+            manifest.dependencies.extend(object.iter().filter_map(
+                |(target_name, requirement)| {
+                    requirement.as_str().map(|version| PackageJsonDependency {
+                        target_name: target_name.clone(),
+                        version_requirement: Some(version.to_string()),
+                        kind,
+                        section,
+                        source_path: relative_path.to_string(),
+                        source_label: PACKAGE_JSON_SOURCE_LABEL,
+                        precision: TopologyPrecision::ExactStatic,
+                        status: TopologyStatus::Present,
+                    })
+                },
+            ));
+        }
+        Some(Value::Array(entries)) if section == "bundleDependencies" => {
+            manifest
+                .dependencies
+                .extend(entries.iter().filter_map(Value::as_str).map(|target_name| {
+                    PackageJsonDependency {
+                        target_name: target_name.to_string(),
+                        version_requirement: None,
+                        kind,
+                        section,
+                        source_path: relative_path.to_string(),
+                        source_label: PACKAGE_JSON_SOURCE_LABEL,
+                        precision: TopologyPrecision::ExactStatic,
+                        status: TopologyStatus::Present,
+                    }
+                }));
+        }
+        Some(_) => manifest
+            .unsupported
+            .push(unsupported(relative_path, section)),
+        None => {}
+    }
+}
+
+fn string_array(entries: &[Value]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn unsupported(relative_path: &str, reason: &str) -> PackageJsonUnsupported {
+    PackageJsonUnsupported {
+        reason: reason.to_string(),
+        source_path: relative_path.to_string(),
+        source_label: PACKAGE_JSON_SOURCE_LABEL,
+        precision: TopologyPrecision::Unknown,
+        status: TopologyStatus::Unsupported,
     }
 }
 
@@ -81,7 +226,7 @@ mod tests {
         assert_eq!(manifest.workspaces, vec!["packages/*", "tools/*"]);
         assert_eq!(
             manifest.exports,
-            vec![".:\"./src/index.ts\"", "./feature:\"./src/feature.ts\""]
+            vec!["./feature:\"./src/feature.ts\"", ".:\"./src/index.ts\""]
         );
         assert_eq!(manifest.imports, vec!["#internal/*:\"./src/internal/*\""]);
         assert_eq!(
@@ -110,7 +255,7 @@ mod tests {
                     "devDependencies",
                     "vitest",
                     Some("^2.0.0"),
-                    RequirementKind::Development,
+                    RequirementKind::Dev,
                     TopologyPrecision::ExactStatic,
                     TopologyStatus::Present,
                 ),
@@ -134,7 +279,7 @@ mod tests {
                     "bundleDependencies",
                     "left-pad",
                     None,
-                    RequirementKind::Build,
+                    RequirementKind::Bundled,
                     TopologyPrecision::ExactStatic,
                     TopologyStatus::Present,
                 ),
