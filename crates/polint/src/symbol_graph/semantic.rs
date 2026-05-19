@@ -159,6 +159,7 @@ pub(crate) enum ScopeKind {
     File,
     Class,
     Function,
+    Method,
     Block,
     Catch,
     Loop,
@@ -182,6 +183,7 @@ pub(crate) enum SemanticImportKind {
     GoNamed,
     GoDot,
     GoBlank,
+    GoImplicit,
     EsNamed,
     EsDefault,
     EsNamespace,
@@ -208,6 +210,7 @@ pub(crate) enum ExportKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum AliasKind {
     Import,
+    ImportAlias,
     Export,
     ReExport,
     Generated,
@@ -615,6 +618,7 @@ fn scope_kind_label(kind: ScopeKind) -> &'static str {
         ScopeKind::File => "file",
         ScopeKind::Class => "class",
         ScopeKind::Function => "function",
+        ScopeKind::Method => "method",
         ScopeKind::Block => "block",
         ScopeKind::Catch => "catch",
         ScopeKind::Loop => "loop",
@@ -777,6 +781,7 @@ fn semantic_import_kind_label(kind: SemanticImportKind) -> &'static str {
         SemanticImportKind::GoNamed => "go_named",
         SemanticImportKind::GoDot => "go_dot",
         SemanticImportKind::GoBlank => "go_blank",
+        SemanticImportKind::GoImplicit => "go_implicit",
         SemanticImportKind::EsNamed => "es_named",
         SemanticImportKind::EsDefault => "es_default",
         SemanticImportKind::EsNamespace => "es_namespace",
@@ -805,6 +810,7 @@ fn export_kind_label(kind: ExportKind) -> &'static str {
 fn alias_kind_label(kind: AliasKind) -> &'static str {
     match kind {
         AliasKind::Import => "import",
+        AliasKind::ImportAlias => "import_alias",
         AliasKind::Export => "export",
         AliasKind::ReExport => "re_export",
         AliasKind::Generated => "generated",
