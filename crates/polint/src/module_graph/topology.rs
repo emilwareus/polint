@@ -215,6 +215,7 @@ pub(crate) enum RequirementKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ResolvedDependencyKind {
     Lockfile,
+    ChecksumEvidence,
     ToolResolved,
     LocalReplacement,
     Workspace,
@@ -273,6 +274,7 @@ pub(crate) enum TopologyStatus {
     Ambiguous,
     Unresolved,
     SetupMissing,
+    MissingLockfile,
     Generated,
     External,
     Unsupported,

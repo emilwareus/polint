@@ -11,9 +11,11 @@ use crate::module_graph::model::{
 };
 use crate::module_graph::paths;
 use crate::module_graph::topology::{
-    SourceSetFact, SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact,
-    TopologyPackageId, TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
-    WorkspaceRootId, WorkspaceRootKind,
+    DependencyRequirementFact, DependencyRequirementId, RequirementKind,
+    ResolvedDependencyEdgeFact, ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact,
+    SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
+    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId,
+    WorkspaceRootKind,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -308,13 +310,15 @@ pub(crate) fn collect_go_topology(
     }
 
     let mut package_ids_by_import_path = BTreeMap::new();
+    let mut go_module_paths = Vec::new();
+    let mut module_requirements = BTreeMap::new();
     for module_root in &config.module_roots {
         let go_mod_path = module_root_manifest_path(module_root, "go.mod");
         let Ok(contents) = std::fs::read_to_string(loaded.root.join(&go_mod_path)) else {
             continue;
         };
         let manifest = parse_go_mod(&go_mod_path, &contents);
-        let Some(module_path) = manifest.module_path else {
+        let Some(module_path) = manifest.module_path.clone() else {
             continue;
         };
         let id = TopologyPackageId(output.packages.len() as u64);
@@ -333,7 +337,17 @@ pub(crate) fn collect_go_topology(
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
         });
-        package_ids_by_import_path.insert(module_path, id);
+        package_ids_by_import_path.insert(module_path.clone(), id);
+        go_module_paths.push(module_path);
+        emit_go_mod_requirements(
+            &mut output,
+            id,
+            &go_mod_path,
+            &manifest.requirements,
+            &manifest.replacements,
+            &manifest.excludes,
+        );
+        module_requirements.insert(module_root.clone(), manifest.requirements);
     }
 
     for package in metadata.local_packages() {
@@ -401,6 +415,14 @@ pub(crate) fn collect_go_topology(
         });
     }
 
+    emit_go_sum_edges(
+        &mut output,
+        &loaded.root,
+        &config.module_roots,
+        &module_requirements,
+        &go_module_paths,
+    );
+
     output.normalized()
 }
 
@@ -440,6 +462,186 @@ fn go_files_setup_missing(db: &AnalysisDb, root: Option<WorkspaceRootId>) -> Vec
             status: TopologyStatus::SetupMissing,
         })
         .collect()
+}
+
+fn emit_go_mod_requirements(
+    output: &mut TopologyOutput,
+    from_package: TopologyPackageId,
+    manifest_path: &str,
+    requirements: &[crate::module_graph::formats::go_mod::GoRequirementDirective],
+    replacements: &[crate::module_graph::formats::go_mod::GoReplacementDirective],
+    excludes: &[crate::module_graph::formats::go_mod::GoRequirementDirective],
+) {
+    for requirement in requirements {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: requirement.target_name.clone(),
+                version_requirement: requirement.version_requirement.clone(),
+                kind: RequirementKind::Direct,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-require:{manifest_path}:{}:{}",
+                    requirement.target_name,
+                    requirement.version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: requirement.precision,
+                status: requirement.status,
+            });
+    }
+    for replacement in replacements {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: replacement.target_name.clone(),
+                version_requirement: replacement.version_requirement.clone(),
+                kind: RequirementKind::Replace,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-replace:{manifest_path}:{}:{}=>{}:{}",
+                    replacement.target_name,
+                    replacement.version_requirement.as_deref().unwrap_or(""),
+                    replacement.replacement_target,
+                    replacement.replacement_version.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: replacement.precision,
+                status: replacement.status,
+            });
+    }
+    for exclude in excludes {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: exclude.target_name.clone(),
+                version_requirement: exclude.version_requirement.clone(),
+                kind: RequirementKind::Exclude,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-exclude:{manifest_path}:{}:{}",
+                    exclude.target_name,
+                    exclude.version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: exclude.precision,
+                status: exclude.status,
+            });
+    }
+}
+
+fn emit_go_sum_edges(
+    output: &mut TopologyOutput,
+    root: &Path,
+    module_roots: &[String],
+    module_requirements: &BTreeMap<
+        String,
+        Vec<crate::module_graph::formats::go_mod::GoRequirementDirective>,
+    >,
+    go_module_paths: &[String],
+) {
+    for module_root in module_roots {
+        let go_sum_path = module_root_manifest_path(module_root, "go.sum");
+        let source_label = "go.sum";
+        let requirements = module_requirements
+            .get(module_root)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let path = root.join(&go_sum_path);
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            for (line_index, line) in contents.lines().enumerate() {
+                if let Some((package_name, resolved_version)) = parse_go_sum_line(line) {
+                    output.resolved_dependency_edges.push(ResolvedDependencyEdgeFact {
+                        id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                        requirement: requirement_id_for(
+                            output,
+                            &package_name,
+                            Some(&resolved_version),
+                        ),
+                        from_package: None,
+                        to_package: None,
+                        package_name: package_name.clone(),
+                        resolved_version: Some(resolved_version.clone()),
+                        kind: ResolvedDependencyKind::ChecksumEvidence,
+                        stable_key: format!(
+                            "go-sum-line:{go_sum_path}:{line_index}:{package_name}:{resolved_version}:source_label={source_label}"
+                        ),
+                        producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                        precision: TopologyPrecision::ExactLockfile,
+                        status: TopologyStatus::Resolved,
+                    });
+                }
+            }
+            continue;
+        }
+
+        for requirement in requirements.iter().filter(|requirement| {
+            is_external_requirement(&requirement.target_name, go_module_paths)
+        }) {
+            let resolved_version = requirement.version_requirement.clone();
+            output
+                .resolved_dependency_edges
+                .push(ResolvedDependencyEdgeFact {
+                    id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                    requirement: requirement_id_for(
+                        output,
+                        &requirement.target_name,
+                        resolved_version.as_deref(),
+                    ),
+                    from_package: None,
+                    to_package: None,
+                    package_name: requirement.target_name.clone(),
+                    resolved_version,
+                    kind: ResolvedDependencyKind::ChecksumEvidence,
+                    stable_key: format!(
+                        "go.sum:absent:{go_sum_path}:{}:{}:source_label={source_label}",
+                        requirement.target_name,
+                        requirement.version_requirement.as_deref().unwrap_or("")
+                    ),
+                    producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                    precision: TopologyPrecision::Unknown,
+                    status: TopologyStatus::MissingLockfile,
+                });
+        }
+    }
+}
+
+fn parse_go_sum_line(line: &str) -> Option<(String, String)> {
+    let mut parts = line.split_whitespace();
+    let package_name = parts.next()?.to_string();
+    let version = parts.next()?.trim_end_matches("/go.mod").to_string();
+    let _checksum = parts.next()?;
+    Some((package_name, version))
+}
+
+fn requirement_id_for(
+    output: &TopologyOutput,
+    target_name: &str,
+    version_requirement: Option<&str>,
+) -> Option<DependencyRequirementId> {
+    output
+        .dependency_requirements
+        .iter()
+        .find(|requirement| {
+            requirement.target_name == target_name
+                && requirement.version_requirement.as_deref() == version_requirement
+        })
+        .map(|requirement| requirement.id)
+}
+
+fn is_external_requirement(target_name: &str, go_module_paths: &[String]) -> bool {
+    !go_module_paths
+        .iter()
+        .any(|module_path| import_is_within_module(target_name, module_path))
 }
 
 fn module_root_manifest_path(module_root: &str, manifest_name: &str) -> String {
@@ -1103,12 +1305,7 @@ mod dependency_topology {
         }));
     }
 
-    fn add_go_file(
-        db: &mut AnalysisDb,
-        root: &Path,
-        relative_path: &str,
-        source: &str,
-    ) -> FileId {
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
         let path = root.join(relative_path);
         std::fs::create_dir_all(path.parent().expect("test fixture has parent"))
             .expect("create parent dirs");
