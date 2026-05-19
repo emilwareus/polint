@@ -637,7 +637,18 @@ fn stable_export_identities_are_consistent(rows: &[StableExportIdentity]) -> boo
 }
 
 fn is_absolute_path_like(value: &str) -> bool {
-    std::path::Path::new(value).is_absolute() || value.starts_with("\\\\")
+    std::path::Path::new(value).is_absolute()
+        || value.starts_with('/')
+        || value.starts_with("\\\\")
+        || is_windows_drive_absolute(value)
+}
+
+fn is_windows_drive_absolute(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 fn write_symbol_graph_layer_payload(

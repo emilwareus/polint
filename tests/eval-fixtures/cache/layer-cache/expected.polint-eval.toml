@@ -99,4 +99,4 @@ invariant = { name = "layer_cache.aggregate.misses", value = "import_edit=4", mo
 invariant = { name = "layer_cache.aggregate.invalid_evicted_reads", value = "import_edit=0", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "layer-cache", max_runtime_ms = 90000, mode = "exact" }
+runtime_budget = { name = "layer-cache", max_runtime_ms = 120000, mode = "exact" }

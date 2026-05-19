@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T09:04:04.485Z"
+last_updated: "2026-05-19T09:59:09.000Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
@@ -198,13 +198,14 @@ Last activity: 2026-05-19
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Fixed Phase 26 semantic-index PR review findings and reran deep review.
-- Stopped at: Phase 26 PR review fixes complete; Phase 27 remains ready for planning/execution.
+- Last activity: 2026-05-19 - Fixed attached Phase 26 CI failures for the active PR.
+- Stopped at: Phase 26 CI fixes ready for verification and PR update; Phase 27 remains ready for planning/execution.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260519-ci | Fix attached Phase 26 CI failures for manifest version, cross-platform path validation, and layer-cache eval budget | 2026-05-19 | implemented | [260519-ci-fix-phase-26-ci-failures](./quick/260519-ci-fix-phase-26-ci-failures/) |
 | 260519-fqg | Fix PR review findings for semantic index keys, validation, lint failures, and rerun deep review | 2026-05-19 | implemented | [260519-fqg-fix-pr-review-findings-for-semantic-inde](./quick/260519-fqg-fix-pr-review-findings-for-semantic-inde/) |
 | 260518-qzd | Research and plan ai-friendly polint check output format | 2026-05-18 | implemented | [260518-qzd-research-and-plan-ai-friendly-polint-che](./quick/260518-qzd-research-and-plan-ai-friendly-polint-che/) |
 
