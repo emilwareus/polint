@@ -24,9 +24,14 @@ use model::{
     MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
     sort_packages,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use topology::{
+    RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind, SourceSetKind,
+    TopologyOutput, TopologyPrecision, TopologyStatus,
+};
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
     &["resolved_imports", "module_graph", "symbols", "references"];
@@ -478,6 +483,9 @@ fn derive_requested_module_graph_uncached(
 
     let output = builder.finish();
     db.replace_module_graph_facts(resolved_imports, output.nodes, output.edges);
+    let base_topology =
+        derive_base_topology(loaded, db, &go_metadata, ts_resolver_context.as_ref());
+    db.replace_topology_facts(base_topology);
 
     let capability_support =
         setup_missing_support(plan, saw_setup_missing, setup_missing_reason.as_deref());
@@ -622,6 +630,273 @@ fn module_graph_layer_payload_parts(
         nodes: nodes.to_vec(),
         edges: edges.to_vec(),
     }
+}
+
+pub(crate) fn derive_base_topology(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    go_metadata: &go::GoPackageIndex,
+    ts_resolver_context: Option<&ts::TsResolverContext>,
+) -> TopologyOutput {
+    let mut output = go::collect_go_topology(loaded, db, go_metadata);
+    output.merge(ts::collect_ts_topology(loaded, db, ts_resolver_context));
+    output.overlays.extend(collect_repo_topology_overlays(
+        loaded.root.as_path(),
+        db,
+        &output,
+    ));
+    output.normalized()
+}
+
+pub(crate) fn collect_repo_topology_overlays(
+    root: &Path,
+    _db: &AnalysisDb,
+    topology: &TopologyOutput,
+) -> Vec<RepoTopologyOverlayFact> {
+    let mut overlays = Vec::new();
+    let mut seen_keys = BTreeSet::new();
+
+    for path in codeowner_paths(root) {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::OwnershipZone,
+            format!("CODEOWNERS:{path}"),
+            Some(path.clone()),
+            format!("repo-topology:ownership-zone:{path}"),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+
+    for source_set in &topology.source_sets {
+        match source_set.kind {
+            SourceSetKind::Generated => push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::GeneratedZone,
+                format!("generated:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!("repo-topology:generated-zone:{}", source_set.path),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            ),
+            SourceSetKind::Test => push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::TestOnlyVisibility,
+                format!("test-only:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!("repo-topology:test-only-visibility:{}", source_set.path),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            ),
+            SourceSetKind::Source
+            | SourceSetKind::Vendor
+            | SourceSetKind::External
+            | SourceSetKind::Unknown => {}
+        }
+
+        if let Some(layer) = conventional_architecture_layer(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::ArchitectureLayer,
+                format!("{layer}:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:architecture-layer:{layer}:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::Heuristic,
+                TopologyStatus::Present,
+            );
+        }
+        if let Some(deploy_unit) = conventional_deploy_unit(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::DeployUnit,
+                format!("{deploy_unit}:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:deploy-unit:{deploy_unit}:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::Heuristic,
+                TopologyStatus::Present,
+            );
+        }
+        if is_internal_path(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::InternalPublicApiBoundary,
+                format!("internal:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:internal-public-api-boundary:internal:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            );
+        }
+    }
+
+    for package in &topology.packages {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            format!("package:{}", package.name),
+            Some(package.path.clone()),
+            format!(
+                "repo-topology:source-of-truth-directory:package:{}",
+                package.path
+            ),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+    for workspace_root in &topology.workspace_roots {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            format!("workspace-root:{}", workspace_root.root_path),
+            Some(workspace_root.root_path.clone()),
+            format!(
+                "repo-topology:source-of-truth-directory:workspace-root:{}",
+                workspace_root.root_path
+            ),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+
+    for (kind, label, stable_key, always_emit) in [
+        (
+            RepoTopologyOverlayKind::OwnershipZone,
+            "ownership-zone:unknown",
+            "repo-topology:ownership-zone:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            "architecture-layer:unknown",
+            "repo-topology:architecture-layer:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::DeployUnit,
+            "deploy-unit:unknown",
+            "repo-topology:deploy-unit:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::GeneratedZone,
+            "generated-zone:unknown",
+            "repo-topology:generated-zone:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            "test-only-visibility:unknown",
+            "repo-topology:test-only-visibility:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            "internal-public-api-boundary:unknown",
+            "repo-topology:internal-public-api-boundary:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            "source-of-truth-directory:unknown",
+            "repo-topology:source-of-truth-directory:unknown",
+            false,
+        ),
+    ] {
+        if always_emit || !overlays.iter().any(|overlay| overlay.kind == kind) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                kind,
+                label.to_string(),
+                None,
+                stable_key.to_string(),
+                TopologyPrecision::Unknown,
+                TopologyStatus::Unknown,
+            );
+        }
+    }
+
+    overlays
+}
+
+fn push_repo_overlay(
+    overlays: &mut Vec<RepoTopologyOverlayFact>,
+    seen_keys: &mut BTreeSet<String>,
+    kind: RepoTopologyOverlayKind,
+    label: String,
+    path: Option<String>,
+    stable_key: String,
+    precision: TopologyPrecision,
+    status: TopologyStatus,
+) {
+    if !seen_keys.insert(stable_key.clone()) {
+        return;
+    }
+    overlays.push(RepoTopologyOverlayFact {
+        id: RepoTopologyOverlayId(overlays.len() as u64),
+        root: None,
+        package: None,
+        source_set: None,
+        kind,
+        label,
+        path,
+        stable_key,
+        producer_id: "polint.module_graph",
+        precision,
+        status,
+    });
+}
+
+fn codeowner_paths(root: &Path) -> Vec<String> {
+    [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+        .into_iter()
+        .filter(|relative_path| root.join(relative_path).is_file())
+        .map(str::to_string)
+        .collect()
+}
+
+fn conventional_architecture_layer(path: &str) -> Option<&'static str> {
+    match first_component(path) {
+        Some("apps" | "cmd" | "services") => Some("entrypoint"),
+        Some("internal") => Some("internal"),
+        Some("pkg" | "packages" | "libs" | "lib") => Some("library"),
+        Some("src") => Some("source"),
+        Some("test" | "tests" | "__tests__") => Some("test"),
+        Some("generated" | "gen") => Some("generated"),
+        _ => None,
+    }
+}
+
+fn conventional_deploy_unit(path: &str) -> Option<&'static str> {
+    match first_component(path) {
+        Some("apps" | "cmd" | "services") => Some("service"),
+        _ => None,
+    }
+}
+
+fn is_internal_path(path: &str) -> bool {
+    path == "internal" || path.starts_with("internal/") || path.contains("/internal/")
+}
+
+fn first_component(path: &str) -> Option<&str> {
+    path.split('/').find(|part| !part.is_empty())
 }
 
 fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
@@ -2290,9 +2565,7 @@ mod base_topology {
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{AnalysisDb, ImportFact, ImportId, Language, Span};
-    use crate::module_graph::topology::{
-        RepoTopologyOverlayKind, TopologyStatus,
-    };
+    use crate::module_graph::topology::{RepoTopologyOverlayKind, TopologyStatus};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -2325,12 +2598,7 @@ mod base_topology {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
-    fn push_ts_import(
-        db: &mut AnalysisDb,
-        file: crate::core::FileId,
-        path: &str,
-        start_byte: u32,
-    ) {
+    fn push_ts_import(db: &mut AnalysisDb, file: crate::core::FileId, path: &str, start_byte: u32) {
         db.push_import(ImportFact {
             id: ImportId(99),
             file,
@@ -2416,14 +2684,16 @@ mod base_topology {
             &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
         );
 
-        assert!(db
-            .dependency_requirements()
-            .iter()
-            .any(|row| row.target_name == "react"));
-        assert!(db
-            .resolved_imports()
-            .iter()
-            .any(|row| row.import == ImportId(0)));
+        assert!(
+            db.dependency_requirements()
+                .iter()
+                .any(|row| row.target_name == "react")
+        );
+        assert!(
+            db.resolved_imports()
+                .iter()
+                .any(|row| row.import == ImportId(0))
+        );
         assert!(db.import_to_package_edges().is_empty());
     }
 

@@ -3729,7 +3729,7 @@ mod tests {
                 root: Some(WorkspaceRootId(99)),
                 package: Some(TopologyPackageId(99)),
                 source_set: Some(SourceSetId(99)),
-                kind: RepoTopologyOverlayKind::Ownership,
+                kind: RepoTopologyOverlayKind::OwnershipZone,
                 label: "team-platform".to_string(),
                 path: Some("src".to_string()),
                 stable_key: format!("{prefix}:overlay"),

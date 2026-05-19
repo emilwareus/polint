@@ -254,13 +254,12 @@ pub(crate) enum ImportContextKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum RepoTopologyOverlayKind {
-    Ownership,
+    OwnershipZone,
     ArchitectureLayer,
     DeployUnit,
     GeneratedZone,
-    TestVisibility,
-    ApiBoundary,
-    SourceOfTruth,
+    TestOnlyVisibility,
+    InternalPublicApiBoundary,
     SourceOfTruthDirectory,
     Unknown,
 }
@@ -280,6 +279,7 @@ pub(crate) enum TopologyStatus {
     Resolved,
     Ambiguous,
     Unresolved,
+    Unknown,
     SetupMissing,
     MissingLockfile,
     Generated,
@@ -288,6 +288,19 @@ pub(crate) enum TopologyStatus {
 }
 
 impl TopologyOutput {
+    pub(crate) fn merge(&mut self, other: TopologyOutput) {
+        self.workspace_roots.extend(other.workspace_roots);
+        self.packages.extend(other.packages);
+        self.source_sets.extend(other.source_sets);
+        self.dependency_requirements
+            .extend(other.dependency_requirements);
+        self.resolved_dependency_edges
+            .extend(other.resolved_dependency_edges);
+        self.import_to_package_edges
+            .extend(other.import_to_package_edges);
+        self.overlays.extend(other.overlays);
+    }
+
     pub(crate) fn normalized(mut self) -> Self {
         let root_ids = normalize_rows(
             &mut self.workspace_roots,
@@ -495,7 +508,7 @@ mod tests {
             root: Some(WorkspaceRootId(0)),
             package: Some(TopologyPackageId(0)),
             source_set: Some(SourceSetId(0)),
-            kind: RepoTopologyOverlayKind::Ownership,
+            kind: RepoTopologyOverlayKind::OwnershipZone,
             label: key.to_string(),
             path: Some("src".to_string()),
             stable_key: key.to_string(),
