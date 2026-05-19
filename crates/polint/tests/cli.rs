@@ -1028,6 +1028,184 @@ fn layer_cache_internals_stay_private() {
     }
 }
 
+#[test]
+fn semantic_index_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_semantic_index_public_rule_repo(temp.path());
+
+    let public_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&public_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{public_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/semantic-public-probe"),
+        "external semantic public rule should run: {report:#?}"
+    );
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(inspect["rules"][0]["rule_id"], "local/semantic-public-probe");
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&public_json, &inspect_json, &test_json] {
+        assert_semantic_index_public_output_is_private(output);
+    }
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("Symbols<'_>"));
+    assert!(source.contains("References<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_public_symbol_rule_source(&source);
+
+    let docs =
+        fs::read_to_string(repo_root().join("docs/facts/symbols-and-references.md")).unwrap();
+    assert!(
+        docs.contains("scopes/import closure/resolution-step rows remain internal"),
+        "public docs should state semantic internals remain internal"
+    );
+    assert!(
+        docs.contains("generated or external semantic evidence"),
+        "public docs should describe bounded generated/external evidence"
+    );
+}
+
+fn assert_semantic_index_public_output_is_private(output: &str) {
+    for marker in [
+        "SemanticIndex",
+        "ScopeFact",
+        "SemanticImportFact",
+        "ResolutionFact",
+        "GeneratedSymbolFact",
+        "StableExportIdentity",
+        "alias_reexport_closure",
+        "metadata.precision",
+        "ProviderOutputMeta",
+        "KernelRunReport",
+        "polint-go-symbols-semantic-1",
+        "tests/eval-fixtures",
+    ] {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak semantic internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn write_semantic_index_public_rule_repo(root: &Path) {
+    write_external_symbol_rule_repo(
+        root,
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/semantic-public-probe",
+    description = "Reads public symbols and references after semantic deepening.",
+    severity = "warn"
+)]
+fn semantic_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let symbol_count = symbols.iter().count();
+    let reference_count = references.iter().count();
+    if symbol_count == 0 && reference_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public symbol/reference facts remain available",
+        )
+        .with_evidence("symbols", symbol_count.to_string())
+        .with_evidence("references", reference_count.to_string())
+        .with_evidence("unresolved", references.unresolved().count().to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![semantic_public_probe()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/app.ts"),
+        r#"import { handler } from "./lib";
+
+export function run() {
+  return handler();
+}
+"#,
+    );
+    write_file(
+        &root.join("src/lib.ts"),
+        r#"export function handler() {
+  return "ok";
+}
+"#,
+    );
+    write_file(
+        &root.join(".polint/tests/rules/semantic_public/basic/polint-test.toml"),
+        r#"
+rule = "local/semantic-public-probe"
+paths = ["src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/semantic-public-probe"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public symbol/reference facts remain available"
+"#,
+    );
+    write_file(
+        &root.join(".polint/tests/rules/semantic_public/basic/src/app.ts"),
+        r#"import { handler } from "./lib";
+
+export function run() {
+  return handler();
+}
+"#,
+    );
+    write_file(
+        &root.join(".polint/tests/rules/semantic_public/basic/src/lib.ts"),
+        r#"export function handler() {
+  return "ok";
+}
+"#,
+    );
+}
+
 fn write_layer_cache_public_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
