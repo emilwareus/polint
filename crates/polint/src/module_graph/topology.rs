@@ -261,6 +261,7 @@ pub(crate) enum RepoTopologyOverlayKind {
     TestVisibility,
     ApiBoundary,
     SourceOfTruth,
+    SourceOfTruthDirectory,
     Unknown,
 }
 

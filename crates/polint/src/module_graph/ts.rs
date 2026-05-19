@@ -4,6 +4,7 @@ use crate::core::{
 };
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
 use crate::module_graph::paths::normalize_path;
+use crate::module_graph::topology::TopologyOutput;
 use crate::ts::DYNAMIC_IMPORT_SPECIFIER;
 use oxc_resolver::{ResolveError, ResolveOptions, Resolver, TsconfigDiscovery};
 use serde::Deserialize;
@@ -17,6 +18,193 @@ use std::cell::Cell;
 #[cfg(test)]
 thread_local! {
     static RESOLVER_CONTEXT_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+mod topology {
+    use super::collect_ts_topology;
+    use crate::config::load_config;
+    use crate::core::{AnalysisDb, FileId};
+    use crate::module_graph::topology::{
+        RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, WorkspaceRootKind,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn collect_ts_topology_emits_js_workspace_and_member_packages() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/ui/src/index.ts",
+            "export const ui = true;\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.workspace_roots.iter().any(|root| {
+            root.kind == WorkspaceRootKind::JsWorkspace
+                && root.root_path == "."
+                && root.manifest_path.as_deref() == Some("package.json")
+        }));
+        assert!(output.packages.iter().any(|package| {
+            package.kind == TopologyPackageKind::JsPackage
+                && package.name == "@acme/ui"
+                && package.path == "packages/ui"
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_records_package_manager_and_lockfile_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+        );
+        write_fixture(temp.path(), "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+        write_fixture(temp.path(), "package-lock.json", r#"{"lockfileVersion":3}"#);
+        write_fixture(temp.path(), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        write_fixture(temp.path(), "yarn.lock", "# yarn lockfile\n");
+        write_fixture(temp.path(), "bun.lock", "# bun lockfile\n");
+        write_fixture(temp.path(), "bun.lockb", "binary");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let labels = output
+            .overlays
+            .iter()
+            .map(|overlay| overlay.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"packageManager:pnpm@9.0.0"));
+        assert!(labels.contains(&"pnpm-workspace.yaml:packages/*"));
+        assert!(labels.contains(&"lockfile:package-lock.json:package-lock-v3"));
+        assert!(labels.contains(&"lockfile:pnpm-lock.yaml:pnpm-lock-present"));
+        assert!(labels.contains(&"lockfile:yarn.lock:yarn-lock-present"));
+        assert!(labels.contains(&"lockfile:bun.lock:bun-lock-present"));
+        assert!(labels.contains(&"lockfile:bun.lockb:bun-lockb-present"));
+    }
+
+    #[test]
+    fn collect_ts_topology_classifies_ts_source_sets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let mut db = AnalysisDb::new();
+        let source = add_fixture_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+        let test = add_fixture_file(&mut db, temp.path(), "src/app.test.ts", "export {};\n");
+        let spec = add_fixture_file(&mut db, temp.path(), "src/app.spec.tsx", "export {};\n");
+        let nested_test =
+            add_fixture_file(&mut db, temp.path(), "src/__tests__/app.ts", "export {};\n");
+        let generated =
+            add_fixture_file(&mut db, temp.path(), "generated/client.ts", "export {};\n");
+        let generated_named =
+            add_fixture_file(&mut db, temp.path(), "src/api.generated.ts", "export {};\n");
+        let vendor =
+            add_fixture_file(&mut db, temp.path(), "node_modules/pkg/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(source_set_for_file(&output, source, SourceSetKind::Source));
+        assert!(source_set_for_file(&output, test, SourceSetKind::Test));
+        assert!(source_set_for_file(&output, spec, SourceSetKind::Test));
+        assert!(source_set_for_file(&output, nested_test, SourceSetKind::Test));
+        assert!(source_set_for_file(
+            &output,
+            generated,
+            SourceSetKind::Generated
+        ));
+        assert!(source_set_for_file(
+            &output,
+            generated_named,
+            SourceSetKind::Generated
+        ));
+        assert!(source_set_for_file(&output, vendor, SourceSetKind::Vendor));
+    }
+
+    #[test]
+    fn collect_ts_topology_records_tsconfig_alias_and_reference_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(temp.path(), "package.json", r#"{"name":"root"}"#);
+        write_fixture(
+            temp.path(),
+            "tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "rootDirs": ["src", "generated"]
+  },
+  "references": [{ "path": "./packages/ui" }]
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                && overlay.label == "tsconfig:paths:@/*"
+        }));
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                && overlay.label == "tsconfig:baseUrl:."
+        }));
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                && overlay.label == "tsconfig:rootDirs:generated"
+        }));
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                && overlay.label == "tsconfig:reference:./packages/ui"
+        }));
+    }
+
+    fn source_set_for_file(
+        output: &crate::module_graph::topology::TopologyOutput,
+        file: FileId,
+        kind: SourceSetKind,
+    ) -> bool {
+        output
+            .source_sets
+            .iter()
+            .any(|source_set| source_set.files == vec![file] && source_set.kind == kind)
+    }
+
+    fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture");
+        path
+    }
+
+    fn add_fixture_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> FileId {
+        let path = write_fixture(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
 }
 
 #[derive(Debug)]
@@ -168,6 +356,14 @@ fn external_draft(label: String, language: Language) -> ResolvedImportDraft {
         reason: None,
         edge_kind: Some(ModuleEdgeKind::DependsOn),
     }
+}
+
+pub(crate) fn collect_ts_topology(
+    _loaded: &crate::config::LoadedConfig,
+    _db: &AnalysisDb,
+    _resolver: Option<&TsResolverContext>,
+) -> TopologyOutput {
+    TopologyOutput::default()
 }
 
 fn is_external_package_specifier(specifier: &str) -> bool {
@@ -417,7 +613,7 @@ pub(crate) fn resolver_context_construction_count_for_test() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{TsResolverContext, resolve_ts_import};
+    use super::{TsResolverContext, collect_ts_topology, resolve_ts_import};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -497,6 +693,172 @@ mod tests {
         assert_eq!(draft.precision, ResolutionPrecision::None);
         assert_eq!(draft.reason, Some(UnresolvedReason::DynamicExpression));
         assert_eq!(draft.target, None);
+    }
+
+    mod topology {
+        use super::*;
+        use crate::module_graph::topology::{
+            RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, WorkspaceRootKind,
+        };
+        use crate::core::FileId;
+
+        #[test]
+        fn collect_ts_topology_emits_js_workspace_and_member_packages() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            write_fixture(
+                temp.path(),
+                "package.json",
+                r#"{"name":"root","workspaces":["packages/*"]}"#,
+            );
+            write_fixture(
+                temp.path(),
+                "packages/ui/package.json",
+                r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+            );
+            let mut db = AnalysisDb::new();
+            add_fixture_file(
+                &mut db,
+                temp.path(),
+                "packages/ui/src/index.ts",
+                "export const ui = true;\n",
+            );
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_ts_topology(&loaded, &db, None);
+
+            assert!(output.workspace_roots.iter().any(|root| {
+                root.kind == WorkspaceRootKind::JsWorkspace
+                    && root.root_path == "."
+                    && root.manifest_path.as_deref() == Some("package.json")
+            }));
+            assert!(output.packages.iter().any(|package| {
+                package.kind == TopologyPackageKind::JsPackage
+                    && package.name == "@acme/ui"
+                    && package.path == "packages/ui"
+            }));
+        }
+
+        #[test]
+        fn collect_ts_topology_records_package_manager_and_lockfile_evidence() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            write_fixture(
+                temp.path(),
+                "package.json",
+                r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+            );
+            write_fixture(temp.path(), "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+            write_fixture(temp.path(), "package-lock.json", r#"{"lockfileVersion":3}"#);
+            write_fixture(temp.path(), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+            write_fixture(temp.path(), "yarn.lock", "# yarn lockfile\n");
+            write_fixture(temp.path(), "bun.lock", "# bun lockfile\n");
+            write_fixture(temp.path(), "bun.lockb", "binary");
+            let mut db = AnalysisDb::new();
+            add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_ts_topology(&loaded, &db, None);
+            let labels = output
+                .overlays
+                .iter()
+                .map(|overlay| overlay.label.as_str())
+                .collect::<Vec<_>>();
+
+            assert!(labels.contains(&"packageManager:pnpm@9.0.0"));
+            assert!(labels.contains(&"pnpm-workspace.yaml:packages/*"));
+            assert!(labels.contains(&"lockfile:package-lock.json:package-lock-v3"));
+            assert!(labels.contains(&"lockfile:pnpm-lock.yaml:pnpm-lock-present"));
+            assert!(labels.contains(&"lockfile:yarn.lock:yarn-lock-present"));
+            assert!(labels.contains(&"lockfile:bun.lock:bun-lock-present"));
+            assert!(labels.contains(&"lockfile:bun.lockb:bun-lockb-present"));
+        }
+
+        #[test]
+        fn collect_ts_topology_classifies_ts_source_sets() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            write_fixture(temp.path(), "package.json", r#"{"name":"root"}"#);
+            let mut db = AnalysisDb::new();
+            let source = add_fixture_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+            let test = add_fixture_file(&mut db, temp.path(), "src/app.test.ts", "export {};\n");
+            let spec = add_fixture_file(&mut db, temp.path(), "src/app.spec.tsx", "export {};\n");
+            let nested_test =
+                add_fixture_file(&mut db, temp.path(), "src/__tests__/app.ts", "export {};\n");
+            let generated =
+                add_fixture_file(&mut db, temp.path(), "generated/client.ts", "export {};\n");
+            let generated_named =
+                add_fixture_file(&mut db, temp.path(), "src/api.generated.ts", "export {};\n");
+            let vendor =
+                add_fixture_file(&mut db, temp.path(), "node_modules/pkg/index.ts", "export {};\n");
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_ts_topology(&loaded, &db, None);
+
+            assert!(source_set_for_file(&output, source, SourceSetKind::Source));
+            assert!(source_set_for_file(&output, test, SourceSetKind::Test));
+            assert!(source_set_for_file(&output, spec, SourceSetKind::Test));
+            assert!(source_set_for_file(&output, nested_test, SourceSetKind::Test));
+            assert!(source_set_for_file(
+                &output,
+                generated,
+                SourceSetKind::Generated
+            ));
+            assert!(source_set_for_file(
+                &output,
+                generated_named,
+                SourceSetKind::Generated
+            ));
+            assert!(source_set_for_file(&output, vendor, SourceSetKind::Vendor));
+        }
+
+        #[test]
+        fn collect_ts_topology_records_tsconfig_alias_and_reference_evidence() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            write_fixture(temp.path(), "package.json", r#"{"name":"root"}"#);
+            write_fixture(
+                temp.path(),
+                "tsconfig.json",
+                r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "rootDirs": ["src", "generated"]
+  },
+  "references": [{ "path": "./packages/ui" }]
+}"#,
+            );
+            let mut db = AnalysisDb::new();
+            add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_ts_topology(&loaded, &db, None);
+
+            assert!(output.overlays.iter().any(|overlay| {
+                overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                    && overlay.label == "tsconfig:paths:@/*"
+            }));
+            assert!(output.overlays.iter().any(|overlay| {
+                overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                    && overlay.label == "tsconfig:baseUrl:."
+            }));
+            assert!(output.overlays.iter().any(|overlay| {
+                overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                    && overlay.label == "tsconfig:rootDirs:generated"
+            }));
+            assert!(output.overlays.iter().any(|overlay| {
+                overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
+                    && overlay.label == "tsconfig:reference:./packages/ui"
+            }));
+        }
+
+        fn source_set_for_file(
+            output: &crate::module_graph::topology::TopologyOutput,
+            file: FileId,
+            kind: SourceSetKind,
+        ) -> bool {
+            output
+                .source_sets
+                .iter()
+                .any(|source_set| source_set.files == vec![file] && source_set.kind == kind)
+        }
     }
 
     type DeterminismSnapshot = (
