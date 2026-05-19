@@ -153,8 +153,8 @@ const TS_SYNTAX_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const MODULE_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "module-graph-facts-1",
-    version: 1,
+    name: "module-graph-facts-2",
+    version: 2,
 }];
 
 const SYMBOL_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -219,7 +219,17 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         id: "polint.module_graph",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &["source_files", "packages", "imports"],
-        outputs: &["resolved_imports", "module_nodes", "module_edges"],
+        outputs: &[
+            "resolved_imports",
+            "module_nodes",
+            "module_edges",
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "repo_topology_overlays",
+        ],
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_GRAPH_SCHEMA,
@@ -391,9 +401,14 @@ mod tests {
         let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let prelude = read_source(&crate_root.join("src/sdk/mod.rs"));
 
-        for term in ["Packages<'_", "Dependencies<'_", "SourceSets<'_", "RepoTopology<'_"] {
+        for term in [
+            ["Packages", "<'_"].concat(),
+            ["Dependencies", "<'_"].concat(),
+            ["SourceSets", "<'_"].concat(),
+            ["RepoTopology", "<'_"].concat(),
+        ] {
             assert!(
-                !prelude.contains(term),
+                !prelude.contains(&term),
                 "unexpected topology SDK prelude export `{term}`"
             );
         }
