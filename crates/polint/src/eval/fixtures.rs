@@ -844,7 +844,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.2", "polint.ts.syntax"),
                 ("provider_order.3", "polint.module_graph"),
                 ("provider_order.4", "polint.symbol_graph"),
-                ("provider_order.5", "polint.metrics"),
+                ("provider_order.5", "polint.module_topology"),
+                ("provider_order.6", "polint.metrics"),
             ]
         );
     }

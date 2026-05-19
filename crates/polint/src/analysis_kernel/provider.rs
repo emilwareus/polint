@@ -162,6 +162,11 @@ const SYMBOL_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 2,
 }];
 
+const MODULE_TOPOLOGY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "module-topology-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -265,6 +270,28 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.module_topology",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "imports",
+            "resolved_imports",
+            "module_nodes",
+            "module_edges",
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "semantic_imports",
+        ],
+        outputs: &["import_to_package_edges"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: MODULE_TOPOLOGY_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -323,6 +350,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );
@@ -365,6 +393,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );
@@ -498,6 +527,25 @@ mod tests {
                         "generated_symbols",
                         "stable_exports",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.module_topology",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "imports",
+                        "resolved_imports",
+                        "module_nodes",
+                        "module_edges",
+                        "workspace_roots",
+                        "topology_packages",
+                        "source_sets",
+                        "dependency_requirements",
+                        "resolved_dependency_edges",
+                        "semantic_imports",
+                    ],
+                    outputs: vec!["import_to_package_edges"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

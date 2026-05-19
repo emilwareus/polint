@@ -148,7 +148,7 @@ impl AnalysisKernel {
             input.cache,
             &input_snapshot,
             Self::provider_manifest("polint.symbol_graph"),
-            module_dependency_output_digest,
+            module_dependency_output_digest.clone(),
             vec![
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
@@ -162,7 +162,31 @@ impl AnalysisKernel {
             "polint.symbol_graph",
             &db,
             polint_symbol_graph_cache_stats,
-            symbol_output_digest,
+            symbol_output_digest.clone(),
+        ));
+
+        let symbol_dependency_output_digest = symbol_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.symbol_graph",
+            )
+        });
+        let module_topology = crate::module_graph::derive_module_topology_with_cache_stats(
+            &mut db,
+            input.cache,
+            &input_snapshot,
+            Self::provider_manifest("polint.module_topology"),
+            module_dependency_output_digest,
+            symbol_dependency_output_digest,
+        );
+        let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
+        let module_topology_output_digest = module_topology.output_digest.clone();
+        diagnostics.extend(module_topology.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.module_topology",
+            &db,
+            polint_module_topology_cache_stats,
+            module_topology_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -571,6 +595,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );
@@ -870,6 +895,7 @@ mod tests {
             "polint.source",
             "polint.module_graph",
             "polint.symbol_graph",
+            "polint.module_topology",
             "polint.metrics",
         ] {
             let row = provider_output(&output, provider_id);

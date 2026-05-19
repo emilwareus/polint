@@ -38,6 +38,7 @@ pub(crate) enum LayerKind {
     TsSyntax,
     ModuleGraph,
     SymbolGraph,
+    ModuleTopology,
     Metrics,
     Extension,
 }
@@ -323,6 +324,72 @@ impl LayerKey {
             Digest::absent(DigestKind::ToolInvocation, "symbol_graph_toolchain"),
             input_digests,
             dependency_layer_digests,
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Module topology identity must keep base topology, semantic, and upstream provider inputs explicit."
+    )]
+    pub(crate) fn module_topology_layer_key(
+        manifest: &ProviderManifest,
+        import_shape_digests: Vec<Digest>,
+        base_topology_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        semantic_provider_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.module_topology",
+            "module topology layer keys require the module topology provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_topology_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_topology_parameters",
+            vec![
+                semantic_provider_parameter_digest.clone(),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "module_topology_outputs",
+                    &["import_to_package_edges"],
+                ),
+            ],
+        );
+        let mut input_digests =
+            Vec::with_capacity(3 + import_shape_digests.len() + base_topology_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(semantic_provider_parameter_digest);
+        input_digests.extend(import_shape_digests);
+        input_digests.extend(base_topology_digests);
+
+        Self::new(
+            LayerKind::ModuleTopology,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "module_topology_toolchain"),
+            input_digests,
+            vec![
+                dependency_layer_digest(module_graph_output_digest),
+                dependency_layer_digest(symbol_graph_output_digest),
+            ],
             vec![Digest::absent(
                 DigestKind::ExtensionCode,
                 "extension_digest_absent",

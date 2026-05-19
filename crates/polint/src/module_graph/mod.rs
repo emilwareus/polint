@@ -11,6 +11,7 @@ use crate::analysis_kernel::incremental::{
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
+    semantic_provider_parameter_digest,
 };
 use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
@@ -24,8 +25,8 @@ use crate::core::{
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::semantic::{SemanticImportFact, SemanticImportKind, SemanticStatus};
 use model::{
-    MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
-    sort_packages,
+    MODULE_GRAPH_LAYER_SCHEMA, MODULE_TOPOLOGY_LAYER_SCHEMA, ModuleGraphBuilder,
+    ModuleGraphLayerPayload, ModuleTopologyLayerPayload, ResolverInput, sort_packages,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -43,6 +44,14 @@ const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModuleTopologyDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
@@ -86,6 +95,28 @@ pub(crate) fn module_graph_layer_key(
         ts_js_lifecycle_digest,
         upstream_syntax_output_digests,
         module_graph_parameter_digest(),
+    )
+}
+
+pub(crate) fn module_topology_layer_key(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+) -> LayerKey {
+    LayerKey::module_topology_layer_key(
+        manifest,
+        module_graph_import_shape_digests(db),
+        module_topology_base_topology_digests(db),
+        config_digest,
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
+        module_graph_output_digest,
+        symbol_graph_output_digest,
+        semantic_provider_parameter_digest(),
     )
 }
 
@@ -224,6 +255,123 @@ pub(crate) fn module_graph_layer_dependency_edges(
     edges
 }
 
+pub(crate) fn module_topology_layer_dependency_edges(
+    db: &AnalysisDb,
+    key: &LayerKey,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(key.clone());
+    let mut edges = Vec::new();
+
+    for import in sorted_imports(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "module_topology_import:{}:{}:{}",
+                db.path_for(import.file),
+                import.path,
+                import.span.start_byte
+            )),
+            DependencyKind::ImportShape,
+            ShapeKind::Import,
+        ));
+    }
+
+    for digest in module_topology_base_topology_digests(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!("module_topology_base:{digest}")),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for semantic_import in db.semantic_imports() {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "semantic_import:{}:{}",
+                semantic_import.stable_key, semantic_import.import_path
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("config:{}", config_digest)),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "provider_schema:{}:{}",
+            manifest.id,
+            manifest.primary_schema_label()
+        )),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "semantic_parameters:{}",
+            semantic_provider_parameter_digest()
+        )),
+        DependencyKind::Provider,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input("toolchain:module_topology:absent".to_string()),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Layer(upstream_layer_key(
+            LayerKind::ModuleGraph,
+            "polint.module_graph",
+            module_graph_output_digest,
+        )),
+        DependencyKind::UpstreamLayer,
+        ShapeKind::Output,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Layer(upstream_layer_key(
+            LayerKind::SymbolGraph,
+            "polint.symbol_graph",
+            symbol_graph_output_digest,
+        )),
+        DependencyKind::UpstreamLayer,
+        ShapeKind::Output,
+    ));
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
 pub(crate) fn module_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
     sorted_imports(db)
         .into_iter()
@@ -263,6 +411,51 @@ pub(crate) fn module_graph_source_package_digests(db: &AnalysisDb) -> Vec<Digest
         ];
         let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
         Digest::from_parts(DigestKind::ProviderParameters, "package_context", &refs)
+    }));
+    digests.sort();
+    digests
+}
+
+pub(crate) fn module_topology_base_topology_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let mut digests = Vec::new();
+    digests.extend(db.workspace_roots().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_workspace_root",
+            &[row.stable_key.as_str(), row.root_path.as_str()],
+        )
+    }));
+    digests.extend(db.topology_packages().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_package",
+            &[
+                row.stable_key.as_str(),
+                row.name.as_str(),
+                row.path.as_str(),
+            ],
+        )
+    }));
+    digests.extend(db.source_sets().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_source_set",
+            &[row.stable_key.as_str(), row.path.as_str()],
+        )
+    }));
+    digests.extend(db.dependency_requirements().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_dependency_requirement",
+            &[row.stable_key.as_str(), row.target_name.as_str()],
+        )
+    }));
+    digests.extend(db.resolved_dependency_edges().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_resolved_dependency",
+            &[row.stable_key.as_str(), row.package_name.as_str()],
+        )
     }));
     digests.sort();
     digests
@@ -385,6 +578,128 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
             }
         })
         .collect()
+}
+
+pub(crate) fn derive_module_topology_with_cache_stats(
+    db: &mut AnalysisDb,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+) -> ModuleTopologyDerivation {
+    if db.imports().is_empty() {
+        return ModuleTopologyDerivation {
+            output_digest: Some(module_topology_output_digest_for_payload(
+                &ModuleTopologyLayerPayload {
+                    schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+                    diagnostics: Vec::new(),
+                    capability_support: Vec::new(),
+                    import_to_package_edges: Vec::new(),
+                },
+                None,
+            )),
+            ..ModuleTopologyDerivation::default()
+        };
+    }
+
+    let config_digest = input_snapshot.config.digest.clone();
+    let go_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::GoLifecycle,
+        "module_topology_go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
+    let ts_js_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::TsJsLifecycle,
+        "module_topology_ts_js_lifecycle",
+        &input_snapshot.ts_js_lifecycle.components,
+    );
+    let layer_key = module_topology_layer_key(
+        db,
+        manifest,
+        config_digest.clone(),
+        go_lifecycle_digest.clone(),
+        ts_js_lifecycle_digest.clone(),
+        module_graph_output_digest.clone(),
+        symbol_graph_output_digest.clone(),
+    );
+    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let mut cache_stats = CacheStats::default();
+    let read = store.read_json_validated::<ModuleTopologyLayerPayload, _>(
+        &layer_key,
+        validate_module_topology_layer_payload,
+    );
+
+    match read.status {
+        LayerCacheReadStatus::Hit => {
+            cache_stats.record_hit();
+            cache_stats.record_verified_reuse();
+            let payload = read
+                .value
+                .expect("layer cache hit should include module topology payload");
+            restore_module_topology_layer_payload(db, &payload);
+            ModuleTopologyDerivation {
+                diagnostics: payload.diagnostics,
+                capability_support: payload.capability_support,
+                cache_stats,
+                output_digest: read.output_digest,
+            }
+        }
+        LayerCacheReadStatus::BypassedDisabled => {
+            cache_stats.record_disabled_bypass();
+            cache_stats.record_recompute();
+            let mut derivation = derive_module_topology_uncached(db);
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
+            if read.status == LayerCacheReadStatus::Miss {
+                cache_stats.record_miss();
+            } else {
+                cache_stats.record_invalid_evicted_read();
+            }
+            cache_stats.record_recompute();
+            let mut derivation = derive_module_topology_uncached(db);
+            let payload = module_topology_layer_payload(db, &derivation);
+            let dependencies = module_topology_layer_dependency_edges(
+                db,
+                &layer_key,
+                manifest,
+                module_graph_output_digest,
+                symbol_graph_output_digest,
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+            );
+            derivation.output_digest = write_module_topology_layer_payload(
+                &store,
+                layer_key,
+                &payload,
+                dependencies,
+                &mut cache_stats,
+                &mut derivation.diagnostics,
+            );
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+    }
+}
+
+fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivation {
+    let import_to_package_edges = derive_import_to_package_edges(db);
+    db.replace_import_to_package_facts(import_to_package_edges);
+    let payload = ModuleTopologyLayerPayload {
+        schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+        diagnostics: Vec::new(),
+        capability_support: Vec::new(),
+        import_to_package_edges: db.import_to_package_edges().to_vec(),
+    };
+    ModuleTopologyDerivation {
+        diagnostics: Vec::new(),
+        capability_support: Vec::new(),
+        cache_stats: CacheStats::default(),
+        output_digest: Some(module_topology_output_digest_for_payload(&payload, None)),
+    }
 }
 
 fn semantic_imports_by_file_path(
@@ -889,6 +1204,18 @@ fn module_graph_layer_payload(
     }
 }
 
+fn module_topology_layer_payload(
+    db: &AnalysisDb,
+    derivation: &ModuleTopologyDerivation,
+) -> ModuleTopologyLayerPayload {
+    ModuleTopologyLayerPayload {
+        schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+        diagnostics: derivation.diagnostics.clone(),
+        capability_support: derivation.capability_support.clone(),
+        import_to_package_edges: db.import_to_package_edges().to_vec(),
+    }
+}
+
 fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraphLayerPayload) {
     db.replace_module_graph_facts(
         payload.resolved_imports.clone(),
@@ -906,6 +1233,13 @@ fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraph
     });
 }
 
+fn restore_module_topology_layer_payload(
+    db: &mut AnalysisDb,
+    payload: &ModuleTopologyLayerPayload,
+) {
+    db.replace_import_to_package_facts(payload.import_to_package_edges.clone());
+}
+
 fn validate_module_graph_layer_payload(
     payload: &ModuleGraphLayerPayload,
     manifest: &LayerCacheManifest,
@@ -914,6 +1248,15 @@ fn validate_module_graph_layer_payload(
         && topology_payload_stable_keys_are_unique(payload)
         && manifest.output_digest
             == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+pub(crate) fn validate_module_topology_layer_payload(
+    payload: &ModuleTopologyLayerPayload,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    payload.schema == MODULE_TOPOLOGY_LAYER_SCHEMA
+        && manifest.output_digest
+            == module_topology_output_digest_for_payload(payload, Some(&manifest.key))
 }
 
 fn write_module_graph_layer_payload(
@@ -950,6 +1293,40 @@ fn write_module_graph_layer_payload(
     Some(output_digest)
 }
 
+fn write_module_topology_layer_payload(
+    store: &LayerCacheStore,
+    layer_key: LayerKey,
+    payload: &ModuleTopologyLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Digest> {
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module topology layer", error));
+            return None;
+        }
+    };
+    let output_digest = module_topology_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest.clone(),
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        "native_trusted",
+        Vec::new(),
+    );
+
+    match store.write_json(&manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module topology layer", error)),
+    }
+    Some(output_digest)
+}
+
 fn module_graph_output_digest_for_payload(
     payload: &ModuleGraphLayerPayload,
     layer_key: Option<&LayerKey>,
@@ -967,12 +1344,40 @@ fn module_graph_output_digest_for_payload(
     }
 }
 
+fn module_topology_output_digest_for_payload(
+    payload: &ModuleTopologyLayerPayload,
+    layer_key: Option<&LayerKey>,
+) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload).unwrap_or_else(|_| {
+        Digest::unsupported(DigestKind::LayerOutput, "module_topology", "json")
+    });
+    if let Some(layer_key) = layer_key {
+        module_topology_output_digest(layer_key, &payload_digest)
+    } else {
+        Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "module_topology_layer_output",
+            &[&payload_digest.to_string()],
+        )
+    }
+}
+
 fn module_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
     let layer_key_json =
         serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
     Digest::from_parts(
         DigestKind::ProviderOutput,
         "module_graph_layer_output",
+        &[&payload_digest.to_string(), &layer_key_json],
+    )
+}
+
+fn module_topology_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
+    let layer_key_json =
+        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "module_topology_layer_output",
         &[&payload_digest.to_string(), &layer_key_json],
     )
 }
@@ -1406,6 +1811,14 @@ fn upstream_syntax_layer_key(index: usize, output_digest: Digest) -> LayerKey {
         1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
         _ => (LayerKind::Extension, "polint.unknown_upstream"),
     };
+    upstream_layer_key(layer_kind, provider_id, output_digest)
+}
+
+fn upstream_layer_key(
+    layer_kind: LayerKind,
+    provider_id: &'static str,
+    output_digest: Digest,
+) -> LayerKey {
     let output_dependency = dependency_layer_digest(output_digest);
 
     LayerKey::new(
