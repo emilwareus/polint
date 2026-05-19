@@ -8,6 +8,11 @@ use crate::diagnostics::{
 };
 use crate::rule_error::RuleResult;
 use crate::rule_manifest::{FactViewRequirement, RuleManifest};
+use crate::symbol_graph::semantic::{
+    AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    SemanticStatus, StableExportId, StableExportIdentity,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -548,6 +553,20 @@ pub struct AnalysisDb {
     resolved_imports: Vec<ResolvedImportFact>,
     module_nodes: Vec<ModuleNode>,
     module_edges: Vec<ModuleEdge>,
+    scopes: Vec<ScopeFact>,
+    semantic_imports: Vec<SemanticImportFact>,
+    exports: Vec<ExportFact>,
+    aliases: Vec<AliasFact>,
+    resolution_facts: Vec<ResolutionFact>,
+    generated_symbols: Vec<GeneratedSymbolFact>,
+    stable_exports: Vec<StableExportIdentity>,
+    scopes_by_id: BTreeMap<ScopeId, usize>,
+    semantic_imports_by_id: BTreeMap<SemanticImportId, usize>,
+    exports_by_id: BTreeMap<ExportId, usize>,
+    aliases_by_id: BTreeMap<AliasId, usize>,
+    resolution_facts_by_id: BTreeMap<ResolutionId, usize>,
+    generated_symbols_by_id: BTreeMap<GeneratedSymbolId, usize>,
+    stable_exports_by_id: BTreeMap<StableExportId, usize>,
     symbols: Vec<SymbolFact>,
     definitions: Vec<DefinitionFact>,
     references: Vec<ReferenceFact>,
@@ -744,6 +763,94 @@ impl AnalysisDb {
         self.refresh_symbol_graph_metadata();
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "semantic index replacement accepts every internal semantic row family explicitly"
+    )]
+    pub(crate) fn replace_semantic_index_facts(
+        &mut self,
+        mut scopes: Vec<ScopeFact>,
+        mut semantic_imports: Vec<SemanticImportFact>,
+        mut exports: Vec<ExportFact>,
+        mut aliases: Vec<AliasFact>,
+        mut resolutions: Vec<ResolutionFact>,
+        mut generated_symbols: Vec<GeneratedSymbolFact>,
+        mut stable_exports: Vec<StableExportIdentity>,
+    ) {
+        normalize_scope_facts(&mut scopes);
+        let scope_ids = scopes
+            .iter()
+            .enumerate()
+            .map(|(index, scope)| (scope.id, ScopeId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+        for (index, scope) in scopes.iter_mut().enumerate() {
+            scope.id = ScopeId(index as u64);
+            if let Some(parent) = scope.parent
+                && let Some(remapped) = scope_ids.get(&parent)
+            {
+                scope.parent = Some(*remapped);
+            }
+        }
+
+        normalize_semantic_import_facts(&mut semantic_imports);
+        for (index, import) in semantic_imports.iter_mut().enumerate() {
+            import.id = SemanticImportId(index as u64);
+            if let Some(scope) = import.scope
+                && let Some(remapped) = scope_ids.get(&scope)
+            {
+                import.scope = Some(*remapped);
+            }
+        }
+
+        normalize_export_facts(&mut exports);
+        let export_ids = exports
+            .iter()
+            .enumerate()
+            .map(|(index, export)| (export.id, ExportId(index as u64)))
+            .collect::<BTreeMap<_, _>>();
+        for (index, export) in exports.iter_mut().enumerate() {
+            export.id = ExportId(index as u64);
+            if let Some(scope) = export.scope
+                && let Some(remapped) = scope_ids.get(&scope)
+            {
+                export.scope = Some(*remapped);
+            }
+        }
+
+        normalize_alias_facts(&mut aliases);
+        for (index, alias) in aliases.iter_mut().enumerate() {
+            alias.id = AliasId(index as u64);
+        }
+
+        normalize_resolution_facts(&mut resolutions);
+        for (index, resolution) in resolutions.iter_mut().enumerate() {
+            resolution.id = ResolutionId(index as u64);
+        }
+
+        normalize_generated_symbol_facts(&mut generated_symbols);
+        for (index, generated) in generated_symbols.iter_mut().enumerate() {
+            generated.id = GeneratedSymbolId(index as u64);
+        }
+
+        normalize_stable_export_identities(&mut stable_exports);
+        for (index, stable_export) in stable_exports.iter_mut().enumerate() {
+            stable_export.id = StableExportId(index as u64);
+            if let Some(remapped) = export_ids.get(&stable_export.export) {
+                stable_export.export = *remapped;
+            }
+        }
+
+        self.scopes = scopes;
+        self.semantic_imports = semantic_imports;
+        self.exports = exports;
+        self.aliases = aliases;
+        self.resolution_facts = resolutions;
+        self.generated_symbols = generated_symbols;
+        self.stable_exports = stable_exports;
+        self.rebuild_semantic_index_indexes();
+        self.refresh_semantic_index_metadata();
+    }
+
     fn refresh_module_graph_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::ModuleNode);
         self.fact_meta.remove_family(FactFamily::ResolvedImport);
@@ -774,6 +881,130 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
+        }
+    }
+
+    fn refresh_semantic_index_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Scope);
+        self.fact_meta.remove_family(FactFamily::SemanticImport);
+        self.fact_meta.remove_family(FactFamily::Export);
+        self.fact_meta.remove_family(FactFamily::Alias);
+        self.fact_meta.remove_family(FactFamily::Resolution);
+        self.fact_meta.remove_family(FactFamily::GeneratedSymbol);
+        self.fact_meta.remove_family(FactFamily::StableExport);
+
+        let scope_metadata = self
+            .scopes
+            .iter()
+            .map(|scope| {
+                (
+                    scope.id.0,
+                    self.semantic_fact_metadata(FactFamily::Scope, &scope.stable_key, scope.status),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in scope_metadata {
+            self.record_fact_meta(FactFamily::Scope, run_id, metadata);
+        }
+
+        let import_metadata = self
+            .semantic_imports
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(
+                        FactFamily::SemanticImport,
+                        &fact.stable_key,
+                        fact.status,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in import_metadata {
+            self.record_fact_meta(FactFamily::SemanticImport, run_id, metadata);
+        }
+
+        let export_metadata = self
+            .exports
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(FactFamily::Export, &fact.stable_key, fact.status),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in export_metadata {
+            self.record_fact_meta(FactFamily::Export, run_id, metadata);
+        }
+
+        let alias_metadata = self
+            .aliases
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(FactFamily::Alias, &fact.stable_key, fact.status),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in alias_metadata {
+            self.record_fact_meta(FactFamily::Alias, run_id, metadata);
+        }
+
+        let resolution_metadata = self
+            .resolution_facts
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(
+                        FactFamily::Resolution,
+                        &fact.stable_key,
+                        fact.status,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in resolution_metadata {
+            self.record_fact_meta(FactFamily::Resolution, run_id, metadata);
+        }
+
+        let generated_metadata = self
+            .generated_symbols
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(
+                        FactFamily::GeneratedSymbol,
+                        &fact.stable_key,
+                        fact.status,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in generated_metadata {
+            self.record_fact_meta(FactFamily::GeneratedSymbol, run_id, metadata);
+        }
+
+        let stable_export_metadata = self
+            .stable_exports
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    self.semantic_fact_metadata(
+                        FactFamily::StableExport,
+                        &fact.stable_key,
+                        fact.status,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in stable_export_metadata {
+            self.record_fact_meta(FactFamily::StableExport, run_id, metadata);
         }
     }
 
@@ -906,6 +1137,38 @@ impl AnalysisDb {
         }
     }
 
+    fn rebuild_semantic_index_indexes(&mut self) {
+        self.scopes_by_id.clear();
+        self.semantic_imports_by_id.clear();
+        self.exports_by_id.clear();
+        self.aliases_by_id.clear();
+        self.resolution_facts_by_id.clear();
+        self.generated_symbols_by_id.clear();
+        self.stable_exports_by_id.clear();
+
+        for (index, scope) in self.scopes.iter().enumerate() {
+            self.scopes_by_id.insert(scope.id, index);
+        }
+        for (index, import) in self.semantic_imports.iter().enumerate() {
+            self.semantic_imports_by_id.insert(import.id, index);
+        }
+        for (index, export) in self.exports.iter().enumerate() {
+            self.exports_by_id.insert(export.id, index);
+        }
+        for (index, alias) in self.aliases.iter().enumerate() {
+            self.aliases_by_id.insert(alias.id, index);
+        }
+        for (index, resolution) in self.resolution_facts.iter().enumerate() {
+            self.resolution_facts_by_id.insert(resolution.id, index);
+        }
+        for (index, generated) in self.generated_symbols.iter().enumerate() {
+            self.generated_symbols_by_id.insert(generated.id, index);
+        }
+        for (index, stable_export) in self.stable_exports.iter().enumerate() {
+            self.stable_exports_by_id.insert(stable_export.id, index);
+        }
+    }
+
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
         let run_id = self.ts_components.len() as u64;
         let metadata = self.ts_component_metadata(&fact);
@@ -983,6 +1246,35 @@ impl AnalysisDb {
         }
         for module_edge in self.module_edges() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleEdge, module_edge.id.0);
+        }
+        for scope in self.scopes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Scope, scope.id.0);
+        }
+        for import in self.semantic_imports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::SemanticImport, import.id.0);
+        }
+        for export in self.exports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Export, export.id.0);
+        }
+        for alias in self.aliases() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Alias, alias.id.0);
+        }
+        for resolution in self.resolution_facts() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Resolution, resolution.id.0);
+        }
+        for generated in self.generated_symbols() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::GeneratedSymbol,
+                generated.id.0,
+            );
+        }
+        for stable_export in self.stable_exports() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::StableExport,
+                stable_export.id.0,
+            );
         }
         for symbol in self.symbols() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
@@ -1103,6 +1395,34 @@ impl AnalysisDb {
 
     pub fn module_edges(&self) -> &[ModuleEdge] {
         &self.module_edges
+    }
+
+    pub(crate) fn scopes(&self) -> &[ScopeFact] {
+        &self.scopes
+    }
+
+    pub(crate) fn semantic_imports(&self) -> &[SemanticImportFact] {
+        &self.semantic_imports
+    }
+
+    pub(crate) fn exports(&self) -> &[ExportFact] {
+        &self.exports
+    }
+
+    pub(crate) fn aliases(&self) -> &[AliasFact] {
+        &self.aliases
+    }
+
+    pub(crate) fn resolution_facts(&self) -> &[ResolutionFact] {
+        &self.resolution_facts
+    }
+
+    pub(crate) fn generated_symbols(&self) -> &[GeneratedSymbolFact] {
+        &self.generated_symbols
+    }
+
+    pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
+        &self.stable_exports
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
@@ -1796,6 +2116,23 @@ impl AnalysisDb {
         )
     }
 
+    fn semantic_fact_metadata(
+        &self,
+        family: FactFamily,
+        stable_key: &str,
+        status: SemanticStatus,
+    ) -> FactMeta {
+        let (precision, confidence) = semantic_status_metadata(status);
+        fact_meta_from_stable_key(
+            family,
+            SYMBOL_GRAPH_PROVIDER_ID,
+            precision,
+            confidence,
+            stable_key.to_string(),
+            stable_parts([("status", semantic_status_label(status).to_string())]),
+        )
+    }
+
     fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
         self.metadata_for(FactRef::new(family, run_id))
             .map(|metadata| metadata.stable_key.clone())
@@ -1887,6 +2224,69 @@ impl AnalysisDb {
             stable_parts([]),
         )
     }
+}
+
+fn normalize_scope_facts(facts: &mut [ScopeFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_semantic_import_facts(facts: &mut [SemanticImportFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_export_facts(facts: &mut [ExportFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_alias_facts(facts: &mut [AliasFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_resolution_facts(facts: &mut [ResolutionFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_generated_symbol_facts(facts: &mut [GeneratedSymbolFact]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+}
+
+fn normalize_stable_export_identities(facts: &mut [StableExportIdentity]) {
+    for fact in facts.iter_mut() {
+        if fact.stable_key.is_empty() {
+            fact.stable_key = fact.computed_stable_key();
+        }
+    }
+    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 }
 
 fn source_file_metadata(relative_path: &str, language: Language, content_hash: &str) -> FactMeta {
@@ -2068,6 +2468,36 @@ fn symbol_resolution_status_label(status: SymbolResolutionStatus) -> &'static st
         SymbolResolutionStatus::Ambiguous => "ambiguous",
         SymbolResolutionStatus::SetupMissing => "setup_missing",
         SymbolResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn semantic_status_metadata(status: SemanticStatus) -> (FactPrecision, FactConfidence) {
+    match status {
+        SemanticStatus::Resolved | SemanticStatus::Generated => {
+            (FactPrecision::SetupAware, FactConfidence::High)
+        }
+        SemanticStatus::Ambiguous => (FactPrecision::Ambiguous, FactConfidence::Medium),
+        SemanticStatus::Unresolved => (FactPrecision::Unresolved, FactConfidence::Medium),
+        SemanticStatus::Cycle | SemanticStatus::Unsupported => {
+            (FactPrecision::Unsupported, FactConfidence::Low)
+        }
+        SemanticStatus::Dynamic => (FactPrecision::Heuristic, FactConfidence::Low),
+        SemanticStatus::External => (FactPrecision::SetupAware, FactConfidence::Medium),
+        SemanticStatus::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::High),
+    }
+}
+
+fn semantic_status_label(status: SemanticStatus) -> &'static str {
+    match status {
+        SemanticStatus::Resolved => "resolved",
+        SemanticStatus::Ambiguous => "ambiguous",
+        SemanticStatus::Unresolved => "unresolved",
+        SemanticStatus::Cycle => "cycle",
+        SemanticStatus::Generated => "generated",
+        SemanticStatus::Dynamic => "dynamic",
+        SemanticStatus::External => "external",
+        SemanticStatus::SetupMissing => "setup_missing",
+        SemanticStatus::Unsupported => "unsupported",
     }
 }
 
@@ -4025,7 +4455,7 @@ mod tests {
             "export function handler() {}\n".to_string(),
         );
         let stale = test_scope("stale", file, SemanticStatus::Resolved);
-        let beta = test_scope("beta", file, SemanticStatus::Resolved);
+        let beta = test_scope("bravo", file, SemanticStatus::Resolved);
         let alpha = test_scope("alpha", file, SemanticStatus::SetupMissing);
 
         db.replace_semantic_index_facts(
@@ -4054,7 +4484,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (0, &["alpha".to_string()][..]),
-                (1, &["beta".to_string()][..]),
+                (1, &["bravo".to_string()][..]),
             ]
         );
         assert!(

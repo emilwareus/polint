@@ -418,10 +418,6 @@ impl StableExportIdentity {
     }
 }
 
-pub(crate) fn semantic_status_metadata_label(status: SemanticStatus) -> &'static str {
-    semantic_status_label(status)
-}
-
 fn sorted_repeated_value(values: &[String]) -> String {
     let mut values = values
         .iter()
