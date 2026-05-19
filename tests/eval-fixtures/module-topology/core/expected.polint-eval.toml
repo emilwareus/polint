@@ -1,0 +1,72 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "module-topology-core"
+area = "module-topology"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+fact = { family = "WorkspaceRoot", stable_key = "go-root:services/api", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "WorkspaceRoot", stable_key = "js-workspace:web", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "TopologyPackage", stable_key = "go-module:services/api:github.com/acme/api", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "TopologyPackage", stable_key = "js-package:web:@acme/web", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "SourceSet", stable_key = "ts-source-set:source:web/src/app.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "SourceSet", stable_key = "ts-source-set:test:web/src/app.test.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "SourceSet", stable_key = "ts-source-set:generated:web/generated/client.generated.ts", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "generated" }
+
+[[expected]]
+fact = { family = "DependencyRequirement", stable_key = "github.com/acme/lib", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "DependencyRequirement", stable_key = "@scope/lib", mode = "partial", producer_id = "polint.module_graph", precision = "exact_static", status = "present" }
+
+[[expected]]
+fact = { family = "ResolvedDependencyEdge", stable_key = "github.com/acme/lib:v1.2.3", mode = "partial", producer_id = "polint.module_graph", precision = "exact_lockfile", status = "resolved" }
+
+[[expected]]
+fact = { family = "ResolvedDependencyEdge", stable_key = "@scope/lib:2.3.4", mode = "partial", producer_id = "polint.module_graph", precision = "exact_lockfile", status = "resolved" }
+
+[[expected]]
+fact = { family = "ImportToPackage", stable_key = "app.test.ts", mode = "partial", producer_id = "polint.module_topology", precision = "exact_static", status = "resolved" }
+
+[[expected]]
+fact = { family = "ImportToPackage", stable_key = "@scope/lib", mode = "partial", producer_id = "polint.module_topology", precision = "heuristic", status = "external" }
+
+[[expected]]
+fact = { family = "ImportToPackage", stable_key = "client.generated.ts", mode = "partial", producer_id = "polint.module_topology", precision = "heuristic", status = "external" }
+
+[[expected]]
+fact = { family = "RepoTopologyOverlay", stable_key = "GeneratedZone", mode = "partial", producer_id = "polint.module_graph", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "RepoTopologyOverlay", stable_key = "TestOnlyVisibility", mode = "partial", producer_id = "polint.module_graph", precision = "heuristic", status = "present" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_topology.hits", value = "warm=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_graph.misses", value = "package_json_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.provider.polint.module_topology.misses", value = "go_mod_edit=1", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "module-topology-core", max_runtime_ms = 120000, mode = "exact" }

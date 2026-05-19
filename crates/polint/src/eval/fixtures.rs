@@ -1375,3 +1375,141 @@ mod semantic_index_core {
         }
     }
 }
+
+#[cfg(test)]
+mod module_topology_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/module-topology/core")
+    }
+
+    #[test]
+    fn eval_module_topology_core_fixture_passes() {
+        let run = run_module_topology_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("module-topology core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "module-topology-core");
+        assert_eq!(case.area, FixtureArea::ModuleTopology);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_module_topology_core_manifest_covers_required_taxonomy() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => {
+                    Some((fact.family.as_str(), fact.stable_key.as_str(), fact.status))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            ("WorkspaceRoot", "services/api", Some(ObservedStatus::Present)),
+            ("TopologyPackage", "web", Some(ObservedStatus::Present)),
+            ("SourceSet", "web/src/app.test.ts", Some(ObservedStatus::Present)),
+            (
+                "SourceSet",
+                "web/generated/client.generated.ts",
+                Some(ObservedStatus::Generated),
+            ),
+            (
+                "DependencyRequirement",
+                "github.com/acme/lib",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DependencyRequirement",
+                "@scope/lib",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "ResolvedDependencyEdge",
+                "@scope/lib",
+                Some(ObservedStatus::Resolved),
+            ),
+            (
+                "ImportToPackage",
+                "@scope/lib",
+                Some(ObservedStatus::External),
+            ),
+            (
+                "RepoTopologyOverlay",
+                "GeneratedZone",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "RepoTopologyOverlay",
+                "TestOnlyVisibility",
+                Some(ObservedStatus::Present),
+            ),
+        ] {
+            assert!(
+                expected_facts.iter().any(|(family, key, status)| {
+                    *family == required.0
+                        && key.contains(required.1)
+                        && *status == required.2
+                }),
+                "module topology fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_module_topology_core_observes_cache_and_edit_invalidation() {
+        let run = run_module_topology_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("module-topology core case");
+
+        for required in [
+            (
+                "layer_cache.provider.polint.module_graph.hits",
+                "warm=1",
+            ),
+            (
+                "layer_cache.provider.polint.module_topology.hits",
+                "warm=1",
+            ),
+            (
+                "layer_cache.provider.polint.module_graph.misses",
+                "package_json_edit=1",
+            ),
+            (
+                "layer_cache.provider.polint.module_topology.misses",
+                "go_mod_edit=1",
+            ),
+        ] {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == required.0 && invariant.value == required.1
+                    }
+                    _ => false,
+                }),
+                "module topology fixture should observe cache invariant {required:?}: {:#?}",
+                case.observed
+            );
+        }
+    }
+}
