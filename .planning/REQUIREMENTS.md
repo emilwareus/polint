@@ -19,7 +19,7 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 
 ### Semantic Backbone
 
-- [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
+- [x] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
 - [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
 - [ ] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations.
 - [ ] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
@@ -73,7 +73,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-FND-04 | Phase 23 | Pending |
 | SAE-FND-05 | Phase 24 | Complete |
 | SAE-FND-06 | Phase 25 | Complete |
-| SAE-SEM-01 | Phase 26 | Pending |
+| SAE-SEM-01 | Phase 26 | Complete |
 | SAE-SEM-02 | Phase 27 | Pending |
 | SAE-SEM-03 | Phase 28 | Pending |
 | SAE-SEM-04 | Phase 29 | Pending |
