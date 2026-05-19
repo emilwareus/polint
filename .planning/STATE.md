@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T12:15:51.355Z"
+last_updated: "2026-05-19T12:35:28.409Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 39
-  completed_plans: 34
-  percent: 87
+  completed_plans: 35
+  percent: 90
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 27 (Layered Module/Package/Topology Graph) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -56,7 +56,7 @@ Last activity: 2026-05-19
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
-| 27 | In Progress | 2/7 plans complete; internal topology contracts plus Go module/package/source-set/requirement/go.sum topology rows done; requirement SAE-SEM-02 |
+| 27 | In Progress | 3/7 plans complete; internal topology contracts, Go topology, and TS/JS package/workspace/source-set/requirement/lockfile topology rows done; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
@@ -173,6 +173,9 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Go module topology reuses GoAnalysisConfig::from_loaded so configured module_roots take precedence and nearest go.mod discovery remains centralized.
 - [Phase 27-layered-module-package-topology-graph]: go.mod requirements, replace/exclude directives, and go.sum checksum rows remain separate topology facts rather than import or DependsOn edges.
 - [Phase 27-layered-module-package-topology-graph]: Missing go.sum evidence for external requirements is represented as explicit MissingLockfile topology uncertainty.
+- [Phase 27-layered-module-package-topology-graph]: Represent package-manager and tsconfig evidence as internal repo topology overlay rows until a dedicated manager-evidence fact family is introduced.
+- [Phase 27-layered-module-package-topology-graph]: Treat package-lock.json packages as exact lockfile-selected rows while marking pnpm, Yarn, and Bun lockfile presence as unsupported evidence.
+- [Phase 27-layered-module-package-topology-graph]: Use workspace: dependency ranges to override the dependency-section kind with RequirementKind::Workspace.
 
 ## Execution Metrics
 
@@ -202,12 +205,13 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 06 | 17 min | 3 | 14 |
 | 27-layered-module-package-topology-graph | 01 | 12 min | 3 | 8 |
 | 27-layered-module-package-topology-graph | 02 | 14 min | 3 | 5 |
+| 27-layered-module-package-topology-graph | 03 | 16 min | 3 | 5 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 27 Plan 02 Go module/package/dependency topology.
-- Stopped at: Completed 27-layered-module-package-topology-graph-02-PLAN.md; Phase 27 Plan 03 is ready.
+- Last activity: 2026-05-19 - Completed Phase 27 Plan 03 TS/JS package/workspace/dependency topology.
+- Stopped at: Completed 27-layered-module-package-topology-graph-03-PLAN.md; Phase 27 Plan 04 is ready.
 
 ### Quick Tasks Completed
 
@@ -219,4 +223,4 @@ Last activity: 2026-05-19
 
 ## Next Action
 
-Phase 27 Plan 03 is ready for execution.
+Phase 27 Plan 04 is ready for execution.
