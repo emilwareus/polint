@@ -1,6 +1,7 @@
 pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod query;
+pub(crate) mod semantic;
 pub(crate) mod stable_id;
 pub(crate) mod ts;
 
