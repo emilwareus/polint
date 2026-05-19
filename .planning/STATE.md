@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T12:35:28.409Z"
+last_updated: "2026-05-19T12:53:01.629Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 22
   completed_phases: 7
   total_plans: 39
-  completed_plans: 35
-  percent: 90
+  completed_plans: 36
+  percent: 92
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 27 (Layered Module/Package/Topology Graph) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Last activity: 2026-05-19
 
 ## Phase Progress
@@ -56,7 +56,7 @@ Last activity: 2026-05-19
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
-| 27 | In Progress | 3/7 plans complete; internal topology contracts, Go topology, and TS/JS package/workspace/source-set/requirement/lockfile topology rows done; requirement SAE-SEM-02 |
+| 27 | In Progress | 4/7 plans complete; internal topology contracts, Go/TS topology collectors, normal provider wiring, schema v2 layer payload persistence, and topology-aware cache identity done; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
@@ -176,6 +176,9 @@ Last activity: 2026-05-19
 - [Phase 27-layered-module-package-topology-graph]: Represent package-manager and tsconfig evidence as internal repo topology overlay rows until a dedicated manager-evidence fact family is introduced.
 - [Phase 27-layered-module-package-topology-graph]: Treat package-lock.json packages as exact lockfile-selected rows while marking pnpm, Yarn, and Bun lockfile presence as unsupported evidence.
 - [Phase 27-layered-module-package-topology-graph]: Use workspace: dependency ranges to override the dependency-section kind with RequirementKind::Workspace.
+- [Phase 27-layered-module-package-topology-graph]: Base topology is stored by the existing polint.module_graph provider immediately after resolved imports, module nodes, and module edges are replaced.
+- [Phase 27-layered-module-package-topology-graph]: Module graph layer payload schema v2 persists base topology rows but keeps import_to_package_edges out for the later semantic-aware topology pass.
+- [Phase 27-layered-module-package-topology-graph]: Topology cache identity hashes checked-in manifest, lockfile, workspace, and tsconfig files under topology-relevant roots while preserving absent-only extension handling.
 
 ## Execution Metrics
 
@@ -206,12 +209,13 @@ Last activity: 2026-05-19
 | 27-layered-module-package-topology-graph | 01 | 12 min | 3 | 8 |
 | 27-layered-module-package-topology-graph | 02 | 14 min | 3 | 5 |
 | 27-layered-module-package-topology-graph | 03 | 16 min | 3 | 5 |
+| 27-layered-module-package-topology-graph | 04 | 14 min | 3 | 6 |
 
 ## Session
 
 - Last session: 2026-05-19
-- Last activity: 2026-05-19 - Completed Phase 27 Plan 03 TS/JS package/workspace/dependency topology.
-- Stopped at: Completed 27-layered-module-package-topology-graph-03-PLAN.md; Phase 27 Plan 04 is ready.
+- Last activity: 2026-05-19 - Completed Phase 27 Plan 04 module graph topology wiring, payload persistence, and cache identity.
+- Stopped at: Completed 27-layered-module-package-topology-graph-04-PLAN.md; Phase 27 Plan 05 is ready.
 
 ### Quick Tasks Completed
 
