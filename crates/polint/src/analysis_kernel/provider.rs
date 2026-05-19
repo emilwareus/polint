@@ -345,6 +345,61 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_manifest_declares_base_topology_outputs_without_reordering_providers() {
+        assert_eq!(
+            provider_order_for_test(),
+            vec![
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ]
+        );
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph manifest should exist");
+
+        assert_eq!(
+            manifest.outputs,
+            &[
+                "resolved_imports",
+                "module_nodes",
+                "module_edges",
+                "workspace_roots",
+                "topology_packages",
+                "source_sets",
+                "dependency_requirements",
+                "resolved_dependency_edges",
+                "repo_topology_overlays",
+            ]
+        );
+        assert!(!manifest.outputs.contains(&"import_to_package_edges"));
+        assert_eq!(
+            manifest.schema_versions,
+            &[SchemaVersion {
+                name: "module-graph-facts-2",
+                version: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn topology_outputs_are_not_sdk_prelude_exports() {
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let prelude = read_source(&crate_root.join("src/sdk/mod.rs"));
+
+        for term in ["Packages<'_", "Dependencies<'_", "SourceSets<'_", "RepoTopology<'_"] {
+            assert!(
+                !prelude.contains(term),
+                "unexpected topology SDK prelude export `{term}`"
+            );
+        }
+    }
+
+    #[test]
     fn provider_manifest_dependencies_are_deterministic_metadata() {
         let report = provider_order_report_for_test();
 
@@ -390,7 +445,17 @@ mod tests {
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
                     inputs: vec!["source_files", "packages", "imports"],
-                    outputs: vec!["resolved_imports", "module_nodes", "module_edges"],
+                    outputs: vec![
+                        "resolved_imports",
+                        "module_nodes",
+                        "module_edges",
+                        "workspace_roots",
+                        "topology_packages",
+                        "source_sets",
+                        "dependency_requirements",
+                        "resolved_dependency_edges",
+                        "repo_topology_overlays",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.symbol_graph",
