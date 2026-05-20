@@ -17,6 +17,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         symbols: symbol_rows(db),
         references: reference_rows(db),
         semantic: semantic_report(db),
+        mir: mir_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -28,6 +29,7 @@ struct MetadataDebugReport<'a> {
     symbols: Vec<SymbolDebugRow<'a>>,
     references: Vec<ReferenceDebugRow<'a>>,
     semantic: SemanticDebugReport,
+    mir: SemanticMirDebugReport,
 }
 
 #[derive(Serialize)]
@@ -123,6 +125,33 @@ struct SemanticMetadataDebugFields {
     precision: &'static str,
     confidence: &'static str,
     validation: &'static str,
+}
+
+#[derive(Serialize)]
+struct SemanticMirDebugReport {
+    bodies: Vec<SemanticMirDebugRow>,
+    operations: Vec<SemanticMirDebugRow>,
+    places: Vec<SemanticMirDebugRow>,
+    unsupported: Vec<SemanticMirDebugRow>,
+}
+
+#[derive(Serialize)]
+struct SemanticMirDebugRow {
+    family: &'static str,
+    run_id: u64,
+    stable_key: String,
+    producer_id: &'static str,
+    layer_id: &'static str,
+    status: String,
+    precision: &'static str,
+    path: Option<String>,
+    span: Option<DebugSpan>,
+    owner_function: Option<u64>,
+    operation_kind: Option<String>,
+    place_root: Option<String>,
+    place_projections: Vec<String>,
+    unsupported_construct: Option<String>,
+    conservative_action: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -430,6 +459,15 @@ fn semantic_report(db: &AnalysisDb) -> SemanticDebugReport {
         resolutions,
         generated_symbols,
         stable_exports,
+    }
+}
+
+fn mir_report(db: &AnalysisDb) -> SemanticMirDebugReport {
+    SemanticMirDebugReport {
+        bodies: mir_body_rows(db),
+        operations: mir_operation_rows(db),
+        places: mir_place_rows(db),
+        unsupported: mir_unsupported_rows(db),
     }
 }
 

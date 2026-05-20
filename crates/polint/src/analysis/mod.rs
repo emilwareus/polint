@@ -14,3 +14,4 @@ pub(crate) mod places;
 pub(crate) mod provider;
 pub(crate) mod stable_key;
 pub(crate) mod store;
+pub(crate) mod validate;
