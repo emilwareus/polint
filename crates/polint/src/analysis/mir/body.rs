@@ -1,14 +1,106 @@
+use serde::{Deserialize, Serialize};
+
+use crate::analysis::ids::{
+    MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, UnsupportedId,
+};
+use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+use crate::analysis::places::PlaceFact;
+use crate::core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MirBody {
+    pub(crate) id: MirBodyId,
+    pub(crate) language: Language,
+    pub(crate) file: FileId,
+    pub(crate) function: FunctionId,
+    pub(crate) package: Option<PackageId>,
+    pub(crate) module: Option<ModuleNodeId>,
+    pub(crate) owner_stable_key: String,
+    pub(crate) span: Span,
+    pub(crate) stable_key: String,
+    pub(crate) status: MirStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    dead_code,
+    reason = "Statement rows are part of the private MIR contract before lowering populates them."
+)]
+pub(crate) struct MirStatement {
+    pub(crate) id: MirStatementId,
+    pub(crate) body: MirBodyId,
+    pub(crate) ordinal: u32,
+    pub(crate) operation: MirOpId,
+    pub(crate) stable_key: String,
+    pub(crate) status: MirStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    dead_code,
+    reason = "Terminator rows are part of the private MIR contract before CFG lowering consumes them."
+)]
+pub(crate) struct MirTerminator {
+    pub(crate) id: MirTerminatorId,
+    pub(crate) body: MirBodyId,
+    pub(crate) ordinal: u32,
+    pub(crate) kind: MirTerminatorKind,
+    pub(crate) stable_key: String,
+    pub(crate) status: MirStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum MirTerminatorKind {
+    Branch { predicate: MirPredicateId },
+    Return,
+    Unsupported { unsupported: UnsupportedId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MirOutput {
+    pub(crate) bodies: Vec<MirBody>,
+    pub(crate) places: Vec<PlaceFact>,
+    pub(crate) operations: Vec<MirOperation>,
+    pub(crate) unsupported: Vec<UnsupportedSemanticFact>,
+}
+
+impl MirOutput {
+    pub(crate) fn normalized(mut self) -> Self {
+        self.bodies
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.places
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.operations.sort_by(|left, right| {
+            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
+                right.body,
+                right.ordinal,
+                right.stable_key.as_str(),
+            ))
+        });
+        self.unsupported
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum MirStatus {
+    Resolved,
+    Partial,
+    Unknown,
+    Unsupported,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId, UnsupportedId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
     use crate::analysis::mir::op::{
         AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
         UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
     };
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::core::{FileId, FunctionId, Language, PackageId, Span};
-    use crate::core::ModuleNodeId;
+    use crate::core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
 
     fn span() -> Span {
         Span {
@@ -135,13 +227,15 @@ mod tests {
         ]
         .join("\n");
 
-        for forbidden in [
-            "tree_sitter::Node",
-            "oxc_ast",
-            "oxc_span::Span",
-            "Node<'_",
-            "Program<'_",
-        ] {
+        let forbidden = [
+            concat!("tree_sitter", "::Node"),
+            concat!("oxc", "_ast"),
+            concat!("oxc", "_span::Span"),
+            concat!("Node", "<'_"),
+            concat!("Program", "<'_"),
+        ];
+
+        for forbidden in forbidden {
             assert!(!source.contains(forbidden), "forbidden parser type leaked: {forbidden}");
         }
     }

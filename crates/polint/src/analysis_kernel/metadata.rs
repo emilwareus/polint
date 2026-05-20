@@ -39,6 +39,31 @@ pub(crate) enum FactFamily {
     FunctionMetric,
     ComplexityMetric,
     Place,
+    #[expect(
+        dead_code,
+        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+    )]
+    MirBody,
+    #[expect(
+        dead_code,
+        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+    )]
+    MirOperation,
+    #[expect(
+        dead_code,
+        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+    )]
+    MirStatement,
+    #[expect(
+        dead_code,
+        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+    )]
+    MirTerminator,
+    #[expect(
+        dead_code,
+        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+    )]
+    UnsupportedSemantic,
 }
 
 impl FactFamily {
@@ -79,6 +104,11 @@ impl FactFamily {
             Self::FunctionMetric => "FunctionMetric",
             Self::ComplexityMetric => "ComplexityMetric",
             Self::Place => "Place",
+            Self::MirBody => "MirBody",
+            Self::MirOperation => "MirOperation",
+            Self::MirStatement => "MirStatement",
+            Self::MirTerminator => "MirTerminator",
+            Self::UnsupportedSemantic => "UnsupportedSemantic",
         }
     }
 }
