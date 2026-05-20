@@ -71,6 +71,16 @@ pub(crate) struct PlaceTableBuilder {
     places: BTreeMap<String, PlaceDraft>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PlaceInsert {
+    pub(crate) language: Language,
+    pub(crate) file: Option<FileId>,
+    pub(crate) function: Option<FunctionId>,
+    pub(crate) root: PlaceRoot,
+    pub(crate) projections: Vec<PlaceProjection>,
+    pub(crate) status: PlaceStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlaceStableContext {
     file_key: String,
@@ -117,36 +127,33 @@ impl PlaceTableBuilder {
         status: PlaceStatus,
     ) -> String {
         self.insert_with_context(
-            language,
-            file,
-            function,
             &PlaceStableContext::for_test(),
-            root,
-            projections,
-            status,
-        )
-    }
-
-    pub(crate) fn insert_with_context(
-        &mut self,
-        language: Language,
-        file: Option<FileId>,
-        function: Option<FunctionId>,
-        context: &PlaceStableContext,
-        root: PlaceRoot,
-        projections: Vec<PlaceProjection>,
-        status: PlaceStatus,
-    ) -> String {
-        let stable_key = stable_key_for(language, context, &root, &projections);
-        self.places
-            .entry(stable_key.clone())
-            .or_insert_with(|| PlaceDraft {
+            PlaceInsert {
                 language,
                 file,
                 function,
                 root,
                 projections,
                 status,
+            },
+        )
+    }
+
+    pub(crate) fn insert_with_context(
+        &mut self,
+        context: &PlaceStableContext,
+        place: PlaceInsert,
+    ) -> String {
+        let stable_key = stable_key_for(place.language, context, &place.root, &place.projections);
+        self.places
+            .entry(stable_key.clone())
+            .or_insert_with(|| PlaceDraft {
+                language: place.language,
+                file: place.file,
+                function: place.function,
+                root: place.root,
+                projections: place.projections,
+                status: place.status,
             });
         stable_key
     }
@@ -409,29 +416,33 @@ mod tests {
         );
         let mut first = PlaceTableBuilder::default();
         let first_key = first.insert_with_context(
-            Language::Go,
-            Some(FileId(1)),
-            Some(FunctionId(10)),
             &context,
-            PlaceRoot::Temporary {
-                body: MirBodyId(4),
-                ordinal: 12,
+            PlaceInsert {
+                language: Language::Go,
+                file: Some(FileId(1)),
+                function: Some(FunctionId(10)),
+                root: PlaceRoot::Temporary {
+                    body: MirBodyId(4),
+                    ordinal: 12,
+                },
+                projections: vec![PlaceProjection::CallReturn(CallSiteId(8))],
+                status: PlaceStatus::Partial,
             },
-            vec![PlaceProjection::CallReturn(CallSiteId(8))],
-            PlaceStatus::Partial,
         );
         let mut second = PlaceTableBuilder::default();
         let second_key = second.insert_with_context(
-            Language::Go,
-            Some(FileId(99)),
-            Some(FunctionId(77)),
             &context,
-            PlaceRoot::Temporary {
-                body: MirBodyId(44),
-                ordinal: 12,
+            PlaceInsert {
+                language: Language::Go,
+                file: Some(FileId(99)),
+                function: Some(FunctionId(77)),
+                root: PlaceRoot::Temporary {
+                    body: MirBodyId(44),
+                    ordinal: 12,
+                },
+                projections: vec![PlaceProjection::CallReturn(CallSiteId(8))],
+                status: PlaceStatus::Partial,
             },
-            vec![PlaceProjection::CallReturn(CallSiteId(8))],
-            PlaceStatus::Partial,
         );
 
         assert_eq!(first_key, second_key);

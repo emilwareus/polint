@@ -201,7 +201,7 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.semantic_mir"),
             module_topology_dependency_output_digest,
-            symbol_dependency_output_digest.clone(),
+            symbol_dependency_output_digest,
             vec![
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),

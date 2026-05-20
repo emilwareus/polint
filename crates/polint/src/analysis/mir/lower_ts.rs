@@ -19,7 +19,7 @@ use crate::analysis::mir::op::{
     UnsupportedPrecision, UnsupportedSemanticFact,
 };
 use crate::analysis::places::{
-    PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
+    PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
 };
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
@@ -86,20 +86,21 @@ impl TsMirLowering {
                     )
                 })
                 .unwrap_or_else(|| Span::point(file.id, 1, 1));
-            self.unsupported.push(UnsupportedDraft::new(
-                UnsupportedId(self.unsupported.len() as u64),
-                None,
-                None,
-                file.language,
-                file.relative_path.clone(),
-                file.id,
-                span,
-                "parser recovery",
-                error.to_string(),
-                Vec::new(),
-                vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
-                ConservativeAction::StopLowering,
-            ));
+            self.unsupported
+                .push(UnsupportedDraft::new(UnsupportedDraftInput {
+                    id: UnsupportedId(self.unsupported.len() as u64),
+                    body: None,
+                    operation: None,
+                    language: file.language,
+                    file_key: file.relative_path.clone(),
+                    file: file.id,
+                    span,
+                    construct: "parser recovery".to_string(),
+                    source_evidence: error.to_string(),
+                    affected_place_keys: Vec::new(),
+                    affected_domains: vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+                    conservative_action: ConservativeAction::StopLowering,
+                }));
         }
         let mut functions = Vec::new();
         collect_functions(file.source.as_ref(), &parsed.program, &mut functions);
@@ -518,18 +519,22 @@ impl<'source> FunctionLowering<'source> {
                 self.lower_expression(&statement.test, places, operations, unsupported, false);
                 self.lower_statement(&statement.body, places, operations, unsupported);
             }
+            Statement::DoWhileStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "do while",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.push_branch(operations, statement.span);
+                self.lower_statement(&statement.body, places, operations, unsupported);
+                self.lower_expression(&statement.test, places, operations, unsupported, false);
+            }
             Statement::ForStatement(statement) => {
                 if let Some(init) = &statement.init {
-                    if let oxc_ast::ast::ForStatementInit::VariableDeclaration(variable) = init {
-                        for declarator in &variable.declarations {
-                            self.lower_variable_declarator(
-                                declarator,
-                                places,
-                                operations,
-                                unsupported,
-                            );
-                        }
-                    }
+                    self.lower_for_statement_init(init, places, operations, unsupported);
                 }
                 if let Some(test) = &statement.test {
                     self.push_branch(operations, test.span());
@@ -538,6 +543,142 @@ impl<'source> FunctionLowering<'source> {
                 if let Some(update) = &statement.update {
                     self.lower_expression(update, places, operations, unsupported, false);
                 }
+                self.lower_statement(&statement.body, places, operations, unsupported);
+            }
+            Statement::ForInStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "for-in",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_for_statement_left(&statement.left, places, operations, unsupported);
+                self.lower_expression(&statement.right, places, operations, unsupported, false);
+                self.lower_statement(&statement.body, places, operations, unsupported);
+            }
+            Statement::ForOfStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    if statement.r#await {
+                        "for await"
+                    } else {
+                        "for-of"
+                    },
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_for_statement_left(&statement.left, places, operations, unsupported);
+                self.lower_expression(&statement.right, places, operations, unsupported, false);
+                self.lower_statement(&statement.body, places, operations, unsupported);
+            }
+            Statement::SwitchStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "switch",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.push_branch(operations, statement.span);
+                self.lower_expression(
+                    &statement.discriminant,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                for case in &statement.cases {
+                    if let Some(test) = &case.test {
+                        self.push_branch(operations, test.span());
+                        self.lower_expression(test, places, operations, unsupported, false);
+                    }
+                    for statement in &case.consequent {
+                        self.lower_statement(statement, places, operations, unsupported);
+                    }
+                }
+            }
+            Statement::TryStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "try",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                for statement in &statement.block.body {
+                    self.lower_statement(statement, places, operations, unsupported);
+                }
+                if let Some(handler) = &statement.handler {
+                    if let Some(param) = &handler.param {
+                        if let Some(name) = binding_identifier_name(&param.pattern) {
+                            self.insert_local(places, &name);
+                        } else {
+                            self.push_unsupported(
+                                operations,
+                                unsupported,
+                                param.span,
+                                "catch destructuring",
+                                Vec::new(),
+                                ConservativeAction::HavocAffectedPlaces,
+                            );
+                        }
+                    }
+                    for statement in &handler.body.body {
+                        self.lower_statement(statement, places, operations, unsupported);
+                    }
+                }
+                if let Some(finalizer) = &statement.finalizer {
+                    for statement in &finalizer.body {
+                        self.lower_statement(statement, places, operations, unsupported);
+                    }
+                }
+            }
+            Statement::ThrowStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "throw",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_expression(&statement.argument, places, operations, unsupported, false);
+            }
+            Statement::BreakStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "break",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+            }
+            Statement::ContinueStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "continue",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+            }
+            Statement::LabeledStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "labeled statement",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
                 self.lower_statement(&statement.body, places, operations, unsupported);
             }
             Statement::WithStatement(statement) => {
@@ -551,6 +692,17 @@ impl<'source> FunctionLowering<'source> {
                 );
                 self.lower_expression(&statement.object, places, operations, unsupported, false);
                 self.lower_statement(&statement.body, places, operations, unsupported);
+            }
+            Statement::EmptyStatement(_) => {}
+            Statement::DebuggerStatement(statement) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    statement.span,
+                    "debugger",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
             }
             _ => {}
         }
@@ -592,6 +744,79 @@ impl<'source> FunctionLowering<'source> {
             value,
             AssignMode::DeclarationBinding,
         );
+    }
+
+    fn lower_for_statement_init(
+        &mut self,
+        init: &oxc_ast::ast::ForStatementInit<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        match init {
+            oxc_ast::ast::ForStatementInit::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    self.lower_variable_declarator(declarator, places, operations, unsupported);
+                }
+            }
+            _ => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    init.span(),
+                    "for initializer",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_expression(init.to_expression(), places, operations, unsupported, false);
+            }
+        }
+    }
+
+    fn lower_for_statement_left(
+        &mut self,
+        left: &oxc_ast::ast::ForStatementLeft<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        match left {
+            oxc_ast::ast::ForStatementLeft::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    self.lower_variable_declarator(declarator, places, operations, unsupported);
+                }
+            }
+            _ => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    left.span(),
+                    "for left binding",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                if let Some(target) = self.assignment_target_shape(
+                    left.to_assignment_target(),
+                    places,
+                    operations,
+                    unsupported,
+                ) {
+                    self.push_assign(
+                        operations,
+                        left.span(),
+                        target.key,
+                        ValueDraft::Unknown {
+                            evidence: "for left binding".to_string(),
+                        },
+                        if target.projections.is_empty() {
+                            AssignMode::Overwrite
+                        } else {
+                            AssignMode::ProjectionMutation
+                        },
+                    );
+                }
+            }
+        }
     }
 
     fn lower_value(
@@ -699,6 +924,15 @@ impl<'source> FunctionLowering<'source> {
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
+                            if property.computed {
+                                self.lower_expression(
+                                    property.key.to_expression(),
+                                    places,
+                                    operations,
+                                    unsupported,
+                                    false,
+                                );
+                            }
                             self.lower_expression(
                                 &property.value,
                                 places,
@@ -730,22 +964,34 @@ impl<'source> FunctionLowering<'source> {
             }
             Expression::ArrayExpression(array) => {
                 for element in &array.elements {
-                    if let oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) = element {
-                        self.push_unsupported(
-                            operations,
-                            unsupported,
-                            spread.span,
-                            "spread",
-                            Vec::new(),
-                            ConservativeAction::HavocAffectedPlaces,
-                        );
-                        self.lower_expression(
-                            &spread.argument,
-                            places,
-                            operations,
-                            unsupported,
-                            false,
-                        );
+                    match element {
+                        oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => {
+                            self.push_unsupported(
+                                operations,
+                                unsupported,
+                                spread.span,
+                                "spread",
+                                Vec::new(),
+                                ConservativeAction::HavocAffectedPlaces,
+                            );
+                            self.lower_expression(
+                                &spread.argument,
+                                places,
+                                operations,
+                                unsupported,
+                                false,
+                            );
+                        }
+                        oxc_ast::ast::ArrayExpressionElement::Elision(_) => {}
+                        _ => {
+                            self.lower_expression(
+                                element.to_expression(),
+                                places,
+                                operations,
+                                unsupported,
+                                false,
+                            );
+                        }
                     }
                 }
                 Some(self.temporary_shape(places, expression.span()))
@@ -795,6 +1041,15 @@ impl<'source> FunctionLowering<'source> {
                     status: PlaceStatus::Partial,
                     key,
                 }),
+            Expression::BinaryExpression(binary) => {
+                self.lower_expression(&binary.left, places, operations, unsupported, false);
+                self.lower_expression(&binary.right, places, operations, unsupported, false);
+                Some(self.temporary_shape(places, binary.span))
+            }
+            Expression::UnaryExpression(unary) => {
+                self.lower_expression(&unary.argument, places, operations, unsupported, false);
+                Some(self.temporary_shape(places, unary.span))
+            }
             Expression::ConditionalExpression(conditional) => {
                 self.push_branch(operations, conditional.span);
                 self.lower_expression(&conditional.test, places, operations, unsupported, false);
@@ -823,6 +1078,35 @@ impl<'source> FunctionLowering<'source> {
                 self.lower_expression(&logical.left, places, operations, unsupported, false);
                 self.lower_expression(&logical.right, places, operations, unsupported, false)
             }
+            Expression::TemplateLiteral(template) => {
+                for expression in &template.expressions {
+                    self.lower_expression(expression, places, operations, unsupported, false);
+                }
+                Some(self.temporary_shape(places, template.span))
+            }
+            Expression::TaggedTemplateExpression(tagged) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    tagged.span,
+                    "tagged template",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_expression(&tagged.tag, places, operations, unsupported, false);
+                for expression in &tagged.quasi.expressions {
+                    self.lower_expression(expression, places, operations, unsupported, false);
+                }
+                Some(self.temporary_shape(places, tagged.span))
+            }
+            Expression::SequenceExpression(sequence) => {
+                let mut last = None;
+                for expression in &sequence.expressions {
+                    last =
+                        self.lower_expression(expression, places, operations, unsupported, false);
+                }
+                last.or_else(|| Some(self.temporary_shape(places, sequence.span)))
+            }
             Expression::ChainExpression(chain) => {
                 self.push_unsupported(
                     operations,
@@ -832,7 +1116,7 @@ impl<'source> FunctionLowering<'source> {
                     Vec::new(),
                     ConservativeAction::HavocAffectedPlaces,
                 );
-                None
+                self.lower_chain_element(&chain.expression, places, operations, unsupported)
             }
             Expression::AwaitExpression(await_expression) => {
                 self.push_unsupported(
@@ -850,6 +1134,27 @@ impl<'source> FunctionLowering<'source> {
                     unsupported,
                     false,
                 )
+            }
+            Expression::ImportExpression(import_expression) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    import_expression.span,
+                    "dynamic import",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_expression(
+                    &import_expression.source,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                if let Some(options) = &import_expression.options {
+                    self.lower_expression(options, places, operations, unsupported, false);
+                }
+                Some(self.temporary_shape(places, import_expression.span))
             }
             Expression::YieldExpression(yield_expression) => {
                 self.push_unsupported(
@@ -887,6 +1192,83 @@ impl<'source> FunctionLowering<'source> {
                 }
                 Some(self.temporary_shape(places, new_expression.span))
             }
+            Expression::PrivateFieldExpression(private) => self.lower_private_field(
+                private,
+                places,
+                operations,
+                unsupported,
+                assignment_destination,
+            ),
+            Expression::PrivateInExpression(private_in) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    private_in.span,
+                    "private in",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                self.lower_expression(&private_in.right, places, operations, unsupported, false);
+                Some(self.temporary_shape(places, private_in.span))
+            }
+            Expression::ArrowFunctionExpression(function) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    function.span,
+                    "function expression",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                Some(self.temporary_shape(places, function.span))
+            }
+            Expression::FunctionExpression(function) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    function.span,
+                    "function expression",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                Some(self.temporary_shape(places, function.span))
+            }
+            Expression::ClassExpression(class) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    class.span,
+                    "class expression",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                Some(self.temporary_shape(places, class.span))
+            }
+            Expression::ThisExpression(this_expression) => Some(self.keyword_shape(
+                places,
+                "this",
+                this_expression.span,
+                assignment_destination,
+            )),
+            Expression::Super(super_expression) => Some(self.keyword_shape(
+                places,
+                "super",
+                super_expression.span,
+                assignment_destination,
+            )),
+            Expression::MetaProperty(meta) => Some(self.keyword_shape(
+                places,
+                &format!("{}.{}", meta.meta.name, meta.property.name),
+                meta.span,
+                assignment_destination,
+            )),
+            Expression::TSInstantiationExpression(expression) => self.lower_expression(
+                &expression.expression,
+                places,
+                operations,
+                unsupported,
+                assignment_destination,
+            ),
             Expression::JSXElement(element) => {
                 if source_text(self.source, element.span).is_some_and(|text| text.contains("=>")) {
                     self.push_unsupported(
@@ -898,9 +1280,30 @@ impl<'source> FunctionLowering<'source> {
                         ConservativeAction::HavocAffectedPlaces,
                     );
                 }
-                None
+                self.lower_jsx_element(element, places, operations, unsupported);
+                Some(self.temporary_shape(places, element.span))
             }
-            _ => None,
+            Expression::JSXFragment(fragment) => {
+                self.lower_jsx_children(&fragment.children, places, operations, unsupported);
+                Some(self.temporary_shape(places, fragment.span))
+            }
+            Expression::V8IntrinsicExpression(intrinsic) => {
+                self.push_unsupported(
+                    operations,
+                    unsupported,
+                    intrinsic.span,
+                    "v8 intrinsic",
+                    Vec::new(),
+                    ConservativeAction::HavocAffectedPlaces,
+                );
+                Some(self.temporary_shape(places, intrinsic.span))
+            }
+            Expression::BigIntLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
+            Expression::RegExpLiteral(literal) => Some(self.temporary_shape(places, literal.span)),
+            Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::StringLiteral(_) => Some(self.temporary_shape(places, expression.span())),
         }
     }
 
@@ -930,6 +1333,216 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
+    fn lower_chain_element(
+        &mut self,
+        element: &oxc_ast::ast::ChainElement<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) -> Option<PlaceShape> {
+        match element {
+            oxc_ast::ast::ChainElement::CallExpression(call) => self
+                .lower_call(call, places, operations, unsupported)
+                .map(|key| PlaceShape {
+                    root: PlaceRoot::CallReturn {
+                        call: CallSiteId(call.span.start as u64),
+                    },
+                    projections: Vec::new(),
+                    status: PlaceStatus::Partial,
+                    key,
+                }),
+            oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
+                self.lower_static_member(member, places, operations, unsupported, false)
+            }
+            oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
+                self.lower_computed_member(member, places, operations, unsupported, false)
+            }
+            oxc_ast::ast::ChainElement::PrivateFieldExpression(private) => {
+                self.lower_private_field(private, places, operations, unsupported, false)
+            }
+            oxc_ast::ast::ChainElement::TSNonNullExpression(expression) => self.lower_expression(
+                &expression.expression,
+                places,
+                operations,
+                unsupported,
+                false,
+            ),
+        }
+    }
+
+    fn lower_private_field(
+        &mut self,
+        private: &oxc_ast::ast::PrivateFieldExpression<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+        _assignment_destination: bool,
+    ) -> Option<PlaceShape> {
+        if private.optional {
+            self.push_unsupported(
+                operations,
+                unsupported,
+                private.span,
+                "optional chaining",
+                Vec::new(),
+                ConservativeAction::HavocAffectedPlaces,
+            );
+        }
+        self.push_unsupported(
+            operations,
+            unsupported,
+            private.field.span,
+            "private field",
+            Vec::new(),
+            ConservativeAction::HavocAffectedPlaces,
+        );
+        let mut shape =
+            self.lower_expression(&private.object, places, operations, unsupported, false)?;
+        shape.projections.push(PlaceProjection::Unknown {
+            evidence: format!("#{}", private.field.name),
+        });
+        shape.key = self.insert_shape(places, &shape);
+        self.insert_temporary(places, private.span, PlaceStatus::Partial);
+        Some(shape)
+    }
+
+    fn keyword_shape(
+        &self,
+        places: &mut PlaceTableBuilder,
+        evidence: &str,
+        span: oxc_span::Span,
+        _assignment_destination: bool,
+    ) -> PlaceShape {
+        let root = PlaceRoot::Unknown {
+            evidence: evidence.to_string(),
+        };
+        let key = self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Unknown);
+        self.insert_temporary(places, span, PlaceStatus::Partial);
+        PlaceShape {
+            root,
+            projections: Vec::new(),
+            status: PlaceStatus::Unknown,
+            key,
+        }
+    }
+
+    fn lower_jsx_element(
+        &mut self,
+        element: &oxc_ast::ast::JSXElement<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        for attribute in &element.opening_element.attributes {
+            match attribute {
+                oxc_ast::ast::JSXAttributeItem::Attribute(attribute) => {
+                    if let Some(value) = &attribute.value {
+                        self.lower_jsx_attribute_value(value, places, operations, unsupported);
+                    }
+                }
+                oxc_ast::ast::JSXAttributeItem::SpreadAttribute(spread) => {
+                    self.push_unsupported(
+                        operations,
+                        unsupported,
+                        spread.span,
+                        "spread",
+                        Vec::new(),
+                        ConservativeAction::HavocAffectedPlaces,
+                    );
+                    self.lower_expression(&spread.argument, places, operations, unsupported, false);
+                }
+            }
+        }
+        self.lower_jsx_children(&element.children, places, operations, unsupported);
+    }
+
+    fn lower_jsx_attribute_value(
+        &mut self,
+        value: &oxc_ast::ast::JSXAttributeValue<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        match value {
+            oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container) => {
+                self.lower_jsx_expression(&container.expression, places, operations, unsupported);
+            }
+            oxc_ast::ast::JSXAttributeValue::Element(element) => {
+                self.lower_jsx_element(element, places, operations, unsupported);
+            }
+            oxc_ast::ast::JSXAttributeValue::Fragment(fragment) => {
+                self.lower_jsx_children(&fragment.children, places, operations, unsupported);
+            }
+            oxc_ast::ast::JSXAttributeValue::StringLiteral(_) => {}
+        }
+    }
+
+    fn lower_jsx_children(
+        &mut self,
+        children: &[oxc_ast::ast::JSXChild<'_>],
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        for child in children {
+            match child {
+                oxc_ast::ast::JSXChild::Element(element) => {
+                    self.lower_jsx_element(element, places, operations, unsupported);
+                }
+                oxc_ast::ast::JSXChild::Fragment(fragment) => {
+                    self.lower_jsx_children(&fragment.children, places, operations, unsupported);
+                }
+                oxc_ast::ast::JSXChild::ExpressionContainer(container) => {
+                    self.lower_jsx_expression(
+                        &container.expression,
+                        places,
+                        operations,
+                        unsupported,
+                    );
+                }
+                oxc_ast::ast::JSXChild::Spread(spread) => {
+                    self.push_unsupported(
+                        operations,
+                        unsupported,
+                        spread.span,
+                        "spread",
+                        Vec::new(),
+                        ConservativeAction::HavocAffectedPlaces,
+                    );
+                    self.lower_expression(
+                        &spread.expression,
+                        places,
+                        operations,
+                        unsupported,
+                        false,
+                    );
+                }
+                oxc_ast::ast::JSXChild::Text(_) => {}
+            }
+        }
+    }
+
+    fn lower_jsx_expression(
+        &mut self,
+        expression: &oxc_ast::ast::JSXExpression<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        match expression {
+            oxc_ast::ast::JSXExpression::EmptyExpression(_) => {}
+            _ => {
+                self.lower_expression(
+                    expression.to_expression(),
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+            }
+        }
+    }
+
     fn lower_static_member(
         &mut self,
         member: &oxc_ast::ast::StaticMemberExpression<'_>,
@@ -938,6 +1551,16 @@ impl<'source> FunctionLowering<'source> {
         unsupported: &mut Vec<UnsupportedDraft>,
         _assignment_destination: bool,
     ) -> Option<PlaceShape> {
+        if member.optional {
+            self.push_unsupported(
+                operations,
+                unsupported,
+                member.span,
+                "optional chaining",
+                Vec::new(),
+                ConservativeAction::HavocAffectedPlaces,
+            );
+        }
         let mut shape =
             self.lower_expression(&member.object, places, operations, unsupported, false)?;
         shape
@@ -956,6 +1579,16 @@ impl<'source> FunctionLowering<'source> {
         unsupported: &mut Vec<UnsupportedDraft>,
         _assignment_destination: bool,
     ) -> Option<PlaceShape> {
+        if member.optional {
+            self.push_unsupported(
+                operations,
+                unsupported,
+                member.span,
+                "optional chaining",
+                Vec::new(),
+                ConservativeAction::HavocAffectedPlaces,
+            );
+        }
         let mut shape =
             self.lower_expression(&member.object, places, operations, unsupported, false)?;
         shape.projections.push(index_projection(&member.expression));
@@ -1031,6 +1664,39 @@ impl<'source> FunctionLowering<'source> {
             oxc_ast::ast::AssignmentTarget::ComputedMemberExpression(member) => {
                 self.lower_computed_member(member, places, operations, unsupported, true)
             }
+            oxc_ast::ast::AssignmentTarget::PrivateFieldExpression(private) => {
+                self.lower_private_field(private, places, operations, unsupported, true)
+            }
+            oxc_ast::ast::AssignmentTarget::TSAsExpression(expression) => self.lower_expression(
+                &expression.expression,
+                places,
+                operations,
+                unsupported,
+                true,
+            ),
+            oxc_ast::ast::AssignmentTarget::TSSatisfiesExpression(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
+            oxc_ast::ast::AssignmentTarget::TSNonNullExpression(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
+            oxc_ast::ast::AssignmentTarget::TSTypeAssertion(expression) => self.lower_expression(
+                &expression.expression,
+                places,
+                operations,
+                unsupported,
+                true,
+            ),
             oxc_ast::ast::AssignmentTarget::ObjectAssignmentTarget(_)
             | oxc_ast::ast::AssignmentTarget::ArrayAssignmentTarget(_) => {
                 self.push_unsupported(
@@ -1043,7 +1709,6 @@ impl<'source> FunctionLowering<'source> {
                 );
                 None
             }
-            _ => None,
         }
     }
 
@@ -1064,7 +1729,41 @@ impl<'source> FunctionLowering<'source> {
             oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(member) => {
                 self.lower_computed_member(member, places, operations, unsupported, true)
             }
-            _ => None,
+            oxc_ast::ast::SimpleAssignmentTarget::PrivateFieldExpression(private) => {
+                self.lower_private_field(private, places, operations, unsupported, true)
+            }
+            oxc_ast::ast::SimpleAssignmentTarget::TSAsExpression(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
+            oxc_ast::ast::SimpleAssignmentTarget::TSSatisfiesExpression(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
+            oxc_ast::ast::SimpleAssignmentTarget::TSNonNullExpression(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
+            oxc_ast::ast::SimpleAssignmentTarget::TSTypeAssertion(expression) => self
+                .lower_expression(
+                    &expression.expression,
+                    places,
+                    operations,
+                    unsupported,
+                    true,
+                ),
         }
     }
 
@@ -1125,13 +1824,15 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_with_context(
-            self.language,
-            Some(self.file),
-            Some(self.function),
             &self.stable_context,
-            root,
-            projections,
-            status,
+            PlaceInsert {
+                language: self.language,
+                file: Some(self.file),
+                function: Some(self.function),
+                root,
+                projections,
+                status,
+            },
         )
     }
 
@@ -1201,6 +1902,7 @@ impl<'source> FunctionLowering<'source> {
             Vec::new(),
             PlaceStatus::Partial,
         );
+        self.lower_expression(&call.callee, places, operations, unsupported, false);
         let callee = callee_text(&call.callee).map_or_else(
             || ValueDraft::Unknown {
                 evidence: "call".to_string(),
@@ -1282,20 +1984,20 @@ impl<'source> FunctionLowering<'source> {
             .unwrap_or(construct)
             .to_string();
         let span = span_from_oxc(self.file, self.source, span);
-        unsupported.push(UnsupportedDraft::new(
-            unsupported_id,
-            Some(self.body),
-            Some(operation_id),
-            self.language,
-            self.stable_context.file_key().to_string(),
-            self.file,
-            span.clone(),
-            construct,
+        unsupported.push(UnsupportedDraft::new(UnsupportedDraftInput {
+            id: unsupported_id,
+            body: Some(self.body),
+            operation: Some(operation_id),
+            language: self.language,
+            file_key: self.stable_context.file_key().to_string(),
+            file: self.file,
+            span: span.clone(),
+            construct: construct.to_string(),
             source_evidence,
             affected_place_keys,
-            unsupported_domains_for(construct),
-            action,
-        ));
+            affected_domains: unsupported_domains_for(construct),
+            conservative_action: action,
+        }));
         operations.push(OperationDraft::new(
             operation_id,
             self.body,
@@ -1431,15 +2133,21 @@ impl OperationKindDraft {
                 callee,
                 arguments,
                 return_place_key,
-            } => Some(MirOperationKind::Call {
-                site: *site,
-                callee: callee.to_value(place_ids),
-                arguments: arguments
-                    .iter()
-                    .filter_map(|key| place_ids.get(key).copied())
-                    .collect(),
-                return_place: *place_ids.get(return_place_key)?,
-            }),
+            } => {
+                debug_assert!(
+                    arguments.iter().all(|key| place_ids.contains_key(key)),
+                    "MIR call argument place key missing from place table"
+                );
+                Some(MirOperationKind::Call {
+                    site: *site,
+                    callee: callee.to_value(place_ids),
+                    arguments: arguments
+                        .iter()
+                        .map(|key| place_ids.get(key).copied())
+                        .collect::<Option<Vec<_>>>()?,
+                    return_place: *place_ids.get(return_place_key)?,
+                })
+            }
             Self::Return { value } => Some(MirOperationKind::Return {
                 value: value.as_ref().map(|value| value.to_value(place_ids)),
             }),
@@ -1536,34 +2244,39 @@ struct UnsupportedDraft {
     conservative_action: ConservativeAction,
 }
 
+struct UnsupportedDraftInput<S> {
+    id: UnsupportedId,
+    body: Option<MirBodyId>,
+    operation: Option<MirOpId>,
+    language: Language,
+    file_key: String,
+    file: FileId,
+    span: Span,
+    construct: String,
+    source_evidence: S,
+    affected_place_keys: Vec<String>,
+    affected_domains: Vec<UnsupportedDomain>,
+    conservative_action: ConservativeAction,
+}
+
 impl UnsupportedDraft {
-    fn new(
-        id: UnsupportedId,
-        body: Option<MirBodyId>,
-        operation: Option<MirOpId>,
-        language: Language,
-        file_key: impl Into<String>,
-        file: FileId,
-        span: Span,
-        construct: &str,
-        source_evidence: impl Into<String>,
-        affected_place_keys: Vec<String>,
-        affected_domains: Vec<UnsupportedDomain>,
-        conservative_action: ConservativeAction,
-    ) -> Self {
+    fn new<S>(input: UnsupportedDraftInput<S>) -> Self
+    where
+        S: Into<String>,
+    {
         Self {
-            id,
-            body,
-            operation,
-            language,
-            file_key: file_key.into(),
-            file,
-            span,
-            construct: construct.to_string(),
-            source_evidence: source_evidence.into().trim().to_string(),
-            affected_place_keys,
-            affected_domains,
-            conservative_action,
+            id: input.id,
+            body: input.body,
+            operation: input.operation,
+            language: input.language,
+            file_key: input.file_key,
+            file: input.file,
+            span: input.span,
+            construct: input.construct,
+            source_evidence: input.source_evidence.into().trim().to_string(),
+            affected_place_keys: input.affected_place_keys,
+            affected_domains: input.affected_domains,
+            conservative_action: input.conservative_action,
         }
     }
 
@@ -1577,11 +2290,18 @@ impl UnsupportedDraft {
             span: self.span.clone(),
             construct: self.construct.clone(),
             source_evidence: self.source_evidence.clone(),
-            affected_places: self
-                .affected_place_keys
-                .iter()
-                .filter_map(|key| place_ids.get(key).copied())
-                .collect(),
+            affected_places: {
+                let affected_places = self
+                    .affected_place_keys
+                    .iter()
+                    .map(|key| place_ids.get(key).copied())
+                    .collect::<Option<Vec<_>>>();
+                debug_assert!(
+                    affected_places.is_some(),
+                    "unsupported semantic affected place key missing from place table"
+                );
+                affected_places.unwrap_or_default()
+            },
             affected_domains: self.affected_domains.clone(),
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
@@ -1605,12 +2325,34 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
         | "await"
         | "yield"
         | "async rejection path"
+        | "switch"
+        | "try"
+        | "throw"
+        | "for initializer"
+        | "for left binding"
+        | "for-in"
+        | "for-of"
+        | "for await"
+        | "do while"
+        | "break"
+        | "continue"
+        | "labeled statement"
+        | "debugger"
+        | "catch destructuring"
         | "getter"
         | "setter"
         | "complex destructuring"
         | "spread"
         | "rest"
-        | "JSX callback scheduling" => vec![
+        | "JSX callback scheduling"
+        | "tagged template"
+        | "dynamic import"
+        | "private field"
+        | "private in"
+        | "function expression"
+        | "class expression"
+        | "v8 intrinsic"
+        | "unhandled expression" => vec![
             UnsupportedDomain::Mir,
             UnsupportedDomain::Cfg,
             UnsupportedDomain::Domains,
@@ -2101,5 +2843,281 @@ export async function flow(obj, key, promise, value) {
                 ConservativeAction::HavocAffectedPlaces | ConservativeAction::StopLowering
             ));
         }
+    }
+
+    #[test]
+    fn ts_nested_expression_lowering_preserves_calls_and_argument_places() {
+        let output = lower(
+            "src/nested.ts",
+            r#"
+export function nested(a, b, tag) {
+  const computed = a + helper(b);
+  const templated = `${computed}:${helper(a)}`;
+  const tagged = tag`${helper(b)}`;
+  const inverted = !helper(computed);
+  const sequenced = (helper(a), helper(b));
+  const invoked = api[helper(tag)](helper(a));
+  return templated;
+}
+"#,
+        );
+
+        let helper_calls = output
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                MirOperationKind::Call {
+                    callee: MirValue::Unknown { evidence },
+                    arguments,
+                    ..
+                } if evidence == "helper" => Some(arguments.len()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(helper_calls.len(), 8);
+        assert!(
+            helper_calls
+                .iter()
+                .all(|argument_count| *argument_count == 1)
+        );
+        assert!(output.unsupported.iter().any(|row| {
+            row.construct == "tagged template"
+                && row.is_complete()
+                && row.affected_domains.contains(&UnsupportedDomain::Mir)
+        }));
+    }
+
+    #[test]
+    fn ts_control_statement_edges_are_explicit_and_still_lower_nested_calls() {
+        let output = lower(
+            "src/control.ts",
+            r#"
+export function control(kind, items, errors) {
+  try {
+    helper(kind);
+  } catch (err) {
+    recover(err);
+  } finally {
+    cleanup();
+  }
+
+  switch (kind) {
+    case "a":
+      helper(items[0]);
+      break;
+    default:
+      fallback();
+  }
+
+  for (const item of items) {
+    helper(item);
+  }
+
+  for (const key in errors) {
+    helper(errors[key]);
+    continue;
+  }
+
+  do {
+    helper(kind);
+  } while (kind);
+
+  throw new Error(kind);
+}
+"#,
+        );
+
+        for construct in [
+            "try", "switch", "break", "for-of", "for-in", "continue", "do while", "throw",
+        ] {
+            let row = output
+                .unsupported
+                .iter()
+                .find(|row| row.construct == construct)
+                .unwrap_or_else(|| panic!("missing unsupported row: {construct}"));
+            assert!(row.is_complete());
+            assert!(row.affected_domains.contains(&UnsupportedDomain::Mir));
+        }
+
+        let calls = output
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation.kind, MirOperationKind::Call { .. }))
+            .count();
+
+        assert!(
+            calls >= 7,
+            "expected nested calls to remain visible: {output:#?}"
+        );
+    }
+
+    #[test]
+    fn ts_for_initializer_expression_is_explicitly_unsupported_not_silent() {
+        let output = lower(
+            "src/for-init.ts",
+            r#"
+export function loop(start, test, update) {
+  for (helper(start); helper(test); helper(update)) {
+    start;
+  }
+}
+"#,
+        );
+
+        let row = output
+            .unsupported
+            .iter()
+            .find(|row| row.construct == "for initializer")
+            .expect("for initializer expression should be explicit unsupported evidence");
+
+        assert!(row.is_complete());
+        let helper_calls = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        ..
+                    } if evidence == "helper"
+                )
+            })
+            .count();
+        assert_eq!(helper_calls, 3);
+    }
+
+    #[test]
+    fn ts_for_in_and_for_of_existing_targets_record_left_writes() {
+        let output = lower(
+            "src/for-left.ts",
+            r#"
+export function loop(target, index, items, map) {
+  for (target[index] of items) {
+    helper(target[index]);
+  }
+  for (target.value in map) {
+    helper(target.value);
+  }
+}
+"#,
+        );
+
+        let projection_mutations = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    MirOperationKind::Assign {
+                        mode: AssignMode::ProjectionMutation,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert!(projection_mutations >= 2, "{output:#?}");
+        for construct in ["for-of", "for-in", "for left binding"] {
+            let row = output
+                .unsupported
+                .iter()
+                .find(|row| row.construct == construct)
+                .unwrap_or_else(|| panic!("missing unsupported row: {construct}"));
+            assert!(row.is_complete());
+            assert!(row.affected_domains.contains(&UnsupportedDomain::Mir));
+        }
+    }
+
+    #[test]
+    fn ts_array_object_and_jsx_expression_children_preserve_nested_calls() {
+        let output = lower(
+            "src/nested-values.tsx",
+            r#"
+export function view(a, b, items) {
+  const data = [helper(a), ...items, { [helper(items)]: helper(b) }];
+  return <Panel data={helper(data)}>{helper(a)}</Panel>;
+}
+"#,
+        );
+
+        let helper_calls = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        ..
+                    } if evidence == "helper"
+                )
+            })
+            .count();
+
+        assert_eq!(helper_calls, 5);
+        assert!(
+            output
+                .unsupported
+                .iter()
+                .any(|row| row.construct == "spread" && row.is_complete())
+        );
+    }
+
+    #[test]
+    fn ts_optional_private_and_dynamic_import_edges_are_explicit() {
+        let output = lower(
+            "src/private.tsx",
+            r#"
+class Box {
+  #value;
+
+  read(obj, modName) {
+    const optional = obj?.value?.();
+    const loaded = import(modName);
+    obj.value! = modName;
+    this.#value = obj;
+    this.#value++;
+    const node = <Panel data={helper(obj)}>{helper(modName)}</Panel>;
+    return this.#value;
+  }
+}
+"#,
+        );
+
+        for construct in ["optional chaining", "dynamic import", "private field"] {
+            let row = output
+                .unsupported
+                .iter()
+                .find(|row| row.construct == construct)
+                .unwrap_or_else(|| panic!("missing unsupported row: {construct}"));
+            assert!(row.is_complete());
+        }
+
+        let helper_calls = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        ..
+                    } if evidence == "helper"
+                )
+            })
+            .count();
+
+        assert_eq!(helper_calls, 2);
+        assert!(output.operations.iter().any(|operation| {
+            matches!(
+                operation.kind,
+                MirOperationKind::Assign {
+                    mode: AssignMode::ProjectionMutation,
+                    ..
+                }
+            )
+        }));
     }
 }

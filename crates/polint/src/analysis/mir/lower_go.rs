@@ -12,7 +12,7 @@ use crate::analysis::mir::op::{
     UnsupportedPrecision, UnsupportedSemanticFact,
 };
 use crate::analysis::places::{
-    PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
+    PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
 };
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
@@ -173,18 +173,20 @@ impl GoMirLowering {
                 let unsupported_id = UnsupportedId(self.unsupported.len() as u64);
                 let operation_id = MirOpId(self.operations.len() as u64);
                 let span = node_span(file.id, file.source.as_ref(), descendant);
-                self.unsupported.push(UnsupportedDraft::new(
-                    unsupported_id,
-                    Some(body),
-                    Some(operation_id),
-                    file.relative_path.clone(),
-                    file.id,
-                    span.clone(),
-                    "ERROR",
-                    node_text(file.source.as_ref(), descendant).unwrap_or("ERROR"),
-                    vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
-                    ConservativeAction::StopLowering,
-                ));
+                self.unsupported
+                    .push(UnsupportedDraft::new(UnsupportedDraftInput {
+                        id: unsupported_id,
+                        body: Some(body),
+                        operation: Some(operation_id),
+                        file_key: file.relative_path.clone(),
+                        file: file.id,
+                        span: span.clone(),
+                        construct: "ERROR".to_string(),
+                        source_evidence: node_text(file.source.as_ref(), descendant)
+                            .unwrap_or("ERROR"),
+                        affected_domains: vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+                        conservative_action: ConservativeAction::StopLowering,
+                    }));
                 self.operations.push(OperationDraft::new(
                     operation_id,
                     body,
@@ -439,7 +441,7 @@ impl<'source> FunctionLowering<'source> {
                     .get(&name)
                     .or_else(|| self.parameters.get(&name))
                 {
-                    let shape = PlaceShape {
+                    PlaceShape {
                         root: root.clone(),
                         projections: Vec::new(),
                         status: PlaceStatus::Resolved,
@@ -449,8 +451,7 @@ impl<'source> FunctionLowering<'source> {
                             Vec::new(),
                             PlaceStatus::Resolved,
                         ),
-                    };
-                    shape
+                    }
                 } else {
                     let root = PlaceRoot::Global { symbol: None, name };
                     let key =
@@ -584,12 +585,7 @@ impl<'source> FunctionLowering<'source> {
                 PlaceStatus::Partial,
             )
         } else {
-            (
-                PlaceRoot::Unknown {
-                    evidence: name.clone(),
-                },
-                PlaceStatus::Unknown,
-            )
+            (PlaceRoot::Unknown { evidence: name }, PlaceStatus::Unknown)
         };
         let shape = PlaceShape {
             root,
@@ -761,18 +757,18 @@ impl<'source> FunctionLowering<'source> {
             None
         };
         if let Some(construct) = construct {
-            unsupported.push(UnsupportedDraft::new(
-                UnsupportedId(unsupported.len() as u64),
-                Some(self.body),
-                None,
-                self.stable_context.file_key().to_string(),
-                self.file,
-                node_span(self.file, self.source, node),
-                construct,
-                text,
-                unsupported_domains_for(construct),
-                ConservativeAction::HavocAffectedPlaces,
-            ));
+            unsupported.push(UnsupportedDraft::new(UnsupportedDraftInput {
+                id: UnsupportedId(unsupported.len() as u64),
+                body: Some(self.body),
+                operation: None,
+                file_key: self.stable_context.file_key().to_string(),
+                file: self.file,
+                span: node_span(self.file, self.source, node),
+                construct: construct.to_string(),
+                source_evidence: text,
+                affected_domains: unsupported_domains_for(construct),
+                conservative_action: ConservativeAction::HavocAffectedPlaces,
+            }));
         }
     }
 
@@ -788,18 +784,18 @@ impl<'source> FunctionLowering<'source> {
         let unsupported_id = UnsupportedId(unsupported.len() as u64);
         let operation_id = MirOpId(operations.len() as u64);
         let span = node_span(self.file, self.source, node);
-        unsupported.push(UnsupportedDraft::new(
-            unsupported_id,
-            Some(self.body),
-            Some(operation_id),
-            self.stable_context.file_key().to_string(),
-            self.file,
-            span.clone(),
-            construct,
-            node_text(self.source, node).unwrap_or(construct),
-            domains,
-            action,
-        ));
+        unsupported.push(UnsupportedDraft::new(UnsupportedDraftInput {
+            id: unsupported_id,
+            body: Some(self.body),
+            operation: Some(operation_id),
+            file_key: self.stable_context.file_key().to_string(),
+            file: self.file,
+            span: span.clone(),
+            construct: construct.to_string(),
+            source_evidence: node_text(self.source, node).unwrap_or(construct),
+            affected_domains: domains,
+            conservative_action: action,
+        }));
         operations.push(OperationDraft::new(
             operation_id,
             self.body,
@@ -903,13 +899,15 @@ impl<'source> FunctionLowering<'source> {
         status: PlaceStatus,
     ) -> String {
         places.insert_with_context(
-            Language::Go,
-            Some(self.file),
-            Some(self.function),
             &self.stable_context,
-            root,
-            projections,
-            status,
+            PlaceInsert {
+                language: Language::Go,
+                file: Some(self.file),
+                function: Some(self.function),
+                root,
+                projections,
+                status,
+            },
         )
     }
 }
@@ -1018,15 +1016,21 @@ impl OperationKindDraft {
                 callee,
                 arguments,
                 return_place_key,
-            } => Some(MirOperationKind::Call {
-                site: *site,
-                callee: callee.to_value(place_ids),
-                arguments: arguments
-                    .iter()
-                    .filter_map(|key| place_ids.get(key).copied())
-                    .collect(),
-                return_place: *place_ids.get(return_place_key)?,
-            }),
+            } => {
+                debug_assert!(
+                    arguments.iter().all(|key| place_ids.contains_key(key)),
+                    "MIR call argument place key missing from place table"
+                );
+                Some(MirOperationKind::Call {
+                    site: *site,
+                    callee: callee.to_value(place_ids),
+                    arguments: arguments
+                        .iter()
+                        .map(|key| place_ids.get(key).copied())
+                        .collect::<Option<Vec<_>>>()?,
+                    return_place: *place_ids.get(return_place_key)?,
+                })
+            }
             Self::Return { value } => Some(MirOperationKind::Return {
                 value: value.as_ref().map(|value| value.to_value(place_ids)),
             }),
@@ -1122,31 +1126,36 @@ struct UnsupportedDraft {
     conservative_action: ConservativeAction,
 }
 
+struct UnsupportedDraftInput<S> {
+    id: UnsupportedId,
+    body: Option<MirBodyId>,
+    operation: Option<MirOpId>,
+    file_key: String,
+    file: FileId,
+    span: Span,
+    construct: String,
+    source_evidence: S,
+    affected_domains: Vec<UnsupportedDomain>,
+    conservative_action: ConservativeAction,
+}
+
 impl UnsupportedDraft {
-    fn new(
-        id: UnsupportedId,
-        body: Option<MirBodyId>,
-        operation: Option<MirOpId>,
-        file_key: impl Into<String>,
-        file: FileId,
-        span: Span,
-        construct: &str,
-        source_evidence: &str,
-        affected_domains: Vec<UnsupportedDomain>,
-        conservative_action: ConservativeAction,
-    ) -> Self {
+    fn new<S>(input: UnsupportedDraftInput<S>) -> Self
+    where
+        S: AsRef<str>,
+    {
         Self {
-            id,
-            body,
-            operation,
-            file_key: file_key.into(),
-            file,
-            span,
-            construct: construct.to_string(),
-            source_evidence: source_evidence.trim().to_string(),
+            id: input.id,
+            body: input.body,
+            operation: input.operation,
+            file_key: input.file_key,
+            file: input.file,
+            span: input.span,
+            construct: input.construct,
+            source_evidence: input.source_evidence.as_ref().trim().to_string(),
             affected_place_keys: Vec::new(),
-            affected_domains,
-            conservative_action,
+            affected_domains: input.affected_domains,
+            conservative_action: input.conservative_action,
         }
     }
 
@@ -1160,11 +1169,18 @@ impl UnsupportedDraft {
             span: self.span.clone(),
             construct: self.construct.clone(),
             source_evidence: self.source_evidence.clone(),
-            affected_places: self
-                .affected_place_keys
-                .iter()
-                .filter_map(|key| place_ids.get(key).copied())
-                .collect(),
+            affected_places: {
+                let affected_places = self
+                    .affected_place_keys
+                    .iter()
+                    .map(|key| place_ids.get(key).copied())
+                    .collect::<Option<Vec<_>>>();
+                debug_assert!(
+                    affected_places.is_some(),
+                    "unsupported semantic affected place key missing from place table"
+                );
+                affected_places.unwrap_or_default()
+            },
             affected_domains: self.affected_domains.clone(),
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,

@@ -420,7 +420,7 @@ pub(crate) fn run_semantic_mir_core_fixture_for_test(
         &plan,
     )?;
 
-    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed.clone());
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed.clone());
     let cold_warm_equal = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run);
 

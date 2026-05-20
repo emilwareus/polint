@@ -1705,6 +1705,10 @@ mod tests {
                 .expect("semantic MIR provider manifest exists")
         }
 
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "test helper mirrors the semantic MIR layer key inputs"
+        )]
         fn semantic_mir_key(
             source_function_digest: Digest,
             config_digest: Digest,

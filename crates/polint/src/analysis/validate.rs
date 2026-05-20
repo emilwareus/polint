@@ -79,11 +79,13 @@ fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mu
             db,
             &ids.files,
             diagnostics,
-            FactFamily::MirBody,
-            body.stable_key.as_str(),
-            "MirBody.span",
-            Some(body.file),
-            &body.span,
+            SpanCheck {
+                family: FactFamily::MirBody,
+                stable_key: body.stable_key.as_str(),
+                field: "MirBody.span",
+                owner_file: Some(body.file),
+                span: &body.span,
+            },
         );
     }
 }
@@ -158,14 +160,17 @@ fn validate_operation_rows(
             db,
             &ids.files,
             diagnostics,
-            FactFamily::MirOperation,
-            operation.stable_key.as_str(),
-            "MirOperation.span",
-            db.mir_bodies()
-                .iter()
-                .find(|body| body.id == operation.body)
-                .map(|body| body.file),
-            &operation.span,
+            SpanCheck {
+                family: FactFamily::MirOperation,
+                stable_key: operation.stable_key.as_str(),
+                field: "MirOperation.span",
+                owner_file: db
+                    .mir_bodies()
+                    .iter()
+                    .find(|body| body.id == operation.body)
+                    .map(|body| body.file),
+                span: &operation.span,
+            },
         );
         validate_operation_kind(
             &operation.kind,
@@ -217,11 +222,13 @@ fn validate_unsupported_rows(
             db,
             &ids.files,
             diagnostics,
-            FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
-            "UnsupportedSemantic.span",
-            Some(row.file),
-            &row.span,
+            SpanCheck {
+                family: FactFamily::UnsupportedSemantic,
+                stable_key: row.stable_key.as_str(),
+                field: "UnsupportedSemantic.span",
+                owner_file: Some(row.file),
+                span: &row.span,
+            },
         );
         for place in &row.affected_places {
             check_ref(
@@ -607,20 +614,29 @@ fn check_nonempty(
     ));
 }
 
+struct SpanCheck<'a> {
+    family: FactFamily,
+    stable_key: &'a str,
+    field: &'static str,
+    owner_file: Option<FileId>,
+    span: &'a Span,
+}
+
 fn check_span(
     db: &AnalysisDb,
     file_ids: &BTreeSet<FileId>,
     diagnostics: &mut Vec<Diagnostic>,
-    family: FactFamily,
-    stable_key: &str,
-    field: &'static str,
-    owner_file: Option<FileId>,
-    span: &Span,
+    check: SpanCheck<'_>,
 ) {
-    let Some(reason) = span_failure_reason(db, file_ids, owner_file, span) else {
+    let Some(reason) = span_failure_reason(db, file_ids, check.owner_file, check.span) else {
         return;
     };
-    diagnostics.push(semantic_mir_diagnostic(family, stable_key, field, reason));
+    diagnostics.push(semantic_mir_diagnostic(
+        check.family,
+        check.stable_key,
+        check.field,
+        reason,
+    ));
 }
 
 fn span_failure_reason(
