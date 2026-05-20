@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: planning
-last_updated: "2026-05-20T11:19:24.679Z"
+last_updated: "2026-05-20T12:02:00.645Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
@@ -43,7 +43,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to plan
 Phase: 29
 Plan: Not started
-Last activity: 2026-05-20 - Completed quick task 260520-ii6: confirmed latest main security fixes are already merged into PR #33 branch and reran all local checks.
+Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
 
 ## Phase Progress
 
@@ -253,13 +253,14 @@ Last activity: 2026-05-20 - Completed quick task 260520-ii6: confirmed latest ma
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed quick task 260520-ii6: confirmed latest main security fixes are already merged into PR #33 branch and reran all local checks.
+- Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
 - Stopped at: Phase 29 (Local CFG and Control Dependence) is ready for discussion/planning.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260520-jho | Speed up CI with Rust caching and lighter PR platform checks, then measure Actions runtime | 2026-05-20 | implemented | [260520-jho-speed-up-ci-with-rust-caching-and-lighte](./quick/260520-jho-speed-up-ci-with-rust-caching-and-lighte/) |
 | 260520-ii6 | Merge latest main security fixes into PR 33 branch and rerun all local checks | 2026-05-20 | implemented | [260520-ii6-merge-latest-main-security-fixes-into-pr](./quick/260520-ii6-merge-latest-main-security-fixes-into-pr/) |
 | 260520-iba | Resolve PR 33 merge conflict against latest main and re-review merge readiness | 2026-05-20 | implemented | [260520-iba-resolve-pr-33-merge-conflict-against-lat](./quick/260520-iba-resolve-pr-33-merge-conflict-against-lat/) |
 | 260520-h6j | Fix Phase 28 local MIR correctness issues and add edge-case tests | 2026-05-20 | implemented | [260520-h6j-fix-phase-28-local-mir-correctness-issue](./quick/260520-h6j-fix-phase-28-local-mir-correctness-issue/) |
