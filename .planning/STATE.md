@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T07:29:37.520Z"
+last_updated: "2026-05-20T07:46:11.703Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
   completed_phases: 8
   total_plans: 46
-  completed_plans: 40
-  percent: 87
+  completed_plans: 41
+  percent: 89
 ---
 
 # State: polint
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 28
+Status: Ready to execute Phase 28 plan 03
 Phase: 28 (Private Semantic MIR and Place Identity) — EXECUTING
-Plan: 2 of 7
-Last activity: 2026-05-20 -- Completed 28-01 private semantic MIR/place contract foundation
+Plan: 3 of 7
+Last activity: 2026-05-20 -- Completed 28-02 semantic MIR storage and metadata
 
 ## Phase Progress
 
@@ -190,6 +190,9 @@ Last activity: 2026-05-20 -- Completed 28-01 private semantic MIR/place contract
 - [Phase 28-private-semantic-mir-and-place-identity]: Keep the new analysis module crate-private and expose no SDK, runner, CLI, or public docs surface.
 - [Phase 28-private-semantic-mir-and-place-identity]: Use run-local dense IDs only as handles; persistent place and MIR identity is carried by stable keys.
 - [Phase 28-private-semantic-mir-and-place-identity]: Represent unsupported semantics as structured rows with source evidence and conservative action labels.
+- [Phase 28-private-semantic-mir-and-place-identity]: Keep stored semantic MIR artifacts behind AnalysisDb crate-private accessors and SemanticStore rather than adding SDK or RuleCtx views.
+- [Phase 28-private-semantic-mir-and-place-identity]: Use polint.semantic_mir as the internal producer/layer id and map stored MIR precision conservatively, never Exact.
+- [Phase 28-private-semantic-mir-and-place-identity]: Treat public-boundary proof as source-surface tests over SDK, runner, docs, README, and _bench.
 
 ## Execution Metrics
 
@@ -225,12 +228,13 @@ Last activity: 2026-05-20 -- Completed 28-01 private semantic MIR/place contract
 | 27-layered-module-package-topology-graph | 06 | 17 min | 2 | 21 |
 | 27-layered-module-package-topology-graph | 07 | 5 min | 1 | 2 |
 | 28-private-semantic-mir-and-place-identity | 01 | 19 min | 3 | 12 |
+| 28-private-semantic-mir-and-place-identity | 02 | 12 min | 3 | 4 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed 28-01 private semantic MIR/place contract foundation.
-- Stopped at: Completed 28-private-semantic-mir-and-place-identity-01-PLAN.md; Phase 28 plan 02 is next.
+- Last activity: 2026-05-20 - Completed 28-02 semantic MIR storage and metadata.
+- Stopped at: Completed 28-private-semantic-mir-and-place-identity-02-PLAN.md; Phase 28 plan 03 is next.
 
 ### Quick Tasks Completed
 

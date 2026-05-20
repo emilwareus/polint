@@ -30,7 +30,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 25 | 4/4 | Complete    | 2026-05-18 |
 | 26 | 6/6 | Complete    | 2026-05-19 |
 | 27 | 7/7 | Complete    | 2026-05-19 |
-| 28 | 1/7 | In Progress | 2026-05-20 |
+| 28 | 2/7 | In Progress | 2026-05-20 |
 | 29 | Local CFG and Control Dependence | Build local CFG, dominance, postdominance, and control-dependence facts over MIR. | SAE-SEM-04 |
 | 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
 | 31 | P0 Abstract-Domain Kernel | Add deterministic lattice/transfer infrastructure and first local domains. | SAE-INT-01 |
@@ -195,11 +195,11 @@ Plans:
 **Goal:** Add private `analysis::mir` and `analysis::places` lowering for Go and TS/JS function bodies.
 **Requirements:** SAE-SEM-03
 **Research:** `research/implementation-bootstrap/FINAL-REPORT.md`, `research/implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`, `research/abstract-interpretation/implementation/MIR-CONTRACT.md`
-**Plans:** 1/7 plans executed
+**Plans:** 2/7 plans executed
 
 Plans:
 - [x] 28-01-PLAN.md — Private analysis, MIR, and place contracts
-- [ ] 28-02-PLAN.md — Semantic MIR storage and metadata
+- [x] 28-02-PLAN.md — Semantic MIR storage and metadata
 - [ ] 28-03-PLAN.md — Go semantic MIR lowering
 - [ ] 28-04-PLAN.md — TS/JS semantic MIR lowering
 - [ ] 28-05-PLAN.md — Provider, cache identity, validation, and debug wiring
