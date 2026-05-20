@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T08:03:59.601Z"
+last_updated: "2026-05-20T08:24:27.085Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
   completed_phases: 8
   total_plans: 46
-  completed_plans: 42
-  percent: 91
+  completed_plans: 43
+  percent: 93
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 28 (Private Semantic MIR and Place Identity) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Last activity: 2026-05-20
 
 ## Phase Progress
@@ -57,7 +57,7 @@ Last activity: 2026-05-20
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
-| 28 | In Progress | 3/7 plans complete; private MIR/place contracts, semantic store, and Go MIR/body/place/operation lowering done; requirement SAE-SEM-03 |
+| 28 | In Progress | 4/7 plans complete; private MIR/place contracts, semantic store, Go lowering, and TS/JS MIR/body/place/operation lowering done; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
@@ -196,6 +196,9 @@ Last activity: 2026-05-20
 - [Phase 28-private-semantic-mir-and-place-identity]: Keep Go MIR lowering crate-private under analysis::mir::lower_go with no SDK, runner, CLI, docs, or public JSON surface.
 - [Phase 28-private-semantic-mir-and-place-identity]: Draft MIR operations against stable place keys, then resolve to run-local PlaceId values only after PlaceTableBuilder assigns deterministic dense IDs.
 - [Phase 28-private-semantic-mir-and-place-identity]: Represent Go calls only as MirOperationKind::Call shape evidence and emit UnsupportedSemanticFact rows for dynamic/control constructs instead of direct-call facts.
+- [Phase 28-private-semantic-mir-and-place-identity]: Keep TS/JS MIR lowering crate-private under analysis::mir::lower_ts with no SDK, runner, CLI, docs, or public JSON surface.
+- [Phase 28-private-semantic-mir-and-place-identity]: Use Oxc AST nodes only inside the lowering pass; emitted MIR/place rows contain polint-owned IDs, spans, stable keys, roots, projections, operations, and unsupported facts.
+- [Phase 28-private-semantic-mir-and-place-identity]: Represent TS/JS calls only as MirOperationKind::Call shape evidence with call-return places; no direct target facts or call graph surface was added.
 
 ## Execution Metrics
 
@@ -233,12 +236,13 @@ Last activity: 2026-05-20
 | 28-private-semantic-mir-and-place-identity | 01 | 19 min | 3 | 12 |
 | 28-private-semantic-mir-and-place-identity | 02 | 12 min | 3 | 4 |
 | 28-private-semantic-mir-and-place-identity | 03 | 14 min | 2 | 2 |
+| 28-private-semantic-mir-and-place-identity | 04 | 17 min | 2 | 2 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed 28-03 Go MIR lowering.
-- Stopped at: Completed 28-private-semantic-mir-and-place-identity-03-PLAN.md; Phase 28 plan 04 is next.
+- Last activity: 2026-05-20 - Completed 28-04 TS/JS MIR lowering.
+- Stopped at: Completed 28-private-semantic-mir-and-place-identity-04-PLAN.md; Phase 28 plan 05 is next.
 
 ### Quick Tasks Completed
 
