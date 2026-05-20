@@ -41,6 +41,7 @@ pub(crate) enum LayerKind {
     ModuleGraph,
     SymbolGraph,
     ModuleTopology,
+    SemanticMir,
     Metrics,
     Extension,
 }
@@ -396,6 +397,64 @@ impl LayerKey {
                 DigestKind::ExtensionCode,
                 "extension_digest_absent",
             )],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Semantic MIR layer identity must keep source, lifecycle, upstream, and provider inputs explicit."
+    )]
+    pub(crate) fn semantic_mir_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        symbol_graph_output_digest: Digest,
+        module_topology_output_digest: Digest,
+        semantic_mir_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.semantic_mir",
+            "semantic MIR layer keys require the semantic MIR provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "semantic_mir_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(2 + source_function_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.extend(source_function_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(2 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+        dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
+
+        Self::new(
+            LayerKind::SemanticMir,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            semantic_mir_parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "semantic_mir_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
         )
     }
 
