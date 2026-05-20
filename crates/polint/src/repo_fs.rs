@@ -337,7 +337,12 @@ pub(crate) fn ensure_no_symlink_ancestors(path: &Path) -> Result<(), RepoFileRea
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(RepoFileReadError::EscapesRepo);
             }
-            Ok(_) => break,
+            Ok(metadata) => {
+                if !missing.is_empty() && !metadata.is_dir() {
+                    return Err(RepoFileReadError::NotDirectory);
+                }
+                break;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(name) = existing.file_name().map(ToOwned::to_owned) {
                     missing.push(name);
@@ -346,17 +351,26 @@ pub(crate) fn ensure_no_symlink_ancestors(path: &Path) -> Result<(), RepoFileRea
                     break;
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err(RepoFileReadError::NotDirectory);
+            }
             Err(_) => return Err(RepoFileReadError::Metadata),
         }
     }
-    for name in missing.iter().rev() {
+    for (index, name) in missing.iter().rev().enumerate() {
         existing.push(name);
         match fs::symlink_metadata(&existing) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(RepoFileReadError::EscapesRepo);
             }
+            Ok(metadata) if !metadata.is_dir() && index + 1 < missing.len() => {
+                return Err(RepoFileReadError::NotDirectory);
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err(RepoFileReadError::NotDirectory);
+            }
             Err(_) => return Err(RepoFileReadError::Metadata),
         }
     }
@@ -465,5 +479,18 @@ mod tests {
 
         assert!(matches!(error, RepoFileReadError::EscapesRepo));
         assert!(!outside.path().join("output/latest.json").exists());
+    }
+
+    #[test]
+    fn ensure_no_symlink_ancestors_rejects_missing_path_below_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("cache"), "not a directory").expect("write file");
+
+        let error = ensure_no_symlink_ancestors(
+            &temp.path().join("cache").join("layers").join("blob.json"),
+        )
+        .expect_err("file ancestor should be rejected");
+
+        assert!(matches!(error, RepoFileReadError::NotDirectory));
     }
 }
