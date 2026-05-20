@@ -203,7 +203,7 @@ Concrete build method:
 
 1. Add public graph types: `ControlFlowGraph`, `BasicBlock`, `CfgEdge`,
    `CfgNodeId`, and `CfgEdgeKind`.
-2. Add `Cfg<'_>::for_function(function_id) -> Option<&ControlFlowGraph>`.
+2. Add a CFG fact-view query for retrieving a function's `ControlFlowGraph`.
 3. For TS/JS, adapt Oxc semantic CFG output into polint's graph model.
 4. For Go, start from existing branch extraction and expand to entry, exit,
    sequential statement, branch, loop, switch, defer, and panic/return edges.
@@ -301,7 +301,7 @@ Concrete build method:
 6. For Python later, start with lexical/direct call names and import-resolved
    module functions; mark attribute/dynamic calls as unresolved or low
    confidence.
-7. Add `CallGraph<'_>::edges()` and `CallGraph<'_>::calls_from(function_id)`.
+7. Add call-graph fact-view queries for all edges and calls from a function.
 
 ### 6. Symbols And References
 
@@ -472,7 +472,7 @@ Impact:
 
 ## Priority 4: Resolved Call Graph
 
-Fulfill `CallGraph<'_>` in stages.
+Fulfill the call-graph fact view in stages.
 
 Start with conservative direct-call facts:
 
@@ -497,14 +497,14 @@ Impact:
 
 ## Priority 5: General CFG Facts
 
-Fulfill `Cfg<'_>` with an honest intra-procedural control-flow model.
+Fulfill the CFG fact view with an honest intra-procedural control-flow model.
 
 Add public facts and accessors such as:
 
 - `ControlFlowGraph`
 - `BasicBlock`
 - `CfgEdge`
-- `Cfg<'_>::for_function(function_id)`
+- query a function's CFG from the fact view
 
 Start syntax-level for Go and TS/JS and reach full coverage there first. The
 first version does not need type semantics, but it must be a real graph rather

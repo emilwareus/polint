@@ -1,3 +1,4 @@
+use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
 use crate::analysis::mir::body::MirOutput;
 use crate::analysis::mir::lower_go::lower_go_mir;
 use crate::analysis::mir::lower_ts::lower_ts_mir;
@@ -59,12 +60,107 @@ fn merge_language_outputs(outputs: impl IntoIterator<Item = MirOutput>) -> MirOu
         unsupported: Vec::new(),
     };
     for output in outputs {
-        merged.bodies.extend(output.bodies);
-        merged.places.extend(output.places);
-        merged.operations.extend(output.operations);
-        merged.unsupported.extend(output.unsupported);
+        append_language_output(&mut merged, output);
     }
     merged.normalized()
+}
+
+fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
+    let body_offset = merged.bodies.len() as u64;
+    let place_offset = merged.places.len() as u64;
+    let operation_offset = merged.operations.len() as u64;
+    let unsupported_offset = merged.unsupported.len() as u64;
+
+    for body in &mut output.bodies {
+        body.id = offset_body_id(body.id, body_offset);
+    }
+    for place in &mut output.places {
+        place.id = offset_place_id(place.id, place_offset);
+        if let PlaceRoot::Temporary { body, .. } = &mut place.root {
+            *body = offset_body_id(*body, body_offset);
+        }
+    }
+    for operation in &mut output.operations {
+        operation.id = offset_operation_id(operation.id, operation_offset);
+        operation.body = offset_body_id(operation.body, body_offset);
+        offset_operation_kind_refs(&mut operation.kind, place_offset, unsupported_offset);
+    }
+    for row in &mut output.unsupported {
+        row.id = offset_unsupported_id(row.id, unsupported_offset);
+        row.body = row.body.map(|body| offset_body_id(body, body_offset));
+        row.operation = row
+            .operation
+            .map(|operation| offset_operation_id(operation, operation_offset));
+        for place in &mut row.affected_places {
+            *place = offset_place_id(*place, place_offset);
+        }
+    }
+
+    merged.bodies.extend(output.bodies);
+    merged.places.extend(output.places);
+    merged.operations.extend(output.operations);
+    merged.unsupported.extend(output.unsupported);
+}
+
+fn offset_operation_kind_refs(
+    kind: &mut MirOperationKind,
+    place_offset: u64,
+    unsupported_offset: u64,
+) {
+    match kind {
+        MirOperationKind::StorageLive { place } | MirOperationKind::Read { place } => {
+            *place = offset_place_id(*place, place_offset);
+        }
+        MirOperationKind::Bind { place, value }
+        | MirOperationKind::Assign { place, value, .. }
+        | MirOperationKind::Write { place, value } => {
+            *place = offset_place_id(*place, place_offset);
+            offset_value_ref(value, place_offset);
+        }
+        MirOperationKind::Branch { .. } => {}
+        MirOperationKind::Call {
+            callee,
+            arguments,
+            return_place,
+            ..
+        } => {
+            offset_value_ref(callee, place_offset);
+            for argument in arguments {
+                *argument = offset_place_id(*argument, place_offset);
+            }
+            *return_place = offset_place_id(*return_place, place_offset);
+        }
+        MirOperationKind::Return { value } => {
+            if let Some(value) = value {
+                offset_value_ref(value, place_offset);
+            }
+        }
+        MirOperationKind::Unsupported { unsupported } => {
+            *unsupported = offset_unsupported_id(*unsupported, unsupported_offset);
+        }
+    }
+}
+
+fn offset_value_ref(value: &mut MirValue, place_offset: u64) {
+    if let MirValue::Place(place) = value {
+        *place = offset_place_id(*place, place_offset);
+    }
+}
+
+fn offset_body_id(id: MirBodyId, offset: u64) -> MirBodyId {
+    MirBodyId(id.0 + offset)
+}
+
+fn offset_place_id(id: PlaceId, offset: u64) -> PlaceId {
+    PlaceId(id.0 + offset)
+}
+
+fn offset_operation_id(id: MirOpId, offset: u64) -> MirOpId {
+    MirOpId(id.0 + offset)
+}
+
+fn offset_unsupported_id(id: UnsupportedId, offset: u64) -> UnsupportedId {
+    UnsupportedId(id.0 + offset)
 }
 
 fn semantic_mir_output_digest(

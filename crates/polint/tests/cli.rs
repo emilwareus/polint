@@ -1141,6 +1141,326 @@ fn semantic_mir_internals_stay_private() {
             .any(|diagnostic| diagnostic.rule_id == "local/semantic-mir-public-probe"),
         "external semantic MIR public-boundary rule should run: {report:#?}"
     );
+    assert_semantic_mir_public_output_is_private(&check_json);
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/semantic-mir-public-probe"
+    );
+    let fact_views = inspect["rules"][0]["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {inspect:#?}"));
+    for canonical_path in [
+        "polint::sdk::facts::ModuleGraphFacts<'_>",
+        "polint::sdk::facts::References<'_>",
+        "polint::sdk::facts::ResolvedImports<'_>",
+        "polint::sdk::facts::Symbols<'_>",
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["canonical_path"] == canonical_path),
+            "inspect JSON should include public fact view {canonical_path}: {inspect_json}"
+        );
+    }
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_semantic_mir_public_output_is_private(output);
+    }
+    assert_semantic_mir_public_surfaces_are_private();
+    assert_semantic_mir_cli_help_is_private();
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("ResolvedImports<'_>"));
+    assert!(source.contains("ModuleGraphFacts<'_>"));
+    assert!(source.contains("Symbols<'_>"));
+    assert!(source.contains("References<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_semantic_mir_public_rule_source(&source);
+}
+
+fn assert_semantic_mir_public_output_is_private(output: &str) {
+    for marker in SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak semantic MIR internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn assert_semantic_mir_public_surfaces_are_private() {
+    let root = repo_root();
+    let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
+    let public_lib_rs = lib_rs
+        .split("pub(crate) mod analysis;")
+        .next()
+        .unwrap_or(&lib_rs);
+    let mut public_surface = public_lib_rs.to_string();
+    for path in [
+        root.join("README.md"),
+        root.join("docs"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&public_surface_text(&path));
+    }
+
+    for marker in SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public docs/CLI/SDK/runner/crate-root source must not expose semantic MIR marker `{marker}`"
+        );
+    }
+}
+
+fn assert_semantic_mir_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose semantic MIR marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
+const SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint.semantic_mir",
+    "semantic-mir-facts",
+    "MirBody",
+    "MirOperation",
+    "PlaceFact",
+    "UnsupportedSemanticFact",
+    "SemanticStore",
+    "analysis::mir",
+    "analysis::places",
+    "mir.bodies",
+    "mir.operations",
+    "mir.places",
+    "mir.unsupported",
+    "Mir<'_>",
+    "Places<'_>",
+    "Cfg<'_>",
+    "CallGraph<'_>",
+    "DataFlow<'_>",
+    "polint mir",
+    "polint facts",
+    "polint explain",
+];
+
+fn assert_semantic_mir_public_rule_source(source: &str) {
+    assert!(
+        source.contains("use polint::sdk::prelude::*;"),
+        "external rule must import the public SDK prelude only:\n{source}"
+    );
+    assert!(
+        source.contains("ResolvedImports<'_>")
+            && source.contains("ModuleGraphFacts<'_>")
+            && source.contains("Symbols<'_>")
+            && source.contains("References<'_>"),
+        "external rule must request supported public fact views through its signature:\n{source}"
+    );
+    for forbidden in [
+        concat!("polint::", "analysis"),
+        concat!("polint::", "analysis_kernel"),
+        concat!("polint::", "core"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{source}"
+        );
+    }
+    assert_semantic_mir_public_output_is_private(source);
+}
+
+fn write_semantic_mir_public_rule_repo(root: &Path) {
+    assert_semantic_mir_public_rule_source(SEMANTIC_MIR_PUBLIC_RULE_SOURCE);
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**", "web/src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        SEMANTIC_MIR_PUBLIC_RULE_SOURCE,
+    );
+    write_semantic_mir_fixture_files(root);
+
+    let case_root = root.join(".polint/tests/rules/semantic_mir_public/basic");
+    write_file(
+        &case_root.join("polint-test.toml"),
+        r#"
+rule = "local/semantic-mir-public-probe"
+paths = ["src/**", "web/src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/semantic-mir-public-probe"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public facts remain compatible"
+"#,
+    );
+    write_semantic_mir_fixture_files(&case_root);
+}
+
+const SEMANTIC_MIR_PUBLIC_RULE_SOURCE: &str = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/semantic-mir-public-probe",
+    description = "Reads supported public facts while semantic MIR stays private.",
+    severity = "warn"
+)]
+fn semantic_mir_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let resolved_count = resolved.iter().count();
+    let edge_count = graph.edges().len();
+    let symbol_count = symbols.iter().count();
+    let reference_count = references.iter().count();
+    if resolved_count == 0 && edge_count == 0 && symbol_count == 0 && reference_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public facts remain compatible",
+        )
+        .with_evidence("resolved_imports", resolved_count.to_string())
+        .with_evidence("module_edges", edge_count.to_string())
+        .with_evidence("symbols", symbol_count.to_string())
+        .with_evidence("references", reference_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![semantic_mir_public_probe()])
+}
+"#;
+
+fn write_semantic_mir_fixture_files(root: &Path) {
+    write_file(
+        &root.join("go.mod"),
+        r#"module example.com/semanticmirpublic
+
+go 1.22
+"#,
+    );
+    write_file(
+        &root.join("src/service/service.go"),
+        r#"package service
+
+import "fmt"
+
+func FormatUser(name string) string {
+    if name == "" {
+        return fmt.Sprint("anonymous")
+    }
+    return name
+}
+"#,
+    );
+    write_file(
+        &root.join("web/package.json"),
+        r#"{"name":"semantic-mir-public-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("web/src/lib.ts"),
+        r#"export function helper(input: string) {
+  return input.trim();
+}
+"#,
+    );
+    write_file(
+        &root.join("web/src/app.ts"),
+        r#"import { helper } from "./lib";
+
+export function render(name: string) {
+  return helper(name);
+}
+"#,
+    );
+    write_file(
+        &root.join("web/src/widget.js"),
+        r#"export function widget(items) {
+  return items;
+}
+"#,
+    );
 }
 
 #[test]
@@ -1725,6 +2045,45 @@ fn source_tree_text(path: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn public_surface_text(path: &Path) -> String {
+    if path.is_file() {
+        return fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read public file {}: {error}", path.display()));
+    }
+
+    let mut files = Vec::new();
+    collect_public_surface_files(path, &mut files);
+    files.sort();
+    files
+        .into_iter()
+        .map(|file| {
+            fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("read public file {}: {error}", file.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_public_surface_files(path: &Path, files: &mut Vec<PathBuf>) {
+    for entry in
+        fs::read_dir(path).unwrap_or_else(|error| panic!("read dir {}: {error}", path.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read dir entry under {}: {error}", path.display()))
+            .path();
+        if path.is_dir() {
+            collect_public_surface_files(&path, files);
+        } else if path.extension().is_some_and(|extension| {
+            matches!(
+                extension.to_string_lossy().as_ref(),
+                "json" | "md" | "rs" | "toml" | "txt"
+            )
+        }) {
+            files.push(path);
+        }
+    }
 }
 
 fn collect_rust_files(path: &Path, files: &mut Vec<PathBuf>) {

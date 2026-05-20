@@ -20,8 +20,8 @@ interprocedural analysis.
 - `CallEdgeFact`
 - `CallResolutionStatus`
 - `CallConfidence`
-- `CallGraph<'_>::edges()`
-- `CallGraph<'_>::calls_from(function_id)`
+- all call-graph edges query
+- calls-from-function query
 
 ## Build Method
 
