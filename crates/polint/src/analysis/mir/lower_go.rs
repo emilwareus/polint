@@ -764,3 +764,172 @@ func authorize(user User) bool {
         assert!(!debug.contains("method_declaration"));
     }
 }
+
+#[cfg(test)]
+mod operations {
+    use super::*;
+    use crate::analysis::mir::op::{
+        AssignMode, ConservativeAction, MirOperationKind, UnsupportedDomain,
+    };
+    use std::path::PathBuf;
+
+    fn lower(source: &str) -> MirOutput {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from("flow.go"),
+            "flow.go".to_string(),
+            source.to_string(),
+        );
+        let diagnostics = crate::go::analyze(&mut db);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        lower_go_mir(&db)
+    }
+
+    #[test]
+    fn go_statement_lowering_emits_assignment_modes_and_control_shapes() {
+        let output = lower(
+            r#"
+package auth
+
+type User struct { Tokens []string }
+
+func flow(user User, index int) bool {
+    var count int
+    token := user.Tokens[index]
+    a, b = b, a
+    user.Tokens[index] = token
+    count = index
+    if token != "" { count = count + 1 }
+    for count < 10 { count = count + 1 }
+    switch token { case "": return false; default: count = count + 1 }
+    return token != ""
+}
+"#,
+        );
+
+        let modes = output
+            .operations
+            .iter()
+            .filter_map(|operation| match operation.kind {
+                MirOperationKind::Assign { mode, .. } => Some(mode),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(modes.contains(&AssignMode::DeclarationBinding));
+        assert!(modes.contains(&AssignMode::Overwrite));
+        assert!(modes.contains(&AssignMode::ProjectionMutation));
+        assert!(modes.contains(&AssignMode::Simultaneous));
+        assert!(output
+            .operations
+            .iter()
+            .any(|operation| matches!(operation.kind, MirOperationKind::Branch { .. })));
+        assert!(output
+            .operations
+            .iter()
+            .any(|operation| matches!(operation.kind, MirOperationKind::Return { .. })));
+    }
+
+    #[test]
+    fn go_call_operations_are_shape_evidence_with_deterministic_call_sites() {
+        let source = r#"
+package auth
+
+func flow(token string, count int) bool {
+    result := helper(token, count)
+    return result
+}
+"#;
+        let first = lower(source);
+        let second = lower(source);
+
+        let first_calls = first
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                MirOperationKind::Call {
+                    site,
+                    callee,
+                    arguments,
+                    return_place,
+                } => Some((operation.stable_key.clone(), *site, callee, arguments, return_place)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let second_calls = second
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                MirOperationKind::Call {
+                    site,
+                    arguments,
+                    return_place,
+                    ..
+                } => Some((operation.stable_key.clone(), *site, arguments.len(), *return_place)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(first_calls.len(), 1);
+        assert_eq!(
+            first_calls
+                .iter()
+                .map(|(key, site, _, arguments, return_place)| {
+                    (key.clone(), *site, arguments.len(), **return_place)
+                })
+                .collect::<Vec<_>>(),
+            second_calls
+        );
+        assert!(first_calls[0].2 != &crate::analysis::mir::op::MirValue::Unknown {
+            evidence: "direct target".to_string()
+        });
+    }
+
+    #[test]
+    fn go_unsupported_semantics_are_structured_and_conservative() {
+        let output = lower(
+            r#"
+package auth
+
+func flow(ch chan int, token string, count int) bool {
+    go helper(token)
+    defer helper(token)
+    select {
+    case ch <- count:
+    case value := <-ch:
+        count = value
+    }
+    reflect.ValueOf(token)
+    unsafe.Sizeof(count)
+    panic(token)
+    recover()
+    return token != ""
+}
+"#,
+        );
+
+        for construct in [
+            "go_statement",
+            "defer_statement",
+            "select_statement",
+            "send_statement",
+            "channel_receive",
+            "reflect",
+            "unsafe",
+            "panic",
+            "recover",
+        ] {
+            let row = output
+                .unsupported
+                .iter()
+                .find(|row| row.construct == construct)
+                .unwrap_or_else(|| panic!("missing unsupported row: {construct}"));
+            assert!(row.is_complete());
+            assert!(row.affected_domains.contains(&UnsupportedDomain::Mir));
+            assert!(matches!(
+                row.conservative_action,
+                ConservativeAction::HavocAffectedPlaces | ConservativeAction::StopLowering
+            ));
+        }
+    }
+}
