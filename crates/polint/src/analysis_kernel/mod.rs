@@ -177,7 +177,7 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.module_topology"),
             module_dependency_output_digest,
-            symbol_dependency_output_digest,
+            symbol_dependency_output_digest.clone(),
         );
         let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
         let module_topology_output_digest = module_topology.output_digest.clone();
@@ -186,7 +186,35 @@ impl AnalysisKernel {
             "polint.module_topology",
             &db,
             polint_module_topology_cache_stats,
-            module_topology_output_digest,
+            module_topology_output_digest.clone(),
+        ));
+
+        let module_topology_dependency_output_digest =
+            module_topology_output_digest.unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.module_topology",
+                )
+            });
+        let semantic_mir = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.semantic_mir"),
+            module_topology_dependency_output_digest,
+            symbol_dependency_output_digest.clone(),
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
+        let polint_semantic_mir_cache_stats = semantic_mir.cache_stats.clone();
+        let semantic_mir_output_digest = semantic_mir.output_digest.clone();
+        diagnostics.extend(semantic_mir.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.semantic_mir",
+            &db,
+            polint_semantic_mir_cache_stats,
+            semantic_mir_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(

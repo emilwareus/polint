@@ -1059,7 +1059,8 @@ path = "repo"
                 ("provider_order.3", "polint.module_graph"),
                 ("provider_order.4", "polint.symbol_graph"),
                 ("provider_order.5", "polint.module_topology"),
-                ("provider_order.6", "polint.metrics"),
+                ("provider_order.6", "polint.semantic_mir"),
+                ("provider_order.7", "polint.metrics"),
             ]
         );
     }
