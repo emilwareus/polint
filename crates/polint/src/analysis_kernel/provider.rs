@@ -424,6 +424,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -576,6 +577,26 @@ mod tests {
                         "semantic_imports",
                     ],
                     outputs: vec!["import_to_package_edges"],
+                },
+                ProviderOrderRow {
+                    id: "polint.semantic_mir",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "scopes",
+                        "semantic_imports",
+                        "import_to_package_edges",
+                    ],
+                    outputs: vec![
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "unsupported_semantics",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

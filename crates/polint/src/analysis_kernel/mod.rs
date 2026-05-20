@@ -936,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_run_report_source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
+    fn kernel_run_report_source_and_derived_provider_rows_have_expected_stats_and_output_digests() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
@@ -958,13 +958,16 @@ mod tests {
             "polint.module_graph",
             "polint.symbol_graph",
             "polint.module_topology",
-            "polint.semantic_mir",
             "polint.metrics",
         ] {
             let row = provider_output(&output, provider_id);
             assert_eq!(row.cache_stats, CacheStats::default());
             assert!(!row.output_digest.value.is_empty());
         }
+
+        let semantic_mir = provider_output(&output, "polint.semantic_mir");
+        assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+        assert!(!semantic_mir.output_digest.value.is_empty());
     }
 
     #[test]
