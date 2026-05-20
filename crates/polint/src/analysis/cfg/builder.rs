@@ -20,7 +20,10 @@ pub(crate) struct CfgBuilder {
     next_edge: u64,
     current_function: Option<CfgFunctionId>,
     current_body: Option<crate::analysis::ids::MirBodyId>,
+    current_body_stable_key: Option<String>,
     current_block: Option<BasicBlockId>,
+    next_body_block_ordinal: u32,
+    next_synthetic_node_ordinal: u32,
 }
 
 impl CfgBuilder {
@@ -33,7 +36,10 @@ impl CfgBuilder {
             next_edge: 1,
             current_function: None,
             current_body: None,
+            current_body_stable_key: None,
             current_block: None,
+            next_body_block_ordinal: 0,
+            next_synthetic_node_ordinal: 0,
         }
     }
 
@@ -45,6 +51,9 @@ impl CfgBuilder {
         let function_id = self.alloc_function_id();
         self.current_function = Some(function_id);
         self.current_body = Some(body.id);
+        self.current_body_stable_key = Some(body.stable_key.clone());
+        self.next_body_block_ordinal = 0;
+        self.next_synthetic_node_ordinal = 0;
 
         let entry_node = self.new_node(
             function_id,
@@ -157,7 +166,7 @@ impl CfgBuilder {
                 FactFamily::CfgFunction,
                 &[
                     ("body", body.stable_key.clone()),
-                    ("function", body.function.0.to_string()),
+                    ("owner", body.owner_stable_key.clone()),
                 ],
             ),
             status: CfgStatus::Resolved,
@@ -197,7 +206,9 @@ impl CfgBuilder {
 
     pub(crate) fn start_block(&mut self, kind: BasicBlockKind) -> BasicBlockId {
         let function = self.expect_function();
-        let ordinal = self.output.blocks.len() as u32;
+        let ordinal = self.next_body_block_ordinal;
+        self.next_body_block_ordinal += 1;
+        let body_key = self.expect_body_stable_key().to_string();
         let block_id = self.new_block(
             function,
             kind,
@@ -207,7 +218,7 @@ impl CfgBuilder {
             stable_key(
                 FactFamily::BasicBlock,
                 &[
-                    ("function", function.0.to_string()),
+                    ("body", body_key),
                     ("ordinal", ordinal.to_string()),
                     ("kind", format!("{kind:?}")),
                 ],
@@ -228,12 +239,18 @@ impl CfgBuilder {
             .current_body
             .expect("CfgBuilder::start_function must be called before append_operation_node");
         let block = self.current_block();
+        let block_key = self.block(block).stable_key.clone();
         let previous_last = self.block_mut(block).last_node;
         let operation_ordinal = operation.map_or_else(
-            || self.output.nodes.len() as u32,
+            || self.alloc_synthetic_node_ordinal(),
             |operation| operation.ordinal,
         );
         let operation_id = operation.map(|operation| operation.id);
+        let operation_key = operation.map_or_else(
+            || format!("synthetic:{operation_ordinal}"),
+            |operation| operation.stable_key.clone(),
+        );
+        let body_key = self.expect_body_stable_key().to_string();
         let node_id = self.new_node(
             function,
             body,
@@ -245,14 +262,17 @@ impl CfgBuilder {
             stable_key(
                 FactFamily::CfgNode,
                 &[
-                    ("function", function.0.to_string()),
-                    ("block", block.0.to_string()),
-                    ("operation", operation_key(operation_id)),
+                    ("body", body_key),
+                    ("block", block_key),
+                    ("operation", operation_key),
                     ("ordinal", operation_ordinal.to_string()),
                     ("kind", format!("{kind:?}")),
                 ],
             ),
         );
+        if let Some(node) = self.output.nodes.iter_mut().find(|node| node.id == node_id) {
+            node.block = block;
+        }
 
         {
             let block_fact = self.block_mut(block);
@@ -292,7 +312,10 @@ impl CfgBuilder {
     pub(crate) fn finish_function(&mut self) {
         self.current_function = None;
         self.current_body = None;
+        self.current_body_stable_key = None;
         self.current_block = None;
+        self.next_body_block_ordinal = 0;
+        self.next_synthetic_node_ordinal = 0;
     }
 
     pub(crate) fn finish(self) -> CfgOutput {
@@ -308,6 +331,11 @@ impl CfgBuilder {
         kind: CfgEdgeKind,
     ) -> CfgEdgeId {
         let function = self.expect_function();
+        let body_key = self.expect_body_stable_key().to_string();
+        let from_block_key = self.block(from_block).stable_key.clone();
+        let to_block_key = self.block(to_block).stable_key.clone();
+        let from_node_key = self.node(from).stable_key.clone();
+        let to_node_key = self.node(to).stable_key.clone();
         let edge_id = self.alloc_edge_id();
         self.output.edges.push(CfgEdgeFact {
             id: edge_id,
@@ -322,11 +350,11 @@ impl CfgBuilder {
             stable_key: stable_key(
                 FactFamily::CfgEdge,
                 &[
-                    ("function", function.0.to_string()),
-                    ("from_block", from_block.0.to_string()),
-                    ("to_block", to_block.0.to_string()),
-                    ("from_node", from.0.to_string()),
-                    ("to_node", to.0.to_string()),
+                    ("body", body_key),
+                    ("from_block", from_block_key),
+                    ("to_block", to_block_key),
+                    ("from_node", from_node_key),
+                    ("to_node", to_node_key),
                     ("kind", format!("{kind:?}")),
                 ],
             ),
@@ -403,6 +431,14 @@ impl CfgBuilder {
             .expect("block id must refer to a builder-owned block")
     }
 
+    fn node(&self, id: CfgNodeId) -> &CfgNodeFact {
+        self.output
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .expect("node id must refer to a builder-owned node")
+    }
+
     fn block_mut(&mut self, id: BasicBlockId) -> &mut BasicBlockFact {
         self.output
             .blocks
@@ -414,6 +450,18 @@ impl CfgBuilder {
     fn expect_function(&self) -> CfgFunctionId {
         self.current_function
             .expect("CfgBuilder::start_function must be called before adding CFG rows")
+    }
+
+    fn expect_body_stable_key(&self) -> &str {
+        self.current_body_stable_key
+            .as_deref()
+            .expect("CfgBuilder::start_function must be called before adding CFG rows")
+    }
+
+    fn alloc_synthetic_node_ordinal(&mut self) -> u32 {
+        let ordinal = self.next_synthetic_node_ordinal;
+        self.next_synthetic_node_ordinal += 1;
+        ordinal
     }
 
     fn alloc_function_id(&mut self) -> CfgFunctionId {
@@ -443,13 +491,6 @@ impl CfgBuilder {
 
 fn stable_key(family: FactFamily, parts: &[(&str, String)]) -> String {
     semantic_stable_key(family, parts).into_string()
-}
-
-fn operation_key(operation: Option<MirOpId>) -> String {
-    operation.map_or_else(
-        || "synthetic".to_string(),
-        |operation| operation.0.to_string(),
-    )
 }
 
 #[cfg(test)]

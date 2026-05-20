@@ -315,7 +315,7 @@ pub(crate) fn resolution_metadata(
     }
 
     match precision {
-        ResolutionPrecision::ExactFile => (FactPrecision::Exact, FactConfidence::High),
+        ResolutionPrecision::ExactFile => (FactPrecision::SetupAware, FactConfidence::High),
         ResolutionPrecision::Package | ResolutionPrecision::ExternalPackage => {
             (FactPrecision::SetupAware, FactConfidence::High)
         }
@@ -340,7 +340,7 @@ pub(crate) fn resolution_status_metadata(
 
 pub(crate) fn symbol_metadata(precision: SymbolPrecision) -> (FactPrecision, FactConfidence) {
     match precision {
-        SymbolPrecision::ExactSemantic => (FactPrecision::Exact, FactConfidence::High),
+        SymbolPrecision::ExactSemantic => (FactPrecision::SetupAware, FactConfidence::High),
         SymbolPrecision::ExactLocal => (FactPrecision::Syntax, FactConfidence::High),
         SymbolPrecision::ModuleLinked => (FactPrecision::SetupAware, FactConfidence::High),
         SymbolPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),

@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use crate::analysis::cfg::builder::CfgBuilder;
 use crate::analysis::cfg::facts::{
@@ -7,7 +9,9 @@ use crate::analysis::cfg::facts::{
 };
 use crate::analysis::cfg::ids::{CfgFunctionId, UnsupportedControlFlowId};
 use crate::analysis::cfg::store::CfgOutput;
-use crate::analysis::ids::{MirBodyId, MirOpId, UnsupportedId};
+#[cfg(test)]
+use crate::analysis::ids::MirOpId;
+use crate::analysis::ids::{MirBodyId, UnsupportedId};
 use crate::analysis::mir::body::MirStatus;
 use crate::analysis::mir::op::{
     ConservativeAction, MirOperation, MirOperationKind, UnsupportedDomain, UnsupportedPrecision,

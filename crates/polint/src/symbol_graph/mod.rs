@@ -1395,7 +1395,7 @@ export function answer() {{
 
         assert_eq!(symbol_meta.producer_id, "polint.symbol_graph");
         assert_eq!(symbol_meta.layer_id, "polint.symbol_graph");
-        assert_eq!(symbol_meta.precision, FactPrecision::Exact);
+        assert_eq!(symbol_meta.precision, FactPrecision::SetupAware);
         assert_eq!(symbol_meta.confidence, FactConfidence::High);
         assert_eq!(symbol_meta.validation, ValidationStatus::NativeTrusted);
         assert_eq!(symbol_meta.stable_key, "symbol:key:value");

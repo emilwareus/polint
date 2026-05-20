@@ -147,6 +147,7 @@ mod tests {
                 "polint.symbol_graph",
                 "polint.module_topology",
                 "polint.semantic_mir",
+                "polint.cfg",
                 "polint.metrics",
             ]
         );

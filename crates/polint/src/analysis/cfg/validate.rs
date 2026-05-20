@@ -210,6 +210,8 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         if !edge_shapes.insert((
             edge.cfg_function,
             edge.view,
+            edge.from,
+            edge.to,
             edge.from_block,
             edge.to_block,
             edge.kind,

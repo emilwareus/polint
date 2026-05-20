@@ -437,6 +437,11 @@ pub(crate) fn semantic_mir_facts_for_test(debug_json: &Value) -> Vec<ObservedIte
 }
 
 #[cfg(test)]
+pub(crate) fn cfg_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    cfg_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
     topology_facts(db)
 }
@@ -646,6 +651,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
         }
     }
     facts.extend(semantic_mir_facts(debug_json));
+    facts.extend(cfg_facts(debug_json));
     facts
 }
 
@@ -703,6 +709,76 @@ fn semantic_mir_payload(row: &Value) -> Option<String> {
         "conservative_action",
         row.get("conservative_action"),
     );
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn cfg_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(cfg) = debug_json.get("cfg").and_then(Value::as_object) else {
+        return facts;
+    };
+    for section in [
+        "functions",
+        "nodes",
+        "blocks",
+        "edges",
+        "reachability",
+        "dominators",
+        "postdominators",
+        "control_dependence",
+        "unsupported",
+    ] {
+        let Some(rows) = cfg.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = cfg_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+fn cfg_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.cfg".to_string()),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        status: Some(observed_status_from_metadata(row)),
+        payload: cfg_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn cfg_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "path", row.get("path"));
+    push_span_fragment(&mut parts, row.get("span"));
+    push_u64_fragment(&mut parts, "function", row.get("function"));
+    push_str_fragment(&mut parts, "view", row.get("view"));
+    push_str_fragment(&mut parts, "kind", row.get("node_kind"));
+    push_str_fragment(&mut parts, "kind", row.get("block_kind"));
+    push_str_fragment(&mut parts, "construct", row.get("unsupported_construct"));
+    push_str_fragment(&mut parts, "payload", row.get("payload"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "precision", row.get("precision"));
 
     if parts.is_empty() {
         None
@@ -876,6 +952,69 @@ fn saturating_millis(duration: Duration) -> u64 {
 #[cfg(test)]
 fn observed_sort_key(item: &ObservedItem) -> String {
     serde_json::to_string(item).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod cfg {
+    use crate::eval::model::ObservedItem;
+
+    use super::*;
+
+    #[test]
+    fn cfg_facts_include_all_debug_families_with_compact_payloads() {
+        let debug_json = serde_json::json!({
+            "cfg": {
+                "functions": [cfg_row("CfgFunction", "cfg:function", "resolved", "exact_lowered")],
+                "nodes": [cfg_row("CfgNode", "cfg:node", "resolved", "exact_lowered")],
+                "blocks": [cfg_row("BasicBlock", "cfg:block", "resolved", "exact_lowered")],
+                "edges": [cfg_row("CfgEdge", "cfg:edge", "resolved", "exact_lowered")],
+                "reachability": [cfg_row("CfgReachability", "cfg:reachability", "resolved", "exact_lowered")],
+                "dominators": [cfg_row("CfgDominator", "cfg:dominator", "resolved", "exact_lowered")],
+                "postdominators": [cfg_row("CfgPostDominator", "cfg:postdominator", "resolved", "exact_lowered")],
+                "control_dependence": [cfg_row("CfgControlDependence", "cfg:dependence", "resolved", "exact_lowered")],
+                "unsupported": [cfg_row("UnsupportedControlFlow", "cfg:unsupported", "unsupported", "unsupported")]
+            }
+        });
+        let facts = cfg_facts_for_test(&debug_json);
+        let families = facts
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Fact(fact) => Some(fact.family.as_str()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for family in crate::eval::model::CFG_FACT_FAMILIES {
+            assert!(families.contains(family), "missing CFG family {family}");
+        }
+        assert!(facts.iter().any(|item| {
+            match item {
+                ObservedItem::Fact(fact) => fact
+                    .payload
+                    .as_deref()
+                    .is_some_and(|payload| payload.contains("view=normal_control")),
+                _ => false,
+            }
+        }));
+    }
+
+    fn cfg_row(family: &str, stable_key: &str, status: &str, precision: &str) -> serde_json::Value {
+        serde_json::json!({
+            "family": family,
+            "stable_key": stable_key,
+            "producer_id": "polint.cfg",
+            "status": status,
+            "precision": precision,
+            "path": "src/app.ts",
+            "span": {"start_line": 1, "start_col": 1, "end_line": 1, "end_col": 2},
+            "function": 1,
+            "view": "normal_control",
+            "node_kind": "operation",
+            "block_kind": "straight_line",
+            "payload": "kind=return;from=1;to=2",
+            "unsupported_construct": "throw"
+        })
+    }
 }
 
 #[cfg(test)]
