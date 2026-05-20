@@ -1,3 +1,218 @@
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::analysis::ids::{CallSiteId, MirBodyId, PlaceId};
+use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis_kernel::FactFamily;
+use crate::core::{FileId, FunctionId, Language, SymbolId};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PlaceFact {
+    pub(crate) id: PlaceId,
+    pub(crate) language: Language,
+    pub(crate) file: Option<FileId>,
+    pub(crate) function: Option<FunctionId>,
+    pub(crate) root: PlaceRoot,
+    pub(crate) projections: Vec<PlaceProjection>,
+    pub(crate) stable_key: String,
+    pub(crate) status: PlaceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum PlaceRoot {
+    Local {
+        function: FunctionId,
+        name: String,
+    },
+    Parameter {
+        function: FunctionId,
+        index: u32,
+        name: Option<String>,
+    },
+    Global {
+        symbol: Option<SymbolId>,
+        name: String,
+    },
+    Temporary {
+        body: MirBodyId,
+        ordinal: u32,
+    },
+    CallReturn {
+        call: CallSiteId,
+    },
+    Unknown {
+        evidence: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum PlaceProjection {
+    Field(String),
+    Property(String),
+    IndexKnown(String),
+    IndexUnknown { evidence: String },
+    Deref,
+    AwaitResult,
+    CallReturn(CallSiteId),
+    Unknown { evidence: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum PlaceStatus {
+    Resolved,
+    Partial,
+    Unknown,
+    Unsupported,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct PlaceTableBuilder {
+    places: BTreeMap<String, PlaceDraft>,
+}
+
+impl PlaceTableBuilder {
+    pub(crate) fn insert(
+        &mut self,
+        language: Language,
+        file: Option<FileId>,
+        function: Option<FunctionId>,
+        root: PlaceRoot,
+        projections: Vec<PlaceProjection>,
+        status: PlaceStatus,
+    ) -> String {
+        let stable_key = stable_key_for(language, file, function, &root, &projections);
+        self.places
+            .entry(stable_key.clone())
+            .or_insert_with(|| PlaceDraft {
+                language,
+                file,
+                function,
+                root,
+                projections,
+                status,
+            });
+        stable_key
+    }
+
+    pub(crate) fn finish(self) -> Vec<PlaceFact> {
+        self.places
+            .into_iter()
+            .enumerate()
+            .map(|(index, (stable_key, draft))| PlaceFact {
+                id: PlaceId(index as u64),
+                language: draft.language,
+                file: draft.file,
+                function: draft.function,
+                root: draft.root,
+                projections: draft.projections,
+                stable_key,
+                status: draft.status,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PlaceDraft {
+    language: Language,
+    file: Option<FileId>,
+    function: Option<FunctionId>,
+    root: PlaceRoot,
+    projections: Vec<PlaceProjection>,
+    status: PlaceStatus,
+}
+
+fn stable_key_for(
+    language: Language,
+    file: Option<FileId>,
+    function: Option<FunctionId>,
+    root: &PlaceRoot,
+    projections: &[PlaceProjection],
+) -> String {
+    let mut parts = vec![
+        ("language".to_string(), format!("{language:?}")),
+        (
+            "file".to_string(),
+            optional_id(file.map(|id| u64::from(id.0))),
+        ),
+        (
+            "function".to_string(),
+            optional_id(function.map(|id| id.0)),
+        ),
+        ("projection_count".to_string(), projections.len().to_string()),
+    ];
+    add_root_parts(&mut parts, root);
+    for (index, projection) in projections.iter().enumerate() {
+        parts.push((projection_label(index), projection_part(projection)));
+    }
+    let borrowed_parts = parts
+        .iter()
+        .map(|(label, value)| (label.as_str(), value.clone()))
+        .collect::<Vec<_>>();
+    let stable_key = semantic_stable_key(FactFamily::Place, &borrowed_parts);
+    stable_key.into_string()
+}
+
+fn add_root_parts(parts: &mut Vec<(String, String)>, root: &PlaceRoot) {
+    match root {
+        PlaceRoot::Local { function, name } => {
+            parts.push(("root_kind".to_string(), "local".to_string()));
+            parts.push(("root_function".to_string(), function.0.to_string()));
+            parts.push(("root_name".to_string(), name.clone()));
+        }
+        PlaceRoot::Parameter {
+            function,
+            index,
+            name,
+        } => {
+            parts.push(("root_kind".to_string(), "parameter".to_string()));
+            parts.push(("root_function".to_string(), function.0.to_string()));
+            parts.push(("parameter_index".to_string(), index.to_string()));
+            parts.push(("root_name".to_string(), name.clone().unwrap_or_default()));
+        }
+        PlaceRoot::Global { symbol, name } => {
+            parts.push(("root_kind".to_string(), "global".to_string()));
+            parts.push(("root_symbol".to_string(), optional_id(symbol.map(|id| id.0))));
+            parts.push(("root_name".to_string(), name.clone()));
+        }
+        PlaceRoot::Temporary { body, ordinal } => {
+            parts.push(("root_kind".to_string(), "temporary".to_string()));
+            parts.push(("root_body".to_string(), body.0.to_string()));
+            parts.push(("temporary_ordinal".to_string(), ordinal.to_string()));
+        }
+        PlaceRoot::CallReturn { call } => {
+            parts.push(("root_kind".to_string(), "call_return".to_string()));
+            parts.push(("call_site".to_string(), call.0.to_string()));
+        }
+        PlaceRoot::Unknown { evidence } => {
+            parts.push(("root_kind".to_string(), "unknown".to_string()));
+            parts.push(("evidence".to_string(), evidence.clone()));
+        }
+    }
+}
+
+fn projection_label(index: usize) -> String {
+    format!("projection_{index:06}")
+}
+
+fn projection_part(projection: &PlaceProjection) -> String {
+    match projection {
+        PlaceProjection::Field(name) => format!("field:{name}"),
+        PlaceProjection::Property(name) => format!("property:{name}"),
+        PlaceProjection::IndexKnown(index) => format!("index_known:{index}"),
+        PlaceProjection::IndexUnknown { evidence } => format!("index_unknown:{evidence}"),
+        PlaceProjection::Deref => "deref".to_string(),
+        PlaceProjection::AwaitResult => "await_result".to_string(),
+        PlaceProjection::CallReturn(call) => format!("call_return:{}", call.0),
+        PlaceProjection::Unknown { evidence } => format!("unknown:{evidence}"),
+    }
+}
+
+fn optional_id(value: Option<u64>) -> String {
+    value.map_or_else(|| "none".to_string(), |id| id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,8 +314,8 @@ mod tests {
         );
 
         assert_ne!(ordered, reversed);
-        assert!(ordered.contains("projection_00"));
-        assert!(ordered.contains("projection_07"));
+        assert!(ordered.contains("projection_000000"));
+        assert!(ordered.contains("projection_000007"));
     }
 
     #[test]

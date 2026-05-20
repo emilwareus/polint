@@ -38,6 +38,7 @@ pub(crate) enum FactFamily {
     FileMetric,
     FunctionMetric,
     ComplexityMetric,
+    Place,
 }
 
 impl FactFamily {
@@ -77,6 +78,7 @@ impl FactFamily {
             Self::FileMetric => "FileMetric",
             Self::FunctionMetric => "FunctionMetric",
             Self::ComplexityMetric => "ComplexityMetric",
+            Self::Place => "Place",
         }
     }
 }
