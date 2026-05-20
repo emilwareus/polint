@@ -1,8 +1,8 @@
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
 use crate::module_graph::paths::{
-    TOPOLOGY_MANIFEST_MAX_BYTES, read_repo_file_to_string_with_limit, repo_file_exists,
-    repo_relative_existing_path,
+    TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative_path, read_repo_file_to_string_with_limit,
+    repo_file_exists, repo_relative_existing_path,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -360,13 +360,15 @@ pub(crate) fn go_work_covers_module_roots(
     else {
         return false;
     };
-    let roots = parse_go_work_use_roots(root, &contents);
+    let Some(roots) = parse_go_work_use_roots(root, &contents) else {
+        return false;
+    };
     module_roots
         .iter()
         .all(|module_root| roots.contains(module_root))
 }
 
-fn parse_go_work_use_roots(root: &Path, contents: &str) -> BTreeSet<String> {
+fn parse_go_work_use_roots(root: &Path, contents: &str) -> Option<BTreeSet<String>> {
     let mut roots = BTreeSet::new();
     let mut in_use_block = false;
     for raw_line in contents.lines() {
@@ -376,8 +378,10 @@ fn parse_go_work_use_roots(root: &Path, contents: &str) -> BTreeSet<String> {
         }
         if in_use_block {
             let (entry, block_done) = split_go_work_block_line(line);
-            if let Some(module_root) = go_work_module_root(root, entry) {
-                roots.insert(module_root);
+            if let Some(module_root) = go_work_module_root(root, entry)
+                && !record_go_work_module_root(root, &mut roots, module_root)
+            {
+                return None;
             }
             if block_done {
                 in_use_block = false;
@@ -397,15 +401,36 @@ fn parse_go_work_use_roots(root: &Path, contents: &str) -> BTreeSet<String> {
         let rest = rest.trim_start();
         if let Some(block_rest) = rest.strip_prefix('(') {
             let (entry, block_done) = split_go_work_block_line(block_rest);
-            if let Some(module_root) = go_work_module_root(root, entry) {
-                roots.insert(module_root);
+            if let Some(module_root) = go_work_module_root(root, entry)
+                && !record_go_work_module_root(root, &mut roots, module_root)
+            {
+                return None;
             }
             in_use_block = !block_done;
-        } else if let Some(module_root) = go_work_module_root(root, rest) {
-            roots.insert(module_root);
+        } else if let Some(module_root) = go_work_module_root(root, rest)
+            && !record_go_work_module_root(root, &mut roots, module_root)
+        {
+            return None;
         }
     }
-    roots
+    Some(roots)
+}
+
+fn record_go_work_module_root(
+    root: &Path,
+    roots: &mut BTreeSet<String>,
+    module_root: GoWorkModuleRoot,
+) -> bool {
+    match module_root {
+        GoWorkModuleRoot::InRepo(module_root) => {
+            if !module_root_has_go_mod(root, &module_root) {
+                return false;
+            }
+            roots.insert(module_root);
+            true
+        }
+        GoWorkModuleRoot::OutsideRepo => false,
+    }
 }
 
 fn strip_go_line_comment(line: &str) -> &str {
@@ -422,7 +447,12 @@ fn split_go_work_block_line(line: &str) -> (&str, bool) {
     }
 }
 
-fn go_work_module_root(root: &Path, value: &str) -> Option<String> {
+enum GoWorkModuleRoot {
+    InRepo(String),
+    OutsideRepo,
+}
+
+fn go_work_module_root(root: &Path, value: &str) -> Option<GoWorkModuleRoot> {
     let token = first_go_work_path_token(value)?;
     let module_path = parse_go_work_path_token(token)?;
     let path = Path::new(&module_path);
@@ -431,7 +461,10 @@ fn go_work_module_root(root: &Path, value: &str) -> Option<String> {
     } else {
         root.join(path)
     };
-    module_root_relative_path(root, &absolute)
+    match normalize_repo_relative_path(root, &absolute) {
+        Some(relative_path) => Some(GoWorkModuleRoot::InRepo(relative_path)),
+        None => Some(GoWorkModuleRoot::OutsideRepo),
+    }
 }
 
 fn first_go_work_path_token(value: &str) -> Option<&str> {
@@ -640,6 +673,12 @@ mod tests {
     #[test]
     fn workspace_env_uses_checked_in_go_work_when_it_covers_roots() {
         let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
         std::fs::write(
             temp.path().join("go.work"),
             "go 1.24\n\nuse ./services/app\n",
@@ -679,6 +718,95 @@ mod tests {
             "{generated}"
         );
         assert!(generated.contains("services/app"), "{generated}");
+    }
+
+    #[test]
+    fn workspace_env_uses_synthetic_go_work_when_checked_in_go_work_uses_outside_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
+        std::fs::write(
+            temp.path().join("go.work"),
+            format!(
+                "go 1.24\n\nuse (\n\t./services/app\n\t{:?}\n)\n",
+                outside.path().display().to_string()
+            ),
+        )
+        .expect("write go.work");
+
+        let checked_in = temp.path().join("go.work").to_string_lossy().to_string();
+        let workspace =
+            workspace_env(temp.path(), &["services/app".to_string()]).expect("workspace env");
+        let generated_path = workspace.value().to_string();
+        let generated = std::fs::read_to_string(&generated_path).expect("read generated go.work");
+
+        assert_ne!(generated_path, checked_in);
+        assert!(
+            !generated.contains(&outside.path().to_string_lossy().to_string()),
+            "{generated}"
+        );
+        assert!(generated.contains("services/app"), "{generated}");
+    }
+
+    #[test]
+    fn go_work_covers_module_roots_rejects_parent_escape_use_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
+        let work_path = temp.path().join("go.work");
+        std::fs::write(
+            &work_path,
+            "go 1.24\n\nuse (\n\t./services/app\n\t../outside\n)\n",
+        )
+        .expect("write go.work");
+
+        assert!(!go_work_covers_module_roots(
+            temp.path(),
+            &work_path,
+            &["services/app".to_string()]
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn go_work_covers_module_roots_rejects_symlinked_use_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::create_dir_all(temp.path().join("services/app")).expect("mkdir service");
+        std::fs::write(
+            temp.path().join("services/app/go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write service go.mod");
+        std::fs::create_dir_all(outside.path().join("outside")).expect("mkdir outside");
+        std::fs::write(
+            outside.path().join("outside/go.mod"),
+            "module example.com/outside\n\ngo 1.24\n",
+        )
+        .expect("write outside go.mod");
+        std::os::unix::fs::symlink(outside.path().join("outside"), temp.path().join("link"))
+            .expect("symlink outside module");
+        let work_path = temp.path().join("go.work");
+        std::fs::write(
+            &work_path,
+            "go 1.24\n\nuse (\n\t./services/app\n\t./link\n)\n",
+        )
+        .expect("write go.work");
+
+        assert!(!go_work_covers_module_roots(
+            temp.path(),
+            &work_path,
+            &["services/app".to_string()]
+        ));
     }
 
     #[test]
