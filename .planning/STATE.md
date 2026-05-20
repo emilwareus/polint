@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T08:53:51.182Z"
+last_updated: "2026-05-20T09:09:43.276Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
   completed_phases: 8
   total_plans: 46
-  completed_plans: 44
-  percent: 96
+  completed_plans: 45
+  percent: 98
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 28 (Private Semantic MIR and Place Identity) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 Last activity: 2026-05-20
 
 ## Phase Progress
@@ -57,7 +57,7 @@ Last activity: 2026-05-20
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
-| 28 | In Progress | 4/7 plans complete; private MIR/place contracts, semantic store, Go lowering, and TS/JS MIR/body/place/operation lowering done; requirement SAE-SEM-03 |
+| 28 | In Progress | 6/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, and semantic-MIR eval snapshots done; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
@@ -202,6 +202,9 @@ Last activity: 2026-05-20
 - [Phase 28-private-semantic-mir-and-place-identity]: Semantic MIR remains private and crate-internal; no SDK, runner, CLI, or public JSON surface was promoted.
 - [Phase 28-private-semantic-mir-and-place-identity]: Malformed unsupported semantic rows are stored and rejected by validation so diagnostics carry stable family/stable_key/field/reason evidence.
 - [Phase 28-private-semantic-mir-and-place-identity]: Semantic MIR cache identity includes absent extension, model, and toolchain slots even before those inputs exist.
+- [Phase 28-private-semantic-mir-and-place-identity]: Keep semantic-MIR eval observation crate-private and test-facing, sourced only from metadata_debug_json_for_test.
+- [Phase 28-private-semantic-mir-and-place-identity]: Use compact semicolon payload fragments for MIR eval evidence instead of raw source, AST dumps, absolute paths, or dense IDs as identity.
+- [Phase 28-private-semantic-mir-and-place-identity]: Treat Partial semantic-MIR rows as unknown-like evidence in matcher outcomes and metrics.
 
 ## Execution Metrics
 
@@ -240,12 +243,14 @@ Last activity: 2026-05-20
 | 28-private-semantic-mir-and-place-identity | 02 | 12 min | 3 | 4 |
 | 28-private-semantic-mir-and-place-identity | 03 | 14 min | 2 | 2 |
 | 28-private-semantic-mir-and-place-identity | 04 | 17 min | 2 | 2 |
+| 28-private-semantic-mir-and-place-identity | 05 | 26 min | 3 | 12 |
+| 28-private-semantic-mir-and-place-identity | 06 | 12 min | 2 | 13 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed 28-04 TS/JS MIR lowering.
-- Stopped at: Completed 28-private-semantic-mir-and-place-identity-04-PLAN.md; Phase 28 plan 05 is next.
+- Last activity: 2026-05-20 - Completed 28-06 semantic MIR eval fixture snapshots.
+- Stopped at: Completed 28-private-semantic-mir-and-place-identity-06-PLAN.md; Phase 28 plan 07 is next.
 
 ### Quick Tasks Completed
 
@@ -262,4 +267,4 @@ Last activity: 2026-05-20
 
 ## Next Action
 
-Phase 28 is ready for planning/execution.
+Phase 28 plan 07 is ready for execution.
