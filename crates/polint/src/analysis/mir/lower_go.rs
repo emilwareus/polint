@@ -2,9 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::{Node, Parser};
 
-use crate::analysis::ids::MirBodyId;
+use crate::analysis::ids::{
+    CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId, UnsupportedId,
+};
 use crate::analysis::mir::body::MirOutput;
 use crate::analysis::mir::body::{MirBody, MirStatus};
+use crate::analysis::mir::op::{
+    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
+    UnsupportedPrecision, UnsupportedSemanticFact,
+};
 use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus, PlaceTableBuilder};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
@@ -23,11 +29,19 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         lowering.lower_file(db, file);
     }
 
+    let places = lowering.places.clone().finish();
+    let place_ids = places
+        .iter()
+        .map(|place| (place.stable_key.clone(), place.id))
+        .collect::<BTreeMap<_, _>>();
+    let operations = lowering.finish_operations(&place_ids);
+    let unsupported = lowering.finish_unsupported(&place_ids);
+
     MirOutput {
         bodies: lowering.bodies,
-        places: lowering.places.finish(),
-        operations: Vec::new(),
-        unsupported: Vec::new(),
+        places,
+        operations,
+        unsupported,
     }
     .normalized()
 }
@@ -36,6 +50,8 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
 struct GoMirLowering {
     bodies: Vec<MirBody>,
     places: PlaceTableBuilder,
+    operations: Vec<OperationDraft>,
+    unsupported: Vec<UnsupportedDraft>,
 }
 
 impl GoMirLowering {
@@ -87,7 +103,13 @@ impl GoMirLowering {
             let mut function_lowering =
                 FunctionLowering::new(file, file.source.as_ref(), function.id, body.id);
             function_lowering.lower_parameters(node, &mut self.places);
-            function_lowering.lower_body(body_node, &mut self.places);
+            function_lowering.lower_body(
+                body_node,
+                &mut self.places,
+                &mut self.operations,
+                &mut self.unsupported,
+            );
+            self.lower_parser_errors(file, body.id, body_node);
         }
     }
 
@@ -135,6 +157,52 @@ impl GoMirLowering {
         };
         self.bodies.push(body.clone());
         body
+    }
+
+    fn lower_parser_errors(&mut self, file: &SourceFile, body: MirBodyId, node: Node<'_>) {
+        visit_named_descendants(node, &mut |descendant| {
+            if descendant.is_error() || descendant.kind() == "ERROR" {
+                let unsupported_id = UnsupportedId(self.unsupported.len() as u64);
+                let operation_id = MirOpId(self.operations.len() as u64);
+                let span = node_span(file.id, file.source.as_ref(), descendant);
+                self.unsupported.push(UnsupportedDraft::new(
+                    unsupported_id,
+                    Some(body),
+                    Some(operation_id),
+                    file.id,
+                    span.clone(),
+                    "ERROR",
+                    node_text(file.source.as_ref(), descendant).unwrap_or("ERROR"),
+                    vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+                    ConservativeAction::StopLowering,
+                ));
+                self.operations.push(OperationDraft::new(
+                    operation_id,
+                    body,
+                    operation_id.0 as u32,
+                    span,
+                    OperationKindDraft::Unsupported { unsupported_id },
+                    MirStatus::Unsupported,
+                ));
+            }
+        });
+    }
+
+    fn finish_operations(&self, place_ids: &BTreeMap<String, PlaceId>) -> Vec<MirOperation> {
+        self.operations
+            .iter()
+            .filter_map(|draft| draft.to_operation(place_ids))
+            .collect()
+    }
+
+    fn finish_unsupported(
+        &self,
+        place_ids: &BTreeMap<String, PlaceId>,
+    ) -> Vec<UnsupportedSemanticFact> {
+        self.unsupported
+            .iter()
+            .map(|draft| draft.to_fact(place_ids))
+            .collect()
     }
 }
 
@@ -189,25 +257,46 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn lower_body(&mut self, body: Node<'_>, places: &mut PlaceTableBuilder) {
+    fn lower_body(
+        &mut self,
+        body: Node<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
         for index in 0..body.named_child_count() as u32 {
             let Some(statement) = body.named_child(index) else {
                 continue;
             };
-            self.lower_statement(statement, places);
+            self.lower_statement(statement, places, operations, unsupported);
         }
     }
 
-    fn lower_statement(&mut self, statement: Node<'_>, places: &mut PlaceTableBuilder) {
+    fn lower_statement(
+        &mut self,
+        statement: Node<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        self.lower_unsupported(statement, operations, unsupported);
         match statement.kind() {
             "short_var_declaration" => {
+                let value = statement
+                    .child_by_field_name("right")
+                    .and_then(|right| self.lower_value(right, places, operations, unsupported))
+                    .unwrap_or_else(|| ValueDraft::Unknown {
+                        evidence: "short declaration initializer".to_string(),
+                    });
                 for name in assignment_left_names(self.source, statement, ":=") {
-                    self.insert_local(places, &name);
-                }
-                if let Some(right) = statement.child_by_field_name("right") {
-                    self.lower_expression(right, places, false);
-                } else {
-                    self.lower_non_left_children(statement, places);
+                    let key = self.insert_local(places, &name);
+                    self.push_assign(
+                        operations,
+                        statement,
+                        key,
+                        value.clone(),
+                        AssignMode::DeclarationBinding,
+                    );
                 }
             }
             "var_declaration" => {
@@ -218,73 +307,217 @@ impl<'source> FunctionLowering<'source> {
                     }
                 });
                 for name in names {
-                    self.insert_local(places, &name);
+                    let key = self.insert_local(places, &name);
+                    self.push_assign(
+                        operations,
+                        statement,
+                        key,
+                        ValueDraft::Unknown {
+                            evidence: "zero value".to_string(),
+                        },
+                        AssignMode::DeclarationBinding,
+                    );
                 }
-                self.lower_non_left_children(statement, places);
             }
             "assignment_statement" => {
-                if let Some(left) = statement.child_by_field_name("left") {
-                    self.lower_expression(left, places, true);
-                } else {
-                    for name in assignment_left_names(self.source, statement, "=") {
-                        if !self.locals.contains_key(&name) && !self.parameters.contains_key(&name)
-                        {
-                            let root = PlaceRoot::Global { symbol: None, name };
-                            self.insert_place(places, root, Vec::new(), PlaceStatus::Partial);
-                        }
-                    }
-                }
-                if let Some(right) = statement.child_by_field_name("right") {
-                    self.lower_expression(right, places, false);
+                let left_places = self.assignment_left_places(statement, places);
+                let value = statement
+                    .child_by_field_name("right")
+                    .and_then(|right| self.lower_value(right, places, operations, unsupported))
+                    .unwrap_or_else(|| ValueDraft::Unknown {
+                        evidence: "assignment value".to_string(),
+                    });
+                let simultaneous = assignment_left_names(self.source, statement, "=").len() > 1;
+                for place in left_places {
+                    let mode = if simultaneous {
+                        AssignMode::Simultaneous
+                    } else if !place.projections.is_empty() {
+                        AssignMode::ProjectionMutation
+                    } else {
+                        AssignMode::Overwrite
+                    };
+                    self.push_assign(operations, statement, place.key, value.clone(), mode);
                 }
             }
-            "identifier"
-            | "selector_expression"
-            | "index_expression"
-            | "binary_expression"
-            | "call_expression"
-            | "return_statement" => {
-                self.lower_expression(statement, places, false);
+            "if_statement"
+            | "for_statement"
+            | "expression_switch_statement"
+            | "type_switch_statement"
+            | "switch_statement" => {
+                self.push_branch(operations, statement);
+                for index in 0..statement.named_child_count() as u32 {
+                    let Some(child) = statement.named_child(index) else {
+                        continue;
+                    };
+                    self.lower_statement(child, places, operations, unsupported);
+                }
+            }
+            "return_statement" => {
+                let value = statement
+                    .named_child(0)
+                    .and_then(|child| self.lower_value(child, places, operations, unsupported));
+                self.push_operation(
+                    operations,
+                    statement,
+                    OperationKindDraft::Return { value },
+                    MirStatus::Partial,
+                );
+            }
+            "call_expression" => {
+                self.lower_call(statement, places, operations, unsupported);
+            }
+            "identifier" | "selector_expression" | "index_expression" | "binary_expression" => {
+                if let Some(shape) =
+                    self.lower_expression(statement, places, operations, unsupported, false)
+                {
+                    self.push_operation(
+                        operations,
+                        statement,
+                        OperationKindDraft::Read {
+                            place_key: shape.key,
+                        },
+                        MirStatus::Partial,
+                    );
+                }
             }
             _ => {
                 for index in 0..statement.named_child_count() as u32 {
                     let Some(child) = statement.named_child(index) else {
                         continue;
                     };
-                    self.lower_statement(child, places);
+                    self.lower_statement(child, places, operations, unsupported);
                 }
             }
         }
     }
 
-    fn lower_non_left_children(&mut self, statement: Node<'_>, places: &mut PlaceTableBuilder) {
-        for index in 0..statement.named_child_count() as u32 {
-            let Some(child) = statement.named_child(index) else {
-                continue;
-            };
-            self.lower_expression(child, places, false);
+    fn assignment_left_places(
+        &mut self,
+        statement: Node<'_>,
+        places: &mut PlaceTableBuilder,
+    ) -> Vec<PlaceShape> {
+        if let Some(left) = statement.child_by_field_name("left") {
+            let mut shapes = Vec::new();
+            for index in 0..left.named_child_count() as u32 {
+                if let Some(child) = left.named_child(index)
+                    && let Some(shape) =
+                        self.lower_expression(child, places, &mut Vec::new(), &mut Vec::new(), true)
+                {
+                    shapes.push(shape);
+                }
+            }
+            if !shapes.is_empty() {
+                return shapes;
+            }
         }
+
+        assignment_left_names(self.source, statement, "=")
+            .into_iter()
+            .map(|name| {
+                if let Some(root) = self
+                    .locals
+                    .get(&name)
+                    .or_else(|| self.parameters.get(&name))
+                {
+                    let shape = PlaceShape {
+                        root: root.clone(),
+                        projections: Vec::new(),
+                        status: PlaceStatus::Resolved,
+                        key: self.insert_place(
+                            places,
+                            root.clone(),
+                            Vec::new(),
+                            PlaceStatus::Resolved,
+                        ),
+                    };
+                    shape
+                } else {
+                    let root = PlaceRoot::Global { symbol: None, name };
+                    let key =
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Partial);
+                    PlaceShape {
+                        root,
+                        projections: Vec::new(),
+                        status: PlaceStatus::Partial,
+                        key,
+                    }
+                }
+            })
+            .collect()
     }
 
-    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) {
+    fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
         let root = PlaceRoot::Local {
             function: self.function,
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
+        self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved)
+    }
+
+    fn lower_value(
+        &mut self,
+        node: Node<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) -> Option<ValueDraft> {
+        match node.kind() {
+            "interpreted_string_literal"
+            | "raw_string_literal"
+            | "int_literal"
+            | "float_literal"
+            | "rune_literal"
+            | "true"
+            | "false"
+            | "nil" => Some(ValueDraft::Literal {
+                value: node_text(self.source, node).unwrap_or_default().to_string(),
+            }),
+            "call_expression" => self
+                .lower_call(node, places, operations, unsupported)
+                .map(ValueDraft::PlaceKey),
+            _ => self
+                .lower_expression(node, places, operations, unsupported, false)
+                .map(|shape| ValueDraft::PlaceKey(shape.key)),
+        }
     }
 
     fn lower_expression(
         &mut self,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
+        self.lower_unsupported(node, operations, unsupported);
         match node.kind() {
             "identifier" => self.lower_identifier(node, places, assignment_destination),
-            "selector_expression" => self.lower_selector(node, places, assignment_destination),
-            "index_expression" => self.lower_index(node, places, assignment_destination),
+            "selector_expression" => self.lower_selector(
+                node,
+                places,
+                operations,
+                unsupported,
+                assignment_destination,
+            ),
+            "index_expression" => self.lower_index(
+                node,
+                places,
+                operations,
+                unsupported,
+                assignment_destination,
+            ),
+            "call_expression" => {
+                self.lower_call(node, places, operations, unsupported)
+                    .map(|key| PlaceShape {
+                        root: PlaceRoot::CallReturn {
+                            call: self.call_site_for(node),
+                        },
+                        projections: Vec::new(),
+                        status: PlaceStatus::Partial,
+                        key,
+                    })
+            }
             "interpreted_string_literal"
             | "raw_string_literal"
             | "int_literal"
@@ -297,7 +530,13 @@ impl<'source> FunctionLowering<'source> {
                         continue;
                     };
                     last = self
-                        .lower_expression(child, places, assignment_destination)
+                        .lower_expression(
+                            child,
+                            places,
+                            operations,
+                            unsupported,
+                            assignment_destination,
+                        )
                         .or(last);
                 }
                 last
@@ -336,8 +575,10 @@ impl<'source> FunctionLowering<'source> {
             root,
             projections: Vec::new(),
             status,
+            key: String::new(),
         };
-        self.insert_shape(places, &shape);
+        let key = self.insert_shape(places, &shape);
+        let shape = PlaceShape { key, ..shape };
         Some(shape)
     }
 
@@ -345,6 +586,8 @@ impl<'source> FunctionLowering<'source> {
         &mut self,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
         let operand = node
@@ -354,11 +597,17 @@ impl<'source> FunctionLowering<'source> {
             .child_by_field_name("field")
             .or_else(|| node.named_child(1))
             .and_then(|field| node_text(self.source, field))?;
-        let mut shape = self.lower_expression(operand, places, assignment_destination)?;
+        let mut shape = self.lower_expression(
+            operand,
+            places,
+            operations,
+            unsupported,
+            assignment_destination,
+        )?;
         shape
             .projections
             .push(PlaceProjection::Field(field.to_string()));
-        self.insert_shape(places, &shape);
+        shape.key = self.insert_shape(places, &shape);
         self.insert_temporary(places, node, PlaceStatus::Partial);
         Some(shape)
     }
@@ -367,6 +616,8 @@ impl<'source> FunctionLowering<'source> {
         &mut self,
         node: Node<'_>,
         places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
         let operand = node
@@ -375,11 +626,221 @@ impl<'source> FunctionLowering<'source> {
         let index = node
             .child_by_field_name("index")
             .or_else(|| node.named_child(1))?;
-        let mut shape = self.lower_expression(operand, places, assignment_destination)?;
+        let mut shape = self.lower_expression(
+            operand,
+            places,
+            operations,
+            unsupported,
+            assignment_destination,
+        )?;
         shape.projections.push(index_projection(self.source, index));
-        self.insert_shape(places, &shape);
+        shape.key = self.insert_shape(places, &shape);
         self.insert_temporary(places, node, PlaceStatus::Partial);
         Some(shape)
+    }
+
+    fn lower_call(
+        &mut self,
+        node: Node<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) -> Option<String> {
+        self.lower_unsupported_call(node, unsupported);
+        let site = self.call_site_for(node);
+        let return_key = self.insert_place(
+            places,
+            PlaceRoot::CallReturn { call: site },
+            Vec::new(),
+            PlaceStatus::Partial,
+        );
+        let callee = node
+            .child_by_field_name("function")
+            .or_else(|| node.named_child(0))
+            .and_then(|callee| node_text(self.source, callee))
+            .map(|evidence| ValueDraft::Unknown {
+                evidence: evidence.to_string(),
+            })
+            .unwrap_or_else(|| ValueDraft::Unknown {
+                evidence: "call".to_string(),
+            });
+        let mut arguments = Vec::new();
+        for index in 1..node.named_child_count() as u32 {
+            let Some(child) = node.named_child(index) else {
+                continue;
+            };
+            if let Some(shape) =
+                self.lower_expression(child, places, operations, unsupported, false)
+            {
+                arguments.push(shape.key);
+            }
+        }
+        self.push_operation(
+            operations,
+            node,
+            OperationKindDraft::Call {
+                site,
+                callee,
+                arguments,
+                return_place_key: return_key.clone(),
+            },
+            MirStatus::Partial,
+        );
+        Some(return_key)
+    }
+
+    fn lower_unsupported(
+        &self,
+        node: Node<'_>,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        let construct = match node.kind() {
+            "go_statement" => Some("go_statement"),
+            "defer_statement" => Some("defer_statement"),
+            "select_statement" => Some("select_statement"),
+            "send_statement" => Some("send_statement"),
+            _ if node.is_error() || node.kind() == "ERROR" => Some("ERROR"),
+            _ if node_text(self.source, node)
+                .is_some_and(|text| text.trim_start().starts_with("<-")) =>
+            {
+                Some("channel_receive")
+            }
+            _ => None,
+        };
+        let Some(construct) = construct else {
+            return;
+        };
+        self.push_unsupported(
+            operations,
+            unsupported,
+            node,
+            construct,
+            unsupported_domains_for(construct),
+            if construct == "ERROR" {
+                ConservativeAction::StopLowering
+            } else {
+                ConservativeAction::HavocAffectedPlaces
+            },
+        );
+    }
+
+    fn lower_unsupported_call(&self, node: Node<'_>, unsupported: &mut Vec<UnsupportedDraft>) {
+        let text = node_text(self.source, node).unwrap_or_default();
+        let construct = if text.contains("panic(") {
+            Some("panic")
+        } else if text.contains("recover(") {
+            Some("recover")
+        } else if text.contains("unsafe.") {
+            Some("unsafe")
+        } else if text.contains("reflect.") {
+            Some("reflect")
+        } else {
+            None
+        };
+        if let Some(construct) = construct {
+            unsupported.push(UnsupportedDraft::new(
+                UnsupportedId(unsupported.len() as u64),
+                Some(self.body),
+                None,
+                self.file,
+                node_span(self.file, self.source, node),
+                construct,
+                text,
+                unsupported_domains_for(construct),
+                ConservativeAction::HavocAffectedPlaces,
+            ));
+        }
+    }
+
+    fn push_unsupported(
+        &self,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+        node: Node<'_>,
+        construct: &str,
+        domains: Vec<UnsupportedDomain>,
+        action: ConservativeAction,
+    ) {
+        let unsupported_id = UnsupportedId(unsupported.len() as u64);
+        let operation_id = MirOpId(operations.len() as u64);
+        let span = node_span(self.file, self.source, node);
+        unsupported.push(UnsupportedDraft::new(
+            unsupported_id,
+            Some(self.body),
+            Some(operation_id),
+            self.file,
+            span.clone(),
+            construct,
+            node_text(self.source, node).unwrap_or(construct),
+            domains,
+            action,
+        ));
+        operations.push(OperationDraft::new(
+            operation_id,
+            self.body,
+            self.ordinal_for(node),
+            span,
+            OperationKindDraft::Unsupported { unsupported_id },
+            MirStatus::Unsupported,
+        ));
+    }
+
+    fn push_assign(
+        &self,
+        operations: &mut Vec<OperationDraft>,
+        node: Node<'_>,
+        place_key: String,
+        value: ValueDraft,
+        mode: AssignMode,
+    ) {
+        self.push_operation(
+            operations,
+            node,
+            OperationKindDraft::Assign {
+                place_key,
+                value,
+                mode,
+            },
+            MirStatus::Partial,
+        );
+    }
+
+    fn push_branch(&self, operations: &mut Vec<OperationDraft>, node: Node<'_>) {
+        self.push_operation(
+            operations,
+            node,
+            OperationKindDraft::Branch {
+                predicate: MirPredicateId(self.ordinal_for(node) as u64),
+            },
+            MirStatus::Partial,
+        );
+    }
+
+    fn push_operation(
+        &self,
+        operations: &mut Vec<OperationDraft>,
+        node: Node<'_>,
+        kind: OperationKindDraft,
+        status: MirStatus,
+    ) {
+        let id = MirOpId(operations.len() as u64);
+        operations.push(OperationDraft::new(
+            id,
+            self.body,
+            self.ordinal_for(node),
+            node_span(self.file, self.source, node),
+            kind,
+            status,
+        ));
+    }
+
+    fn ordinal_for(&self, node: Node<'_>) -> u32 {
+        node.start_byte() as u32
+    }
+
+    fn call_site_for(&self, node: Node<'_>) -> CallSiteId {
+        CallSiteId(node.start_byte() as u64)
     }
 
     fn insert_temporary(
@@ -399,13 +860,13 @@ impl<'source> FunctionLowering<'source> {
         )
     }
 
-    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) {
+    fn insert_shape(&self, places: &mut PlaceTableBuilder, shape: &PlaceShape) -> String {
         self.insert_place(
             places,
             shape.root.clone(),
             shape.projections.clone(),
             shape.status,
-        );
+        )
     }
 
     fn insert_place(
@@ -431,6 +892,335 @@ struct PlaceShape {
     root: PlaceRoot,
     projections: Vec<PlaceProjection>,
     status: PlaceStatus,
+    key: String,
+}
+
+#[derive(Debug, Clone)]
+struct OperationDraft {
+    id: MirOpId,
+    body: MirBodyId,
+    ordinal: u32,
+    span: Span,
+    kind: OperationKindDraft,
+    stable_key: String,
+    status: MirStatus,
+}
+
+impl OperationDraft {
+    fn new(
+        id: MirOpId,
+        body: MirBodyId,
+        ordinal: u32,
+        span: Span,
+        kind: OperationKindDraft,
+        status: MirStatus,
+    ) -> Self {
+        let stable_key = operation_stable_key(body, ordinal, &span, &kind);
+        Self {
+            id,
+            body,
+            ordinal,
+            span,
+            kind,
+            stable_key,
+            status,
+        }
+    }
+
+    fn to_operation(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<MirOperation> {
+        Some(MirOperation {
+            id: self.id,
+            body: self.body,
+            ordinal: self.ordinal,
+            span: self.span.clone(),
+            kind: self.kind.to_kind(place_ids)?,
+            stable_key: self.stable_key.clone(),
+            status: self.status,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum OperationKindDraft {
+    Assign {
+        place_key: String,
+        value: ValueDraft,
+        mode: AssignMode,
+    },
+    Read {
+        place_key: String,
+    },
+    Branch {
+        predicate: MirPredicateId,
+    },
+    Call {
+        site: CallSiteId,
+        callee: ValueDraft,
+        arguments: Vec<String>,
+        return_place_key: String,
+    },
+    Return {
+        value: Option<ValueDraft>,
+    },
+    Unsupported {
+        unsupported_id: UnsupportedId,
+    },
+}
+
+impl OperationKindDraft {
+    fn to_kind(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<MirOperationKind> {
+        match self {
+            Self::Assign {
+                place_key,
+                value,
+                mode,
+            } => Some(MirOperationKind::Assign {
+                place: *place_ids.get(place_key)?,
+                value: value.to_value(place_ids),
+                mode: *mode,
+            }),
+            Self::Read { place_key } => Some(MirOperationKind::Read {
+                place: *place_ids.get(place_key)?,
+            }),
+            Self::Branch { predicate } => Some(MirOperationKind::Branch {
+                predicate: *predicate,
+            }),
+            Self::Call {
+                site,
+                callee,
+                arguments,
+                return_place_key,
+            } => Some(MirOperationKind::Call {
+                site: *site,
+                callee: callee.to_value(place_ids),
+                arguments: arguments
+                    .iter()
+                    .filter_map(|key| place_ids.get(key).copied())
+                    .collect(),
+                return_place: *place_ids.get(return_place_key)?,
+            }),
+            Self::Return { value } => Some(MirOperationKind::Return {
+                value: value.as_ref().map(|value| value.to_value(place_ids)),
+            }),
+            Self::Unsupported { unsupported_id } => Some(MirOperationKind::Unsupported {
+                unsupported: *unsupported_id,
+            }),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Assign { .. } => "assign",
+            Self::Read { .. } => "read",
+            Self::Branch { .. } => "branch",
+            Self::Call { .. } => "call",
+            Self::Return { .. } => "return",
+            Self::Unsupported { .. } => "unsupported",
+        }
+    }
+
+    fn place_keys(&self) -> Vec<String> {
+        match self {
+            Self::Assign {
+                place_key, value, ..
+            } => {
+                let mut keys = vec![place_key.clone()];
+                keys.extend(value.place_keys());
+                keys
+            }
+            Self::Read { place_key } => vec![place_key.clone()],
+            Self::Call {
+                arguments,
+                return_place_key,
+                callee,
+                ..
+            } => {
+                let mut keys = arguments.clone();
+                keys.push(return_place_key.clone());
+                keys.extend(callee.place_keys());
+                keys
+            }
+            Self::Return { value } => value.as_ref().map_or_else(Vec::new, ValueDraft::place_keys),
+            Self::Branch { .. } | Self::Unsupported { .. } => Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ValueDraft {
+    Literal { value: String },
+    PlaceKey(String),
+    Unknown { evidence: String },
+}
+
+impl ValueDraft {
+    fn to_value(&self, place_ids: &BTreeMap<String, PlaceId>) -> MirValue {
+        match self {
+            Self::Literal { value } => MirValue::Literal {
+                value: value.clone(),
+            },
+            Self::PlaceKey(key) => place_ids
+                .get(key)
+                .map(|id| MirValue::Place(*id))
+                .unwrap_or_else(|| MirValue::Unknown {
+                    evidence: key.clone(),
+                }),
+            Self::Unknown { evidence } => MirValue::Unknown {
+                evidence: evidence.clone(),
+            },
+        }
+    }
+
+    fn place_keys(&self) -> Vec<String> {
+        match self {
+            Self::PlaceKey(key) => vec![key.clone()],
+            Self::Literal { .. } | Self::Unknown { .. } => Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UnsupportedDraft {
+    id: UnsupportedId,
+    body: Option<MirBodyId>,
+    operation: Option<MirOpId>,
+    file: FileId,
+    span: Span,
+    construct: String,
+    source_evidence: String,
+    affected_place_keys: Vec<String>,
+    affected_domains: Vec<UnsupportedDomain>,
+    conservative_action: ConservativeAction,
+}
+
+impl UnsupportedDraft {
+    fn new(
+        id: UnsupportedId,
+        body: Option<MirBodyId>,
+        operation: Option<MirOpId>,
+        file: FileId,
+        span: Span,
+        construct: &str,
+        source_evidence: &str,
+        affected_domains: Vec<UnsupportedDomain>,
+        conservative_action: ConservativeAction,
+    ) -> Self {
+        Self {
+            id,
+            body,
+            operation,
+            file,
+            span,
+            construct: construct.to_string(),
+            source_evidence: source_evidence.trim().to_string(),
+            affected_place_keys: Vec::new(),
+            affected_domains,
+            conservative_action,
+        }
+    }
+
+    fn to_fact(&self, place_ids: &BTreeMap<String, PlaceId>) -> UnsupportedSemanticFact {
+        UnsupportedSemanticFact {
+            id: self.id,
+            body: self.body,
+            operation: self.operation,
+            language: Language::Go,
+            file: self.file,
+            span: self.span.clone(),
+            construct: self.construct.clone(),
+            source_evidence: self.source_evidence.clone(),
+            affected_places: self
+                .affected_place_keys
+                .iter()
+                .filter_map(|key| place_ids.get(key).copied())
+                .collect(),
+            affected_domains: self.affected_domains.clone(),
+            conservative_action: self.conservative_action,
+            precision: UnsupportedPrecision::Unsupported,
+            status: MirStatus::Unsupported,
+            stable_key: unsupported_stable_key(self),
+        }
+    }
+}
+
+fn operation_stable_key(
+    body: MirBodyId,
+    ordinal: u32,
+    span: &Span,
+    kind: &OperationKindDraft,
+) -> String {
+    let mut parts = vec![
+        ("language", "go".to_string()),
+        ("body", body.0.to_string()),
+        ("ordinal", ordinal.to_string()),
+        ("kind", kind.label().to_string()),
+        ("start_byte", span.start_byte.to_string()),
+        ("end_byte", span.end_byte.to_string()),
+    ];
+    for (index, key) in kind.place_keys().into_iter().enumerate() {
+        parts.push((operation_place_label(index), key));
+    }
+    let borrowed = parts
+        .iter()
+        .map(|(label, value)| (*label, value.clone()))
+        .collect::<Vec<_>>();
+    semantic_stable_key(FactFamily::MirOperation, &borrowed).into_string()
+}
+
+fn operation_place_label(index: usize) -> &'static str {
+    match index {
+        0 => "place_000000",
+        1 => "place_000001",
+        2 => "place_000002",
+        3 => "place_000003",
+        _ => "place_extra",
+    }
+}
+
+fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
+    semantic_stable_key(
+        FactFamily::UnsupportedSemantic,
+        &[
+            ("language", "go".to_string()),
+            ("file", draft.file.0.to_string()),
+            ("construct", draft.construct.clone()),
+            ("start_byte", draft.span.start_byte.to_string()),
+            ("end_byte", draft.span.end_byte.to_string()),
+            ("evidence", draft.source_evidence.clone()),
+        ],
+    )
+    .into_string()
+}
+
+fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
+    match construct {
+        "go_statement" | "defer_statement" => vec![
+            UnsupportedDomain::Mir,
+            UnsupportedDomain::Cfg,
+            UnsupportedDomain::Calls,
+            UnsupportedDomain::DataFlow,
+        ],
+        "select_statement" | "send_statement" | "channel_receive" => vec![
+            UnsupportedDomain::Mir,
+            UnsupportedDomain::Cfg,
+            UnsupportedDomain::Domains,
+            UnsupportedDomain::DataFlow,
+        ],
+        "panic" | "recover" => vec![
+            UnsupportedDomain::Mir,
+            UnsupportedDomain::Cfg,
+            UnsupportedDomain::Domains,
+            UnsupportedDomain::DataFlow,
+        ],
+        "reflect" | "unsafe" => vec![
+            UnsupportedDomain::Mir,
+            UnsupportedDomain::Calls,
+            UnsupportedDomain::Domains,
+            UnsupportedDomain::Aliases,
+            UnsupportedDomain::DataFlow,
+        ],
+        _ => vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+    }
 }
 
 fn matching_function<'db>(
@@ -820,14 +1610,18 @@ func flow(user User, index int) bool {
         assert!(modes.contains(&AssignMode::Overwrite));
         assert!(modes.contains(&AssignMode::ProjectionMutation));
         assert!(modes.contains(&AssignMode::Simultaneous));
-        assert!(output
-            .operations
-            .iter()
-            .any(|operation| matches!(operation.kind, MirOperationKind::Branch { .. })));
-        assert!(output
-            .operations
-            .iter()
-            .any(|operation| matches!(operation.kind, MirOperationKind::Return { .. })));
+        assert!(
+            output
+                .operations
+                .iter()
+                .any(|operation| matches!(operation.kind, MirOperationKind::Branch { .. }))
+        );
+        assert!(
+            output
+                .operations
+                .iter()
+                .any(|operation| matches!(operation.kind, MirOperationKind::Return { .. }))
+        );
     }
 
     #[test]
@@ -852,7 +1646,13 @@ func flow(token string, count int) bool {
                     callee,
                     arguments,
                     return_place,
-                } => Some((operation.stable_key.clone(), *site, callee, arguments, return_place)),
+                } => Some((
+                    operation.stable_key.clone(),
+                    *site,
+                    callee,
+                    arguments,
+                    return_place,
+                )),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -865,7 +1665,12 @@ func flow(token string, count int) bool {
                     arguments,
                     return_place,
                     ..
-                } => Some((operation.stable_key.clone(), *site, arguments.len(), *return_place)),
+                } => Some((
+                    operation.stable_key.clone(),
+                    *site,
+                    arguments.len(),
+                    *return_place,
+                )),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -880,9 +1685,12 @@ func flow(token string, count int) bool {
                 .collect::<Vec<_>>(),
             second_calls
         );
-        assert!(first_calls[0].2 != &crate::analysis::mir::op::MirValue::Unknown {
-            evidence: "direct target".to_string()
-        });
+        assert!(
+            first_calls[0].2
+                != &crate::analysis::mir::op::MirValue::Unknown {
+                    evidence: "direct target".to_string()
+                }
+        );
     }
 
     #[test]
