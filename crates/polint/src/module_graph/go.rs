@@ -312,6 +312,7 @@ pub(crate) fn collect_go_topology(
     let mut package_ids_by_import_path = BTreeMap::new();
     let mut go_module_paths = Vec::new();
     let mut module_requirements = BTreeMap::new();
+    let mut module_replacements = BTreeMap::new();
     let mut module_package_ids = BTreeMap::new();
     for module_root in &config.module_roots {
         let go_mod_path = module_root_manifest_path(module_root, "go.mod");
@@ -350,6 +351,7 @@ pub(crate) fn collect_go_topology(
             &manifest.excludes,
         );
         module_requirements.insert(module_root.clone(), manifest.requirements);
+        module_replacements.insert(module_root.clone(), manifest.replacements);
     }
 
     for package in metadata.local_packages() {
@@ -422,6 +424,7 @@ pub(crate) fn collect_go_topology(
         &loaded.root,
         &config.module_roots,
         &module_requirements,
+        &module_replacements,
         &module_package_ids,
         &go_module_paths,
     );
@@ -550,6 +553,10 @@ fn emit_go_sum_edges(
         String,
         Vec<crate::module_graph::formats::go_mod::GoRequirementDirective>,
     >,
+    module_replacements: &BTreeMap<
+        String,
+        Vec<crate::module_graph::formats::go_mod::GoReplacementDirective>,
+    >,
     module_package_ids: &BTreeMap<String, TopologyPackageId>,
     go_module_paths: &[String],
 ) {
@@ -558,6 +565,10 @@ fn emit_go_sum_edges(
         let source_label = "go.sum";
         let module_package = module_package_ids.get(module_root).copied();
         let requirements = module_requirements
+            .get(module_root)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let replacements = module_replacements
             .get(module_root)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
@@ -592,6 +603,7 @@ fn emit_go_sum_edges(
 
         for requirement in requirements.iter().filter(|requirement| {
             is_external_requirement(&requirement.target_name, go_module_paths)
+                && !requirement_has_local_replacement(requirement, replacements)
         }) {
             let resolved_version = requirement.version_requirement.clone();
             output
@@ -620,6 +632,26 @@ fn emit_go_sum_edges(
                 });
         }
     }
+}
+
+fn requirement_has_local_replacement(
+    requirement: &crate::module_graph::formats::go_mod::GoRequirementDirective,
+    replacements: &[crate::module_graph::formats::go_mod::GoReplacementDirective],
+) -> bool {
+    replacements.iter().any(|replacement| {
+        replacement.target_name == requirement.target_name
+            && (replacement.version_requirement.is_none()
+                || replacement.version_requirement == requirement.version_requirement)
+            && replacement.replacement_version.is_none()
+            && is_local_go_replacement_target(&replacement.replacement_target)
+    })
+}
+
+fn is_local_go_replacement_target(target: &str) -> bool {
+    matches!(target, "." | "..")
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || Path::new(target).is_absolute()
 }
 
 fn parse_go_sum_line(line: &str) -> Option<(String, String)> {
@@ -1391,6 +1423,28 @@ mod dependency_topology {
                 && edge.resolved_version.as_deref() == Some("v1.2.3")
                 && edge.status == TopologyStatus::MissingLockfile
                 && edge.precision == TopologyPrecision::Unknown
+                && edge.stable_key.contains("go.sum:absent")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_does_not_mark_local_replacements_missing_go_sum() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n\nreplace github.com/acme/lib => ../lib\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(!output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.status == TopologyStatus::MissingLockfile
                 && edge.stable_key.contains("go.sum:absent")
         }));
     }

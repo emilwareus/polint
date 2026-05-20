@@ -16,6 +16,7 @@ use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
+use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
 
 pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.mod",
@@ -590,6 +591,11 @@ fn workspace_member_topology_input_candidates<'a>(
             ));
         }
     }
+    if let Ok(contents) = fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+        for workspace in parse_pnpm_workspace_packages(&contents) {
+            package_paths.extend(expand_package_workspace_glob(root, ".", &workspace));
+        }
+    }
 
     package_paths
         .into_iter()
@@ -1117,6 +1123,39 @@ mod tests {
         let changed_member = module_graph_topology_input_digest_rows(temp.path(), &db);
 
         assert_ne!(with_member, changed_member);
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_pnpm_workspace_member_manifests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        write_file(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            r#"packages: ["packages/*"]"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            base.iter()
+                .all(|(path, _)| path != "packages/ui/package.json")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let with_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert!(
+            with_member
+                .iter()
+                .any(|(path, _)| path == "packages/ui/package.json")
+        );
+        assert_ne!(base, with_member);
     }
 
     #[test]

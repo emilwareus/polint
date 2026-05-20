@@ -7,6 +7,7 @@ use crate::module_graph::formats::js_lockfile::{
     JsLockfileKind, JsLockfileManifest, JsLockfilePackage, JsPackageManager, parse_js_lockfile,
 };
 use crate::module_graph::formats::package_json::{PackageJsonManifest, parse_package_json};
+use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
 use crate::module_graph::paths::{normalize_path, normalize_repo_relative};
 use crate::module_graph::topology::{
@@ -295,7 +296,7 @@ mod topology {
 
 #[cfg(test)]
 mod dependency_topology {
-    use super::collect_ts_topology;
+    use super::{collect_ts_topology, parse_pnpm_workspace_packages};
     use crate::config::load_config;
     use crate::core::AnalysisDb;
     use crate::module_graph::topology::{
@@ -714,6 +715,90 @@ importers:
                 && edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("19.0.0")
         }));
+    }
+
+    #[test]
+    fn collect_ts_topology_does_not_apply_root_pnpm_manager_outside_workspace_members() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            "packages:\n  - packages/*\n",
+        );
+        write_fixture(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"ui","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "tools/cli/package.json",
+            r#"{"name":"cli","dependencies":{"react":"^19.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "tools/cli/package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"19.0.0"}}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-lock.yaml",
+            r#"
+lockfileVersion: '9.0'
+importers:
+  packages/ui:
+    dependencies:
+      react:
+        specifier: ^18.0.0
+        version: 18.2.0
+"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/ui/src/index.ts",
+            "export {};\n",
+        );
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "tools/cli/src/index.ts",
+            "export {};\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let cli = output
+            .packages
+            .iter()
+            .find(|package| package.path == "tools/cli")
+            .expect("cli package exists");
+
+        assert_eq!(
+            lockfile_versions_for(&output, cli.id, "react"),
+            vec!["19.0.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_pnpm_workspace_packages_reads_yaml_sequences_and_comments() {
+        let packages = parse_pnpm_workspace_packages(
+            r#"
+packages: ["packages/*", "apps/*"] # inline sequence
+ignored: true
+"#,
+        );
+
+        assert_eq!(
+            packages,
+            vec!["apps/*".to_string(), "packages/*".to_string()]
+        );
     }
 
     #[test]
@@ -1252,7 +1337,9 @@ pub(crate) fn collect_ts_topology(
         .filter(|file| file.language.is_ts_family())
         .collect::<Vec<_>>();
     let package_manifests = collect_package_manifests(loaded, &ts_files);
-    let workspace_roots = js_workspace_roots(loaded, &package_manifests);
+    let workspace_members_by_root = js_workspace_members_by_root(loaded, &package_manifests);
+    let workspace_roots =
+        js_workspace_roots(loaded, &package_manifests, &workspace_members_by_root);
 
     let mut root_ids_by_path = BTreeMap::new();
     for package_path in &workspace_roots {
@@ -1275,8 +1362,9 @@ pub(crate) fn collect_ts_topology(
     for (package_path, manifest) in &package_manifests {
         let (precision, status) = package_manifest_topology_state(manifest);
         let id = TopologyPackageId(output.packages.len() as u64);
-        let workspace_root = workspace_root_for_package(package_path, &workspace_roots)
-            .and_then(|root| root_ids_by_path.get(root).copied());
+        let workspace_root =
+            workspace_root_for_package(package_path, &workspace_roots, &workspace_members_by_root)
+                .and_then(|root| root_ids_by_path.get(root).copied());
         output.packages.push(TopologyPackageFact {
             id,
             workspace_root,
@@ -1301,7 +1389,12 @@ pub(crate) fn collect_ts_topology(
         package_ids_by_path.insert(package_path.clone(), id);
     }
 
-    let lockfile_selections = select_js_lockfiles(loaded, &package_manifests, &workspace_roots);
+    let lockfile_selections = select_js_lockfiles(
+        loaded,
+        &package_manifests,
+        &workspace_roots,
+        &workspace_members_by_root,
+    );
 
     for (package_path, manifest) in &package_manifests {
         emit_package_manager_overlays(&mut output, package_path, manifest);
@@ -1329,7 +1422,9 @@ pub(crate) fn collect_ts_topology(
             .and_then(|path| package_ids_by_path.get(path).copied());
         let root = package_path
             .as_ref()
-            .and_then(|path| workspace_root_for_package(path, &workspace_roots))
+            .and_then(|path| {
+                workspace_root_for_package(path, &workspace_roots, &workspace_members_by_root)
+            })
             .and_then(|path| root_ids_by_path.get(path).copied());
         let kind = classify_ts_source_set(file);
         output.source_sets.push(SourceSetFact {
@@ -1416,16 +1511,42 @@ fn collect_package_manifests(
 fn js_workspace_roots(
     loaded: &LoadedConfig,
     package_manifests: &BTreeMap<String, PackageJsonManifest>,
+    members_by_root: &BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeSet<String> {
     let mut roots = package_manifests
         .iter()
         .filter(|(_, manifest)| !manifest.workspaces.is_empty())
         .map(|(path, _)| path.clone())
         .collect::<BTreeSet<_>>();
+    roots.extend(members_by_root.keys().cloned());
     if package_manifests.contains_key(".") && !root_pnpm_workspace_patterns(loaded).is_empty() {
         roots.insert(".".to_string());
     }
     roots
+}
+
+fn js_workspace_members_by_root(
+    loaded: &LoadedConfig,
+    package_manifests: &BTreeMap<String, PackageJsonManifest>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut members_by_root = BTreeMap::<String, BTreeSet<String>>::new();
+    for (package_path, manifest) in package_manifests {
+        for workspace in &manifest.workspaces {
+            let members = expand_workspace_glob(&loaded.root, package_path, workspace);
+            members_by_root
+                .entry(package_path.clone())
+                .or_default()
+                .extend(members);
+        }
+    }
+    for workspace in root_pnpm_workspace_patterns(loaded) {
+        let members = expand_workspace_glob(&loaded.root, ".", &workspace);
+        members_by_root
+            .entry(".".to_string())
+            .or_default()
+            .extend(members);
+    }
+    members_by_root
 }
 
 fn package_roots_for_relative_path(loaded: &LoadedConfig, relative_path: &str) -> Vec<String> {
@@ -1513,13 +1634,15 @@ fn expand_workspace_glob(root: &Path, package_path: &str, pattern: &str) -> Vec<
 fn workspace_root_for_package<'a>(
     package_path: &str,
     workspace_roots: &'a BTreeSet<String>,
+    members_by_root: &BTreeMap<String, BTreeSet<String>>,
 ) -> Option<&'a String> {
     workspace_roots
         .iter()
         .filter(|root| {
-            root.as_str() == "."
-                || package_path == root.as_str()
-                || package_path.starts_with(&format!("{root}/"))
+            package_path == root.as_str()
+                || members_by_root
+                    .get(root.as_str())
+                    .is_some_and(|members| members.contains(package_path))
         })
         .max_by_key(|root| root.len())
 }
@@ -1528,6 +1651,7 @@ fn select_js_lockfiles(
     loaded: &LoadedConfig,
     package_manifests: &BTreeMap<String, PackageJsonManifest>,
     workspace_roots: &BTreeSet<String>,
+    members_by_root: &BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeMap<String, JsLockfileSelection> {
     package_manifests
         .iter()
@@ -1538,6 +1662,7 @@ fn select_js_lockfiles(
                 manifest,
                 package_manifests,
                 workspace_roots,
+                members_by_root,
             );
             let root_manifest = package_manifests.get(&root_path).unwrap_or(manifest);
             let selection = select_js_lockfile_at_root(loaded, &root_path, root_manifest);
@@ -1552,11 +1677,14 @@ fn lockfile_selection_root(
     manifest: &PackageJsonManifest,
     package_manifests: &BTreeMap<String, PackageJsonManifest>,
     workspace_roots: &BTreeSet<String>,
+    members_by_root: &BTreeMap<String, BTreeSet<String>>,
 ) -> String {
     if manifest.package_manager.is_some() {
         return package_path.to_string();
     }
-    let Some(workspace_root) = workspace_root_for_package(package_path, workspace_roots) else {
+    let Some(workspace_root) =
+        workspace_root_for_package(package_path, workspace_roots, members_by_root)
+    else {
         return package_path.to_string();
     };
     if workspace_root == package_path {
@@ -2216,31 +2344,6 @@ fn root_pnpm_workspace_patterns(loaded: &LoadedConfig) -> Vec<String> {
     fs::read_to_string(loaded.root.join(relative_path))
         .map(|contents| parse_pnpm_workspace_packages(&contents))
         .unwrap_or_default()
-}
-
-fn parse_pnpm_workspace_packages(contents: &str) -> Vec<String> {
-    let mut in_packages = false;
-    let mut packages = Vec::new();
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed == "packages:" {
-            in_packages = true;
-            continue;
-        }
-        if !in_packages {
-            continue;
-        }
-        let Some(entry) = trimmed.strip_prefix('-') else {
-            if !trimmed.is_empty() && !line.starts_with(' ') {
-                break;
-            }
-            continue;
-        };
-        packages.push(entry.trim().trim_matches(['"', '\'']).to_string());
-    }
-    packages.sort();
-    packages.dedup();
-    packages
 }
 
 fn emit_tsconfig_overlays(
