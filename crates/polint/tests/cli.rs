@@ -1121,6 +1121,29 @@ fn assert_semantic_index_public_output_is_private(output: &str) {
 }
 
 #[test]
+fn semantic_mir_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_semantic_mir_public_rule_repo(temp.path());
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/semantic-mir-public-probe"),
+        "external semantic MIR public-boundary rule should run: {report:#?}"
+    );
+}
+
+#[test]
 fn module_topology_internals_stay_private() {
     let temp = tempfile::tempdir().unwrap();
     write_module_topology_public_rule_repo(temp.path());
