@@ -195,6 +195,16 @@ Plans:
 **Goal:** Add private `analysis::mir` and `analysis::places` lowering for Go and TS/JS function bodies.
 **Requirements:** SAE-SEM-03
 **Research:** `research/implementation-bootstrap/FINAL-REPORT.md`, `research/implementation-bootstrap/RECOMMENDED_IMPLEMENTATION.md`, `research/abstract-interpretation/implementation/MIR-CONTRACT.md`
+**Plans:** 7 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — Private analysis, MIR, and place contracts
+- [ ] 28-02-PLAN.md — Semantic MIR storage and metadata
+- [ ] 28-03-PLAN.md — Go semantic MIR lowering
+- [ ] 28-04-PLAN.md — TS/JS semantic MIR lowering
+- [ ] 28-05-PLAN.md — Provider, cache identity, validation, and debug wiring
+- [ ] 28-06-PLAN.md — Semantic MIR eval fixture snapshots
+- [ ] 28-07-PLAN.md — Public no-leak and compatibility proof
 
 **Success criteria:**
 1. MIR snapshots are deterministic.
