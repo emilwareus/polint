@@ -4,7 +4,7 @@ use crate::analysis::cfg::facts::{
 };
 use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
 use crate::analysis::cfg::store::CfgOutput;
-use crate::analysis::ids::MirOpId;
+use crate::analysis::ids::{MirBodyId, MirOpId};
 use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::MirOperation;
 use crate::analysis::stable_key::semantic_stable_key;
@@ -24,6 +24,17 @@ pub(crate) struct CfgBuilder {
     current_block: Option<BasicBlockId>,
     next_body_block_ordinal: u32,
     next_synthetic_node_ordinal: u32,
+}
+
+struct CfgNodeDraft {
+    function: CfgFunctionId,
+    body: MirBodyId,
+    operation: Option<MirOpId>,
+    kind: CfgNodeKind,
+    span: Option<Span>,
+    generated: bool,
+    operation_ordinal: u32,
+    stable_key: String,
 }
 
 impl CfgBuilder {
@@ -55,22 +66,22 @@ impl CfgBuilder {
         self.next_body_block_ordinal = 0;
         self.next_synthetic_node_ordinal = 0;
 
-        let entry_node = self.new_node(
-            function_id,
-            body.id,
-            None,
-            CfgNodeKind::Entry,
-            Some(body.span.clone()),
-            true,
-            0,
-            stable_key(
+        let entry_node = self.new_node(CfgNodeDraft {
+            function: function_id,
+            body: body.id,
+            operation: None,
+            kind: CfgNodeKind::Entry,
+            span: Some(body.span.clone()),
+            generated: true,
+            operation_ordinal: 0,
+            stable_key: stable_key(
                 FactFamily::CfgNode,
                 &[
                     ("body", body.stable_key.clone()),
                     ("kind", "entry".to_string()),
                 ],
             ),
-        );
+        });
         let entry_block = self.new_block(
             function_id,
             BasicBlockKind::Entry,
@@ -86,22 +97,22 @@ impl CfgBuilder {
             ),
         );
 
-        let normal_exit_node = self.new_node(
-            function_id,
-            body.id,
-            None,
-            CfgNodeKind::ExitNormal,
-            Some(body.span.clone()),
-            true,
-            u32::MAX - 1,
-            stable_key(
+        let normal_exit_node = self.new_node(CfgNodeDraft {
+            function: function_id,
+            body: body.id,
+            operation: None,
+            kind: CfgNodeKind::ExitNormal,
+            span: Some(body.span.clone()),
+            generated: true,
+            operation_ordinal: u32::MAX - 1,
+            stable_key: stable_key(
                 FactFamily::CfgNode,
                 &[
                     ("body", body.stable_key.clone()),
                     ("kind", "exit-normal".to_string()),
                 ],
             ),
-        );
+        });
         self.new_block(
             function_id,
             BasicBlockKind::ExitNormal,
@@ -118,22 +129,22 @@ impl CfgBuilder {
         );
 
         let exceptional_exit_node = include_exceptional_exit.then(|| {
-            self.new_node(
-                function_id,
-                body.id,
-                None,
-                CfgNodeKind::ExitExceptional,
-                Some(body.span.clone()),
-                true,
-                u32::MAX,
-                stable_key(
+            self.new_node(CfgNodeDraft {
+                function: function_id,
+                body: body.id,
+                operation: None,
+                kind: CfgNodeKind::ExitExceptional,
+                span: Some(body.span.clone()),
+                generated: true,
+                operation_ordinal: u32::MAX,
+                stable_key: stable_key(
                     FactFamily::CfgNode,
                     &[
                         ("body", body.stable_key.clone()),
                         ("kind", "exit-exceptional".to_string()),
                     ],
                 ),
-            )
+            })
         });
         if let Some(node) = exceptional_exit_node {
             self.new_block(
@@ -251,15 +262,15 @@ impl CfgBuilder {
             |operation| operation.stable_key.clone(),
         );
         let body_key = self.expect_body_stable_key().to_string();
-        let node_id = self.new_node(
+        let node_id = self.new_node(CfgNodeDraft {
             function,
             body,
-            operation_id,
+            operation: operation_id,
             kind,
             span,
-            false,
+            generated: false,
             operation_ordinal,
-            stable_key(
+            stable_key: stable_key(
                 FactFamily::CfgNode,
                 &[
                     ("body", body_key),
@@ -269,7 +280,7 @@ impl CfgBuilder {
                     ("kind", format!("{kind:?}")),
                 ],
             ),
-        );
+        });
         if let Some(node) = self.output.nodes.iter_mut().find(|node| node.id == node_id) {
             node.block = block;
         }
@@ -364,29 +375,19 @@ impl CfgBuilder {
         edge_id
     }
 
-    fn new_node(
-        &mut self,
-        function: CfgFunctionId,
-        body: crate::analysis::ids::MirBodyId,
-        operation: Option<MirOpId>,
-        kind: CfgNodeKind,
-        span: Option<Span>,
-        generated: bool,
-        operation_ordinal: u32,
-        stable_key: String,
-    ) -> CfgNodeId {
+    fn new_node(&mut self, draft: CfgNodeDraft) -> CfgNodeId {
         let id = self.alloc_node_id();
         self.output.nodes.push(CfgNodeFact {
             id,
-            cfg_function: function,
-            body,
-            operation,
+            cfg_function: draft.function,
+            body: draft.body,
+            operation: draft.operation,
             block: BasicBlockId(0),
-            kind,
-            span,
-            generated,
-            operation_ordinal,
-            stable_key,
+            kind: draft.kind,
+            span: draft.span,
+            generated: draft.generated,
+            operation_ordinal: draft.operation_ordinal,
+            stable_key: draft.stable_key,
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         });
