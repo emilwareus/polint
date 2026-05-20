@@ -5,8 +5,7 @@ use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
 use crate::analysis::mir::body::{MirBody, MirOutput};
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceRoot};
-
-const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
+use crate::core::SEMANTIC_MIR_PROVIDER_ID;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SemanticStore {

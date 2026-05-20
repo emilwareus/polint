@@ -1,7 +1,7 @@
 use crate::analysis::error::AnalysisError;
-use crate::analysis::mir::body::{MirBody, MirOutput};
+use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
-use crate::analysis::places::PlaceFact;
+use crate::analysis::places::{PlaceFact, PlaceStatus};
 use crate::analysis::store::SemanticStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
@@ -36,6 +36,7 @@ const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
+pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -894,7 +895,52 @@ impl AnalysisDb {
 
     pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
         self.semantic = Some(SemanticStore::from_output(output)?);
+        self.refresh_semantic_mir_metadata();
         Ok(())
+    }
+
+    fn refresh_semantic_mir_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::MirBody);
+        self.fact_meta.remove_family(FactFamily::MirOperation);
+        self.fact_meta.remove_family(FactFamily::Place);
+        self.fact_meta
+            .remove_family(FactFamily::UnsupportedSemantic);
+
+        let body_metadata = self
+            .mir_bodies()
+            .iter()
+            .map(|body| (body.id.0, self.mir_body_metadata(body)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in body_metadata {
+            self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
+        }
+
+        let operation_metadata = self
+            .mir_operations()
+            .iter()
+            .map(|operation| (operation.id.0, self.mir_operation_metadata(operation)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in operation_metadata {
+            self.record_fact_meta(FactFamily::MirOperation, run_id, metadata);
+        }
+
+        let place_metadata = self
+            .mir_places()
+            .iter()
+            .map(|place| (place.id.0, self.place_metadata(place)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in place_metadata {
+            self.record_fact_meta(FactFamily::Place, run_id, metadata);
+        }
+
+        let unsupported_metadata = self
+            .unsupported_semantics()
+            .iter()
+            .map(|row| (row.id.0, self.unsupported_semantic_metadata(row)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unsupported_metadata {
+            self.record_fact_meta(FactFamily::UnsupportedSemantic, run_id, metadata);
+        }
     }
 
     fn refresh_module_graph_metadata(&mut self) {
@@ -1507,6 +1553,22 @@ impl AnalysisDb {
                 &mut missing,
                 FactFamily::StableExport,
                 stable_export.id.0,
+            );
+        }
+        for body in self.mir_bodies() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirBody, body.id.0);
+        }
+        for operation in self.mir_operations() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirOperation, operation.id.0);
+        }
+        for place in self.mir_places() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Place, place.id.0);
+        }
+        for row in self.unsupported_semantics() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::UnsupportedSemantic,
+                row.id.0,
             );
         }
         for symbol in self.symbols() {
@@ -2416,6 +2478,119 @@ impl AnalysisDb {
         )
     }
 
+    fn mir_body_metadata(&self, body: &MirBody) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(body.status);
+        fact_meta_from_stable_key(
+            FactFamily::MirBody,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            body.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(body.status).to_string()),
+                ("language", language_label(body.language).to_string()),
+                ("file_key", self.source_file_key(body.file)),
+                (
+                    "function_key",
+                    self.function_key(body.function, "", &body.span),
+                ),
+                ("owner_stable_key", body.owner_stable_key.clone()),
+                (
+                    "package",
+                    body.package
+                        .map(|package| package.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "module",
+                    body.module
+                        .map(|module| module.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                ("span", span_metadata_value(&body.span)),
+            ]),
+        )
+    }
+
+    fn mir_operation_metadata(&self, operation: &MirOperation) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(operation.status);
+        fact_meta_from_stable_key(
+            FactFamily::MirOperation,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            operation.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(operation.status).to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, operation.body.0),
+                ),
+                ("ordinal", operation.ordinal.to_string()),
+                ("span", span_metadata_value(&operation.span)),
+            ]),
+        )
+    }
+
+    fn place_metadata(&self, place: &PlaceFact) -> FactMeta {
+        let (precision, confidence) = place_status_metadata(place.status);
+        fact_meta_from_stable_key(
+            FactFamily::Place,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            place.stable_key.clone(),
+            stable_parts([
+                ("status", place_status_label(place.status).to_string()),
+                ("language", language_label(place.language).to_string()),
+                ("path", option_file_path(self, place.file)),
+                ("function", option_function_id(place.function)),
+                ("projection_count", place.projections.len().to_string()),
+            ]),
+        )
+    }
+
+    fn unsupported_semantic_metadata(&self, row: &UnsupportedSemanticFact) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(row.status);
+        fact_meta_from_stable_key(
+            FactFamily::UnsupportedSemantic,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            row.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(row.status).to_string()),
+                ("language", language_label(row.language).to_string()),
+                ("path", self.path_for(row.file)),
+                ("span", span_metadata_value(&row.span)),
+                ("construct", row.construct.clone()),
+                ("source_evidence", row.source_evidence.clone()),
+                (
+                    "body_key",
+                    row.body
+                        .map(|body| self.fact_stable_key(FactFamily::MirBody, body.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    row.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "affected_places",
+                    row.affected_places
+                        .iter()
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+            ]),
+        )
+    }
+
     fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
         self.metadata_for(FactRef::new(family, run_id))
             .map(|metadata| metadata.stable_key.clone())
@@ -2787,6 +2962,24 @@ fn semantic_status_metadata(status: SemanticStatus) -> (FactPrecision, FactConfi
     }
 }
 
+fn mir_status_metadata(status: MirStatus) -> (FactPrecision, FactConfidence) {
+    match status {
+        MirStatus::Resolved => (FactPrecision::SetupAware, FactConfidence::High),
+        MirStatus::Partial => (FactPrecision::Heuristic, FactConfidence::Medium),
+        MirStatus::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        MirStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
+fn place_status_metadata(status: PlaceStatus) -> (FactPrecision, FactConfidence) {
+    match status {
+        PlaceStatus::Resolved => (FactPrecision::SetupAware, FactConfidence::High),
+        PlaceStatus::Partial => (FactPrecision::Heuristic, FactConfidence::Medium),
+        PlaceStatus::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        PlaceStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
 fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
     match precision {
         TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile => {
@@ -2809,6 +3002,24 @@ fn semantic_status_label(status: SemanticStatus) -> &'static str {
         SemanticStatus::External => "external",
         SemanticStatus::SetupMissing => "setup_missing",
         SemanticStatus::Unsupported => "unsupported",
+    }
+}
+
+fn mir_status_label(status: MirStatus) -> &'static str {
+    match status {
+        MirStatus::Resolved => "resolved",
+        MirStatus::Partial => "partial",
+        MirStatus::Unknown => "unknown",
+        MirStatus::Unsupported => "unsupported",
+    }
+}
+
+fn place_status_label(status: PlaceStatus) -> &'static str {
+    match status {
+        PlaceStatus::Resolved => "resolved",
+        PlaceStatus::Partial => "partial",
+        PlaceStatus::Unknown => "unknown",
+        PlaceStatus::Unsupported => "unsupported",
     }
 }
 
