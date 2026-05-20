@@ -1,4 +1,4 @@
-# Exercise release builds and packaging on every branch/PR without publishing:
+# Exercise release builds and packaging on PRs and main pushes without publishing:
 # no version bump, no tag, no crates.io upload, no GitHub Release.
 
 name: Release dry-run
@@ -6,6 +6,7 @@ name: Release dry-run
 on:
   pull_request:
   push:
+    branches: [main]
 
 concurrency:
   group: release-dry-run-${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 permissions:
   contents: read
@@ -25,6 +27,8 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: cargo publish --dry-run
         run: DRY_RUN=1 ./scripts/publish-crates.sh
@@ -67,6 +71,7 @@ jobs:
 
       - name: Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-gnu'
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -75,8 +80,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Ensure cross target std is installed
-        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build polint
         run: cargo build --locked --release -p polint --target ${{ matrix.target }}

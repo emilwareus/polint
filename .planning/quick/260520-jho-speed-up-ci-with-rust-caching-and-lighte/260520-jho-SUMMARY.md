@@ -12,10 +12,14 @@
   tests, and Ubuntu install smoke.
 - Added explicit Go cache dependency paths where CI tests can invoke Go tooling.
 - Kept SARIF, rustdoc, MSRV, rustfmt, and cargo-deny checks.
+- Updated the SARIF upload action to CodeQL v4 to remove the Node 20 / CodeQL
+  v3 deprecation warning.
+- Tightened release dry-run triggers so PR branches do not run duplicate push
+  and pull_request dry-runs for the same commit, and added Rust caching there.
 
 ## Local Verification
 
-- `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/ci.yml")'`
+- `ruby -e 'require "yaml"; %w[.github/workflows/ci.yml .github/workflows/release-dry-run.yml].each { |f| YAML.load_file(f) }'`
 - `git diff --check`
 - `cargo fmt --all --check`
 - `GOWORK=off go test ./...` in `tools/polint-go-symbols`
