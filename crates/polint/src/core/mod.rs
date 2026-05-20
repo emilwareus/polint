@@ -4254,6 +4254,82 @@ mod tests {
         }
     }
 
+    mod semantic_mir_storage_public_boundary {
+        use std::fs;
+        use std::path::Path;
+
+        const FORBIDDEN_PUBLIC_TOKENS: &[&str] = &[
+            "MirBody",
+            "MirOperation",
+            "PlaceFact",
+            "SemanticStore",
+            "UnsupportedSemanticFact",
+            "polint.semantic_mir",
+            "semantic-mir-facts",
+        ];
+
+        fn assert_no_forbidden_tokens(label: &str, source: &str) {
+            for token in FORBIDDEN_PUBLIC_TOKENS {
+                assert!(
+                    !source.contains(token),
+                    "{label} leaked private semantic MIR token `{token}`"
+                );
+            }
+        }
+
+        #[test]
+        fn sdk_runner_and_bench_sources_do_not_leak_semantic_mir_storage() {
+            let sources = [
+                ("sdk/mod.rs", include_str!("../sdk/mod.rs")),
+                ("sdk/facts.rs", include_str!("../sdk/facts.rs")),
+                ("runner/mod.rs", include_str!("../runner/mod.rs")),
+                ("lib.rs", include_str!("../lib.rs")),
+            ];
+
+            for (label, source) in sources {
+                assert_no_forbidden_tokens(label, source);
+            }
+        }
+
+        #[test]
+        fn crate_root_keeps_analysis_module_crate_private_and_out_of_bench() {
+            let lib = include_str!("../lib.rs");
+            assert!(lib.contains("pub(crate) mod analysis;"));
+
+            let bench_surface = lib.split("pub mod _bench").nth(1).unwrap_or_default();
+            assert!(!bench_surface.contains("analysis"));
+            assert_no_forbidden_tokens("_bench", bench_surface);
+        }
+
+        #[test]
+        fn docs_and_readme_do_not_advertise_private_semantic_mir_facts() {
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let repo_root = manifest_dir
+                .parent()
+                .and_then(Path::parent)
+                .expect("workspace root");
+            let docs_root = repo_root.join("docs/facts");
+            let mut sources = vec![(
+                "README.md".to_string(),
+                fs::read_to_string(repo_root.join("README.md")).expect("README.md"),
+            )];
+
+            for entry in fs::read_dir(&docs_root).expect("docs/facts exists") {
+                let entry = entry.expect("docs/facts entry");
+                if entry.file_type().expect("docs/facts file type").is_file() {
+                    sources.push((
+                        entry.path().display().to_string(),
+                        fs::read_to_string(entry.path()).expect("docs/facts source"),
+                    ));
+                }
+            }
+
+            for (label, source) in sources {
+                assert_no_forbidden_tokens(&label, &source);
+            }
+        }
+    }
+
     fn topology_output(prefix: &str) -> crate::module_graph::topology::TopologyOutput {
         use crate::module_graph::topology::{
             DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
