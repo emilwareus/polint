@@ -30,7 +30,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 25 | 4/4 | Complete    | 2026-05-18 |
 | 26 | 6/6 | Complete    | 2026-05-19 |
 | 27 | 7/7 | Complete    | 2026-05-19 |
-| 28 | 7/7 | Complete   | 2026-05-20 |
+| 28 | 7/7 | Complete    | 2026-05-20 |
 | 29 | Local CFG and Control Dependence | Build local CFG, dominance, postdominance, and control-dependence facts over MIR. | SAE-SEM-04 |
 | 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
 | 31 | P0 Abstract-Domain Kernel | Add deterministic lattice/transfer infrastructure and first local domains. | SAE-INT-01 |

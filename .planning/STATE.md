@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-20T09:25:46.952Z"
+status: planning
+last_updated: "2026-05-20T10:06:25.783Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 28 — Private Semantic MIR and Place Identity
+**Current focus:** Phase 29 — Local CFG and Control Dependence
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 28 (Private Semantic MIR and Place Identity) — COMPLETE
-Plan: 7 of 7
-Last activity: 2026-05-20
+Status: Ready to plan
+Phase: 29
+Plan: Not started
+Last activity: 2026-05-20 -- Phase 28 verified and completed; Phase 29 ready to plan
 
 ## Phase Progress
 
@@ -253,8 +253,8 @@ Last activity: 2026-05-20
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed 28-07 semantic MIR public-boundary proof.
-- Stopped at: Completed 28-private-semantic-mir-and-place-identity-07-PLAN.md; Phase 28 is ready for verification.
+- Last activity: 2026-05-20 - Phase 28 verified and completed.
+- Stopped at: Phase 29 (Local CFG and Control Dependence) is ready for discussion/planning.
 
 ### Quick Tasks Completed
 
@@ -271,4 +271,4 @@ Last activity: 2026-05-20
 
 ## Next Action
 
-Phase 28 is ready for verification.
+Phase 29 is ready for discussion/planning.
