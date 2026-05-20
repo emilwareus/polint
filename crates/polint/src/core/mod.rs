@@ -3916,6 +3916,133 @@ mod tests {
         }
     }
 
+    mod semantic_mir_metadata {
+        use super::*;
+
+        fn replace_with_semantic_rows(db: &mut AnalysisDb, file: FileId) {
+            db.replace_semantic_mir(MirOutput {
+                bodies: vec![test_mir_body(2, file, "body:metadata")],
+                places: vec![test_place(2, file, "place:metadata")],
+                operations: vec![test_mir_operation(
+                    2,
+                    MirBodyId(2),
+                    PlaceId(2),
+                    PlaceId(2),
+                    "op:metadata",
+                )],
+                unsupported: vec![test_unsupported("unsupported:metadata")],
+            })
+            .expect("semantic MIR replace");
+        }
+
+        #[test]
+        fn replace_semantic_mir_records_metadata_for_every_stored_row() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+
+            replace_with_semantic_rows(&mut db, file);
+
+            for family in [
+                FactFamily::MirBody,
+                FactFamily::MirOperation,
+                FactFamily::Place,
+                FactFamily::UnsupportedSemantic,
+            ] {
+                let metadata = db
+                    .metadata_for(FactRef::new(family, 0))
+                    .expect("semantic MIR metadata exists");
+                assert_eq!(metadata.producer_id, "polint.semantic_mir");
+                assert_eq!(metadata.layer_id, "polint.semantic_mir");
+                assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
+                assert_ne!(metadata.precision, FactPrecision::Exact);
+            }
+        }
+
+        #[test]
+        fn semantic_mir_missing_metadata_reports_rows_when_refresh_is_bypassed() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+
+            replace_with_semantic_rows(&mut db, file);
+            for family in [
+                FactFamily::MirBody,
+                FactFamily::MirOperation,
+                FactFamily::Place,
+                FactFamily::UnsupportedSemantic,
+            ] {
+                db.remove_fact_metadata_for_test(FactRef::new(family, 0));
+            }
+
+            assert_eq!(
+                db.missing_fact_metadata(),
+                vec![
+                    MissingFactMeta {
+                        family: FactFamily::MirBody,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::MirOperation,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::Place,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::UnsupportedSemantic,
+                        run_id: 0,
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn semantic_mir_metadata_maps_unknown_and_unsupported_to_low_precision() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let mut body = test_mir_body(1, file, "body:unknown");
+            body.status = MirStatus::Unknown;
+            let mut place = test_place(1, file, "place:partial");
+            place.status = PlaceStatus::Partial;
+
+            db.replace_semantic_mir(MirOutput {
+                bodies: vec![body],
+                places: vec![place],
+                operations: Vec::new(),
+                unsupported: vec![test_unsupported("unsupported:metadata")],
+            })
+            .expect("semantic MIR replace");
+
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::MirBody, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Unresolved, FactConfidence::Low))
+            );
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::Place, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Heuristic, FactConfidence::Medium))
+            );
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::UnsupportedSemantic, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Unsupported, FactConfidence::Low))
+            );
+        }
+    }
+
     fn topology_output(prefix: &str) -> crate::module_graph::topology::TopologyOutput {
         use crate::module_graph::topology::{
             DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
