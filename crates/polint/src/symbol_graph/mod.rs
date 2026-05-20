@@ -138,7 +138,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         module_graph_output_digest.clone(),
         upstream_syntax_output_digests.clone(),
     );
-    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<SymbolGraphLayerPayload, _>(&layer_key, |payload, manifest| {

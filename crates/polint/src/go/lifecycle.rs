@@ -17,6 +17,7 @@ pub(crate) struct GoAnalysisConfig {
     pub(crate) package_patterns: Vec<String>,
     pub(crate) build_tags: Vec<String>,
     pub(crate) include_tests: bool,
+    pub(crate) offline: bool,
     pub(crate) files_without_module_root: Vec<String>,
 }
 
@@ -79,6 +80,10 @@ impl GoAnalysisConfig {
                 .get("include_tests")
                 .and_then(toml::Value::as_bool)
                 .unwrap_or(true),
+            offline: settings
+                .get("offline")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false),
             files_without_module_root,
         })
     }
@@ -582,6 +587,12 @@ pub(crate) fn command_with_go_env(
     Ok((command, workspace))
 }
 
+pub(crate) fn apply_go_offline_env(command: &mut Command, offline: bool) {
+    if offline {
+        command.env("GOPROXY", "off").env("GOSUMDB", "off");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,5 +703,39 @@ mod tests {
                 "must not start with `-` because it would be interpreted as a go list flag"
             )
         );
+    }
+
+    #[test]
+    fn go_analysis_config_parses_offline_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(".polint.toml"),
+            "[languages.go]\nmodule_roots = [\".\"]\noffline = true\n",
+        )
+        .expect("write config");
+        let loaded = crate::config::load_config(temp.path()).expect("config loads");
+
+        let config = GoAnalysisConfig::from_loaded_files(&loaded, &[]).expect("config parses");
+
+        assert!(config.offline);
+    }
+
+    #[test]
+    fn apply_go_offline_env_disables_go_network_sources() {
+        let mut command = Command::new("go");
+
+        apply_go_offline_env(&mut command, true);
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(envs.get("GOPROXY"), Some(&Some("off".to_string())));
+        assert_eq!(envs.get("GOSUMDB"), Some(&Some("off".to_string())));
     }
 }

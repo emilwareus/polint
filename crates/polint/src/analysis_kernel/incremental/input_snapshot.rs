@@ -389,6 +389,11 @@ fn go_lifecycle_components(
             vec![config.include_tests.to_string()],
         ),
         values_component(
+            "go.offline",
+            DigestKind::GoLifecycle,
+            vec![config.offline.to_string()],
+        ),
+        values_component(
             "go.package_patterns",
             DigestKind::GoLifecycle,
             config.package_patterns.clone(),
@@ -447,6 +452,11 @@ fn go_lifecycle_error_components(loaded: &LoadedConfig, reason: &str) -> Vec<Inp
                 bool_snapshot_setting(&loaded.config.languages.go, "include_tests", true)
                     .to_string(),
             ],
+        ),
+        values_component(
+            "go.offline",
+            DigestKind::GoLifecycle,
+            vec![bool_snapshot_setting(&loaded.config.languages.go, "offline", false).to_string()],
         ),
         values_component(
             "go.package_patterns",
@@ -1388,6 +1398,10 @@ mod lifecycle {
             .languages
             .go
             .insert("include_tests".to_string(), toml::Value::Boolean(false));
+        config
+            .languages
+            .go
+            .insert("offline".to_string(), toml::Value::Boolean(true));
         config.languages.go.insert(
             "package_patterns".to_string(),
             toml::Value::Array(vec![
@@ -1429,6 +1443,7 @@ mod lifecycle {
             component(components, "go.include_tests").detail,
             vec!["false"]
         );
+        assert_eq!(component(components, "go.offline").detail, vec!["true"]);
         assert_eq!(
             component(components, "go.package_patterns").detail,
             vec!["./cmd/...", "./internal/..."]
@@ -1494,6 +1509,7 @@ mod lifecycle {
                 "go.include_tests",
                 "go.mod",
                 "go.module_roots",
+                "go.offline",
                 "go.package_patterns",
                 "go.sum",
                 "go.tool_invocation",

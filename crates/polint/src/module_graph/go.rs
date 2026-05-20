@@ -906,6 +906,7 @@ fn run_go_list(root: &Path, config: &GoAnalysisConfig) -> GoCommandOutput {
     if !config.build_tags.is_empty() {
         command.arg(format!("-tags={}", config.build_tags.join(",")));
     }
+    lifecycle::apply_go_offline_env(&mut command, config.offline);
     command
         .args(config.rooted_package_patterns())
         .output()

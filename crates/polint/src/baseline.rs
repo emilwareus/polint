@@ -1,22 +1,18 @@
 use crate::diagnostics::{Diagnostic, diagnostic_fingerprint, fingerprint};
+use crate::repo_fs::{read_repo_file_to_string_with_limit, write_repo_file_atomic};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub(crate) const DEFAULT_BASELINE_PATH: &str = ".polint/baseline.yaml";
 const BASELINE_VERSION: u32 = 1;
+const BASELINE_MAX_BYTES: u64 = 16 * 1_048_576;
 
 #[derive(Debug, Error)]
 pub(crate) enum BaselineError {
-    #[error("failed to read baseline file {path}: {source}")]
-    Read { path: PathBuf, source: io::Error },
-    #[error("failed to write baseline file {path}: {source}")]
-    Write { path: PathBuf, source: io::Error },
-    #[error("failed to create baseline directory {path}: {source}")]
-    CreateDir { path: PathBuf, source: io::Error },
+    #[error("refusing baseline path {path}: {reason}")]
+    Path { path: PathBuf, reason: &'static str },
     #[error("failed to parse baseline YAML: {0}")]
     Yaml(#[from] serde_norway::Error),
     #[error("unsupported baseline version {0}; expected version 1")]
@@ -361,27 +357,22 @@ struct BaselineWire {
     ignore: Vec<String>,
 }
 
-pub(crate) fn load_baseline(path: &Path) -> Result<BaselineConfig, BaselineError> {
-    let raw = fs::read_to_string(path).map_err(|source| BaselineError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
+pub(crate) fn load_baseline(root: &Path) -> Result<BaselineConfig, BaselineError> {
+    let raw = read_repo_file_to_string_with_limit(root, DEFAULT_BASELINE_PATH, BASELINE_MAX_BYTES)
+        .map_err(|error| BaselineError::Path {
+            path: root.join(DEFAULT_BASELINE_PATH),
+            reason: error.stable_reason(),
+        })?;
     parse_baseline(&raw)
 }
 
-pub(crate) fn write_baseline(path: &Path, config: &BaselineConfig) -> Result<(), BaselineError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|source| BaselineError::CreateDir {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+pub(crate) fn write_baseline(root: &Path, config: &BaselineConfig) -> Result<(), BaselineError> {
     let rendered = render_baseline(config)?;
-    fs::write(path, rendered).map_err(|source| BaselineError::Write {
-        path: path.to_path_buf(),
-        source,
+    write_repo_file_atomic(root, DEFAULT_BASELINE_PATH, rendered).map_err(|error| {
+        BaselineError::Path {
+            path: root.join(DEFAULT_BASELINE_PATH),
+            reason: error.stable_reason(),
+        }
     })
 }
 
@@ -673,6 +664,46 @@ baseline:
         .unwrap();
 
         assert_eq!(config.baseline[0].file, "src/path with spaces.go");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_baseline_rejects_symlink_escape() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::create_dir_all(repo.path().join(".polint")).expect("repo .polint");
+        std::fs::write(
+            outside.path().join("baseline.yaml"),
+            "version: 1\nbaseline: []\n",
+        )
+        .expect("write outside baseline");
+        std::os::unix::fs::symlink(
+            outside.path().join("baseline.yaml"),
+            repo.path().join(DEFAULT_BASELINE_PATH),
+        )
+        .expect("symlink baseline");
+
+        let error = load_baseline(repo.path()).expect_err("symlink escape should fail");
+
+        assert!(error.to_string().contains("path escapes repository root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_baseline_rejects_symlink_parent_escape() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        std::os::unix::fs::symlink(outside.path(), repo.path().join(".polint"))
+            .expect("symlink .polint");
+        let config = BaselineConfig {
+            baseline: Vec::new(),
+            ignore: Vec::new(),
+        };
+
+        let error = write_baseline(repo.path(), &config).expect_err("symlink parent should fail");
+
+        assert!(error.to_string().contains("path escapes repository root"));
+        assert!(!outside.path().join("baseline.yaml").exists());
     }
 
     #[test]

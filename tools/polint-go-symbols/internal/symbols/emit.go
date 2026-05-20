@@ -197,9 +197,7 @@ func Emit(config Config) (Output, error) {
 		Tests: config.IncludeTests,
 		Env:   env,
 	}
-	if len(config.BuildTags) > 0 {
-		loadConfig.BuildFlags = []string{"-tags=" + strings.Join(config.BuildTags, ",")}
-	}
+	loadConfig.BuildFlags = goBuildFlags(config.BuildTags)
 
 	pkgs, err := packages.Load(loadConfig, patterns...)
 	if err != nil {
@@ -252,6 +250,14 @@ func Emit(config Config) (Output, error) {
 	}
 	e.finish()
 	return e.out, nil
+}
+
+func goBuildFlags(buildTags []string) []string {
+	flags := []string{"-mod=readonly"}
+	if len(buildTags) > 0 {
+		flags = append(flags, "-tags="+strings.Join(buildTags, ","))
+	}
+	return flags
 }
 
 func normalizeModuleRoots(roots []string) ([]string, error) {

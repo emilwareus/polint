@@ -863,7 +863,8 @@ mod tests {
         .expect("kernel should run");
         let metrics = provider_output(&output, "polint.metrics");
 
-        assert_eq!(metrics.cache_stats.misses, 1);
+        assert_eq!(metrics.cache_stats.misses, 0);
+        assert_eq!(metrics.cache_stats.invalid_evicted_reads, 1);
         assert_eq!(metrics.cache_stats.recomputes, 1);
         assert_eq!(metrics.cache_stats.writes, 0);
         assert!(output.diagnostics.iter().any(|diagnostic| {

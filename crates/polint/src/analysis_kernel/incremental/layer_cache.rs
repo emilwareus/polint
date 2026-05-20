@@ -23,6 +23,8 @@ use super::keys::{LayerKey, LayerKind, PrecisionTier};
 use crate::cache::stable_hash;
 
 pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-2";
+const LAYER_CACHE_MANIFEST_MAX_BYTES: u64 = 4 * 1_048_576;
+const LAYER_CACHE_PAYLOAD_MAX_BYTES: u64 = 64 * 1_048_576;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,7 @@ impl LayerCacheManifest {
 #[derive(Debug, Clone)]
 pub(crate) struct LayerCacheStore {
     root: PathBuf,
+    repo_root: Option<PathBuf>,
     enabled: bool,
 }
 
@@ -104,6 +107,19 @@ impl LayerCacheStore {
     pub(crate) fn new(root: impl AsRef<Path>, enabled: bool) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
+            repo_root: None,
+            enabled,
+        }
+    }
+
+    pub(crate) fn new_with_repo_root(
+        root: impl AsRef<Path>,
+        enabled: bool,
+        repo_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            root: root.as_ref().to_path_buf(),
+            repo_root,
             enabled,
         }
     }
@@ -139,17 +155,20 @@ impl LayerCacheStore {
         let Ok(manifest_path) = self.manifest_path(key) else {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         };
-        if !manifest_path.exists() {
+        let manifests_dir = self.manifests_dir();
+        if self.path_is_missing(&manifest_path) {
             self.evict_stale_manifests_for_key(key);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         }
 
-        let Some(manifest_path) = self.managed_existing_file(&manifest_path, &self.manifests_dir())
-        else {
-            evict_file(&manifest_path);
+        let Some(manifest_path) = self.managed_existing_file(&manifest_path, &manifests_dir) else {
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
-        let Ok(raw_manifest) = fs::read_to_string(&manifest_path) else {
+        let Ok(raw_manifest) = crate::repo_fs::read_file_to_string_with_limit(
+            &manifest_path,
+            LAYER_CACHE_MANIFEST_MAX_BYTES,
+        ) else {
+            evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         };
         let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
@@ -170,7 +189,9 @@ impl LayerCacheStore {
             evict_file(&blob_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
-        let Ok(payload_bytes) = fs::read(&blob_path) else {
+        let Ok(payload_bytes) =
+            crate::repo_fs::read_file_with_limit(&blob_path, LAYER_CACHE_PAYLOAD_MAX_BYTES)
+        else {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
@@ -241,21 +262,26 @@ impl LayerCacheStore {
             .blob_path(&manifest.payload_digest)
             .ok_or_else(|| anyhow!("invalid layer cache payload digest path"))?;
         let manifest_path = self.manifest_path(key)?;
-        fs::create_dir_all(self.blobs_dir())?;
-        fs::create_dir_all(self.manifests_dir())?;
+        self.create_managed_dir(&self.blobs_dir())
+            .with_context(|| {
+                format!(
+                    "failed to create layer cache dir {}",
+                    self.blobs_dir().display()
+                )
+            })?;
+        self.create_managed_dir(&self.manifests_dir())
+            .with_context(|| {
+                format!(
+                    "failed to create layer cache dir {}",
+                    self.manifests_dir().display()
+                )
+            })?;
         self.ensure_managed_dir(&self.blobs_dir())?;
         self.ensure_managed_dir(&self.manifests_dir())?;
 
         let payload = serde_json::to_vec(value)?;
-        let payload_tmp = temp_path_for(&payload_path);
-        fs::write(&payload_tmp, payload)
-            .with_context(|| format!("failed to write layer payload {}", payload_tmp.display()))?;
-        if let Err(error) = fs::rename(&payload_tmp, &payload_path) {
-            let _ = fs::remove_file(&payload_tmp);
-            return Err(error).with_context(|| {
-                format!("failed to rename layer payload {}", payload_path.display())
-            });
-        }
+        self.write_layer_file_atomic(&payload_path, payload)
+            .with_context(|| format!("failed to write layer payload {}", payload_path.display()))?;
 
         self.write_manifest_last(&manifest_path, manifest)?;
         Ok(LayerCacheWriteStatus::Written)
@@ -273,19 +299,10 @@ impl LayerCacheStore {
         normalized.warnings.sort();
         normalized.warnings.dedup();
 
-        let manifest_tmp = temp_path_for(manifest_path);
-        fs::write(&manifest_tmp, serde_json::to_vec(&normalized)?).with_context(|| {
-            format!("failed to write layer manifest {}", manifest_tmp.display())
-        })?;
-        if let Err(error) = fs::rename(&manifest_tmp, manifest_path) {
-            let _ = fs::remove_file(&manifest_tmp);
-            return Err(error).with_context(|| {
-                format!(
-                    "failed to rename layer manifest {}",
-                    manifest_path.display()
-                )
-            });
-        }
+        self.write_layer_file_atomic(manifest_path, serde_json::to_vec(&normalized)?)
+            .with_context(|| {
+                format!("failed to write layer manifest {}", manifest_path.display())
+            })?;
         Ok(())
     }
 
@@ -330,23 +347,27 @@ impl LayerCacheStore {
     }
 
     fn managed_existing_file(&self, path: &Path, managed_dir: &Path) -> Option<PathBuf> {
-        let metadata = fs::symlink_metadata(path).ok()?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return None;
+        if let Some(repo_root) = &self.repo_root {
+            let path_relative = self.repo_relative_path(path)?;
+            let managed_relative = self.repo_relative_path(managed_dir)?;
+            let path = crate::repo_fs::repo_file_path(repo_root, path_relative).ok()?;
+            let managed_dir = crate::repo_fs::repo_dir_path(repo_root, managed_relative).ok()?;
+            return path.starts_with(&managed_dir).then_some(path);
         }
-        let canonical_root = self.root.canonicalize().ok()?;
-        let canonical_managed_dir = managed_dir.canonicalize().ok()?;
-        let canonical_path = path.canonicalize().ok()?;
-        if canonical_managed_dir.starts_with(&canonical_root)
-            && canonical_path.starts_with(&canonical_managed_dir)
-        {
-            Some(canonical_path)
-        } else {
-            None
-        }
+        crate::repo_fs::managed_existing_file(&self.root, managed_dir, path)
     }
 
     fn ensure_managed_dir(&self, dir: &Path) -> Result<()> {
+        if let Some(repo_root) = &self.repo_root {
+            let relative_path = self
+                .repo_relative_path(dir)
+                .ok_or_else(|| anyhow!("layer cache dir escapes managed cache root"))?;
+            crate::repo_fs::repo_dir_path(repo_root, relative_path)
+                .map_err(|_| anyhow!("layer cache dir escapes managed cache root"))?;
+            return Ok(());
+        }
+        crate::repo_fs::ensure_no_symlink_ancestors(dir)
+            .map_err(|_| anyhow!("layer cache dir escapes managed cache root"))?;
         let metadata = fs::symlink_metadata(dir)
             .with_context(|| format!("failed to inspect layer cache dir {}", dir.display()))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -367,17 +388,74 @@ impl LayerCacheStore {
         Ok(())
     }
 
+    fn create_managed_dir(&self, dir: &Path) -> Result<(), crate::repo_fs::RepoFileReadError> {
+        if let Some(repo_root) = &self.repo_root {
+            let relative_path = self
+                .repo_relative_path(dir)
+                .ok_or(crate::repo_fs::RepoFileReadError::EscapesRepo)?;
+            crate::repo_fs::ensure_repo_dir(repo_root, relative_path).map(|_| ())
+        } else {
+            crate::repo_fs::create_dir_all_no_symlink(dir)
+        }
+    }
+
+    fn write_layer_file_atomic(
+        &self,
+        path: &Path,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<(), crate::repo_fs::RepoFileReadError> {
+        if let Some(repo_root) = &self.repo_root {
+            let relative_path = self
+                .repo_relative_path(path)
+                .ok_or(crate::repo_fs::RepoFileReadError::EscapesRepo)?;
+            crate::repo_fs::write_repo_file_atomic(repo_root, relative_path, contents)
+        } else {
+            crate::repo_fs::write_file_atomic_no_symlink(path, contents)
+        }
+    }
+
+    fn path_is_missing(&self, path: &Path) -> bool {
+        if let Some(repo_root) = &self.repo_root {
+            let Some(relative_path) = self.repo_relative_path(path) else {
+                return false;
+            };
+            return matches!(
+                crate::repo_fs::repo_file_path(repo_root, relative_path),
+                Err(error) if error.is_not_found()
+            );
+        }
+        if crate::repo_fs::ensure_no_symlink_ancestors(path).is_err() {
+            return false;
+        }
+        matches!(
+            fs::symlink_metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    }
+
+    fn repo_relative_path(&self, path: &Path) -> Option<PathBuf> {
+        let repo_root = self.repo_root.as_ref()?;
+        let relative_path = path.strip_prefix(repo_root).ok()?;
+        crate::repo_fs::normalize_repo_relative_input(relative_path)
+    }
+
     fn evict_stale_manifests_for_key(&self, key: &LayerKey) {
-        let Ok(entries) = fs::read_dir(self.manifests_dir()) else {
+        let manifests_dir = self.manifests_dir();
+        if self.ensure_managed_dir(&manifests_dir).is_err() {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(&manifests_dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(managed_path) = self.managed_existing_file(&path, &self.manifests_dir())
-            else {
+            let Some(managed_path) = self.managed_existing_file(&path, &manifests_dir) else {
                 continue;
             };
-            let Ok(raw_manifest) = fs::read_to_string(&managed_path) else {
+            let Ok(raw_manifest) = crate::repo_fs::read_file_to_string_with_limit(
+                &managed_path,
+                LAYER_CACHE_MANIFEST_MAX_BYTES,
+            ) else {
                 continue;
             };
             let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
@@ -976,6 +1054,30 @@ mod tests {
         assert_eq!(write, LayerCacheWriteStatus::BypassedDisabled);
         assert_eq!(read.status, LayerCacheReadStatus::BypassedDisabled);
         assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_rejects_symlink_cache_parent() {
+        let scratch = scratch_dir();
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        let root = scratch.path().join("cache/layers");
+        std::fs::create_dir_all(root.parent().expect("cache parent")).expect("cache parent");
+        std::os::unix::fs::symlink(&outside, &root).expect("symlink layer cache root");
+        let store = LayerCacheStore::new(&root, true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = key();
+        let manifest = manifest_for_payload(layer_key, &payload);
+
+        let error = store
+            .write_json(&manifest, &payload)
+            .expect_err("symlink layer root should fail");
+
+        assert!(format!("{error:#}").contains("path escapes repository root"));
+        assert!(!outside.join("blobs").exists());
     }
 
     #[test]
