@@ -135,7 +135,7 @@ pub(crate) struct PathContextPair {
 }
 
 /// Loaded `.polint.toml` (path + parsed config). Fields are crate-private; this type exists so
-/// `load_config` and `polint::_bench::analysis_keys` can use it in public `bench` API surfaces.
+/// `load_config` and `polint::_bench::keys` can use it in public `bench` API surfaces.
 #[allow(unreachable_pub)]
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {

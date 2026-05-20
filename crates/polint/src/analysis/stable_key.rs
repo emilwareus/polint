@@ -1,3 +1,25 @@
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct StableFactKey(String);
+
+impl StableFactKey {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn into_string(self) -> String {
+        self.0
+    }
+}
+
+pub(crate) fn semantic_stable_key(
+    family: FactFamily,
+    parts: &[(&str, String)],
+) -> StableFactKey {
+    StableFactKey(stable_key_from_parts(family, parts))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -66,7 +66,7 @@ pub mod _bench {
         pub use crate::ts::analyze_with_options;
     }
     #[doc(hidden)]
-    pub mod analysis_keys {
+    pub mod keys {
         use crate::config::LoadedConfig;
         use crate::core::{Rule, RuleOptions};
         use std::collections::BTreeMap;
