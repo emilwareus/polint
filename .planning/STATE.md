@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T16:16:57.225Z"
-last_activity: 2026-05-20 -- Phase 29 execution started
+last_updated: "2026-05-20T16:26:15.205Z"
+last_activity: 2026-05-20 -- Phase 29 plan 01 completed; ready for plan 02
 progress:
   total_phases: 22
   completed_phases: 9
   total_plans: 52
-  completed_plans: 46
-  percent: 88
+  completed_plans: 47
+  percent: 90
 ---
 
 # State: polint
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 29
 Phase: 29 (Local CFG and Control Dependence) — EXECUTING
-Plan: 1 of 6
-Last activity: 2026-05-20 -- Phase 29 execution started
+Plan: 2 of 6
+Last activity: 2026-05-20 -- Phase 29 plan 01 completed; ready for plan 02
 
 ## Phase Progress
 
@@ -58,7 +58,7 @@ Last activity: 2026-05-20 -- Phase 29 execution started
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
-| 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
+| 29 | In Progress | 1/6 plans complete; private CFG contracts and storage done; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
@@ -208,6 +208,9 @@ Last activity: 2026-05-20 -- Phase 29 execution started
 - [Phase 28-private-semantic-mir-and-place-identity]: Keep semantic MIR/place internals out of public check JSON, inspect JSON, polint test JSON, CLI help, SDK, runner, crate-root public exports, README, and docs.
 - [Phase 28-private-semantic-mir-and-place-identity]: Use an external temp-repo rule that requests only supported public fact views to prove existing rule-author workflows remain compatible.
 - [Phase 28-private-semantic-mir-and-place-identity]: Offset private MIR/place/unsupported IDs per language output before merge so validation does not cross-wire Go and TS/JS run-local IDs.
+- [Phase 29-local-cfg-and-control-dependence]: Keep CFG contracts crate-private with no SDK, runner, CLI, or docs promotion.
+- [Phase 29-local-cfg-and-control-dependence]: Use run-local dense IDs only as handles; persistent CFG identity is carried by stable keys.
+- [Phase 29-local-cfg-and-control-dependence]: Preserve duplicate CFG rows during normalization so later validation can report conflicts deterministically.
 
 ## Execution Metrics
 
@@ -249,6 +252,7 @@ Last activity: 2026-05-20 -- Phase 29 execution started
 | 28-private-semantic-mir-and-place-identity | 05 | 26 min | 3 | 12 |
 | 28-private-semantic-mir-and-place-identity | 06 | 12 min | 2 | 13 |
 | 28-private-semantic-mir-and-place-identity | 07 | 11 min | 1 | 6 |
+| 29-local-cfg-and-control-dependence | 01 | 18 min | 3 | 7 |
 
 ## Session
 

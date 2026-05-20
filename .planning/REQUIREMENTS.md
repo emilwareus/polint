@@ -76,7 +76,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-SEM-01 | Phase 26 | Complete |
 | SAE-SEM-02 | Phase 27 | Complete |
 | SAE-SEM-03 | Phase 28 | Complete |
-| SAE-SEM-04 | Phase 29 | Pending |
+| SAE-SEM-04 | Phase 29 | In Progress |
 | SAE-SEM-05 | Phase 30 | Pending |
 | SAE-INT-01 | Phase 31 | Pending |
 | SAE-INT-02 | Phase 32 | Pending |
