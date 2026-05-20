@@ -37,6 +37,7 @@ const POLINT_CACHE_STATUS_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercont
 const POLINT_RULES_PROFILE_ENV: &str = "POLINT_RULES_PROFILE";
 const AI_FRIENDLY_OUTPUT_DIR: &str = ".polint/output";
 const AI_FRIENDLY_LATEST_OUTPUT: &str = ".polint/output/latest.json";
+const REPORT_SOURCE_SNIPPET_MAX_BYTES: u64 = 1_048_576;
 
 struct AiFriendlyOutput {
     report: AiFriendlyReport,
@@ -78,10 +79,13 @@ fn write_ai_friendly_report(
     persisted_diagnostics: &[Diagnostic],
     json_meta: JsonReportMeta<'_>,
 ) -> Result<AiFriendlyOutput> {
-    let polint_dir = root.join(".polint");
-    fs::create_dir_all(polint_dir.join("output"))
-        .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
-    ensure_polint_nested_gitignore(&polint_dir)?;
+    crate::repo_fs::ensure_repo_dir(root, AI_FRIENDLY_OUTPUT_DIR).with_context(|| {
+        format!(
+            "failed to create {}",
+            root.join(AI_FRIENDLY_OUTPUT_DIR).display()
+        )
+    })?;
+    ensure_polint_nested_gitignore(root)?;
 
     let generated_at = generated_at_label();
     let report = build_ai_friendly_report(
@@ -93,12 +97,17 @@ fn write_ai_friendly_report(
     let json = serde_json::to_string_pretty(&report)?;
     let hash = crate::cache::stable_hash(&[&json]);
     let run_name = format!("check-{generated_at}-{}.json", &hash[..12]);
-    let run_path = root.join(AI_FRIENDLY_OUTPUT_DIR).join(run_name);
-    let latest_path = root.join(AI_FRIENDLY_LATEST_OUTPUT);
-    fs::write(&run_path, &json)
-        .with_context(|| format!("failed to write {}", run_path.display()))?;
-    fs::write(&latest_path, json)
-        .with_context(|| format!("failed to write {}", latest_path.display()))?;
+    let run_path = format!("{AI_FRIENDLY_OUTPUT_DIR}/{run_name}");
+    crate::repo_fs::write_repo_file_atomic(root, &run_path, &json)
+        .with_context(|| format!("failed to write {}", root.join(&run_path).display()))?;
+    crate::repo_fs::write_repo_file_atomic(root, AI_FRIENDLY_LATEST_OUTPUT, json).with_context(
+        || {
+            format!(
+                "failed to write {}",
+                root.join(AI_FRIENDLY_LATEST_OUTPUT).display()
+            )
+        },
+    )?;
     Ok(AiFriendlyOutput { report })
 }
 
@@ -123,10 +132,11 @@ fn read_sources_for_diagnostics(
             continue;
         }
         let rel = diagnostic.file.trim_start_matches("./");
-        let path = root.join(rel);
-        if path.metadata().map(|m| m.is_file()).unwrap_or(false)
-            && let Ok(text) = fs::read_to_string(&path)
-        {
+        if let Ok(text) = crate::repo_fs::read_repo_file_to_string_with_limit(
+            root,
+            rel,
+            REPORT_SOURCE_SNIPPET_MAX_BYTES,
+        ) {
             map.insert(diagnostic.file.clone(), Arc::from(text.into_boxed_str()));
         }
     }
@@ -465,18 +475,18 @@ pub(crate) fn run() -> Result<u8> {
 fn init_project(root: PathBuf) -> Result<()> {
     let config_path = root.join(".polint.toml");
     if !config_path.exists() {
-        fs::write(&config_path, default_config_toml())
+        crate::repo_fs::write_repo_file_atomic(&root, ".polint.toml", default_config_toml())
             .with_context(|| format!("failed to write {}", config_path.display()))?;
     }
 
     let polint_dir = root.join(".polint");
-    fs::create_dir_all(polint_dir.join("rules/src"))
+    crate::repo_fs::ensure_repo_dir(&root, ".polint/rules/src")
         .with_context(|| format!("failed to create {}", polint_dir.display()))?;
-    fs::create_dir_all(polint_dir.join("cache"))
+    crate::repo_fs::ensure_repo_dir(&root, ".polint/cache")
         .with_context(|| format!("failed to create {}", polint_dir.join("cache").display()))?;
-    fs::create_dir_all(polint_dir.join("output"))
+    crate::repo_fs::ensure_repo_dir(&root, ".polint/output")
         .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
-    ensure_polint_nested_gitignore(&polint_dir)?;
+    ensure_polint_nested_gitignore(&root)?;
     ensure_repo_rust_toolchain_shim(&root)?;
 
     println!("Initialized polint config at {}", config_path.display());
@@ -484,12 +494,13 @@ fn init_project(root: PathBuf) -> Result<()> {
 }
 
 /// Ensures `.polint/.gitignore` lists `cache/` so analysis cache stays local to each machine.
-fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
-    let path = polint_dir.join(".gitignore");
+fn ensure_polint_nested_gitignore(root: &Path) -> Result<()> {
+    let path = root.join(".polint/.gitignore");
     const ENTRIES: &[&str] = &["cache/", "output/"];
 
-    if path.is_file() {
-        let existing = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+    if let Ok(existing) =
+        crate::repo_fs::read_repo_file_to_string_with_limit(root, ".polint/.gitignore", 1_048_576)
+    {
         if ENTRIES.iter().all(|entry| {
             existing
                 .lines()
@@ -507,10 +518,12 @@ fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
                 out.push('\n');
             }
         }
-        fs::write(&path, out).with_context(|| format!("failed to update {}", path.display()))?;
+        crate::repo_fs::write_repo_file_atomic(root, ".polint/.gitignore", out)
+            .with_context(|| format!("failed to update {}", path.display()))?;
     } else {
         let content = "# polint: local cache and agent output (not shared between checkouts)\ncache/\noutput/\n";
-        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+        crate::repo_fs::write_repo_file_atomic(root, ".polint/.gitignore", content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())
 }
@@ -855,7 +868,7 @@ fn create_baseline(root: PathBuf, args: &BaselineCreateArgs) -> Result<u8> {
         args.no_cache,
     )?;
     let config = BaselineConfig::from_diagnostics(&diagnostics);
-    write_baseline(&output, &config)?;
+    write_baseline(&root, &config)?;
     println!(
         "Created baseline {} with {} entries",
         output.display(),
@@ -866,7 +879,7 @@ fn create_baseline(root: PathBuf, args: &BaselineCreateArgs) -> Result<u8> {
 
 fn update_baseline(root: PathBuf, args: &BaselineUpdateArgs) -> Result<u8> {
     let baseline_path = baseline_path(&root);
-    let config = load_baseline(&baseline_path)?;
+    let config = load_baseline(&root)?;
     let diagnostics = collect_diagnostics_for_baseline(
         &root,
         &args.paths,
@@ -875,7 +888,7 @@ fn update_baseline(root: PathBuf, args: &BaselineUpdateArgs) -> Result<u8> {
     )?;
     let classification = classify_diagnostics(&diagnostics, &config);
     let updated = config.updated_for_current_diagnostics(&diagnostics);
-    write_baseline(&baseline_path, &updated)?;
+    write_baseline(&root, &updated)?;
     println!(
         "Updated baseline {} with {} entries",
         baseline_path.display(),
@@ -1442,8 +1455,7 @@ fn apply_baseline(
         });
     }
 
-    let baseline_path = baseline_path(root);
-    let config = load_baseline(&baseline_path)?;
+    let config = load_baseline(root)?;
     let classification = classify_diagnostics(&diagnostics, &config);
     let failure_diagnostics = classification.new_diagnostics.clone();
     let diagnostics = if args.new_only {

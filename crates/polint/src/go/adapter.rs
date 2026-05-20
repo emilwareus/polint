@@ -98,7 +98,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
         };
     }
 
-    let layer_store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let layer_store = cache.layer_cache_store();
     let layer_key = go_syntax_layer_key(&files, config_hash);
     let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
         &layer_key,

@@ -17,6 +17,11 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
 use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
+use crate::module_graph::paths::{
+    TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
+    normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
+    repo_dir_path, repo_file_exists, repo_file_path, repo_relative_existing_path,
+};
 
 pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
     "go.mod",
@@ -603,8 +608,22 @@ pub(crate) fn module_graph_topology_input_digest_rows(
     let mut rows = candidate_paths
         .into_iter()
         .filter_map(|relative_path| {
-            let path = root.join(&relative_path);
-            let bytes = fs::read(path).ok()?;
+            let bytes = match read_repo_file_with_limit(
+                root,
+                &relative_path,
+                topology_input_max_bytes(&relative_path),
+            ) {
+                Ok(bytes) => bytes,
+                Err(error) if error.is_not_found() => return None,
+                Err(error) => {
+                    let digest = Digest::from_parts(
+                        DigestKind::ProviderParameters,
+                        "module_graph_topology_input",
+                        &[relative_path.as_str(), error.stable_reason()],
+                    );
+                    return Some((relative_path, digest));
+                }
+            };
             let content_hash = stable_hash_bytes(&bytes);
             let digest = Digest::from_parts(
                 DigestKind::ProviderParameters,
@@ -617,6 +636,22 @@ pub(crate) fn module_graph_topology_input_digest_rows(
     rows.sort();
     rows.dedup();
     rows
+}
+
+fn topology_input_max_bytes(relative_path: &str) -> u64 {
+    match Path::new(relative_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some(
+            "package-lock.json"
+            | "npm-shrinkwrap.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lock",
+        ) => TOPOLOGY_LOCKFILE_MAX_BYTES,
+        _ => TOPOLOGY_MANIFEST_MAX_BYTES,
+    }
 }
 
 fn workspace_member_topology_input_candidates<'a>(
@@ -635,11 +670,12 @@ fn workspace_member_topology_input_candidates<'a>(
         let Some(package_path) = package_path_for_manifest_path(candidate) else {
             continue;
         };
-        let manifest_path = root.join(candidate);
-        if !manifest_path.is_file() {
+        if !repo_file_exists(root, candidate) {
             continue;
         }
-        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+        let Ok(contents) =
+            read_repo_file_to_string_with_limit(root, candidate, TOPOLOGY_MANIFEST_MAX_BYTES)
+        else {
             continue;
         };
         for workspace in package_json_workspace_patterns(&contents) {
@@ -650,7 +686,11 @@ fn workspace_member_topology_input_candidates<'a>(
             ));
         }
     }
-    if let Ok(contents) = fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+    if let Ok(contents) = read_repo_file_to_string_with_limit(
+        root,
+        "pnpm-workspace.yaml",
+        TOPOLOGY_MANIFEST_MAX_BYTES,
+    ) {
         for workspace in parse_pnpm_workspace_packages(&contents) {
             package_paths.extend(expand_package_workspace_glob(root, ".", &workspace));
         }
@@ -710,14 +750,20 @@ fn expand_package_workspace_glob(root: &Path, package_path: &str, pattern: &str)
     } else {
         Path::new(package_path).join(base)
     };
-    let Ok(entries) = fs::read_dir(root.join(base_path)) else {
+    let Some(base_path) = normalize_repo_relative_input(&base_path) else {
+        return Vec::new();
+    };
+    let Ok(base_dir) = repo_dir_path(root, &base_path) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(base_dir) else {
         return Vec::new();
     };
     let mut members = entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_type().ok()?.is_dir().then_some(entry.path()))
-        .filter(|path| path.join("package.json").is_file())
-        .filter_map(|path| repo_relative_path(root, &path))
+        .filter_map(|path| repo_relative_existing_path(root, &path))
+        .filter(|path| repo_file_exists(root, topology_input_relative_path(path, "package.json")))
         .collect::<Vec<_>>();
     members.sort();
     members
@@ -757,38 +803,37 @@ fn extended_ts_config_candidates<'a>(
 fn collect_extended_ts_configs(
     root: &Path,
     config_path: &Path,
-    visited: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<String>,
     discovered: &mut BTreeSet<String>,
 ) {
-    let Some(config_path) = normalize_existing_path(config_path) else {
+    let Some(config_path) = repo_relative_existing_path(root, config_path) else {
         return;
     };
     if !visited.insert(config_path.clone()) {
         return;
     }
-    let Some(config) = read_tsconfig_extends_wire(&config_path) else {
+    let Some(config) = read_tsconfig_extends_wire(root, &config_path) else {
         return;
     };
-    let Some(config_dir) = config_path.parent() else {
-        return;
-    };
+    let config_dir = Path::new(&config_path).parent().unwrap_or(Path::new(""));
     for specifier in config
         .extends
         .into_iter()
         .flat_map(TsconfigExtendsWire::into_specifiers)
     {
-        let Some(extended_path) = resolve_tsconfig_extends_path(config_dir, &specifier) else {
+        let Some(extended_path) = resolve_tsconfig_extends_path(root, config_dir, &specifier)
+        else {
             continue;
         };
-        if let Some(relative_path) = repo_relative_path(root, &extended_path) {
-            discovered.insert(relative_path);
-        }
-        collect_extended_ts_configs(root, &extended_path, visited, discovered);
+        discovered.insert(extended_path.clone());
+        collect_extended_ts_configs(root, &root.join(&extended_path), visited, discovered);
     }
 }
 
-fn read_tsconfig_extends_wire(path: &Path) -> Option<TsconfigExtendsOnlyWire> {
-    let Ok(mut source) = fs::read_to_string(path) else {
+fn read_tsconfig_extends_wire(root: &Path, relative_path: &str) -> Option<TsconfigExtendsOnlyWire> {
+    let Ok(mut source) =
+        read_repo_file_to_string_with_limit(root, relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)
+    else {
         return None;
     };
     if let Some(stripped) = source.strip_prefix('\u{feff}') {
@@ -800,31 +845,44 @@ fn read_tsconfig_extends_wire(path: &Path) -> Option<TsconfigExtendsOnlyWire> {
     serde_json::from_str::<TsconfigExtendsOnlyWire>(&source).ok()
 }
 
-fn resolve_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+fn resolve_tsconfig_extends_path(
+    root: &Path,
+    config_dir: &Path,
+    specifier: &str,
+) -> Option<String> {
     let specifier_path = Path::new(specifier);
     if specifier_path.is_absolute() {
-        return resolve_tsconfig_file_candidate(specifier_path);
+        return None;
     }
     if specifier.starts_with('.') {
-        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+        return resolve_tsconfig_file_candidate(root, &config_dir.join(specifier_path));
     }
-    resolve_package_tsconfig_extends_path(config_dir, specifier)
+    resolve_package_tsconfig_extends_path(root, config_dir, specifier)
 }
 
-fn resolve_package_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
-    let mut current = normalize_existing_path(config_dir)?;
+fn resolve_package_tsconfig_extends_path(
+    root: &Path,
+    config_dir: &Path,
+    specifier: &str,
+) -> Option<String> {
+    let mut current = normalize_repo_relative_input(config_dir)?;
     loop {
-        let candidate = current.join("node_modules").join(specifier);
-        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+        let candidate = if current.as_os_str().is_empty() {
+            PathBuf::from("node_modules").join(specifier)
+        } else {
+            current.join("node_modules").join(specifier)
+        };
+        if let Some(resolved) = resolve_tsconfig_file_candidate(root, &candidate) {
             return Some(resolved);
         }
-        if !current.pop() {
+        if current.as_os_str().is_empty() {
             return None;
         }
+        current.pop();
     }
 }
 
-fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
+fn resolve_tsconfig_file_candidate(root: &Path, base: &Path) -> Option<String> {
     let mut candidates = vec![base.to_path_buf()];
     if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
         let mut with_json = base.as_os_str().to_owned();
@@ -835,19 +893,19 @@ fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.is_file())
-        .and_then(|candidate| normalize_existing_path(&candidate))
+        .filter_map(|candidate| normalized_existing_repo_file(root, &candidate))
+        .next()
 }
 
-fn normalize_existing_path(path: &Path) -> Option<PathBuf> {
-    path.canonicalize().ok()
-}
-
-fn repo_relative_path(root: &Path, path: &Path) -> Option<String> {
-    let root = root.canonicalize().ok()?;
-    let path = path.canonicalize().ok()?;
-    let relative = path.strip_prefix(root).ok()?;
-    Some(path_to_repo_string(relative))
+fn normalized_existing_repo_file(root: &Path, candidate: &Path) -> Option<String> {
+    repo_file_path(root, candidate).ok()?;
+    let normalized = normalize_repo_relative_input(candidate)?;
+    let relative = normalized.to_string_lossy();
+    if relative.is_empty() {
+        None
+    } else {
+        normalize_repo_relative(relative)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -895,11 +953,12 @@ fn path_to_repo_string(path: &Path) -> String {
 }
 
 fn stable_hash_bytes(bytes: &[u8]) -> String {
-    let hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    crate::cache::stable_hash(&[hex.as_str()])
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 pub(crate) fn semantic_provider_parameter_digest() -> Digest {
@@ -1145,6 +1204,53 @@ mod tests {
     }
 
     #[test]
+    fn module_graph_layer_key_topology_inputs_reject_absolute_tsconfig_extends() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_file(
+            outside.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        );
+        let outside_config = outside.path().join("tsconfig.base.json");
+        write_file(
+            repo.path(),
+            "tsconfig.json",
+            &format!(
+                r#"{{"extends":{}}}"#,
+                serde_json::to_string(&outside_config).unwrap()
+            ),
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, repo.path(), "src/app.ts", "export {};\n");
+
+        let rows = module_graph_topology_input_digest_rows(repo.path(), &db);
+
+        assert!(rows.iter().all(|(path, _)| path != "tsconfig.base.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn module_graph_layer_key_topology_inputs_do_not_hash_symlink_escape_contents() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_file(outside.path(), "package.json", r#"{"name":"outside-one"}"#);
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            repo.path().join("package.json"),
+        )
+        .expect("create symlink");
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, repo.path(), "src/app.ts", "export {};\n");
+
+        let first = module_graph_topology_input_digest_rows(repo.path(), &db);
+        write_file(outside.path(), "package.json", r#"{"name":"outside-two"}"#);
+        let second = module_graph_topology_input_digest_rows(repo.path(), &db);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
     fn module_graph_layer_key_topology_inputs_follow_workspace_member_manifests() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_file(
@@ -1182,6 +1288,25 @@ mod tests {
         let changed_member = module_graph_topology_input_digest_rows(temp.path(), &db);
 
         assert_ne!(with_member, changed_member);
+    }
+
+    #[test]
+    fn module_graph_layer_key_workspace_globs_reject_absolute_and_escaping_patterns() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui"}"#,
+        );
+
+        assert_eq!(
+            expand_package_workspace_glob(temp.path(), ".", "/tmp/*"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            expand_package_workspace_glob(temp.path(), ".", "../outside/*"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

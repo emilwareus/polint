@@ -2,9 +2,10 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+const CONFIG_MAX_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Error)]
 pub(crate) enum ConfigError {
@@ -175,19 +176,24 @@ impl LoadedConfig {
 #[allow(unreachable_pub)]
 pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
     let root = root.as_ref().to_path_buf();
-    let path = root.join(".polint.toml");
-    if !path.exists() {
-        return Ok(LoadedConfig {
-            root,
-            config: PolintConfig::default(),
-            missing: true,
-        });
-    }
-
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read config {}", path.display()))?;
+    let path = ".polint.toml";
+    let raw =
+        match crate::repo_fs::read_repo_file_to_string_with_limit(&root, path, CONFIG_MAX_BYTES) {
+            Ok(raw) => raw,
+            Err(error) if error.is_not_found() => {
+                return Ok(LoadedConfig {
+                    root,
+                    config: PolintConfig::default(),
+                    missing: true,
+                });
+            }
+            Err(error) => anyhow::bail!(
+                "failed to read config {}: {error}",
+                root.join(path).display()
+            ),
+        };
     let config: PolintConfig = toml::from_str(&raw)
-        .with_context(|| format!("failed to parse config {}", path.display()))?;
+        .with_context(|| format!("failed to parse config {}", root.join(path).display()))?;
     Ok(LoadedConfig {
         root,
         config,
@@ -273,6 +279,42 @@ mod tests {
         assert!(loaded.config.profiles.is_empty());
         assert_eq!(loaded.profile_rules(None).unwrap(), None);
         assert!(loaded.profile_rules(Some("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_config_rejects_symlink_escape() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join(".polint.toml"), "[rules]\npaths = []\n")
+            .expect("write outside config");
+        std::os::unix::fs::symlink(
+            outside.path().join(".polint.toml"),
+            repo.path().join(".polint.toml"),
+        )
+        .expect("symlink config");
+
+        let error = load_config(repo.path()).expect_err("symlink escape should fail");
+
+        assert!(error.to_string().contains("path escapes repository root"));
+    }
+
+    #[test]
+    fn load_config_rejects_oversized_config() {
+        let repo = tempfile::tempdir().expect("repo");
+        std::fs::write(
+            repo.path().join(".polint.toml"),
+            " ".repeat(CONFIG_MAX_BYTES as usize + 1),
+        )
+        .expect("write config");
+
+        let error = load_config(repo.path()).expect_err("oversized config should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("file exceeds topology input size limit")
+        );
     }
 
     #[test]

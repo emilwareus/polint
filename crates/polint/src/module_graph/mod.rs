@@ -29,7 +29,6 @@ use model::{
     ModuleGraphLayerPayload, ModuleTopologyLayerPayload, ResolverInput, sort_packages,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use topology::{
@@ -638,7 +637,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
         module_graph_output_digest.clone(),
         symbol_graph_output_digest.clone(),
     );
-    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store.read_json_validated::<ModuleTopologyLayerPayload, _>(
         &layer_key,
@@ -1086,7 +1085,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         ts_js_lifecycle_digest.clone(),
         upstream_syntax_output_digests.clone(),
     );
-    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<ModuleGraphLayerPayload, _>(&layer_key, |payload, manifest| {
@@ -2052,13 +2051,20 @@ fn find_ts_project_root(root: &Path, file_path: &Path) -> Option<PathBuf> {
 }
 
 fn ts_project_module_label(root: &Path, module_root: &Path) -> String {
-    package_json_name(&module_root.join("package.json")).unwrap_or_else(|| {
+    package_json_name(root, module_root).unwrap_or_else(|| {
         paths::normalize_repo_relative_path(root, module_root).unwrap_or_else(|| ".".to_string())
     })
 }
 
-fn package_json_name(path: &Path) -> Option<String> {
-    let source = fs::read_to_string(path).ok()?;
+fn package_json_name(root: &Path, module_root: &Path) -> Option<String> {
+    let relative_path =
+        paths::normalize_repo_relative_path(root, &module_root.join("package.json"))?;
+    let source = paths::read_repo_file_to_string_with_limit(
+        root,
+        relative_path,
+        paths::TOPOLOGY_MANIFEST_MAX_BYTES,
+    )
+    .ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&source).ok()?;
     value
         .get("name")
@@ -2146,8 +2152,7 @@ mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerCacheStore, LayerKey,
-        ShapeKind,
+        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -2350,6 +2355,25 @@ mod tests {
             span: span(file, start_byte),
             language: Language::TypeScript,
         })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ts_project_module_label_does_not_read_package_json_symlink_escape() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        fs::create_dir_all(repo.path().join("packages/app")).expect("package dir");
+        fs::write(outside.path().join("package.json"), r#"{"name":"outside"}"#)
+            .expect("outside package");
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            repo.path().join("packages/app/package.json"),
+        )
+        .expect("symlink package manifest");
+
+        let label = super::ts_project_module_label(repo.path(), &repo.path().join("packages/app"));
+
+        assert_eq!(label, "packages/app");
     }
 
     #[test]
@@ -2611,7 +2635,7 @@ mod tests {
             go_lifecycle_digest,
             ts_js_lifecycle_digest,
         );
-        let store = LayerCacheStore::new(cache.layer_cache_dir(), true);
+        let store = cache.layer_cache_store();
         let mut stats = crate::analysis_kernel::incremental::CacheStats::default();
         let mut diagnostics = Vec::new();
         super::write_module_graph_layer_payload(

@@ -5,11 +5,18 @@ use crate::core::{
 };
 use crate::module_graph::formats::js_lockfile::{
     JsLockfileKind, JsLockfileManifest, JsLockfilePackage, JsPackageManager, parse_js_lockfile,
+    unsupported_js_lockfile,
 };
-use crate::module_graph::formats::package_json::{PackageJsonManifest, parse_package_json};
+use crate::module_graph::formats::package_json::{
+    PackageJsonManifest, parse_package_json, unsupported_package_json,
+};
 use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
 use crate::module_graph::model::{ModuleNodeDraft, ResolvedImportDraft, ResolverInput};
-use crate::module_graph::paths::{normalize_path, normalize_repo_relative};
+use crate::module_graph::paths::{
+    RepoFileReadError, TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_path,
+    normalize_repo_relative, normalize_repo_relative_input, read_repo_file_to_string_with_limit,
+    repo_dir_path, repo_file_exists, repo_file_path, repo_relative_existing_path,
+};
 use crate::module_graph::topology::{
     DependencyRequirementFact, DependencyRequirementId, RepoTopologyOverlayFact,
     RepoTopologyOverlayId, RepoTopologyOverlayKind, RequirementKind, ResolvedDependencyEdgeFact,
@@ -34,9 +41,10 @@ thread_local! {
 
 #[cfg(test)]
 mod topology {
-    use super::collect_ts_topology;
+    use super::{collect_ts_topology, expand_workspace_glob, read_tsconfig_path_aliases};
     use crate::config::load_config;
     use crate::core::{AnalysisDb, FileId};
+    use crate::module_graph::paths::{TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES};
     use crate::module_graph::topology::{
         RepoTopologyOverlayKind, SourceSetKind, TopologyPackageKind, TopologyPrecision,
         TopologyStatus, WorkspaceRootKind,
@@ -263,6 +271,130 @@ mod topology {
             overlay.kind == RepoTopologyOverlayKind::SourceOfTruthDirectory
                 && overlay.label == "tsconfig:reference:./packages/ui"
         }));
+    }
+
+    #[test]
+    fn collect_ts_topology_marks_oversized_package_json_unsupported_without_parsing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let oversized = format!(
+            r#"{{"name":"root","padding":"{}"}}"#,
+            "x".repeat(TOPOLOGY_MANIFEST_MAX_BYTES as usize)
+        );
+        write_fixture(temp.path(), "package.json", &oversized);
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let package = output
+            .packages
+            .iter()
+            .find(|package| package.path == ".")
+            .expect("root package row exists");
+
+        assert_eq!(package.status, TopologyStatus::Unsupported);
+        assert!(output.overlays.iter().any(|overlay| {
+            overlay.label == "package-json-unsupported:file-exceeds-topology-input-size-limit"
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_marks_oversized_lockfile_unsupported_without_parsing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let lockfile = write_fixture(temp.path(), "package-lock.json", "");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&lockfile)
+            .expect("open lockfile")
+            .set_len(TOPOLOGY_LOCKFILE_MAX_BYTES + 1)
+            .expect("make oversized lockfile");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("js-lock-unsupported")
+                && edge
+                    .stable_key
+                    .contains("reason=file-exceeds-topology-input-size-limit")
+                && edge.status == TopologyStatus::Unsupported
+        }));
+    }
+
+    #[test]
+    fn expand_workspace_glob_rejects_absolute_and_escaping_patterns() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join("packages/ui")).expect("create workspace dir");
+        write_fixture(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui"}"#,
+        );
+
+        assert_eq!(
+            expand_workspace_glob(temp.path(), ".", "/tmp/*"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            expand_workspace_glob(temp.path(), ".", "../outside/*"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn tsconfig_extends_rejects_absolute_paths_outside_repo() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_fixture(
+            outside.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"paths":{"@/*":["src/*"]}}}"#,
+        );
+        let outside_config = outside.path().join("tsconfig.base.json");
+        write_fixture(
+            repo.path(),
+            "tsconfig.json",
+            &format!(
+                r#"{{"extends":{}}}"#,
+                serde_json::to_string(&outside_config).unwrap()
+            ),
+        );
+
+        let aliases = read_tsconfig_path_aliases(repo.path(), &repo.path().join("tsconfig.json"));
+
+        assert!(aliases.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_ts_topology_does_not_read_package_json_symlink_escape() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        write_fixture(outside.path(), "package.json", r#"{"name":"outside"}"#);
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            repo.path().join("package.json"),
+        )
+        .expect("create symlink");
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, repo.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(repo.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(
+            output
+                .packages
+                .iter()
+                .all(|package| package.name != "outside")
+        );
     }
 
     fn source_set_for_file(
@@ -1478,7 +1610,7 @@ fn collect_package_manifests(
     ts_files: &[&SourceFile],
 ) -> BTreeMap<String, PackageJsonManifest> {
     let mut package_paths = BTreeSet::new();
-    if loaded.root.join("package.json").is_file() {
+    if repo_file_exists(&loaded.root, "package.json") {
         package_paths.insert(".".to_string());
     }
     for file in ts_files {
@@ -1557,7 +1689,7 @@ fn package_roots_for_relative_path(loaded: &LoadedConfig, relative_path: &str) -
     loop {
         if let Some(package_path) = normalize_repo_relative(path.to_string_lossy()) {
             let manifest_path = package_manifest_path(&package_path);
-            if loaded.root.join(manifest_path).is_file() {
+            if repo_file_exists(&loaded.root, &manifest_path) {
                 package_roots.push(package_path);
             }
         }
@@ -1570,8 +1702,18 @@ fn package_roots_for_relative_path(loaded: &LoadedConfig, relative_path: &str) -
 
 fn read_package_manifest(loaded: &LoadedConfig, package_path: &str) -> Option<PackageJsonManifest> {
     let manifest_path = package_manifest_path(package_path);
-    let contents = fs::read_to_string(loaded.root.join(&manifest_path)).ok()?;
-    Some(parse_package_json(&manifest_path, &contents))
+    match read_repo_file_to_string_with_limit(
+        &loaded.root,
+        &manifest_path,
+        TOPOLOGY_MANIFEST_MAX_BYTES,
+    ) {
+        Ok(contents) => Some(parse_package_json(&manifest_path, &contents)),
+        Err(error) if error.is_not_found() => None,
+        Err(error) => Some(unsupported_package_json(
+            &manifest_path,
+            error.stable_reason(),
+        )),
+    }
 }
 
 fn package_manifest_topology_state(
@@ -1600,7 +1742,7 @@ fn nearest_package_root_for_relative_path(
     loop {
         let package_path = normalize_repo_relative(path.to_string_lossy())?;
         let manifest_path = package_manifest_path(&package_path);
-        if loaded.root.join(manifest_path).is_file() {
+        if repo_file_exists(&loaded.root, &manifest_path) {
             return Some(package_path);
         }
         if !path.pop() {
@@ -1618,14 +1760,20 @@ fn expand_workspace_glob(root: &Path, package_path: &str, pattern: &str) -> Vec<
     } else {
         Path::new(package_path).join(base)
     };
-    let Ok(entries) = fs::read_dir(root.join(base_path)) else {
+    let Some(base_path) = normalize_repo_relative_input(&base_path) else {
+        return Vec::new();
+    };
+    let Ok(base_dir) = repo_dir_path(root, &base_path) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(base_dir) else {
         return Vec::new();
     };
     let mut members = entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_type().ok()?.is_dir().then_some(entry.path()))
-        .filter(|path| path.join("package.json").is_file())
-        .filter_map(|path| crate::module_graph::paths::normalize_repo_relative_path(root, &path))
+        .filter_map(|path| repo_relative_existing_path(root, &path))
+        .filter(|path| repo_file_exists(root, package_manifest_path(path)))
         .collect::<Vec<_>>();
     members.sort();
     members
@@ -1805,12 +1953,7 @@ fn detect_js_lockfiles(loaded: &LoadedConfig, package_path: &str) -> Vec<Detecte
         JsLockfileKind::Bun,
     ]
     .into_iter()
-    .filter(|kind| {
-        loaded
-            .root
-            .join(lockfile_relative_path(package_path, *kind))
-            .is_file()
-    })
+    .filter(|kind| repo_file_exists(&loaded.root, lockfile_relative_path(package_path, *kind)))
     .map(|kind| DetectedJsLockfile { kind })
     .collect()
 }
@@ -1915,22 +2058,13 @@ fn emit_package_manifest_unsupported_overlays(
 fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, package_path: &str) {
     for lockfile in detect_js_lockfiles(loaded, package_path) {
         let relative_path = lockfile_relative_path(package_path, lockfile.kind);
-        let manifest = fs::read_to_string(loaded.root.join(&relative_path))
-            .map(|contents| parse_js_lockfile(lockfile.kind, &relative_path, &contents));
-        let schema = manifest
-            .as_ref()
-            .map(|manifest| manifest.schema_label.clone())
-            .unwrap_or_else(|_| format!("{}-unknown", lockfile.kind.manager().label()));
-        let (precision, status) = manifest
-            .as_ref()
-            .map(|manifest| {
-                if manifest.unsupported.is_empty() {
-                    (TopologyPrecision::ExactStatic, TopologyStatus::Present)
-                } else {
-                    (TopologyPrecision::Unsupported, TopologyStatus::Unsupported)
-                }
-            })
-            .unwrap_or((TopologyPrecision::Unknown, TopologyStatus::SetupMissing));
+        let manifest = read_js_lockfile_manifest(loaded, lockfile.kind, &relative_path);
+        let schema = manifest.schema_label.clone();
+        let (precision, status) = if manifest.unsupported.is_empty() {
+            (TopologyPrecision::ExactStatic, TopologyStatus::Present)
+        } else {
+            (TopologyPrecision::Unsupported, TopologyStatus::Unsupported)
+        };
         push_overlay(
             output,
             package_path,
@@ -1939,6 +2073,21 @@ fn emit_lockfile_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig, pa
             precision,
             status,
         );
+    }
+}
+
+fn read_js_lockfile_manifest(
+    loaded: &LoadedConfig,
+    kind: JsLockfileKind,
+    relative_path: &str,
+) -> JsLockfileManifest {
+    match read_repo_file_to_string_with_limit(
+        &loaded.root,
+        relative_path,
+        TOPOLOGY_LOCKFILE_MAX_BYTES,
+    ) {
+        Ok(contents) => parse_js_lockfile(kind, relative_path, &contents),
+        Err(error) => unsupported_js_lockfile(kind, relative_path, error.stable_reason()),
     }
 }
 
@@ -2038,19 +2187,7 @@ fn emit_js_lockfile_edges(
                 return;
             };
             let relative_path = lockfile_relative_path(&selection.root_path, lockfile.kind);
-            let Ok(contents) = fs::read_to_string(loaded.root.join(&relative_path)) else {
-                emit_lockfile_problem_edge(
-                    output,
-                    package_path,
-                    package_id,
-                    lockfile.kind.file_name(),
-                    "unreadable",
-                    TopologyPrecision::Unknown,
-                    TopologyStatus::SetupMissing,
-                );
-                return;
-            };
-            let manifest = parse_js_lockfile(lockfile.kind, &relative_path, &contents);
+            let manifest = read_js_lockfile_manifest(loaded, lockfile.kind, &relative_path);
             let unsupported_count =
                 emit_lockfile_unsupported_edges(output, package_path, package_id, &manifest);
             let selected_count = emit_selected_lockfile_package_edges(
@@ -2327,23 +2464,44 @@ fn package_relative_path(package_path: &str, file_name: &str) -> String {
 
 fn emit_pnpm_workspace_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig) {
     let relative_path = "pnpm-workspace.yaml";
-    for workspace in root_pnpm_workspace_patterns(loaded) {
-        push_overlay(
+    match root_pnpm_workspace_patterns_result(loaded) {
+        Ok(workspaces) => {
+            for workspace in workspaces {
+                push_overlay(
+                    output,
+                    ".",
+                    format!("pnpm-workspace.yaml:{workspace}"),
+                    Some(relative_path.to_string()),
+                    TopologyPrecision::Heuristic,
+                    TopologyStatus::Present,
+                );
+            }
+        }
+        Err(error) if !error.is_not_found() => push_overlay(
             output,
             ".",
-            format!("pnpm-workspace.yaml:{workspace}"),
+            format!(
+                "pnpm-workspace-unsupported:{}",
+                stable_label_fragment(error.stable_reason())
+            ),
             Some(relative_path.to_string()),
-            TopologyPrecision::Heuristic,
-            TopologyStatus::Present,
-        );
+            TopologyPrecision::Unsupported,
+            TopologyStatus::Unsupported,
+        ),
+        Err(_) => {}
     }
 }
 
 fn root_pnpm_workspace_patterns(loaded: &LoadedConfig) -> Vec<String> {
+    root_pnpm_workspace_patterns_result(loaded).unwrap_or_default()
+}
+
+fn root_pnpm_workspace_patterns_result(
+    loaded: &LoadedConfig,
+) -> Result<Vec<String>, RepoFileReadError> {
     let relative_path = "pnpm-workspace.yaml";
-    fs::read_to_string(loaded.root.join(relative_path))
+    read_repo_file_to_string_with_limit(&loaded.root, relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)
         .map(|contents| parse_pnpm_workspace_packages(&contents))
-        .unwrap_or_default()
 }
 
 fn emit_tsconfig_overlays(
@@ -2366,8 +2524,23 @@ fn emit_tsconfig_overlays(
         }
     }
     for config in configs {
-        let Some(value) = read_json_with_comments(&loaded.root.join(&config)) else {
-            continue;
+        let value = match read_json_with_comments(&loaded.root, &config) {
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(error) => {
+                push_overlay(
+                    output,
+                    ".",
+                    format!(
+                        "tsconfig-unsupported:{}",
+                        stable_label_fragment(error.stable_reason())
+                    ),
+                    Some(config.clone()),
+                    TopologyPrecision::Unsupported,
+                    TopologyStatus::Unsupported,
+                );
+                continue;
+            }
         };
         let Some(object) = value.as_object() else {
             continue;
@@ -2436,13 +2609,19 @@ fn emit_tsconfig_overlays(
     }
 }
 
-fn read_json_with_comments(path: &Path) -> Option<serde_json::Value> {
-    let mut source = fs::read_to_string(path).ok()?;
+fn read_json_with_comments(
+    root: &Path,
+    relative_path: &str,
+) -> Result<Option<serde_json::Value>, RepoFileReadError> {
+    let mut source =
+        read_repo_file_to_string_with_limit(root, relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)?;
     if let Some(stripped) = source.strip_prefix('\u{feff}') {
         source = stripped.to_string();
     }
-    json_strip_comments::strip(&mut source).ok()?;
-    serde_json::from_str(&source).ok()
+    if json_strip_comments::strip(&mut source).is_err() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_str(&source).ok())
 }
 
 fn classify_ts_source_set(file: &SourceFile) -> SourceSetKind {
@@ -2563,7 +2742,7 @@ fn collect_ts_path_aliases(root: &Path, db: &AnalysisDb) -> BTreeMap<PathBuf, Ve
         };
         aliases
             .entry(config_dir)
-            .or_insert_with(|| read_tsconfig_path_aliases(&config_path));
+            .or_insert_with(|| read_tsconfig_path_aliases(root, &config_path));
     }
     aliases
 }
@@ -2582,19 +2761,29 @@ fn nearest_tsconfig_path(root: &Path, file_path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn read_tsconfig_path_aliases(path: &Path) -> Vec<String> {
+fn read_tsconfig_path_aliases(root: &Path, path: &Path) -> Vec<String> {
     let mut visited = BTreeSet::new();
-    read_tsconfig_path_aliases_inner(path, &mut visited)
-}
-
-fn read_tsconfig_path_aliases_inner(path: &Path, visited: &mut BTreeSet<PathBuf>) -> Vec<String> {
-    let Some(path) = normalize_path(path) else {
+    let Some(relative_path) = repo_relative_existing_path(root, path) else {
         return Vec::new();
     };
-    if !visited.insert(path.clone()) {
+    read_tsconfig_path_aliases_inner(root, &relative_path, &mut visited)
+}
+
+fn read_tsconfig_path_aliases_inner(
+    root: &Path,
+    relative_path: &str,
+    visited: &mut BTreeSet<String>,
+) -> Vec<String> {
+    let Ok(path) = repo_file_path(root, relative_path) else {
+        return Vec::new();
+    };
+    let Some(relative_path) = repo_relative_existing_path(root, &path) else {
+        return Vec::new();
+    };
+    if !visited.insert(relative_path.clone()) {
         return Vec::new();
     }
-    let Some(config) = read_tsconfig_alias_wire(&path) else {
+    let Some(config) = read_tsconfig_alias_wire(root, &relative_path) else {
         return Vec::new();
     };
 
@@ -2606,23 +2795,23 @@ fn read_tsconfig_path_aliases_inner(path: &Path, visited: &mut BTreeSet<PathBuf>
         return sorted_ts_path_aliases(paths.keys().cloned());
     }
 
-    let Some(config_dir) = path.parent() else {
-        return Vec::new();
-    };
+    let config_dir = Path::new(&relative_path).parent().unwrap_or(Path::new(""));
     let mut aliases = config
         .extends
         .into_iter()
         .flat_map(TsconfigExtendsWire::into_specifiers)
-        .filter_map(|specifier| resolve_tsconfig_extends_path(config_dir, &specifier))
-        .flat_map(|extended_path| read_tsconfig_path_aliases_inner(&extended_path, visited))
+        .filter_map(|specifier| resolve_tsconfig_extends_path(root, config_dir, &specifier))
+        .flat_map(|extended_path| read_tsconfig_path_aliases_inner(root, &extended_path, visited))
         .collect::<Vec<_>>();
     aliases.sort();
     aliases.dedup();
     aliases
 }
 
-fn read_tsconfig_alias_wire(path: &Path) -> Option<TsconfigAliasWire> {
-    let Ok(mut source) = fs::read_to_string(path) else {
+fn read_tsconfig_alias_wire(root: &Path, relative_path: &str) -> Option<TsconfigAliasWire> {
+    let Ok(mut source) =
+        read_repo_file_to_string_with_limit(root, relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)
+    else {
         return None;
     };
     if let Some(stripped) = source.strip_prefix('\u{feff}') {
@@ -2641,31 +2830,44 @@ fn sorted_ts_path_aliases(paths: impl Iterator<Item = String>) -> Vec<String> {
     aliases
 }
 
-fn resolve_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+fn resolve_tsconfig_extends_path(
+    root: &Path,
+    config_dir: &Path,
+    specifier: &str,
+) -> Option<String> {
     let specifier_path = Path::new(specifier);
     if specifier_path.is_absolute() {
-        return resolve_tsconfig_file_candidate(specifier_path);
+        return None;
     }
     if specifier.starts_with('.') {
-        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+        return resolve_tsconfig_file_candidate(root, &config_dir.join(specifier_path));
     }
-    resolve_package_tsconfig_extends_path(config_dir, specifier)
+    resolve_package_tsconfig_extends_path(root, config_dir, specifier)
 }
 
-fn resolve_package_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
-    let mut current = normalize_path(config_dir)?;
+fn resolve_package_tsconfig_extends_path(
+    root: &Path,
+    config_dir: &Path,
+    specifier: &str,
+) -> Option<String> {
+    let mut current = normalize_repo_relative_input(config_dir)?;
     loop {
-        let candidate = current.join("node_modules").join(specifier);
-        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+        let candidate = if current.as_os_str().is_empty() {
+            PathBuf::from("node_modules").join(specifier)
+        } else {
+            current.join("node_modules").join(specifier)
+        };
+        if let Some(resolved) = resolve_tsconfig_file_candidate(root, &candidate) {
             return Some(resolved);
         }
-        if !current.pop() {
+        if current.as_os_str().is_empty() {
             return None;
         }
+        current.pop();
     }
 }
 
-fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
+fn resolve_tsconfig_file_candidate(root: &Path, base: &Path) -> Option<String> {
     let mut candidates = vec![base.to_path_buf()];
     if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
         let mut with_json = base.as_os_str().to_owned();
@@ -2676,8 +2878,19 @@ fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.is_file())
-        .and_then(|candidate| normalize_path(&candidate))
+        .filter_map(|candidate| normalized_existing_repo_file(root, &candidate))
+        .next()
+}
+
+fn normalized_existing_repo_file(root: &Path, candidate: &Path) -> Option<String> {
+    repo_file_path(root, candidate).ok()?;
+    let normalized = normalize_repo_relative_input(candidate)?;
+    let relative = normalized.to_string_lossy();
+    if relative.is_empty() {
+        None
+    } else {
+        normalize_repo_relative(relative)
+    }
 }
 
 #[derive(Debug, Deserialize)]

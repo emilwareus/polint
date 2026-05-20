@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: planning
-last_updated: "2026-05-20T10:57:10.000Z"
+last_updated: "2026-05-20T11:11:09.580Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
@@ -43,7 +43,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to plan
 Phase: 29
 Plan: Not started
-Last activity: 2026-05-20 -- Phase 28 verified and completed; Phase 29 ready to plan
+Last activity: 2026-05-20 - Completed quick task 260520-iba: resolved PR #33 merge conflict against latest main and reran merge-readiness review.
 
 ## Phase Progress
 
@@ -253,14 +253,18 @@ Last activity: 2026-05-20 -- Phase 28 verified and completed; Phase 29 ready to 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed quick task 260520-h6j: fixed Phase 28 local MIR correctness issues and added edge-case tests.
+- Last activity: 2026-05-20 - Completed quick task 260520-iba: resolved PR #33 merge conflict against latest main and reran merge-readiness review.
 - Stopped at: Phase 29 (Local CFG and Control Dependence) is ready for discussion/planning.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260520-iba | Resolve PR 33 merge conflict against latest main and re-review merge readiness | 2026-05-20 | implemented | [260520-iba-resolve-pr-33-merge-conflict-against-lat](./quick/260520-iba-resolve-pr-33-merge-conflict-against-lat/) |
 | 260520-h6j | Fix Phase 28 local MIR correctness issues and add edge-case tests | 2026-05-20 | implemented | [260520-h6j-fix-phase-28-local-mir-correctness-issue](./quick/260520-h6j-fix-phase-28-local-mir-correctness-issue/) |
+| 260520-fpj | Fix remaining go.work repo-boundary issues and run another security review | 2026-05-20 | implemented | [260520-fpj-fix-remaining-go-work-repo-boundary-secu](./quick/260520-fpj-fix-remaining-go-work-repo-boundary-secu/) |
+| 260520-da2 | Harden core trust boundaries, add regression tests, and run a secondary deep security review | 2026-05-20 | implemented | [260520-da2-harden-core-trust-boundaries-and-run-sec](./quick/260520-da2-harden-core-trust-boundaries-and-run-sec/) |
+| 260520-c7k | Fix security findings around repo escape reads, workspace glob validation, Go package pattern validation, topology input size limits, and synthetic go.work creation | 2026-05-20 | implemented | [260520-c7k-fix-security-findings-around-repo-escape](./quick/260520-c7k-fix-security-findings-around-repo-escape/) |
 | 260520-ai8 | Fix package-manager topology review findings with TDD tests and deep review | 2026-05-20 | implemented | [260520-ai8-fix-package-manager-topology-review-find](./quick/260520-ai8-fix-package-manager-topology-review-find/) |
 | 260520-a6t | Fix pnpm workspace package-manager review findings | 2026-05-20 | implemented | [260520-a6t-fix-pnpm-workspace-package-manager-revie](./quick/260520-a6t-fix-pnpm-workspace-package-manager-revie/) |
 | 260520-9jr | Fix package-manager topology review findings | 2026-05-20 | implemented | [260520-9jr-fix-package-manager-topology-review-find](./quick/260520-9jr-fix-package-manager-topology-review-find/) |
