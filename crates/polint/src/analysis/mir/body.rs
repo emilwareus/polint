@@ -22,9 +22,12 @@ pub(crate) struct MirBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[expect(
-    dead_code,
-    reason = "Statement rows are part of the private MIR contract before lowering populates them."
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "Statement rows are part of the private MIR contract before lowering populates them."
+    )
 )]
 pub(crate) struct MirStatement {
     pub(crate) id: MirStatementId,
@@ -36,9 +39,12 @@ pub(crate) struct MirStatement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[expect(
-    dead_code,
-    reason = "Terminator rows are part of the private MIR contract before CFG lowering consumes them."
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "Terminator rows are part of the private MIR contract before CFG lowering consumes them."
+    )
 )]
 pub(crate) struct MirTerminator {
     pub(crate) id: MirTerminatorId,
