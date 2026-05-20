@@ -3449,6 +3449,13 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{
+        AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+        UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    };
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -3630,6 +3637,217 @@ mod tests {
             scope_path,
             kind: ScopeKind::Function,
             status,
+        }
+    }
+
+    fn test_mir_body(id: u64, file: FileId, stable_key: &str) -> MirBody {
+        MirBody {
+            id: MirBodyId(id),
+            language: Language::TypeScript,
+            file,
+            function: FunctionId(id),
+            package: None,
+            module: None,
+            owner_stable_key: format!("function:{stable_key}"),
+            span: test_span(file, 1),
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn test_place(id: u64, file: FileId, stable_key: &str) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::TypeScript,
+            file: Some(file),
+            function: Some(FunctionId(0)),
+            root: PlaceRoot::Local {
+                function: FunctionId(0),
+                name: stable_key.to_string(),
+            },
+            projections: Vec::new(),
+            stable_key: stable_key.to_string(),
+            status: PlaceStatus::Resolved,
+        }
+    }
+
+    fn test_mir_operation(
+        id: u64,
+        body: MirBodyId,
+        place: PlaceId,
+        value: PlaceId,
+        stable_key: &str,
+    ) -> MirOperation {
+        MirOperation {
+            id: MirOpId(id),
+            body,
+            ordinal: id as u32,
+            span: test_span(FileId(0), 1),
+            kind: MirOperationKind::Assign {
+                place,
+                value: MirValue::Place(value),
+                mode: AssignMode::Overwrite,
+            },
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn test_unsupported(stable_key: &str) -> UnsupportedSemanticFact {
+        UnsupportedSemanticFact {
+            id: UnsupportedId(9),
+            body: Some(MirBodyId(9)),
+            operation: Some(MirOpId(9)),
+            language: Language::TypeScript,
+            file: FileId(0),
+            span: test_span(FileId(0), 1),
+            construct: "dynamic-property".to_string(),
+            source_evidence: "target[key]".to_string(),
+            affected_places: vec![PlaceId(9)],
+            affected_domains: vec![UnsupportedDomain::Mir],
+            conservative_action: ConservativeAction::HavocAffectedPlaces,
+            precision: UnsupportedPrecision::Unsupported,
+            status: MirStatus::Unsupported,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    mod semantic_mir_storage {
+        use super::*;
+
+        #[test]
+        fn replace_semantic_mir_removes_stale_rows_from_prior_run() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let first = MirOutput {
+                bodies: vec![test_mir_body(9, file, "body:first")],
+                places: vec![test_place(9, file, "place:first")],
+                operations: vec![test_mir_operation(
+                    9,
+                    MirBodyId(9),
+                    PlaceId(9),
+                    PlaceId(9),
+                    "op:first",
+                )],
+                unsupported: vec![test_unsupported("unsupported:first")],
+            };
+            let second = MirOutput {
+                bodies: vec![test_mir_body(4, file, "body:second")],
+                places: vec![test_place(4, file, "place:second")],
+                operations: vec![test_mir_operation(
+                    4,
+                    MirBodyId(4),
+                    PlaceId(4),
+                    PlaceId(4),
+                    "op:second",
+                )],
+                unsupported: Vec::new(),
+            };
+
+            db.replace_semantic_mir(first).expect("first MIR replace");
+            db.replace_semantic_mir(second).expect("second MIR replace");
+
+            assert_eq!(
+                db.mir_bodies()
+                    .iter()
+                    .map(|body| (body.id, body.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(MirBodyId(0), "body:second")]
+            );
+            assert_eq!(db.mir_operations()[0].stable_key, "op:second");
+            assert_eq!(db.mir_places()[0].stable_key, "place:second");
+            assert!(db.unsupported_semantics().is_empty());
+        }
+
+        #[test]
+        fn replace_semantic_mir_reassigns_ids_by_stable_key_order() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let output = MirOutput {
+                bodies: vec![
+                    test_mir_body(20, file, "body:z"),
+                    test_mir_body(10, file, "body:a"),
+                ],
+                places: vec![test_place(20, file, "place:z"), test_place(10, file, "place:a")],
+                operations: vec![
+                    test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
+                    test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
+                ],
+                unsupported: vec![test_unsupported("unsupported:z"), test_unsupported("unsupported:a")],
+            };
+
+            db.replace_semantic_mir(output).expect("semantic MIR replace");
+
+            assert_eq!(
+                db.mir_bodies()
+                    .iter()
+                    .map(|body| (body.id, body.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(MirBodyId(0), "body:a"), (MirBodyId(1), "body:z")]
+            );
+            assert_eq!(
+                db.mir_operations()
+                    .iter()
+                    .map(|operation| (operation.id, operation.body, operation.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (MirOpId(0), MirBodyId(0), "op:a"),
+                    (MirOpId(1), MirBodyId(1), "op:z"),
+                ]
+            );
+            assert_eq!(
+                db.mir_places()
+                    .iter()
+                    .map(|place| (place.id, place.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(PlaceId(0), "place:a"), (PlaceId(1), "place:z")]
+            );
+            assert_eq!(
+                db.unsupported_semantics()
+                    .iter()
+                    .map(|row| (row.id, row.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (UnsupportedId(0), "unsupported:a"),
+                    (UnsupportedId(1), "unsupported:z"),
+                ]
+            );
+        }
+
+        #[test]
+        fn replace_semantic_mir_rejects_dangling_operation_references() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let output = MirOutput {
+                bodies: vec![test_mir_body(0, file, "body:a")],
+                places: vec![test_place(0, file, "place:a")],
+                operations: vec![test_mir_operation(
+                    0,
+                    MirBodyId(99),
+                    PlaceId(0),
+                    PlaceId(0),
+                    "op:dangling",
+                )],
+                unsupported: Vec::new(),
+            };
+
+            let error = db
+                .replace_semantic_mir(output)
+                .expect_err("dangling MIR body reference should fail");
+
+            assert!(error.to_string().contains("dangling MIR operation body"));
         }
     }
 
