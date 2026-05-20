@@ -24,10 +24,16 @@ impl SemanticStore {
         let output = output.normalized();
         let (mir_bodies, body_ids) = normalize_bodies(output.bodies);
         let (places, place_ids) = normalize_places(output.places, &body_ids)?;
+        let unsupported_ids = unsupported_id_map(&output.unsupported);
         let (mir_operations, operation_ids) =
-            normalize_operations(output.operations, &body_ids, &place_ids)?;
-        let (unsupported_semantics, _unsupported_ids) =
-            normalize_unsupported(output.unsupported, &body_ids, &operation_ids, &place_ids)?;
+            normalize_operations(output.operations, &body_ids, &place_ids, &unsupported_ids)?;
+        let unsupported_semantics = normalize_unsupported_with_ids(
+            output.unsupported,
+            &body_ids,
+            &operation_ids,
+            &place_ids,
+            &unsupported_ids,
+        )?;
 
         Ok(Self {
             mir_bodies_by_id: index_by_id(&mir_bodies, |body| body.id),
@@ -115,6 +121,7 @@ fn normalize_operations(
     mut operations: Vec<MirOperation>,
     body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
 ) -> Result<(Vec<MirOperation>, BTreeMap<MirOpId, MirOpId>), AnalysisError> {
     operations.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
     let mut operation_ids = BTreeMap::new();
@@ -123,28 +130,28 @@ fn normalize_operations(
         operation_ids.insert(operation.id, new_id);
         operation.id = new_id;
         operation.body = remap_body_id(operation.body, body_ids, "dangling MIR operation body")?;
-        remap_operation_kind(&mut operation.kind, place_ids)?;
+        remap_operation_kind(&mut operation.kind, place_ids, unsupported_ids)?;
     }
     Ok((operations, operation_ids))
 }
 
-fn normalize_unsupported(
+fn normalize_unsupported_with_ids(
     mut rows: Vec<UnsupportedSemanticFact>,
     body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     operation_ids: &BTreeMap<MirOpId, MirOpId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
-) -> Result<
-    (
-        Vec<UnsupportedSemanticFact>,
-        BTreeMap<UnsupportedId, UnsupportedId>,
-    ),
-    AnalysisError,
-> {
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+) -> Result<Vec<UnsupportedSemanticFact>, AnalysisError> {
     rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
-    let mut unsupported_ids = BTreeMap::new();
     for (index, row) in rows.iter_mut().enumerate() {
         let new_id = UnsupportedId(index as u64);
-        unsupported_ids.insert(row.id, new_id);
+        let expected_id = unsupported_ids
+            .get(&row.id)
+            .copied()
+            .ok_or_else(|| invalid_fact("dangling unsupported semantic id"))?;
+        if expected_id != new_id {
+            return Err(invalid_fact("inconsistent unsupported semantic id remap"));
+        }
         row.id = new_id;
         row.body = row
             .body
@@ -163,7 +170,20 @@ fn normalize_unsupported(
             *place = remap_place_id(*place, place_ids, "dangling unsupported semantic place")?;
         }
     }
-    Ok((rows, unsupported_ids))
+    Ok(rows)
+}
+
+fn unsupported_id_map(rows: &[UnsupportedSemanticFact]) -> BTreeMap<UnsupportedId, UnsupportedId> {
+    let mut sorted = rows
+        .iter()
+        .map(|row| (row.stable_key.as_str(), row.id))
+        .collect::<Vec<_>>();
+    sorted.sort_by(|left, right| left.0.cmp(right.0));
+    sorted
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, old_id))| (old_id, UnsupportedId(index as u64)))
+        .collect()
 }
 
 fn remap_place_root(
@@ -179,6 +199,7 @@ fn remap_place_root(
 fn remap_operation_kind(
     kind: &mut MirOperationKind,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
 ) -> Result<(), AnalysisError> {
     match kind {
         MirOperationKind::StorageLive { place } | MirOperationKind::Read { place } => {
@@ -210,7 +231,13 @@ fn remap_operation_kind(
                 remap_value(value, place_ids)?;
             }
         }
-        MirOperationKind::Unsupported { .. } => {}
+        MirOperationKind::Unsupported { unsupported } => {
+            *unsupported = remap_unsupported_id(
+                *unsupported,
+                unsupported_ids,
+                "dangling MIR unsupported operation",
+            )?;
+        }
     }
     Ok(())
 }
@@ -247,6 +274,17 @@ fn remap_place_id(
         .ok_or_else(|| invalid_fact(reason))
 }
 
+fn remap_unsupported_id(
+    id: UnsupportedId,
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+    reason: &'static str,
+) -> Result<UnsupportedId, AnalysisError> {
+    unsupported_ids
+        .get(&id)
+        .copied()
+        .ok_or_else(|| invalid_fact(reason))
+}
+
 fn index_by_id<T, Id>(rows: &[T], id: impl Fn(&T) -> Id) -> BTreeMap<Id, usize>
 where
     Id: Ord,
@@ -261,5 +299,121 @@ fn invalid_fact(reason: impl Into<String>) -> AnalysisError {
     AnalysisError::InvalidFact {
         provider: SEMANTIC_MIR_PROVIDER_ID,
         reason: reason.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{
+        ConservativeAction, MirOperation, MirOperationKind, UnsupportedDomain,
+        UnsupportedPrecision, UnsupportedSemanticFact,
+    };
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::core::{FileId, FunctionId, Language, Span};
+
+    fn span() -> Span {
+        Span {
+            file: FileId(1),
+            start_byte: 1,
+            end_byte: 2,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
+    }
+
+    fn body() -> MirBody {
+        MirBody {
+            id: MirBodyId(0),
+            language: Language::Go,
+            file: FileId(1),
+            function: FunctionId(1),
+            package: None,
+            module: None,
+            owner_stable_key: "owner".to_string(),
+            span: span(),
+            stable_key: "body".to_string(),
+            status: MirStatus::Partial,
+        }
+    }
+
+    fn place() -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(0),
+            language: Language::Go,
+            file: Some(FileId(1)),
+            function: Some(FunctionId(1)),
+            root: PlaceRoot::Local {
+                function: FunctionId(1),
+                name: "value".to_string(),
+            },
+            projections: Vec::new(),
+            stable_key: "place".to_string(),
+            status: PlaceStatus::Resolved,
+        }
+    }
+
+    fn unsupported(id: u64, stable_key: &str, operation: MirOpId) -> UnsupportedSemanticFact {
+        UnsupportedSemanticFact {
+            id: UnsupportedId(id),
+            body: Some(MirBodyId(0)),
+            operation: Some(operation),
+            language: Language::Go,
+            file: FileId(1),
+            span: span(),
+            construct: stable_key.to_string(),
+            source_evidence: stable_key.to_string(),
+            affected_places: vec![PlaceId(0)],
+            affected_domains: vec![UnsupportedDomain::Mir],
+            conservative_action: ConservativeAction::HavocAffectedPlaces,
+            precision: UnsupportedPrecision::Unsupported,
+            status: MirStatus::Unsupported,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn semantic_store_remaps_unsupported_operation_refs_after_unsupported_sorting() {
+        let output = MirOutput {
+            bodies: vec![body()],
+            places: vec![place()],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(),
+                kind: MirOperationKind::Unsupported {
+                    unsupported: UnsupportedId(0),
+                },
+                stable_key: "operation".to_string(),
+                status: MirStatus::Unsupported,
+            }],
+            unsupported: vec![
+                unsupported(0, "unsupported:z", MirOpId(0)),
+                unsupported(1, "unsupported:a", MirOpId(0)),
+            ],
+        };
+
+        let store = SemanticStore::from_output(output).expect("store normalizes");
+        let operation = store
+            .mir_operations()
+            .first()
+            .expect("unsupported operation exists");
+        let MirOperationKind::Unsupported { unsupported } = operation.kind else {
+            panic!("expected unsupported MIR operation");
+        };
+
+        assert_eq!(unsupported, UnsupportedId(1));
+        assert_eq!(
+            store
+                .unsupported_semantic(unsupported)
+                .expect("remapped unsupported row exists")
+                .stable_key,
+            "unsupported:z"
+        );
     }
 }

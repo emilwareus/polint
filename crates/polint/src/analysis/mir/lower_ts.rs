@@ -18,7 +18,9 @@ use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
     UnsupportedPrecision, UnsupportedSemanticFact,
 };
-use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus, PlaceTableBuilder};
+use crate::analysis::places::{
+    PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
+};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
@@ -89,6 +91,7 @@ impl TsMirLowering {
                 None,
                 None,
                 file.language,
+                file.relative_path.clone(),
                 file.id,
                 span,
                 "parser recovery",
@@ -124,7 +127,7 @@ impl TsMirLowering {
             };
             let body = self.push_body(db, file, function_fact, span);
             let mut function_lowering =
-                FunctionLowering::new(file, file.source.as_ref(), function_fact.id, body.id);
+                FunctionLowering::new(file, file.source.as_ref(), function_fact.id, &body);
             if function.r#async {
                 function_lowering.push_unsupported(
                     &mut self.operations,
@@ -408,18 +411,24 @@ struct FunctionLowering<'source> {
     source: &'source str,
     function: FunctionId,
     body: MirBodyId,
+    stable_context: PlaceStableContext,
     parameters: BTreeMap<String, PlaceRoot>,
     locals: BTreeMap<String, PlaceRoot>,
 }
 
 impl<'source> FunctionLowering<'source> {
-    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: MirBodyId) -> Self {
+    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: &MirBody) -> Self {
         Self {
             language: file.language,
             file: file.id,
             source,
             function,
-            body,
+            body: body.id,
+            stable_context: PlaceStableContext::new(
+                file.relative_path.clone(),
+                body.owner_stable_key.clone(),
+                body.stable_key.clone(),
+            ),
             parameters: BTreeMap::new(),
             locals: BTreeMap::new(),
         }
@@ -1115,10 +1124,11 @@ impl<'source> FunctionLowering<'source> {
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        places.insert(
+        places.insert_with_context(
             self.language,
             Some(self.file),
             Some(self.function),
+            &self.stable_context,
             root,
             projections,
             status,
@@ -1277,6 +1287,7 @@ impl<'source> FunctionLowering<'source> {
             Some(self.body),
             Some(operation_id),
             self.language,
+            self.stable_context.file_key().to_string(),
             self.file,
             span.clone(),
             construct,
@@ -1288,6 +1299,7 @@ impl<'source> FunctionLowering<'source> {
         operations.push(OperationDraft::new(
             operation_id,
             self.body,
+            self.stable_context.body_key(),
             span.start_byte,
             span,
             OperationKindDraft::Unsupported { unsupported_id },
@@ -1306,6 +1318,7 @@ impl<'source> FunctionLowering<'source> {
         operations.push(OperationDraft::new(
             id,
             self.body,
+            self.stable_context.body_key(),
             span.start,
             span_from_oxc(self.file, self.source, span),
             kind,
@@ -1337,12 +1350,13 @@ impl OperationDraft {
     fn new(
         id: MirOpId,
         body: MirBodyId,
+        body_stable_key: &str,
         ordinal: u32,
         span: Span,
         kind: OperationKindDraft,
         status: MirStatus,
     ) -> Self {
-        let stable_key = operation_stable_key(body, ordinal, &span, &kind);
+        let stable_key = operation_stable_key(body_stable_key, ordinal, &span, &kind);
         Self {
             id,
             body,
@@ -1512,6 +1526,7 @@ struct UnsupportedDraft {
     body: Option<MirBodyId>,
     operation: Option<MirOpId>,
     language: Language,
+    file_key: String,
     file: FileId,
     span: Span,
     construct: String,
@@ -1527,6 +1542,7 @@ impl UnsupportedDraft {
         body: Option<MirBodyId>,
         operation: Option<MirOpId>,
         language: Language,
+        file_key: impl Into<String>,
         file: FileId,
         span: Span,
         construct: &str,
@@ -1540,6 +1556,7 @@ impl UnsupportedDraft {
             body,
             operation,
             language,
+            file_key: file_key.into(),
             file,
             span,
             construct: construct.to_string(),
@@ -1605,14 +1622,14 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
 }
 
 fn operation_stable_key(
-    body: MirBodyId,
+    body_stable_key: &str,
     ordinal: u32,
     span: &Span,
     kind: &OperationKindDraft,
 ) -> String {
     let mut parts = vec![
         ("language", "ts-js".to_string()),
-        ("body", body.0.to_string()),
+        ("body", body_stable_key.to_string()),
         ("ordinal", ordinal.to_string()),
         ("kind", kind.label().to_string()),
         ("start_byte", span.start_byte.to_string()),
@@ -1643,7 +1660,7 @@ fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
         FactFamily::UnsupportedSemantic,
         &[
             ("language", language_label(draft.language).to_string()),
-            ("file", draft.file.0.to_string()),
+            ("file", draft.file_key.clone()),
             ("construct", draft.construct.clone()),
             ("start_byte", draft.span.start_byte.to_string()),
             ("end_byte", draft.span.end_byte.to_string()),

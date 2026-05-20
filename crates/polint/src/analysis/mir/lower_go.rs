@@ -11,7 +11,9 @@ use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
     UnsupportedPrecision, UnsupportedSemanticFact,
 };
-use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus, PlaceTableBuilder};
+use crate::analysis::places::{
+    PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
+};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
@@ -101,7 +103,7 @@ impl GoMirLowering {
             };
             let body = self.push_body(db, file, function, span);
             let mut function_lowering =
-                FunctionLowering::new(file, file.source.as_ref(), function.id, body.id);
+                FunctionLowering::new(file, file.source.as_ref(), function.id, &body);
             function_lowering.lower_parameters(node, &mut self.places);
             function_lowering.lower_body(
                 body_node,
@@ -109,7 +111,7 @@ impl GoMirLowering {
                 &mut self.operations,
                 &mut self.unsupported,
             );
-            self.lower_parser_errors(file, body.id, body_node);
+            self.lower_parser_errors(file, body.id, &body.stable_key, body_node);
         }
     }
 
@@ -159,7 +161,13 @@ impl GoMirLowering {
         body
     }
 
-    fn lower_parser_errors(&mut self, file: &SourceFile, body: MirBodyId, node: Node<'_>) {
+    fn lower_parser_errors(
+        &mut self,
+        file: &SourceFile,
+        body: MirBodyId,
+        body_stable_key: &str,
+        node: Node<'_>,
+    ) {
         visit_named_descendants(node, &mut |descendant| {
             if descendant.is_error() || descendant.kind() == "ERROR" {
                 let unsupported_id = UnsupportedId(self.unsupported.len() as u64);
@@ -169,6 +177,7 @@ impl GoMirLowering {
                     unsupported_id,
                     Some(body),
                     Some(operation_id),
+                    file.relative_path.clone(),
                     file.id,
                     span.clone(),
                     "ERROR",
@@ -179,6 +188,7 @@ impl GoMirLowering {
                 self.operations.push(OperationDraft::new(
                     operation_id,
                     body,
+                    body_stable_key,
                     operation_id.0 as u32,
                     span,
                     OperationKindDraft::Unsupported { unsupported_id },
@@ -211,17 +221,23 @@ struct FunctionLowering<'source> {
     source: &'source str,
     function: FunctionId,
     body: MirBodyId,
+    stable_context: PlaceStableContext,
     parameters: BTreeMap<String, PlaceRoot>,
     locals: BTreeMap<String, PlaceRoot>,
 }
 
 impl<'source> FunctionLowering<'source> {
-    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: MirBodyId) -> Self {
+    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: &MirBody) -> Self {
         Self {
             file: file.id,
             source,
             function,
-            body,
+            body: body.id,
+            stable_context: PlaceStableContext::new(
+                file.relative_path.clone(),
+                body.owner_stable_key.clone(),
+                body.stable_key.clone(),
+            ),
             parameters: BTreeMap::new(),
             locals: BTreeMap::new(),
         }
@@ -288,7 +304,7 @@ impl<'source> FunctionLowering<'source> {
                     .unwrap_or_else(|| ValueDraft::Unknown {
                         evidence: "short declaration initializer".to_string(),
                     });
-                for name in assignment_left_names(self.source, statement, ":=") {
+                for name in assignment_left_names(self.source, statement) {
                     let key = self.insert_local(places, &name);
                     self.push_assign(
                         operations,
@@ -327,9 +343,13 @@ impl<'source> FunctionLowering<'source> {
                     .unwrap_or_else(|| ValueDraft::Unknown {
                         evidence: "assignment value".to_string(),
                     });
-                let simultaneous = assignment_left_names(self.source, statement, "=").len() > 1;
+                let simultaneous = left_places.len() > 1;
+                let compound = assignment_operator(self.source, statement)
+                    .is_some_and(|operator| operator != "=");
                 for place in left_places {
-                    let mode = if simultaneous {
+                    let mode = if compound {
+                        AssignMode::PartialWrite
+                    } else if simultaneous {
                         AssignMode::Simultaneous
                     } else if !place.projections.is_empty() {
                         AssignMode::ProjectionMutation
@@ -411,7 +431,7 @@ impl<'source> FunctionLowering<'source> {
             }
         }
 
-        assignment_left_names(self.source, statement, "=")
+        assignment_left_names(self.source, statement)
             .into_iter()
             .map(|name| {
                 if let Some(root) = self
@@ -743,6 +763,7 @@ impl<'source> FunctionLowering<'source> {
                 UnsupportedId(unsupported.len() as u64),
                 Some(self.body),
                 None,
+                self.stable_context.file_key().to_string(),
                 self.file,
                 node_span(self.file, self.source, node),
                 construct,
@@ -769,6 +790,7 @@ impl<'source> FunctionLowering<'source> {
             unsupported_id,
             Some(self.body),
             Some(operation_id),
+            self.stable_context.file_key().to_string(),
             self.file,
             span.clone(),
             construct,
@@ -779,6 +801,7 @@ impl<'source> FunctionLowering<'source> {
         operations.push(OperationDraft::new(
             operation_id,
             self.body,
+            self.stable_context.body_key(),
             self.ordinal_for(node),
             span,
             OperationKindDraft::Unsupported { unsupported_id },
@@ -828,6 +851,7 @@ impl<'source> FunctionLowering<'source> {
         operations.push(OperationDraft::new(
             id,
             self.body,
+            self.stable_context.body_key(),
             self.ordinal_for(node),
             node_span(self.file, self.source, node),
             kind,
@@ -876,10 +900,11 @@ impl<'source> FunctionLowering<'source> {
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        places.insert(
+        places.insert_with_context(
             Language::Go,
             Some(self.file),
             Some(self.function),
+            &self.stable_context,
             root,
             projections,
             status,
@@ -910,12 +935,13 @@ impl OperationDraft {
     fn new(
         id: MirOpId,
         body: MirBodyId,
+        body_stable_key: &str,
         ordinal: u32,
         span: Span,
         kind: OperationKindDraft,
         status: MirStatus,
     ) -> Self {
-        let stable_key = operation_stable_key(body, ordinal, &span, &kind);
+        let stable_key = operation_stable_key(body_stable_key, ordinal, &span, &kind);
         Self {
             id,
             body,
@@ -1084,6 +1110,7 @@ struct UnsupportedDraft {
     id: UnsupportedId,
     body: Option<MirBodyId>,
     operation: Option<MirOpId>,
+    file_key: String,
     file: FileId,
     span: Span,
     construct: String,
@@ -1098,6 +1125,7 @@ impl UnsupportedDraft {
         id: UnsupportedId,
         body: Option<MirBodyId>,
         operation: Option<MirOpId>,
+        file_key: impl Into<String>,
         file: FileId,
         span: Span,
         construct: &str,
@@ -1109,6 +1137,7 @@ impl UnsupportedDraft {
             id,
             body,
             operation,
+            file_key: file_key.into(),
             file,
             span,
             construct: construct.to_string(),
@@ -1144,14 +1173,14 @@ impl UnsupportedDraft {
 }
 
 fn operation_stable_key(
-    body: MirBodyId,
+    body_stable_key: &str,
     ordinal: u32,
     span: &Span,
     kind: &OperationKindDraft,
 ) -> String {
     let mut parts = vec![
         ("language", "go".to_string()),
-        ("body", body.0.to_string()),
+        ("body", body_stable_key.to_string()),
         ("ordinal", ordinal.to_string()),
         ("kind", kind.label().to_string()),
         ("start_byte", span.start_byte.to_string()),
@@ -1182,7 +1211,7 @@ fn unsupported_stable_key(draft: &UnsupportedDraft) -> String {
         FactFamily::UnsupportedSemantic,
         &[
             ("language", "go".to_string()),
-            ("file", draft.file.0.to_string()),
+            ("file", draft.file_key.clone()),
             ("construct", draft.construct.clone()),
             ("start_byte", draft.span.start_byte.to_string()),
             ("end_byte", draft.span.end_byte.to_string()),
@@ -1319,11 +1348,27 @@ fn parameter_names(source: &str, parameter_list: Node<'_>) -> Vec<String> {
     names
 }
 
-fn assignment_left_names(source: &str, statement: Node<'_>, delimiter: &str) -> Vec<String> {
+fn assignment_operator<'source>(source: &'source str, statement: Node<'_>) -> Option<&'source str> {
+    statement
+        .child_by_field_name("operator")
+        .and_then(|operator| node_text(source, operator))
+}
+
+fn assignment_left_names(source: &str, statement: Node<'_>) -> Vec<String> {
+    if let Some(left) = statement.child_by_field_name("left") {
+        let names = direct_identifier_names(source, left);
+        if !names.is_empty() {
+            return names;
+        }
+    }
+
     let Some(text) = node_text(source, statement) else {
         return Vec::new();
     };
-    let Some((left, _)) = text.split_once(delimiter) else {
+    let Some((left, _)) = assignment_delimiters()
+        .iter()
+        .find_map(|delimiter| text.split_once(delimiter))
+    else {
         return Vec::new();
     };
     left.split(',')
@@ -1339,19 +1384,32 @@ fn assignment_left_names(source: &str, statement: Node<'_>, delimiter: &str) -> 
 }
 
 fn var_spec_names(source: &str, node: Node<'_>) -> Vec<String> {
-    let Some(text) = node_text(source, node) else {
-        return Vec::new();
-    };
-    let declaration = text.split_once('=').map_or(text, |(left, _)| left);
-    declaration
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && *name != "_")
+    let mut cursor = node.walk();
+    node.children_by_field_name("name", &mut cursor)
+        .filter_map(|name| node_text(source, name))
+        .filter(|name| !name.trim().is_empty() && *name != "_")
         .map(str::to_string)
         .collect()
+}
+
+fn direct_identifier_names(source: &str, node: Node<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "identifier"
+            && let Some(name) = node_text(source, child)
+            && name != "_"
+        {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn assignment_delimiters() -> &'static [&'static str] {
+    &[
+        "&^=", "<<=", ">>=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "=",
+    ]
 }
 
 fn index_projection(source: &str, node: Node<'_>) -> PlaceProjection {
@@ -1622,6 +1680,38 @@ func flow(user User, index int) bool {
                 .iter()
                 .any(|operation| matches!(operation.kind, MirOperationKind::Return { .. }))
         );
+    }
+
+    #[test]
+    fn go_declarations_and_compound_assignments_keep_all_mutated_places() {
+        let output = lower(
+            r#"
+package auth
+
+func flow(delta int) int {
+    var count, limit int
+    count += delta
+    limit = count
+    return limit
+}
+"#,
+        );
+
+        assert!(output.places.iter().any(|place| matches!(
+            &place.root,
+            PlaceRoot::Local { name, .. } if name == "count"
+        )));
+        assert!(output.places.iter().any(|place| matches!(
+            &place.root,
+            PlaceRoot::Local { name, .. } if name == "limit"
+        )));
+        assert!(output.operations.iter().any(|operation| matches!(
+            operation.kind,
+            MirOperationKind::Assign {
+                mode: AssignMode::PartialWrite,
+                ..
+            }
+        )));
     }
 
     #[test]

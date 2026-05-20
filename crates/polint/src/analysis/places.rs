@@ -71,7 +71,42 @@ pub(crate) struct PlaceTableBuilder {
     places: BTreeMap<String, PlaceDraft>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlaceStableContext {
+    file_key: String,
+    function_key: String,
+    body_key: String,
+}
+
+impl PlaceStableContext {
+    pub(crate) fn new(
+        file_key: impl Into<String>,
+        function_key: impl Into<String>,
+        body_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            file_key: file_key.into(),
+            function_key: function_key.into(),
+            body_key: body_key.into(),
+        }
+    }
+
+    pub(crate) fn file_key(&self) -> &str {
+        &self.file_key
+    }
+
+    pub(crate) fn body_key(&self) -> &str {
+        &self.body_key
+    }
+
+    #[cfg(test)]
+    fn for_test() -> Self {
+        Self::new("test-file", "test-function", "test-body")
+    }
+}
+
 impl PlaceTableBuilder {
+    #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
         language: Language,
@@ -81,7 +116,28 @@ impl PlaceTableBuilder {
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        let stable_key = stable_key_for(language, file, function, &root, &projections);
+        self.insert_with_context(
+            language,
+            file,
+            function,
+            &PlaceStableContext::for_test(),
+            root,
+            projections,
+            status,
+        )
+    }
+
+    pub(crate) fn insert_with_context(
+        &mut self,
+        language: Language,
+        file: Option<FileId>,
+        function: Option<FunctionId>,
+        context: &PlaceStableContext,
+        root: PlaceRoot,
+        projections: Vec<PlaceProjection>,
+        status: PlaceStatus,
+    ) -> String {
+        let stable_key = stable_key_for(language, context, &root, &projections);
         self.places
             .entry(stable_key.clone())
             .or_insert_with(|| PlaceDraft {
@@ -125,24 +181,20 @@ struct PlaceDraft {
 
 fn stable_key_for(
     language: Language,
-    file: Option<FileId>,
-    function: Option<FunctionId>,
+    context: &PlaceStableContext,
     root: &PlaceRoot,
     projections: &[PlaceProjection],
 ) -> String {
     let mut parts = vec![
         ("language".to_string(), format!("{language:?}")),
-        (
-            "file".to_string(),
-            optional_id(file.map(|id| u64::from(id.0))),
-        ),
-        ("function".to_string(), optional_id(function.map(|id| id.0))),
+        ("file".to_string(), context.file_key.clone()),
+        ("function".to_string(), context.function_key.clone()),
         (
             "projection_count".to_string(),
             projections.len().to_string(),
         ),
     ];
-    add_root_parts(&mut parts, root);
+    add_root_parts(&mut parts, context, root);
     for (index, projection) in projections.iter().enumerate() {
         parts.push((projection_label(index), projection_part(projection)));
     }
@@ -154,39 +206,33 @@ fn stable_key_for(
     stable_key.into_string()
 }
 
-fn add_root_parts(parts: &mut Vec<(String, String)>, root: &PlaceRoot) {
+fn add_root_parts(
+    parts: &mut Vec<(String, String)>,
+    context: &PlaceStableContext,
+    root: &PlaceRoot,
+) {
     match root {
-        PlaceRoot::Local { function, name } => {
+        PlaceRoot::Local { name, .. } => {
             parts.push(("root_kind".to_string(), "local".to_string()));
-            parts.push(("root_function".to_string(), function.0.to_string()));
             parts.push(("root_name".to_string(), name.clone()));
         }
-        PlaceRoot::Parameter {
-            function,
-            index,
-            name,
-        } => {
+        PlaceRoot::Parameter { index, name, .. } => {
             parts.push(("root_kind".to_string(), "parameter".to_string()));
-            parts.push(("root_function".to_string(), function.0.to_string()));
             parts.push(("parameter_index".to_string(), index.to_string()));
             parts.push(("root_name".to_string(), name.clone().unwrap_or_default()));
         }
-        PlaceRoot::Global { symbol, name } => {
+        PlaceRoot::Global { name, .. } => {
             parts.push(("root_kind".to_string(), "global".to_string()));
-            parts.push((
-                "root_symbol".to_string(),
-                optional_id(symbol.map(|id| id.0)),
-            ));
             parts.push(("root_name".to_string(), name.clone()));
         }
-        PlaceRoot::Temporary { body, ordinal } => {
+        PlaceRoot::Temporary { ordinal, .. } => {
             parts.push(("root_kind".to_string(), "temporary".to_string()));
-            parts.push(("root_body".to_string(), body.0.to_string()));
+            parts.push(("root_body".to_string(), context.body_key.clone()));
             parts.push(("temporary_ordinal".to_string(), ordinal.to_string()));
         }
         PlaceRoot::CallReturn { call } => {
             parts.push(("root_kind".to_string(), "call_return".to_string()));
-            parts.push(("call_site".to_string(), call.0.to_string()));
+            parts.push(("call_start_byte".to_string(), call.0.to_string()));
         }
         PlaceRoot::Unknown { evidence } => {
             parts.push(("root_kind".to_string(), "unknown".to_string()));
@@ -207,13 +253,9 @@ fn projection_part(projection: &PlaceProjection) -> String {
         PlaceProjection::IndexUnknown { evidence } => format!("index_unknown:{evidence}"),
         PlaceProjection::Deref => "deref".to_string(),
         PlaceProjection::AwaitResult => "await_result".to_string(),
-        PlaceProjection::CallReturn(call) => format!("call_return:{}", call.0),
+        PlaceProjection::CallReturn(call) => format!("call_return_start_byte:{}", call.0),
         PlaceProjection::Unknown { evidence } => format!("unknown:{evidence}"),
     }
-}
-
-fn optional_id(value: Option<u64>) -> String {
-    value.map_or_else(|| "none".to_string(), |id| id.to_string())
 }
 
 #[cfg(test)]
@@ -356,5 +398,47 @@ mod tests {
         assert!(places[0].stable_key < places[1].stable_key);
         assert!(!places[0].stable_key.contains("place_id"));
         assert!(!places[1].stable_key.contains("PlaceId"));
+    }
+
+    #[test]
+    fn place_stable_keys_use_stable_context_not_dense_run_ids() {
+        let context = PlaceStableContext::new(
+            "src/auth.go",
+            "function:auth.Authorize:stable",
+            "body:auth.Authorize:stable",
+        );
+        let mut first = PlaceTableBuilder::default();
+        let first_key = first.insert_with_context(
+            Language::Go,
+            Some(FileId(1)),
+            Some(FunctionId(10)),
+            &context,
+            PlaceRoot::Temporary {
+                body: MirBodyId(4),
+                ordinal: 12,
+            },
+            vec![PlaceProjection::CallReturn(CallSiteId(8))],
+            PlaceStatus::Partial,
+        );
+        let mut second = PlaceTableBuilder::default();
+        let second_key = second.insert_with_context(
+            Language::Go,
+            Some(FileId(99)),
+            Some(FunctionId(77)),
+            &context,
+            PlaceRoot::Temporary {
+                body: MirBodyId(44),
+                ordinal: 12,
+            },
+            vec![PlaceProjection::CallReturn(CallSiteId(8))],
+            PlaceStatus::Partial,
+        );
+
+        assert_eq!(first_key, second_key);
+        assert!(!first_key.contains("FileId"));
+        assert!(!first_key.contains("FunctionId"));
+        assert!(!first_key.contains("MirBodyId"));
+        assert!(!first_key.contains("root_function"));
+        assert!(!first_key.contains("root_symbol"));
     }
 }
