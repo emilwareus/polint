@@ -362,3 +362,183 @@ fact = { family = "ResolvedDependencyEdge", stable_key = "edge:missing-lockfile"
         }
     }
 }
+
+#[cfg(test)]
+mod semantic_mir_rows {
+    use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
+    use crate::eval::model::{
+        AssertionMode, ExpectedFact, ExpectedItem, FixtureArea, ObservedFact, ObservedItem,
+        ObservedStatus, SEMANTIC_MIR_FACT_FAMILIES,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn eval_expected_facts_accept_semantic_mir_families_and_partial_status() {
+        assert_eq!(
+            SEMANTIC_MIR_FACT_FAMILIES,
+            ["MirBody", "MirOperation", "Place", "UnsupportedSemantic"]
+        );
+
+        let manifest = r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "semantic-mir-row-model"
+area = "semantic-mir"
+
+[repo]
+path = "repo"
+
+[[expected]]
+fact = { family = "MirBody", stable_key = "body:handler", mode = "partial", producer_id = "polint.semantic_mir", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "MirOperation", stable_key = "op:branch", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "root_kind:parameter", mode = "partial", producer_id = "polint.semantic_mir", precision = "setup_aware", status = "unknown" }
+
+[[expected]]
+fact = { family = "UnsupportedSemantic", stable_key = "unsupported:eval", mode = "partial", producer_id = "polint.semantic_mir", precision = "unsupported", status = "unsupported" }
+"#;
+
+        let parsed: crate::eval::fixtures::NativeFixtureManifest =
+            toml::from_str(manifest).expect("semantic MIR expected facts should parse");
+
+        assert_eq!(parsed.area, FixtureArea::SemanticMir);
+        assert_eq!(parsed.expected.len(), 4);
+    }
+
+    #[test]
+    fn observed_semantic_mir_debug_rows_normalize_to_fact_rows_with_compact_payloads() {
+        let debug = json!({
+            "mir": {
+                "bodies": [{
+                    "family": "MirBody",
+                    "stable_key": "mir-body:src/app.ts:handler",
+                    "producer_id": "polint.semantic_mir",
+                    "layer_id": "polint.semantic_mir",
+                    "status": "resolved",
+                    "precision": "setup_aware",
+                    "path": "src/app.ts",
+                    "span": {
+                        "start_byte": 0,
+                        "end_byte": 16,
+                        "start_line": 1,
+                        "start_col": 1,
+                        "end_line": 1,
+                        "end_col": 17
+                    },
+                    "owner_function": 7
+                }],
+                "operations": [{
+                    "family": "MirOperation",
+                    "stable_key": "mir-op:src/app.ts:handler:branch",
+                    "producer_id": "polint.semantic_mir",
+                    "layer_id": "polint.semantic_mir",
+                    "status": "partial",
+                    "precision": "heuristic",
+                    "path": "src/app.ts",
+                    "span": {
+                        "start_byte": 20,
+                        "end_byte": 32,
+                        "start_line": 2,
+                        "start_col": 3,
+                        "end_line": 2,
+                        "end_col": 15
+                    },
+                    "owner_function": 7,
+                    "operation_kind": "branch"
+                }],
+                "places": [{
+                    "family": "Place",
+                    "stable_key": "place:src/app.ts:handler:parameter:0:user",
+                    "producer_id": "polint.semantic_mir",
+                    "layer_id": "polint.semantic_mir",
+                    "status": "unknown",
+                    "precision": "setup_aware",
+                    "path": "src/app.ts",
+                    "owner_function": 7,
+                    "place_root": "parameter:0:user",
+                    "place_projections": ["property:name", "index_known:0"]
+                }],
+                "unsupported": [{
+                    "family": "UnsupportedSemantic",
+                    "stable_key": "unsupported:src/app.ts:eval",
+                    "producer_id": "polint.semantic_mir",
+                    "layer_id": "polint.semantic_mir",
+                    "status": "unsupported",
+                    "precision": "unsupported",
+                    "path": "src/app.ts",
+                    "span": {
+                        "start_byte": 44,
+                        "end_byte": 55,
+                        "start_line": 4,
+                        "start_col": 5,
+                        "end_line": 4,
+                        "end_col": 16
+                    },
+                    "owner_function": 7,
+                    "unsupported_construct": "eval",
+                    "conservative_action": "havoc_affected_places"
+                }]
+            }
+        });
+
+        let observed = crate::eval::observed::semantic_mir_facts_for_test(&debug);
+
+        for family in SEMANTIC_MIR_FACT_FAMILIES {
+            assert!(
+                observed.iter().any(|item| matches!(
+                    item,
+                    ObservedItem::Fact(fact) if fact.family == *family
+                )),
+                "missing semantic MIR family {family}: {observed:#?}"
+            );
+        }
+        let rendered = serde_json::to_string(&observed).unwrap();
+        assert!(rendered.contains("path=src/app.ts"));
+        assert!(rendered.contains("span=1:1-1:17"));
+        assert!(rendered.contains("owner=7"));
+        assert!(rendered.contains("kind=branch"));
+        assert!(rendered.contains("root=parameter:0:user"));
+        assert!(rendered.contains("projections=property:name>index_known:0"));
+        assert!(rendered.contains("construct=eval"));
+        assert!(rendered.contains("conservative_action=havoc_affected_places"));
+        for forbidden in ["raw_source", "source_text", "tree_sitter", "oxc_ast", "/tmp/"] {
+            assert!(!rendered.contains(forbidden), "unexpected payload leak: {forbidden}");
+        }
+    }
+
+    #[test]
+    fn semantic_mir_unknown_like_statuses_match_as_unknown_metrics() {
+        for status in [
+            ObservedStatus::Partial,
+            ObservedStatus::Unknown,
+            ObservedStatus::Unsupported,
+        ] {
+            let summaries = match_case(
+                &[ExpectedItem::Fact(ExpectedFact {
+                    family: "MirOperation".to_string(),
+                    stable_key: "handler".to_string(),
+                    mode: AssertionMode::Partial,
+                    producer_id: Some("polint.semantic_mir".to_string()),
+                    precision: None,
+                    status: Some(status),
+                    false_positive_trap: false,
+                })],
+                &[ObservedItem::Fact(ObservedFact {
+                    family: "MirOperation".to_string(),
+                    stable_key: "mir-op:handler:branch".to_string(),
+                    mode: AssertionMode::Exact,
+                    producer_id: Some("polint.semantic_mir".to_string()),
+                    provenance: Some("kernel.metadata_debug_json.mir".to_string()),
+                    precision: Some("heuristic".to_string()),
+                    status: Some(status),
+                    payload: None,
+                })],
+                MatcherConfig::default(),
+            );
+
+            assert_eq!(summaries[0].outcome, MatchOutcome::Unknown);
+        }
+    }
+}
