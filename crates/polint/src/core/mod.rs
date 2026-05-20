@@ -1,3 +1,8 @@
+use crate::analysis::error::AnalysisError;
+use crate::analysis::mir::body::{MirBody, MirOutput};
+use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+use crate::analysis::places::PlaceFact;
+use crate::analysis::store::SemanticStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
@@ -599,6 +604,7 @@ pub struct AnalysisDb {
     ts_classes: Vec<TsClassFact>,
     string_literals: Vec<StringLiteralFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
+    semantic: Option<SemanticStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -884,6 +890,11 @@ impl AnalysisDb {
         self.stable_exports = stable_exports;
         self.rebuild_semantic_index_indexes();
         self.refresh_semantic_index_metadata();
+    }
+
+    pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
+        self.semantic = Some(SemanticStore::from_output(output)?);
+        Ok(())
     }
 
     fn refresh_module_graph_metadata(&mut self) {
@@ -1673,6 +1684,28 @@ impl AnalysisDb {
 
     pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
         &self.stable_exports
+    }
+
+    pub(crate) fn semantic_store(&self) -> Option<&SemanticStore> {
+        self.semantic.as_ref()
+    }
+
+    pub(crate) fn mir_bodies(&self) -> &[MirBody] {
+        self.semantic_store().map_or(&[], SemanticStore::mir_bodies)
+    }
+
+    pub(crate) fn mir_operations(&self) -> &[MirOperation] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::mir_operations)
+    }
+
+    pub(crate) fn mir_places(&self) -> &[PlaceFact] {
+        self.semantic_store().map_or(&[], SemanticStore::places)
+    }
+
+    pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::unsupported_semantics)
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
@@ -3696,14 +3729,14 @@ mod tests {
     fn test_unsupported(stable_key: &str) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: UnsupportedId(9),
-            body: Some(MirBodyId(9)),
-            operation: Some(MirOpId(9)),
+            body: None,
+            operation: None,
             language: Language::TypeScript,
             file: FileId(0),
             span: test_span(FileId(0), 1),
             construct: "dynamic-property".to_string(),
             source_evidence: "target[key]".to_string(),
-            affected_places: vec![PlaceId(9)],
+            affected_places: Vec::new(),
             affected_domains: vec![UnsupportedDomain::Mir],
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
@@ -3776,15 +3809,22 @@ mod tests {
                     test_mir_body(20, file, "body:z"),
                     test_mir_body(10, file, "body:a"),
                 ],
-                places: vec![test_place(20, file, "place:z"), test_place(10, file, "place:a")],
+                places: vec![
+                    test_place(20, file, "place:z"),
+                    test_place(10, file, "place:a"),
+                ],
                 operations: vec![
                     test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
                     test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
                 ],
-                unsupported: vec![test_unsupported("unsupported:z"), test_unsupported("unsupported:a")],
+                unsupported: vec![
+                    test_unsupported("unsupported:z"),
+                    test_unsupported("unsupported:a"),
+                ],
             };
 
-            db.replace_semantic_mir(output).expect("semantic MIR replace");
+            db.replace_semantic_mir(output)
+                .expect("semantic MIR replace");
 
             assert_eq!(
                 db.mir_bodies()
@@ -3819,6 +3859,31 @@ mod tests {
                     (UnsupportedId(0), "unsupported:a"),
                     (UnsupportedId(1), "unsupported:z"),
                 ]
+            );
+            let store = db.semantic_store().expect("semantic store exists");
+            assert_eq!(
+                store
+                    .mir_body(MirBodyId(1))
+                    .map(|body| body.stable_key.as_str()),
+                Some("body:z")
+            );
+            assert_eq!(
+                store
+                    .mir_operation(MirOpId(0))
+                    .map(|operation| operation.stable_key.as_str()),
+                Some("op:a")
+            );
+            assert_eq!(
+                store
+                    .place(PlaceId(0))
+                    .map(|place| place.stable_key.as_str()),
+                Some("place:a")
+            );
+            assert_eq!(
+                store
+                    .unsupported_semantic(UnsupportedId(1))
+                    .map(|row| row.stable_key.as_str()),
+                Some("unsupported:z")
             );
         }
 
