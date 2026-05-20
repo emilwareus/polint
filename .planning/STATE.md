@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T17:56:57.373Z"
-last_activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
+last_updated: "2026-05-20T18:02:47.944Z"
+last_activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 progress:
   total_phases: 22
   completed_phases: 9
   total_plans: 52
-  completed_plans: 50
-  percent: 96
+  completed_plans: 51
+  percent: 98
 ---
 
 # State: polint
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 29
 Phase: 29 (Local CFG and Control Dependence) — EXECUTING
-Plan: 5 of 6
-Last activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
+Plan: 6 of 6
+Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 
 ## Phase Progress
 
@@ -58,7 +58,7 @@ Last activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
-| 29 | In Progress | 4/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, and Go CFG lowering done; requirement SAE-SEM-04 |
+| 29 | In Progress | 5/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, and TS/JS CFG lowering done; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
@@ -220,6 +220,9 @@ Last activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
 - [Phase 29-local-cfg-and-control-dependence]: Lower Go CFG from private semantic MIR rows and keep raw tree-sitter AST objects out of CFG facts.
 - [Phase 29-local-cfg-and-control-dependence]: Keep language CFG lowerers responsible for base nodes/edges only; shared provider code derives reachability, dominance, postdominance, and control dependence.
 - [Phase 29-local-cfg-and-control-dependence]: Represent Go spawn, defer, panic, select, goto, fallthrough, and unsupported semantics with typed CFG edges or unsupported control-flow rows instead of exact claims.
+- [Phase 29-local-cfg-and-control-dependence]: Lower TS/JS CFG from private semantic MIR rows and keep Oxc AST/span objects out of CFG facts.
+- [Phase 29-local-cfg-and-control-dependence]: Merge language base CFG outputs with deterministic run-local ID offsets before deriving shared CFG analyses.
+- [Phase 29-local-cfg-and-control-dependence]: Represent TS/JS dynamic, async, cleanup, optional/nullish, throw, and unsupported semantics with typed CFG edges or unsupported control-flow rows instead of exact scheduler/runtime claims.
 
 ## Execution Metrics
 
@@ -265,12 +268,13 @@ Last activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
 | 29-local-cfg-and-control-dependence | 02 | 24 min | 3 | 4 |
 | 29-local-cfg-and-control-dependence | 03 | 34 min | 3 | 12 |
 | 29-local-cfg-and-control-dependence | 04 | 28 min | 2 | 4 |
+| 29-local-cfg-and-control-dependence | 05 | 31 min | 2 | 3 |
 
 ## Session
 
 - Last session: 2026-05-20
 - Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
-- Stopped at: Phase 29 plan 04 completed; ready for 29-05 TS/JS CFG lowering.
+- Stopped at: Phase 29 plan 05 completed; ready for 29-06 eval fixtures and public-boundary proof.
 
 ### Quick Tasks Completed
 
@@ -294,4 +298,4 @@ Last activity: 2026-05-20 -- Phase 29 plan 04 completed; ready for plan 05
 
 ## Next Action
 
-Phase 29 plan 05 is next: lower TS/JS semantic MIR into CFG rows through the private `polint.cfg` provider.
+Phase 29 plan 06 is next: add CFG/control-dependence eval fixtures, public-boundary proof, and docs alignment.
