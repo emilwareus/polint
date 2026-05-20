@@ -3,10 +3,10 @@ use std::fmt::Debug;
 
 use serde::Serialize;
 
+use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
-use crate::analysis::validate::validate_semantic_mir;
 use crate::core::{
     AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ResolvedImportId,
     Span, SymbolId,
@@ -38,6 +38,7 @@ pub(crate) fn validate_fact_metadata(
     validate_spans(db, &ids.files, &mut diagnostics);
     validate_semantic_index(db, &ids, &mut diagnostics);
     validate_topology_facts(db, &ids, &mut diagnostics);
+    validate_semantic_mir(db, &ids, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
@@ -173,8 +174,7 @@ mod semantic_mir {
                     .message
                     .starts_with("Semantic MIR validation failed")
                     && diagnostic.evidence.iter().any(|evidence| {
-                        evidence.label == "reason"
-                            && evidence.value.contains("precision ceiling")
+                        evidence.label == "reason" && evidence.value.contains("precision ceiling")
                     })
             }),
             "expected semantic MIR precision ceiling diagnostic: {diagnostics:#?}"

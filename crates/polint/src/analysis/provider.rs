@@ -83,7 +83,11 @@ fn semantic_mir_output_digest(
         format!("module_topology={module_topology_output_digest}"),
         format!("symbol_graph={symbol_graph_output_digest}"),
     ];
-    extend_component_parts(&mut parts, "go_lifecycle", &input_snapshot.go_lifecycle.components);
+    extend_component_parts(
+        &mut parts,
+        "go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
     extend_component_parts(
         &mut parts,
         "ts_js_lifecycle",
@@ -148,7 +152,11 @@ fn semantic_mir_output_digest(
 
     parts.sort();
     let digest_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir_output", &digest_refs)
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "semantic_mir_output",
+        &digest_refs,
+    )
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
@@ -174,7 +182,10 @@ fn place_root_fragment(root: &PlaceRoot) -> String {
             function,
             index,
             name,
-        } => format!("parameter:{function:?}:{index}:{}", name.as_deref().unwrap_or("")),
+        } => format!(
+            "parameter:{function:?}:{index}:{}",
+            name.as_deref().unwrap_or("")
+        ),
         PlaceRoot::Global { symbol, name } => format!("global:{symbol:?}:{name}"),
         PlaceRoot::Temporary { body, ordinal } => format!("temporary:{body:?}:{ordinal}"),
         PlaceRoot::CallReturn { call } => format!("call_return:{call:?}"),
@@ -297,10 +308,7 @@ mod semantic_mir_provider {
             output.db.mir_bodies().len() >= 2,
             "expected Go and TS MIR bodies"
         );
-        assert!(
-            output.db.mir_places().len() >= 2,
-            "expected lowered places"
-        );
+        assert!(output.db.mir_places().len() >= 2, "expected lowered places");
         assert!(
             output.db.mir_operations().len() >= 2,
             "expected lowered operations"

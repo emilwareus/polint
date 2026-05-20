@@ -3,6 +3,9 @@
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
 };
+use crate::analysis::mir::body::MirStatus;
+use crate::analysis::mir::op::{AssignMode, ConservativeAction, MirOperationKind};
+use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus};
 use crate::core::{
     AnalysisDb, FileId, Language, ReferenceFact, Span, SymbolPrecision, SymbolResolutionStatus,
 };
@@ -471,6 +474,149 @@ fn mir_report(db: &AnalysisDb) -> SemanticMirDebugReport {
     }
 }
 
+fn mir_body_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
+    let mut rows = db
+        .mir_bodies()
+        .iter()
+        .filter_map(|body| {
+            mir_metadata_row(db, FactFamily::MirBody, body.id.0).map(|metadata| {
+                SemanticMirDebugRow {
+                    family: FactFamily::MirBody.label(),
+                    run_id: body.id.0,
+                    stable_key: body.stable_key.clone(),
+                    producer_id: metadata.producer_id,
+                    layer_id: metadata.layer_id,
+                    status: mir_status_label(body.status).to_string(),
+                    precision: fact_precision_label(metadata.precision),
+                    path: relative_path(db, Some(body.file)).map(str::to_string),
+                    span: Some(debug_span(&body.span)),
+                    owner_function: Some(body.function.0),
+                    operation_kind: None,
+                    place_root: None,
+                    place_projections: Vec::new(),
+                    unsupported_construct: None,
+                    conservative_action: None,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_mir_rows(&mut rows);
+    rows
+}
+
+fn mir_operation_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
+    let mut rows = db
+        .mir_operations()
+        .iter()
+        .filter_map(|operation| {
+            mir_metadata_row(db, FactFamily::MirOperation, operation.id.0).map(|metadata| {
+                let body = db
+                    .mir_bodies()
+                    .iter()
+                    .find(|body| body.id == operation.body);
+                SemanticMirDebugRow {
+                    family: FactFamily::MirOperation.label(),
+                    run_id: operation.id.0,
+                    stable_key: operation.stable_key.clone(),
+                    producer_id: metadata.producer_id,
+                    layer_id: metadata.layer_id,
+                    status: mir_status_label(operation.status).to_string(),
+                    precision: fact_precision_label(metadata.precision),
+                    path: body
+                        .and_then(|body| relative_path(db, Some(body.file)))
+                        .map(str::to_string),
+                    span: Some(debug_span(&operation.span)),
+                    owner_function: body.map(|body| body.function.0),
+                    operation_kind: Some(operation_kind_label(&operation.kind).to_string()),
+                    place_root: None,
+                    place_projections: Vec::new(),
+                    unsupported_construct: None,
+                    conservative_action: None,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_mir_rows(&mut rows);
+    rows
+}
+
+fn mir_place_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
+    let mut rows = db
+        .mir_places()
+        .iter()
+        .filter_map(|place| {
+            mir_metadata_row(db, FactFamily::Place, place.id.0).map(|metadata| {
+                SemanticMirDebugRow {
+                    family: FactFamily::Place.label(),
+                    run_id: place.id.0,
+                    stable_key: place.stable_key.clone(),
+                    producer_id: metadata.producer_id,
+                    layer_id: metadata.layer_id,
+                    status: place_status_label(place.status).to_string(),
+                    precision: fact_precision_label(metadata.precision),
+                    path: relative_path(db, place.file).map(str::to_string),
+                    span: None,
+                    owner_function: place.function.map(|function| function.0),
+                    operation_kind: None,
+                    place_root: Some(place_root_label(&place.root)),
+                    place_projections: place
+                        .projections
+                        .iter()
+                        .map(place_projection_label)
+                        .collect(),
+                    unsupported_construct: None,
+                    conservative_action: None,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_mir_rows(&mut rows);
+    rows
+}
+
+fn mir_unsupported_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
+    let mut rows = db
+        .unsupported_semantics()
+        .iter()
+        .filter_map(|row| {
+            mir_metadata_row(db, FactFamily::UnsupportedSemantic, row.id.0).map(|metadata| {
+                SemanticMirDebugRow {
+                    family: FactFamily::UnsupportedSemantic.label(),
+                    run_id: row.id.0,
+                    stable_key: row.stable_key.clone(),
+                    producer_id: metadata.producer_id,
+                    layer_id: metadata.layer_id,
+                    status: mir_status_label(row.status).to_string(),
+                    precision: fact_precision_label(metadata.precision),
+                    path: relative_path(db, Some(row.file)).map(str::to_string),
+                    span: Some(debug_span(&row.span)),
+                    owner_function: row
+                        .body
+                        .and_then(|body_id| db.mir_bodies().iter().find(|body| body.id == body_id))
+                        .map(|body| body.function.0),
+                    operation_kind: None,
+                    place_root: None,
+                    place_projections: Vec::new(),
+                    unsupported_construct: Some(row.construct.clone()),
+                    conservative_action: Some(
+                        conservative_action_label(row.conservative_action).to_string(),
+                    ),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_mir_rows(&mut rows);
+    rows
+}
+
+fn mir_metadata_row(
+    db: &AnalysisDb,
+    family: FactFamily,
+    run_id: u64,
+) -> Option<&FactMeta> {
+    db.metadata_for(FactRef::new(family, run_id))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "semantic debug rows normalize several distinct internal fact families"
@@ -534,6 +680,23 @@ fn sort_semantic_rows(rows: &mut [SemanticDebugRow]) {
                 right.name.as_deref().unwrap_or(""),
                 right.export_name.as_deref().unwrap_or(""),
                 right.status,
+                right.stable_key.as_str(),
+                right.run_id,
+            ))
+    });
+}
+
+fn sort_mir_rows(rows: &mut [SemanticMirDebugRow]) {
+    rows.sort_by(|left, right| {
+        (
+            left.path.as_deref().unwrap_or(""),
+            span_start(left.span),
+            left.stable_key.as_str(),
+            left.run_id,
+        )
+            .cmp(&(
+                right.path.as_deref().unwrap_or(""),
+                span_start(right.span),
                 right.stable_key.as_str(),
                 right.run_id,
             ))
@@ -662,6 +825,90 @@ fn semantic_status_label(status: SemanticStatus) -> &'static str {
         SemanticStatus::External => "external",
         SemanticStatus::SetupMissing => "setup_missing",
         SemanticStatus::Unsupported => "unsupported",
+    }
+}
+
+fn mir_status_label(status: MirStatus) -> &'static str {
+    match status {
+        MirStatus::Resolved => "resolved",
+        MirStatus::Partial => "partial",
+        MirStatus::Unknown => "unknown",
+        MirStatus::Unsupported => "unsupported",
+    }
+}
+
+fn place_status_label(status: PlaceStatus) -> &'static str {
+    match status {
+        PlaceStatus::Resolved => "resolved",
+        PlaceStatus::Partial => "partial",
+        PlaceStatus::Unknown => "unknown",
+        PlaceStatus::Unsupported => "unsupported",
+    }
+}
+
+fn operation_kind_label(kind: &MirOperationKind) -> &'static str {
+    match kind {
+        MirOperationKind::StorageLive { .. } => "storage_live",
+        MirOperationKind::Bind { .. } => "bind",
+        MirOperationKind::Assign { mode, .. } => match mode {
+            AssignMode::DeclarationBinding => "assign:declaration_binding",
+            AssignMode::Overwrite => "assign:overwrite",
+            AssignMode::PartialWrite => "assign:partial_write",
+            AssignMode::Simultaneous => "assign:simultaneous",
+            AssignMode::ProjectionMutation => "assign:projection_mutation",
+            AssignMode::UnknownWrite => "assign:unknown_write",
+        },
+        MirOperationKind::Read { .. } => "read",
+        MirOperationKind::Write { .. } => "write",
+        MirOperationKind::Branch { .. } => "branch",
+        MirOperationKind::Call { .. } => "call",
+        MirOperationKind::Return { .. } => "return",
+        MirOperationKind::Unsupported { .. } => "unsupported",
+    }
+}
+
+fn place_root_label(root: &PlaceRoot) -> String {
+    match root {
+        PlaceRoot::Local { name, .. } => format!("local:{name}"),
+        PlaceRoot::Parameter { index, name, .. } => {
+            format!(
+                "parameter:{index}:{}",
+                name.as_deref().unwrap_or("<anonymous>")
+            )
+        }
+        PlaceRoot::Global { symbol, name } => {
+            format!(
+                "global:{}:{name}",
+                symbol.map_or_else(|| "none".to_string(), |symbol| symbol.0.to_string())
+            )
+        }
+        PlaceRoot::Temporary { body, ordinal } => {
+            format!("temporary:{}:{ordinal}", body.0)
+        }
+        PlaceRoot::CallReturn { call } => format!("call_return:{}", call.0),
+        PlaceRoot::Unknown { evidence } => format!("unknown:{evidence}"),
+    }
+}
+
+fn place_projection_label(projection: &PlaceProjection) -> String {
+    match projection {
+        PlaceProjection::Field(name) => format!("field:{name}"),
+        PlaceProjection::Property(name) => format!("property:{name}"),
+        PlaceProjection::IndexKnown(index) => format!("index_known:{index}"),
+        PlaceProjection::IndexUnknown { evidence } => format!("index_unknown:{evidence}"),
+        PlaceProjection::Deref => "deref".to_string(),
+        PlaceProjection::AwaitResult => "await_result".to_string(),
+        PlaceProjection::CallReturn(call) => format!("call_return:{}", call.0),
+        PlaceProjection::Unknown { evidence } => format!("unknown:{evidence}"),
+    }
+}
+
+fn conservative_action_label(action: ConservativeAction) -> &'static str {
+    match action {
+        ConservativeAction::SkipOperation => "skip_operation",
+        ConservativeAction::HavocAffectedPlaces => "havoc_affected_places",
+        ConservativeAction::PreserveWithUnknownValue => "preserve_with_unknown_value",
+        ConservativeAction::StopLowering => "stop_lowering",
     }
 }
 
@@ -826,6 +1073,137 @@ export const value = answer();
         );
 
         AnalysisKernel::metadata_debug_json_for_test(&output.db)
+    }
+}
+
+mod semantic_mir_debug_json {
+    use super::super::AnalysisKernel;
+    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{
+        AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+        UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    };
+    use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use std::path::PathBuf;
+
+    #[test]
+    fn metadata_debug_json_contains_deterministic_semantic_mir_rows() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app(value: number) { return value + 1; }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span(file, 0, 54),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file,
+                function: FunctionId(0),
+                package: None,
+                module: None,
+                owner_stable_key: "function:app".to_string(),
+                span: span(file, 0, 54),
+                stable_key: "body:app".to_string(),
+                status: MirStatus::Partial,
+            }],
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                function: Some(FunctionId(0)),
+                root: PlaceRoot::Local {
+                    function: FunctionId(0),
+                    name: "value".to_string(),
+                },
+                projections: vec![PlaceProjection::Property("count".to_string())],
+                stable_key: "place:value".to_string(),
+                status: PlaceStatus::Partial,
+            }],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(file, 38, 51),
+                kind: MirOperationKind::Assign {
+                    place: PlaceId(0),
+                    value: MirValue::Literal {
+                        value: "1".to_string(),
+                    },
+                    mode: AssignMode::Overwrite,
+                },
+                stable_key: "op:assign".to_string(),
+                status: MirStatus::Partial,
+            }],
+            unsupported: vec![UnsupportedSemanticFact {
+                id: UnsupportedId(0),
+                body: Some(MirBodyId(0)),
+                operation: Some(MirOpId(0)),
+                language: Language::TypeScript,
+                file,
+                span: span(file, 38, 51),
+                construct: "dynamic-write".to_string(),
+                source_evidence: "value + 1".to_string(),
+                affected_places: vec![PlaceId(0)],
+                affected_domains: vec![UnsupportedDomain::Mir],
+                conservative_action: ConservativeAction::HavocAffectedPlaces,
+                precision: UnsupportedPrecision::Unsupported,
+                status: MirStatus::Unsupported,
+                stable_key: "unsupported:dynamic-write".to_string(),
+            }],
+        })
+        .expect("store semantic MIR rows");
+
+        let report = AnalysisKernel::metadata_debug_json_for_test(&db);
+        let mir = report["mir"]
+            .as_object()
+            .unwrap_or_else(|| panic!("missing semantic MIR debug object: {report:#?}"));
+
+        for key in ["bodies", "operations", "places", "unsupported"] {
+            let rows = mir
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .unwrap_or_else(|| panic!("missing mir.{key} rows: {mir:#?}"));
+            assert_eq!(rows.len(), 1, "unexpected mir.{key} row count: {mir:#?}");
+        }
+        assert_eq!(mir["bodies"][0]["path"], "src/app.ts");
+        assert_eq!(mir["operations"][0]["operation_kind"], "assign:overwrite");
+        assert_eq!(mir["places"][0]["place_root"], "local:value");
+        assert_eq!(
+            mir["unsupported"][0]["conservative_action"],
+            "havoc_affected_places"
+        );
+        assert!(
+            !serde_json::to_string(&report)
+                .expect("serialize report")
+                .contains(env!("CARGO_MANIFEST_DIR")),
+            "debug JSON should not leak absolute paths: {report:#?}"
+        );
+    }
+
+    fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: end_byte + 1,
+        }
     }
 }
 

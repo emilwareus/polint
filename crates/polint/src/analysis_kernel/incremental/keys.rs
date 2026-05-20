@@ -1891,7 +1891,11 @@ mod tests {
             let rule_code = Digest::from_parts(DigestKind::RuleCode, "rule", &["changed"]);
 
             assert_eq!(base.layer_kind, LayerKind::SemanticMir);
-            assert!(base.toolchain_digest.to_string().contains("tool_invocation"));
+            assert!(
+                base.toolchain_digest
+                    .to_string()
+                    .contains("tool_invocation")
+            );
             assert!(base.extension_digests.contains(&Digest::absent(
                 DigestKind::ExtensionCode,
                 "extension_digest_absent"

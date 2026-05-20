@@ -143,9 +143,6 @@ fn normalize_unsupported(
     rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
     let mut unsupported_ids = BTreeMap::new();
     for (index, row) in rows.iter_mut().enumerate() {
-        if !row.is_complete() {
-            return Err(invalid_fact("incomplete unsupported semantic row"));
-        }
         let new_id = UnsupportedId(index as u64);
         unsupported_ids.insert(row.id, new_id);
         row.id = new_id;
