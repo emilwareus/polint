@@ -15,7 +15,8 @@
 - Updated the SARIF upload action to CodeQL v4 to remove the Node 20 / CodeQL
   v3 deprecation warning.
 - Tightened release dry-run triggers so PR branches do not run duplicate push
-  and pull_request dry-runs for the same commit, and added Rust caching there.
+  and pull_request dry-runs for the same commit, and added Rust caching there
+  while keeping explicit cross-target std installation for CLI release builds.
 
 ## Local Verification
 
