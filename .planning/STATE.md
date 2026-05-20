@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T18:02:47.944Z"
-last_activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
+last_updated: "2026-05-20T18:29:53.278Z"
+last_activity: 2026-05-20 -- Phase 29 completed; ready for Phase 30
 progress:
   total_phases: 22
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 52
-  completed_plans: 51
-  percent: 98
+  completed_plans: 52
+  percent: 100
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 29 — Local CFG and Control Dependence
+**Current focus:** Phase 30 — Direct Call Facts
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 29
-Phase: 29 (Local CFG and Control Dependence) — EXECUTING
-Plan: 6 of 6
-Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
+Status: Ready for Phase 30
+Phase: 30 (Direct Call Facts) — PENDING
+Plan: Planning/execution not started
+Last activity: 2026-05-20 -- Phase 29 completed; ready for Phase 30
 
 ## Phase Progress
 
@@ -58,7 +58,7 @@ Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
-| 29 | In Progress | 5/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, and TS/JS CFG lowering done; requirement SAE-SEM-04 |
+| 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
@@ -223,6 +223,10 @@ Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 - [Phase 29-local-cfg-and-control-dependence]: Lower TS/JS CFG from private semantic MIR rows and keep Oxc AST/span objects out of CFG facts.
 - [Phase 29-local-cfg-and-control-dependence]: Merge language base CFG outputs with deterministic run-local ID offsets before deriving shared CFG analyses.
 - [Phase 29-local-cfg-and-control-dependence]: Represent TS/JS dynamic, async, cleanup, optional/nullish, throw, and unsupported semantics with typed CFG edges or unsupported control-flow rows instead of exact scheduler/runtime claims.
+- [Phase 29-local-cfg-and-control-dependence]: Keep CFG eval support crate-private and test-facing, sourced only from metadata_debug_json_for_test.
+- [Phase 29-local-cfg-and-control-dependence]: Use the existing TOML eval fixture manifest format instead of adding JSON fixture files.
+- [Phase 29-local-cfg-and-control-dependence]: CFG stable keys must use MIR/body stable identity, not run-local CFG IDs, to avoid cross-language and cross-function collisions.
+- [Phase 29-local-cfg-and-control-dependence]: Keep reserved public cfg capability unsupported until a later intentional promotion phase.
 
 ## Execution Metrics
 
@@ -269,12 +273,13 @@ Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 | 29-local-cfg-and-control-dependence | 03 | 34 min | 3 | 12 |
 | 29-local-cfg-and-control-dependence | 04 | 28 min | 2 | 4 |
 | 29-local-cfg-and-control-dependence | 05 | 31 min | 2 | 3 |
+| 29-local-cfg-and-control-dependence | 06 | 68 min | 3 | 19 |
 
 ## Session
 
 - Last session: 2026-05-20
 - Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
-- Stopped at: Phase 29 plan 05 completed; ready for 29-06 eval fixtures and public-boundary proof.
+- Stopped at: Phase 29 completed; ready for Phase 30 direct call facts.
 
 ### Quick Tasks Completed
 
@@ -298,4 +303,4 @@ Last activity: 2026-05-20 -- Phase 29 plan 05 completed; ready for plan 06
 
 ## Next Action
 
-Phase 29 plan 06 is next: add CFG/control-dependence eval fixtures, public-boundary proof, and docs alignment.
+Phase 30 is next: plan and execute direct call facts.
