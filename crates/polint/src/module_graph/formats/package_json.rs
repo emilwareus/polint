@@ -90,6 +90,14 @@ pub(crate) fn parse_package_json(relative_path: &str, contents: &str) -> Package
     manifest
 }
 
+pub(crate) fn unsupported_package_json(relative_path: &str, reason: &str) -> PackageJsonManifest {
+    let mut manifest = empty_manifest(relative_path);
+    manifest
+        .unsupported
+        .push(unsupported(relative_path, reason));
+    manifest
+}
+
 fn empty_manifest(relative_path: &str) -> PackageJsonManifest {
     PackageJsonManifest {
         relative_path: relative_path.to_string(),

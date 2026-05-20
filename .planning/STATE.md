@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T05:44:23Z"
+last_updated: "2026-05-20T09:36:09Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
@@ -43,7 +43,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 28
 Plan: Not started
-Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager topology review findings with TDD tests and deep review
+Last activity: 2026-05-20 - Completed quick task 260520-fpj: Fix remaining go.work repo-boundary issues and run another security review.
 
 ## Phase Progress
 
@@ -225,13 +225,16 @@ Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager topology review findings with TDD tests and deep review.
+- Last activity: 2026-05-20 - Completed quick task 260520-fpj: Fix remaining go.work repo-boundary issues and run another security review.
 - Stopped at: Completed 27-layered-module-package-topology-graph-07-PLAN.md; Phase 27 is complete and Phase 28 is next.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260520-fpj | Fix remaining go.work repo-boundary issues and run another security review | 2026-05-20 | implemented | [260520-fpj-fix-remaining-go-work-repo-boundary-secu](./quick/260520-fpj-fix-remaining-go-work-repo-boundary-secu/) |
+| 260520-da2 | Harden core trust boundaries, add regression tests, and run a secondary deep security review | 2026-05-20 | implemented | [260520-da2-harden-core-trust-boundaries-and-run-sec](./quick/260520-da2-harden-core-trust-boundaries-and-run-sec/) |
+| 260520-c7k | Fix security findings around repo escape reads, workspace glob validation, Go package pattern validation, topology input size limits, and synthetic go.work creation | 2026-05-20 | implemented | [260520-c7k-fix-security-findings-around-repo-escape](./quick/260520-c7k-fix-security-findings-around-repo-escape/) |
 | 260520-ai8 | Fix package-manager topology review findings with TDD tests and deep review | 2026-05-20 | implemented | [260520-ai8-fix-package-manager-topology-review-find](./quick/260520-ai8-fix-package-manager-topology-review-find/) |
 | 260520-a6t | Fix pnpm workspace package-manager review findings | 2026-05-20 | implemented | [260520-a6t-fix-pnpm-workspace-package-manager-revie](./quick/260520-a6t-fix-pnpm-workspace-package-manager-revie/) |
 | 260520-9jr | Fix package-manager topology review findings | 2026-05-20 | implemented | [260520-9jr-fix-package-manager-topology-review-find](./quick/260520-9jr-fix-package-manager-topology-review-find/) |

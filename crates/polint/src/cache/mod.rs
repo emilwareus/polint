@@ -9,6 +9,7 @@ pub(crate) mod keys;
 pub(crate) const CACHE_VERSION: &str = concat!("polint-cache-v1:", env!("CARGO_PKG_VERSION"));
 pub(crate) const POLINT_CACHE_DIR_ENV: &str = "POLINT_CACHE_DIR";
 pub(crate) const POLINT_RULES_TARGET_DIR_ENV: &str = "POLINT_RULES_TARGET_DIR";
+const ANALYSIS_CACHE_MAX_BYTES: u64 = 16 * 1_048_576;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CacheKey {
@@ -93,6 +94,7 @@ pub(crate) enum CacheWriteStatus {
 #[derive(Debug, Clone)]
 pub struct Cache {
     root: PathBuf,
+    repo_root: Option<PathBuf>,
     enabled: bool,
 }
 
@@ -100,6 +102,7 @@ impl Cache {
     pub(crate) fn new(root: impl AsRef<Path>, enabled: bool) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
+            repo_root: None,
             enabled,
         }
     }
@@ -107,9 +110,18 @@ impl Cache {
     /// Used by `polint-bench` (`feature = "bench"`) and in-crate callers.
     #[allow(unreachable_pub)]
     pub fn default_for_repo(repo: impl AsRef<Path>, enabled: bool) -> Self {
-        Self::new(CacheLayout::for_repo(repo).analysis_dir(), enabled)
+        let layout = CacheLayout::for_repo(repo.as_ref());
+        let mut cache = Self::new(layout.analysis_dir(), enabled);
+        if std::env::var_os(POLINT_CACHE_DIR_ENV)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            cache.repo_root = Some(repo.as_ref().to_path_buf());
+        }
+        cache
     }
 
+    #[cfg(test)]
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -128,6 +140,14 @@ impl Cache {
         self.root.join("layers")
     }
 
+    pub(crate) fn layer_cache_store(&self) -> crate::analysis_kernel::incremental::LayerCacheStore {
+        crate::analysis_kernel::incremental::LayerCacheStore::new_with_repo_root(
+            self.layer_cache_dir(),
+            self.enabled,
+            self.repo_root.clone(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn read_json<T>(&self, key: &CacheKey) -> Result<Option<T>>
     where
@@ -137,11 +157,13 @@ impl Cache {
             return Ok(None);
         }
         let path = self.path_for(key);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read cache {}", path.display()))?;
+        let raw = match self.read_cache_file_to_string(&path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) | Err(CacheFileAccess::Unsafe) => return Ok(None),
+            Err(CacheFileAccess::ReadFailed(_)) => {
+                return Err(anyhow::anyhow!("failed to read cache {}", path.display()));
+            }
+        };
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
@@ -164,17 +186,27 @@ impl Cache {
             };
         }
         let path = self.path_for(key);
-        if !path.exists() {
-            return CacheReadOutcome {
-                value: None,
-                status: CacheReadStatus::Miss,
-            };
-        }
-        let Ok(raw) = fs::read_to_string(&path) else {
-            return CacheReadOutcome {
-                value: None,
-                status: CacheReadStatus::Miss,
-            };
+        let raw = match self.read_cache_file_to_string(&path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
+                return CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::Miss,
+                };
+            }
+            Err(CacheFileAccess::Unsafe) => {
+                return CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                };
+            }
+            Err(CacheFileAccess::ReadFailed(managed_path)) => {
+                evict_file(&managed_path);
+                return CacheReadOutcome {
+                    value: None,
+                    status: CacheReadStatus::InvalidEvicted,
+                };
+            }
         };
         match serde_json::from_str(&raw) {
             Ok(value) => CacheReadOutcome {
@@ -211,9 +243,8 @@ impl Cache {
         if !self.enabled {
             return Ok(CacheWriteStatus::Disabled);
         }
-        fs::create_dir_all(&self.root)?;
         let path = self.path_for(key);
-        fs::write(&path, serde_json::to_vec(value)?)
+        self.write_cache_file_atomic(&path, serde_json::to_vec(value)?)
             .with_context(|| format!("failed to write cache {}", path.display()))?;
         Ok(CacheWriteStatus::Written)
     }
@@ -221,6 +252,64 @@ impl Cache {
     fn path_for(&self, key: &CacheKey) -> PathBuf {
         self.root.join(format!("{}.json", key.stable_id()))
     }
+
+    fn read_cache_file_to_string(&self, path: &Path) -> Result<Option<String>, CacheFileAccess> {
+        if let Some(repo_root) = &self.repo_root {
+            let Some(relative_path) = self.repo_relative_path(path) else {
+                return Err(CacheFileAccess::Unsafe);
+            };
+            return match crate::repo_fs::read_repo_file_to_string_with_limit(
+                repo_root,
+                relative_path,
+                ANALYSIS_CACHE_MAX_BYTES,
+            ) {
+                Ok(raw) => Ok(Some(raw)),
+                Err(error) if error.is_not_found() => Ok(None),
+                Err(_) => Err(CacheFileAccess::Unsafe),
+            };
+        }
+        if crate::repo_fs::ensure_no_symlink_ancestors(path).is_err() {
+            return Err(CacheFileAccess::Unsafe);
+        }
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return Ok(None);
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(CacheFileAccess::Unsafe);
+        }
+        let Some(path) = crate::repo_fs::managed_existing_file(&self.root, &self.root, path) else {
+            return Err(CacheFileAccess::Unsafe);
+        };
+        crate::repo_fs::read_file_to_string_with_limit(&path, ANALYSIS_CACHE_MAX_BYTES)
+            .map(Some)
+            .map_err(|_| CacheFileAccess::ReadFailed(path))
+    }
+
+    fn write_cache_file_atomic(
+        &self,
+        path: &Path,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<(), crate::repo_fs::RepoFileReadError> {
+        if let Some(repo_root) = &self.repo_root {
+            let relative_path = self
+                .repo_relative_path(path)
+                .ok_or(crate::repo_fs::RepoFileReadError::EscapesRepo)?;
+            crate::repo_fs::write_repo_file_atomic(repo_root, relative_path, contents)
+        } else {
+            crate::repo_fs::write_file_atomic_no_symlink(path, contents)
+        }
+    }
+
+    fn repo_relative_path(&self, path: &Path) -> Option<PathBuf> {
+        let repo_root = self.repo_root.as_ref()?;
+        let relative_path = path.strip_prefix(repo_root).ok()?;
+        crate::repo_fs::normalize_repo_relative_input(relative_path)
+    }
+}
+
+enum CacheFileAccess {
+    Unsafe,
+    ReadFailed(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -612,6 +701,10 @@ fn remove_cache_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn evict_file(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
 fn remove_empty_dirs(path: &Path) -> Result<bool> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return Ok(false);
@@ -907,6 +1000,26 @@ mod tests {
             assert!(!cache.path_for(&key).exists());
         }
 
+        #[cfg(unix)]
+        #[test]
+        fn read_json_with_status_rejects_symlink_entry_without_following_it() {
+            let temp = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+            fs::create_dir_all(cache.root()).unwrap();
+            fs::write(outside.path().join("entry.json"), r#"{"secret":true}"#).unwrap();
+            std::os::unix::fs::symlink(outside.path().join("entry.json"), cache.path_for(&key))
+                .unwrap();
+
+            let outcome: CacheReadOutcome<serde_json::Value> = cache.read_json_with_status(&key);
+
+            assert_eq!(outcome.status, CacheReadStatus::InvalidEvicted);
+            assert!(outcome.value.is_none());
+            assert!(cache.path_for(&key).exists());
+            assert!(outside.path().join("entry.json").exists());
+        }
+
         #[test]
         fn write_json_preserves_existing_success_contract() {
             let temp = tempfile::tempdir().unwrap();
@@ -920,6 +1033,23 @@ mod tests {
 
             assert_eq!(status, CacheWriteStatus::Written);
             assert_eq!(restored, value);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn write_json_rejects_symlink_cache_parent() {
+            let temp = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), temp.path().join(".polint")).unwrap();
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let key = key();
+
+            let error = cache
+                .write_json_with_status(&key, &json!({ "schema": "go-facts-v1" }))
+                .expect_err("symlink cache parent should fail");
+
+            assert!(format!("{error:#}").contains("path escapes repository root"));
+            assert!(!outside.path().join("cache/analysis").exists());
         }
     }
 

@@ -9,7 +9,10 @@ use crate::module_graph::formats::go_work::parse_go_work;
 use crate::module_graph::model::{
     ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft, ResolverInput,
 };
-use crate::module_graph::paths;
+use crate::module_graph::paths::{
+    self, TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES,
+    read_repo_file_to_string_with_limit, repo_file_exists,
+};
 use crate::module_graph::topology::{
     DependencyRequirementFact, DependencyRequirementId, RequirementKind,
     ResolvedDependencyEdgeFact, ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact,
@@ -270,7 +273,7 @@ pub(crate) fn collect_go_topology(
     for module_root in &config.module_roots {
         let id = WorkspaceRootId(output.workspace_roots.len() as u64);
         let go_mod_path = module_root_manifest_path(module_root, "go.mod");
-        let present = loaded.root.join(&go_mod_path).is_file();
+        let present = repo_file_exists(&loaded.root, &go_mod_path);
         output.workspace_roots.push(WorkspaceRootFact {
             id,
             kind: WorkspaceRootKind::GoModule,
@@ -290,7 +293,7 @@ pub(crate) fn collect_go_topology(
     }
 
     let go_work = loaded.root.join("go.work");
-    if go_work.is_file()
+    if repo_file_exists(&loaded.root, "go.work")
         && lifecycle::go_work_covers_module_roots(&loaded.root, &go_work, &config.module_roots)
     {
         output.workspace_roots.push(WorkspaceRootFact {
@@ -304,7 +307,11 @@ pub(crate) fn collect_go_topology(
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
         });
-        if let Ok(contents) = std::fs::read_to_string(&go_work) {
+        if let Ok(contents) = read_repo_file_to_string_with_limit(
+            &loaded.root,
+            "go.work",
+            TOPOLOGY_MANIFEST_MAX_BYTES,
+        ) {
             let _ = parse_go_work("go.work", &contents);
         }
     }
@@ -316,7 +323,11 @@ pub(crate) fn collect_go_topology(
     let mut module_package_ids = BTreeMap::new();
     for module_root in &config.module_roots {
         let go_mod_path = module_root_manifest_path(module_root, "go.mod");
-        let Ok(contents) = std::fs::read_to_string(loaded.root.join(&go_mod_path)) else {
+        let Ok(contents) = read_repo_file_to_string_with_limit(
+            &loaded.root,
+            &go_mod_path,
+            TOPOLOGY_MANIFEST_MAX_BYTES,
+        ) else {
             continue;
         };
         let manifest = parse_go_mod(&go_mod_path, &contents);
@@ -572,8 +583,9 @@ fn emit_go_sum_edges(
             .get(module_root)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let path = root.join(&go_sum_path);
-        if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(contents) =
+            read_repo_file_to_string_with_limit(root, &go_sum_path, TOPOLOGY_LOCKFILE_MAX_BYTES)
+        {
             for (line_index, line) in contents.lines().enumerate() {
                 if let Some((package_name, resolved_version)) = parse_go_sum_line(line) {
                     output.resolved_dependency_edges.push(ResolvedDependencyEdgeFact {
@@ -890,10 +902,11 @@ fn run_go_list(root: &Path, config: &GoAnalysisConfig) -> GoCommandOutput {
             };
         }
     };
-    command.args(["list", "-json"]);
+    command.args(["list", "-mod=readonly", "-json"]);
     if !config.build_tags.is_empty() {
         command.arg(format!("-tags={}", config.build_tags.join(",")));
     }
+    lifecycle::apply_go_offline_env(&mut command, config.offline);
     command
         .args(config.rooted_package_patterns())
         .output()
@@ -1320,6 +1333,41 @@ mod dependency_topology {
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
                 && edge.stable_key.contains("go-sum-line")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_topology_does_not_read_go_sum_symlink_escape() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(
+            repo.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            outside.path().join("go.sum"),
+            "github.com/acme/lib v1.2.3 h1:abc\n",
+        )
+        .expect("write outside go.sum");
+        std::os::unix::fs::symlink(outside.path().join("go.sum"), repo.path().join("go.sum"))
+            .expect("create symlink");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, repo.path(), "main.go", "package app\n");
+        let loaded = load_config(repo.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(!output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.status == TopologyStatus::Resolved
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.status == TopologyStatus::MissingLockfile
         }));
     }
 

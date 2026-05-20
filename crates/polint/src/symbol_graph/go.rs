@@ -341,6 +341,7 @@ fn run_go_sidecar(root: &Path, config: &GoAnalysisConfig) -> Result<Vec<u8>, GoS
         }
     };
 
+    lifecycle::apply_go_offline_env(&mut command, config.offline);
     let output = command
         .arg("symbols")
         .arg("--root")
@@ -1913,6 +1914,7 @@ include_tests = false
                 package_patterns: vec!["./cmd/...".to_string(), "./pkg/...".to_string()],
                 build_tags: vec!["enterprise".to_string(), "polint".to_string()],
                 include_tests: false,
+                offline: false,
                 files_without_module_root: Vec::new(),
             }
         );

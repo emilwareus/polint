@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 )
 
 const SchemaVersion = "polint-go-symbols-semantic-1"
+const topologyManifestMaxBytes int64 = 1_048_576
 
 type Config struct {
 	Root         string
@@ -170,9 +172,13 @@ func Emit(config Config) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
+	if err := validateModuleRootFiles(root, moduleRoots); err != nil {
+		return Output{}, err
+	}
 	patterns := config.Patterns
-	if len(patterns) == 0 {
-		patterns = []string{"./..."}
+	patterns, err = validatePackagePatterns(patterns)
+	if err != nil {
+		return Output{}, err
 	}
 	patterns = rootedPackagePatterns(moduleRoots, patterns)
 	env, cleanup, err := goPackageEnv(root, moduleRoots)
@@ -197,9 +203,7 @@ func Emit(config Config) (Output, error) {
 		Tests: config.IncludeTests,
 		Env:   env,
 	}
-	if len(config.BuildTags) > 0 {
-		loadConfig.BuildFlags = []string{"-tags=" + strings.Join(config.BuildTags, ",")}
-	}
+	loadConfig.BuildFlags = goBuildFlags(config.BuildTags)
 
 	pkgs, err := packages.Load(loadConfig, patterns...)
 	if err != nil {
@@ -252,6 +256,48 @@ func Emit(config Config) (Output, error) {
 	}
 	e.finish()
 	return e.out, nil
+}
+
+func goBuildFlags(buildTags []string) []string {
+	flags := []string{"-mod=readonly"}
+	if len(buildTags) > 0 {
+		flags = append(flags, "-tags="+strings.Join(buildTags, ","))
+	}
+	return flags
+}
+
+func validatePackagePatterns(patterns []string) ([]string, error) {
+	var normalized []string
+	for _, raw := range patterns {
+		pattern := strings.TrimSpace(raw)
+		if pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(pattern, "-") {
+			return nil, fmt.Errorf("package pattern %q must not start with -", pattern)
+		}
+		normalized = append(normalized, pattern)
+	}
+	if len(normalized) == 0 {
+		return []string{"./..."}, nil
+	}
+	return normalized, nil
+}
+
+func validateModuleRootFiles(root string, moduleRoots []string) error {
+	for _, moduleRoot := range moduleRoots {
+		if !repoRegularFileExists(root, moduleRootManifest(moduleRoot)) {
+			return fmt.Errorf("module root %q is missing an in-repository go.mod", moduleRoot)
+		}
+	}
+	return nil
+}
+
+func moduleRootManifest(moduleRoot string) string {
+	if moduleRoot == "." {
+		return "go.mod"
+	}
+	return filepath.ToSlash(filepath.Join(filepath.FromSlash(moduleRoot), "go.mod"))
 }
 
 func normalizeModuleRoots(roots []string) ([]string, error) {
@@ -324,7 +370,7 @@ func rootedPackagePattern(root string, pattern string) string {
 
 func goPackageEnv(root string, moduleRoots []string) ([]string, func(), error) {
 	env := os.Environ()
-	if path := filepath.Join(root, "go.work"); fileExists(path) && goWorkCoversModuleRoots(path, root, moduleRoots) {
+	if path := filepath.Join(root, "go.work"); repoRegularFileExists(root, "go.work") && goWorkCoversModuleRoots(root, moduleRoots) {
 		env = append(env, "GOWORK="+path)
 		return env, func() {}, nil
 	}
@@ -344,14 +390,15 @@ func needsSyntheticWorkspace(root string, moduleRoots []string) bool {
 	if len(moduleRoots) != 1 || moduleRoots[0] != "." {
 		return true
 	}
-	return !fileExists(filepath.Join(root, "go.mod"))
+	return !repoRegularFileExists(root, "go.mod")
 }
 
-func goWorkCoversModuleRoots(workPath string, root string, moduleRoots []string) bool {
-	contents, err := os.ReadFile(workPath)
+func goWorkCoversModuleRoots(root string, moduleRoots []string) bool {
+	contents, err := readRepoFile(root, "go.work", topologyManifestMaxBytes)
 	if err != nil {
 		return false
 	}
+	workPath := filepath.Join(root, "go.work")
 	workFile, err := modfile.ParseWork(workPath, contents, nil)
 	if err != nil {
 		return false
@@ -359,9 +406,13 @@ func goWorkCoversModuleRoots(workPath string, root string, moduleRoots []string)
 	usedRoots := make(map[string]bool)
 	for _, use := range workFile.Use {
 		usedRoot, ok := goWorkUseRoot(root, use.Path)
-		if ok {
-			usedRoots[usedRoot] = true
+		if !ok {
+			return false
 		}
+		if !repoRegularFileExists(root, moduleRootManifest(usedRoot)) {
+			return false
+		}
+		usedRoots[usedRoot] = true
 	}
 	for _, moduleRoot := range moduleRoots {
 		if !usedRoots[moduleRoot] {
@@ -445,9 +496,73 @@ func workspaceGoVersion() string {
 	return version
 }
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+func repoRegularFileExists(root string, relative string) bool {
+	_, _, err := repoRegularFile(root, relative)
+	return err == nil
+}
+
+func readRepoFile(root string, relative string, maxBytes int64) ([]byte, error) {
+	path, info, err := repoRegularFile(root, relative)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("%s exceeds max size", relative)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	bytes, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(bytes)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds max size", relative)
+	}
+	return bytes, nil
+}
+
+func repoRegularFile(root string, relative string) (string, os.FileInfo, error) {
+	clean, err := cleanRepoRelative(relative)
+	if err != nil {
+		return "", nil, err
+	}
+	path := root
+	parts := strings.Split(clean, string(filepath.Separator))
+	for index, part := range parts {
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", nil, fmt.Errorf("%s escapes repository through a symlink", relative)
+		}
+		if index+1 < len(parts) {
+			if !info.IsDir() {
+				return "", nil, fmt.Errorf("%s has a non-directory ancestor", relative)
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			return "", nil, fmt.Errorf("%s is not a regular repository file", relative)
+		}
+		return path, info, nil
+	}
+	return "", nil, fmt.Errorf("%s is not repository relative", relative)
+}
+
+func cleanRepoRelative(relative string) (string, error) {
+	path := filepath.Clean(filepath.FromSlash(relative))
+	if path == "." || filepath.IsAbs(path) {
+		return "", fmt.Errorf("%s is not repository relative", relative)
+	}
+	if path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s escapes repository", relative)
+	}
+	return path, nil
 }
 
 func (e *emitter) indexSyntax(pkg *packages.Package) {

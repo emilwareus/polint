@@ -62,7 +62,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         config_digest.clone(),
         upstream_syntax_output_digests.clone(),
     );
-    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
@@ -1017,7 +1017,8 @@ mod tests {
             let derivation =
                 derive_metrics_with_cache(&mut db, &loaded, &cache, &plan, "config", "stable");
 
-            assert_eq!(derivation.cache_stats.misses, 1);
+            assert_eq!(derivation.cache_stats.misses, 0);
+            assert_eq!(derivation.cache_stats.invalid_evicted_reads, 1);
             assert_eq!(derivation.cache_stats.recomputes, 1);
             assert_eq!(derivation.cache_stats.writes, 0);
             assert!(derivation.diagnostics.iter().any(|diagnostic| {

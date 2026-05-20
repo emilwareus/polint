@@ -12,7 +12,6 @@ use crate::rule_manifest::{InspectRuleReport, RuleManifestWire};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -264,10 +263,13 @@ fn write_ai_friendly_report(
     diagnostics: &[crate::diagnostics::Diagnostic],
     persisted_diagnostics: &[crate::diagnostics::Diagnostic],
 ) -> Result<crate::diagnostics::AiFriendlyReport> {
-    let polint_dir = root.join(".polint");
-    fs::create_dir_all(polint_dir.join("output"))
-        .with_context(|| format!("failed to create {}", polint_dir.join("output").display()))?;
-    ensure_polint_nested_gitignore(&polint_dir)?;
+    crate::repo_fs::ensure_repo_dir(root, AI_FRIENDLY_OUTPUT_DIR).with_context(|| {
+        format!(
+            "failed to create {}",
+            root.join(AI_FRIENDLY_OUTPUT_DIR).display()
+        )
+    })?;
+    ensure_polint_nested_gitignore(root)?;
     let generated_at = generated_at_label();
     let report = build_ai_friendly_report(
         diagnostics,
@@ -281,20 +283,26 @@ fn write_ai_friendly_report(
     let json = serde_json::to_string_pretty(&report)?;
     let hash = crate::cache::stable_hash(&[&json]);
     let run_name = format!("check-{generated_at}-{}.json", &hash[..12]);
-    let run_path = root.join(AI_FRIENDLY_OUTPUT_DIR).join(run_name);
-    let latest_path = root.join(AI_FRIENDLY_LATEST_OUTPUT);
-    fs::write(&run_path, &json)
-        .with_context(|| format!("failed to write {}", run_path.display()))?;
-    fs::write(&latest_path, json)
-        .with_context(|| format!("failed to write {}", latest_path.display()))?;
+    let run_path = format!("{AI_FRIENDLY_OUTPUT_DIR}/{run_name}");
+    crate::repo_fs::write_repo_file_atomic(root, &run_path, &json)
+        .with_context(|| format!("failed to write {}", root.join(&run_path).display()))?;
+    crate::repo_fs::write_repo_file_atomic(root, AI_FRIENDLY_LATEST_OUTPUT, json).with_context(
+        || {
+            format!(
+                "failed to write {}",
+                root.join(AI_FRIENDLY_LATEST_OUTPUT).display()
+            )
+        },
+    )?;
     Ok(report)
 }
 
-fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
-    let path = polint_dir.join(".gitignore");
+fn ensure_polint_nested_gitignore(root: &Path) -> Result<()> {
+    let path = root.join(".polint/.gitignore");
     const ENTRIES: &[&str] = &["cache/", "output/"];
-    if path.is_file() {
-        let existing = fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+    if let Ok(existing) =
+        crate::repo_fs::read_repo_file_to_string_with_limit(root, ".polint/.gitignore", 1_048_576)
+    {
         if ENTRIES.iter().all(|entry| {
             existing
                 .lines()
@@ -312,10 +320,12 @@ fn ensure_polint_nested_gitignore(polint_dir: &Path) -> Result<()> {
                 out.push('\n');
             }
         }
-        fs::write(&path, out).with_context(|| format!("failed to update {}", path.display()))?;
+        crate::repo_fs::write_repo_file_atomic(root, ".polint/.gitignore", out)
+            .with_context(|| format!("failed to update {}", path.display()))?;
     } else {
         let content = "# polint: local cache and agent output (not shared between checkouts)\ncache/\noutput/\n";
-        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+        crate::repo_fs::write_repo_file_atomic(root, ".polint/.gitignore", content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())
 }

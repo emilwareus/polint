@@ -31,6 +31,7 @@ pub(crate) mod ignores;
 pub(crate) mod metrics;
 pub(crate) mod module_graph;
 pub(crate) mod path_context;
+pub(crate) mod repo_fs;
 pub(crate) mod rule_error;
 pub(crate) mod rule_manifest;
 pub(crate) mod rule_test;
