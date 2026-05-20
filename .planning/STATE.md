@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T18:29:53.278Z"
-last_activity: 2026-05-20 -- Phase 29 completed; ready for Phase 30
+last_updated: "2026-05-20T19:52:45.617Z"
+last_activity: 2026-05-20 -- Phase 29 shipped in PR #34; ready for Phase 30
 progress:
   total_phases: 22
   completed_phases: 10
@@ -34,6 +34,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 - v1.2 roadmap is defined in `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
+- Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
 - Each v1.2 research PR maps to one GSD phase, in order, from Phase 20 through Phase 41.
 - New broad research is not needed by default. Use the relevant research documents referenced by each phase; do additional research only for a concrete implementation gap.
 
@@ -43,7 +44,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready for Phase 30
 Phase: 30 (Direct Call Facts) — PENDING
 Plan: Planning/execution not started
-Last activity: 2026-05-20 -- Phase 29 completed; ready for Phase 30
+Last activity: 2026-05-20 -- Phase 29 shipped in PR #34; ready for Phase 30
 
 ## Phase Progress
 
@@ -279,7 +280,7 @@ Last activity: 2026-05-20 -- Phase 29 completed; ready for Phase 30
 
 - Last session: 2026-05-20
 - Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
-- Stopped at: Phase 29 completed; ready for Phase 30 direct call facts.
+- Stopped at: Phase 29 shipped in PR #34; ready for Phase 30 direct call facts.
 
 ### Quick Tasks Completed
 
