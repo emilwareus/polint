@@ -516,6 +516,42 @@ mod topology {
         );
     }
 
+    #[test]
+    fn topology_validation_accepts_exact_lockfile_for_lockfile_dependency_rows() {
+        let mut db = AnalysisDb::new();
+        db.replace_topology_facts(TopologyOutput {
+            resolved_dependency_edges: [
+                ResolvedDependencyKind::Lockfile,
+                ResolvedDependencyKind::LockfileSelected,
+                ResolvedDependencyKind::ChecksumEvidence,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(index as u64),
+                requirement: None,
+                from_package: None,
+                to_package: None,
+                package_name: format!("package-{index}"),
+                resolved_version: Some("1.0.0".to_string()),
+                kind,
+                stable_key: format!("resolved:package-{index}"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactLockfile,
+                status: TopologyStatus::Resolved,
+            })
+            .collect(),
+            ..TopologyOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            topology_diagnostics(&diagnostics).is_empty(),
+            "expected exact lockfile rows to validate cleanly: {diagnostics:#?}"
+        );
+    }
+
     fn root(path: &str, stable_key: &str) -> WorkspaceRootFact {
         WorkspaceRootFact {
             id: WorkspaceRootId(0),
@@ -1724,6 +1760,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             "WorkspaceRootFact.precision",
             root.precision,
             root.status,
+            false,
         );
     }
 
@@ -1766,6 +1803,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             "TopologyPackageFact.precision",
             package.precision,
             package.status,
+            false,
         );
     }
 
@@ -1810,6 +1848,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             "SourceSetFact.precision",
             source_set.precision,
             source_set.status,
+            false,
         );
     }
 
@@ -1844,6 +1883,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             "DependencyRequirementFact.precision",
             requirement.precision,
             requirement.status,
+            false,
         );
     }
 
@@ -1994,6 +2034,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             "RepoTopologyOverlayFact.precision",
             overlay.precision,
             overlay.status,
+            false,
         );
     }
 }
@@ -2120,14 +2161,13 @@ fn check_resolved_dependency_precision(
     diagnostics: &mut Vec<Diagnostic>,
     edge: &crate::module_graph::topology::ResolvedDependencyEdgeFact,
 ) {
-    if edge.precision == TopologyPrecision::ExactLockfile
-        && !matches!(
-            edge.kind,
-            ResolvedDependencyKind::Lockfile
-                | ResolvedDependencyKind::LockfileSelected
-                | ResolvedDependencyKind::ChecksumEvidence
-        )
-    {
+    let exact_lockfile_allowed = matches!(
+        edge.kind,
+        ResolvedDependencyKind::Lockfile
+            | ResolvedDependencyKind::LockfileSelected
+            | ResolvedDependencyKind::ChecksumEvidence
+    );
+    if edge.precision == TopologyPrecision::ExactLockfile && !exact_lockfile_allowed {
         diagnostics.push(topology_diagnostic(
             FactFamily::ResolvedDependencyEdge,
             edge.stable_key.as_str(),
@@ -2142,6 +2182,7 @@ fn check_resolved_dependency_precision(
         "ResolvedDependencyEdgeFact.precision",
         edge.precision,
         edge.status,
+        exact_lockfile_allowed,
     );
 }
 
@@ -2182,8 +2223,9 @@ fn check_topology_precision(
     field: &'static str,
     precision: TopologyPrecision,
     status: TopologyStatus,
+    exact_lockfile_allowed: bool,
 ) {
-    if precision == TopologyPrecision::ExactLockfile {
+    if precision == TopologyPrecision::ExactLockfile && !exact_lockfile_allowed {
         diagnostics.push(topology_diagnostic(
             family,
             stable_key,

@@ -453,6 +453,76 @@ mod dependency_topology {
     }
 
     #[test]
+    fn collect_ts_topology_scopes_inherited_package_lock_entries_to_workspace_member() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"npm@10.0.0","workspaces":["packages/*"]}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "packages/a/package.json",
+            r#"{"name":"a","dependencies":{"react":"^17.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "packages/b/package.json",
+            r#"{"name":"b","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "package-lock.json",
+            r#"{
+  "lockfileVersion": 3,
+  "packages": {
+    "": { "name": "root", "version": "1.0.0" },
+    "node_modules/react": { "version": "19.0.0" },
+    "packages/a": { "name": "a", "version": "1.0.0" },
+    "packages/a/node_modules/react": { "version": "17.0.2" },
+    "packages/b": { "name": "b", "version": "1.0.0" },
+    "packages/b/node_modules/react": { "version": "18.2.0" }
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/a/src/index.ts",
+            "export {};\n",
+        );
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/b/src/index.ts",
+            "export {};\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let package_a = output
+            .packages
+            .iter()
+            .find(|package| package.path == "packages/a")
+            .expect("package a exists");
+        let package_b = output
+            .packages
+            .iter()
+            .find(|package| package.path == "packages/b")
+            .expect("package b exists");
+
+        assert_eq!(
+            lockfile_versions_for(&output, package_a.id, "react"),
+            vec!["17.0.2".to_string()]
+        );
+        assert_eq!(
+            lockfile_versions_for(&output, package_b.id, "react"),
+            vec!["18.2.0".to_string()]
+        );
+    }
+
+    #[test]
     fn collect_ts_topology_prefers_npm_shrinkwrap_over_package_lock() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_fixture(
@@ -825,6 +895,24 @@ react@^18.0.0:
                 && overlay.precision == TopologyPrecision::Unknown
                 && overlay.status == TopologyStatus::Unsupported
         }));
+    }
+
+    fn lockfile_versions_for(
+        output: &crate::module_graph::topology::TopologyOutput,
+        package_id: crate::module_graph::topology::TopologyPackageId,
+        package_name: &str,
+    ) -> Vec<String> {
+        output
+            .resolved_dependency_edges
+            .iter()
+            .filter(|edge| {
+                edge.from_package == Some(package_id)
+                    && edge.package_name == package_name
+                    && edge.kind == ResolvedDependencyKind::LockfileSelected
+                    && edge.precision == TopologyPrecision::ExactLockfile
+            })
+            .filter_map(|edge| edge.resolved_version.clone())
+            .collect()
     }
 
     fn write_fixture(root: &Path, relative_path: &str, source: &str) -> PathBuf {
@@ -1727,7 +1815,6 @@ fn emit_selected_lockfile_package_edges(
     selection: &JsLockfileSelection,
     manifest: &JsLockfileManifest,
 ) {
-    let importer_path = importer_path_for_package(&selection.root_path, package_path);
     let mut stable_keys = BTreeSet::new();
     for package in &manifest.packages {
         if !lockfile_package_applies_to_package(
@@ -1737,13 +1824,6 @@ fn emit_selected_lockfile_package_edges(
             package_path,
             package,
         ) {
-            continue;
-        }
-        if package
-            .importer_path
-            .as_deref()
-            .is_some_and(|importer| importer != importer_path)
-        {
             continue;
         }
         let stable_key = format!(
@@ -1782,11 +1862,29 @@ fn lockfile_package_applies_to_package(
     package_path: &str,
     package: &JsLockfilePackage,
 ) -> bool {
-    if package.importer_path.is_some() {
+    let importer_path = importer_path_for_package(&selection.root_path, package_path);
+    if let Some(package_importer_path) = package.importer_path.as_deref() {
+        return package_importer_path == importer_path;
+    }
+    if selection.root_path == package_path {
         return true;
     }
-    selection.root_path == package_path
-        || requirement_id_for(output, package_id, &package.name).is_some()
+    package_lock_path_matches_importer(&package.path, &importer_path, &package.name)
+        && requirement_id_for(output, package_id, &package.name).is_some()
+}
+
+fn package_lock_path_matches_importer(
+    package_path: &str,
+    importer_path: &str,
+    package_name: &str,
+) -> bool {
+    let package_entry = if importer_path == "." {
+        package_path.strip_prefix("node_modules/")
+    } else {
+        let prefix = format!("{importer_path}/node_modules/");
+        package_path.strip_prefix(&prefix)
+    };
+    package_entry.is_some_and(|entry| entry == package_name)
 }
 
 fn emit_lockfile_problem_edge(

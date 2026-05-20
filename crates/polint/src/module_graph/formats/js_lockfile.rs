@@ -435,9 +435,9 @@ fn parse_bun_lock(relative_path: &str, contents: &str) -> JsLockfileManifest {
 fn bun_package_version(name: &str, value: &JsonValue) -> Option<String> {
     match value {
         JsonValue::Array(entries) => entries
-            .iter()
-            .filter_map(JsonValue::as_str)
-            .find_map(|entry| version_from_resolution(name, entry)),
+            .first()
+            .and_then(JsonValue::as_str)
+            .and_then(|entry| version_from_resolution(name, entry)),
         JsonValue::Object(object) => {
             object
                 .get("version")
@@ -626,10 +626,10 @@ fn package_name_from_bun_key(key: &str) -> Option<String> {
 
 fn version_from_resolution(package_name: &str, resolution: &str) -> Option<String> {
     let text = resolution.trim().trim_matches('"').trim_matches('\'');
+    let text = text.strip_prefix("npm:").unwrap_or(text);
     let candidate = text
         .strip_prefix(package_name)
-        .and_then(|rest| rest.strip_prefix('@'))
-        .unwrap_or(text);
+        .and_then(|rest| rest.strip_prefix('@'))?;
     let version = candidate
         .strip_prefix("npm:")
         .unwrap_or(candidate)
@@ -637,7 +637,11 @@ fn version_from_resolution(package_name: &str, resolution: &str) -> Option<Strin
         .next()
         .unwrap_or(candidate)
         .trim();
-    (!version.is_empty() && !version.contains(':')).then(|| version.to_string())
+    (!version.is_empty()
+        && !version.contains(':')
+        && !version.contains('/')
+        && version.chars().any(|ch| ch.is_ascii_digit()))
+    .then(|| version.to_string())
 }
 
 fn stable_label(value: &str) -> String {
@@ -734,5 +738,25 @@ __metadata:
         assert_eq!(manifest.schema_label, "bun-lock-v1");
         assert_eq!(manifest.packages[0].name, "react");
         assert_eq!(manifest.packages[0].version, "18.2.0");
+    }
+
+    #[test]
+    fn parse_bun_lock_does_not_treat_artifact_strings_as_versions() {
+        let manifest = parse_bun_lock(
+            "bun.lock",
+            r#"{
+  "lockfileVersion": 1,
+  "packages": {
+    "uWebSockets.js": [
+      "git+https://github.com/uNetworking/uWebSockets.js.git#6609a88",
+      "",
+      {},
+      "uNetworking-uWebSockets.js-6609a88"
+    ]
+  }
+}"#,
+        );
+
+        assert!(manifest.packages.is_empty());
     }
 }
