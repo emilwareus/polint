@@ -9,7 +9,7 @@ use crate::diagnostics::Diagnostic;
 pub(crate) mod incremental;
 mod metadata;
 mod provider;
-mod validation;
+pub(crate) mod validation;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
@@ -177,7 +177,7 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.module_topology"),
             module_dependency_output_digest,
-            symbol_dependency_output_digest,
+            symbol_dependency_output_digest.clone(),
         );
         let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
         let module_topology_output_digest = module_topology.output_digest.clone();
@@ -186,7 +186,35 @@ impl AnalysisKernel {
             "polint.module_topology",
             &db,
             polint_module_topology_cache_stats,
-            module_topology_output_digest,
+            module_topology_output_digest.clone(),
+        ));
+
+        let module_topology_dependency_output_digest = module_topology_output_digest
+            .unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.module_topology",
+                )
+            });
+        let semantic_mir = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.semantic_mir"),
+            module_topology_dependency_output_digest,
+            symbol_dependency_output_digest,
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
+        let polint_semantic_mir_cache_stats = semantic_mir.cache_stats.clone();
+        let semantic_mir_output_digest = semantic_mir.output_digest.clone();
+        diagnostics.extend(semantic_mir.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.semantic_mir",
+            &db,
+            polint_semantic_mir_cache_stats,
+            semantic_mir_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -596,6 +624,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -795,6 +824,39 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_semantic_mir_row_carries_output_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc answer() int { return 42 }\n",
+        )
+        .expect("write go");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let semantic_mir = provider_output(&output, "polint.semantic_mir");
+
+        assert_eq!(semantic_mir.schema_version, "semantic-mir-facts-1:1");
+        assert!(!semantic_mir.output_digest.value.is_empty());
+        assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+    }
+
+    #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(temp.path().join("src")).expect("create src");
@@ -875,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_run_report_source_and_derived_provider_rows_have_zero_stats_and_output_digests() {
+    fn kernel_run_report_source_and_derived_provider_rows_have_expected_stats_and_output_digests() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("app.ts"), "export const app = 1;\n").expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
@@ -903,6 +965,10 @@ mod tests {
             assert_eq!(row.cache_stats, CacheStats::default());
             assert!(!row.output_digest.value.is_empty());
         }
+
+        let semantic_mir = provider_output(&output, "polint.semantic_mir");
+        assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+        assert!(!semantic_mir.output_digest.value.is_empty());
     }
 
     #[test]
@@ -973,6 +1039,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );

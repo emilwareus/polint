@@ -167,6 +167,11 @@ const MODULE_TOPOLOGY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const SEMANTIC_MIR_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "semantic-mir-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -292,6 +297,29 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.semantic_mir",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "scopes",
+            "semantic_imports",
+            "import_to_package_edges",
+        ],
+        outputs: &[
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "unsupported_semantics",
+        ],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: SEMANTIC_MIR_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -335,6 +363,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -351,6 +380,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -394,6 +424,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -548,6 +579,26 @@ mod tests {
                     outputs: vec!["import_to_package_edges"],
                 },
                 ProviderOrderRow {
+                    id: "polint.semantic_mir",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "scopes",
+                        "semantic_imports",
+                        "import_to_package_edges",
+                    ],
+                    outputs: vec![
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "unsupported_semantics",
+                    ],
+                },
+                ProviderOrderRow {
                     id: "polint.metrics",
                     kind: "metrics_derived",
                     language_scope: "multi_language",
@@ -616,5 +667,28 @@ mod tests {
         std::fs::read_to_string(path).unwrap_or_else(|error| {
             panic!("read {}: {error}", path.display());
         })
+    }
+
+    #[test]
+    fn semantic_mir_manifest_declares_private_provider_contract() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.semantic_mir")
+            .expect("semantic MIR manifest should exist");
+
+        assert_eq!(manifest.primary_schema_label(), "semantic-mir-facts-1:1");
+        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
+        assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
+        assert!(manifest.inputs.contains(&"functions"));
+        assert!(manifest.inputs.contains(&"symbols"));
+        assert!(manifest.inputs.contains(&"references"));
+        assert!(manifest.inputs.contains(&"scopes"));
+        assert!(manifest.inputs.contains(&"semantic_imports"));
+        assert!(manifest.inputs.contains(&"import_to_package_edges"));
+        assert!(manifest.outputs.contains(&"mir_bodies"));
+        assert!(manifest.outputs.contains(&"mir_operations"));
+        assert!(manifest.outputs.contains(&"places"));
+        assert!(manifest.outputs.contains(&"unsupported_semantics"));
     }
 }

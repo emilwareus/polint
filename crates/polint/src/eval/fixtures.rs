@@ -296,7 +296,10 @@ pub(crate) fn run_semantic_index_core_fixture_for_test(
 
     let mut observed = warm_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| {
+            !is_cache_stats_observed_invariant(item)
+                && !matches!(item, crate::eval::model::ObservedItem::RuntimeBudget(_))
+        })
         .cloned()
         .collect::<Vec<_>>();
     observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
@@ -391,6 +394,60 @@ pub(crate) fn run_module_topology_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_semantic_mir_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed.clone());
+    let cold_warm_equal = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run);
+
+    let mut observed = warm_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if cold_warm_equal {
+        observed.push(semantic_mir_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -431,6 +488,19 @@ fn cache_current_determinism_observed_invariant() -> crate::eval::model::Observe
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("cache.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn semantic_mir_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "semantic_mir.current_determinism".to_string(),
+        value: "cold_warm_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("semantic_mir.current_behavior".to_string()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -949,7 +1019,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.3", "polint.module_graph"),
                 ("provider_order.4", "polint.symbol_graph"),
                 ("provider_order.5", "polint.module_topology"),
-                ("provider_order.6", "polint.metrics"),
+                ("provider_order.6", "polint.semantic_mir"),
+                ("provider_order.7", "polint.metrics"),
             ]
         );
     }
@@ -1368,6 +1439,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "module-topology-core"
         {
             run_module_topology_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::SemanticMir
+            && fixture.manifest.case_id == "semantic-mir-core"
+        {
+            run_semantic_mir_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -1619,5 +1694,123 @@ mod module_topology_core {
                 case.observed
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod semantic_mir_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/semantic-mir/core")
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_fixture_passes() {
+        let run = run_semantic_mir_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("semantic-MIR core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "semantic-mir-core");
+        assert_eq!(case.area, FixtureArea::SemanticMir);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_manifest_covers_required_taxonomy() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            ("MirBody", "service.go", Some(ObservedStatus::Partial)),
+            ("MirBody", "app.ts", Some(ObservedStatus::Partial)),
+            ("MirOperation", "call", Some(ObservedStatus::Partial)),
+            ("Place", "parameter", Some(ObservedStatus::Resolved)),
+            ("Place", "local", Some(ObservedStatus::Resolved)),
+            ("Place", "global", Some(ObservedStatus::Partial)),
+            ("Place", "temporary", Some(ObservedStatus::Partial)),
+            ("Place", "call_return", Some(ObservedStatus::Partial)),
+            ("Place", "unknown", Some(ObservedStatus::Unknown)),
+            (
+                "UnsupportedSemantic",
+                "defer_statement",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "UnsupportedSemantic",
+                "eval",
+                Some(ObservedStatus::Unsupported),
+            ),
+        ] {
+            assert!(
+                expected_facts.iter().any(|(family, key, status, _)| {
+                    *family == required.0 && key.contains(required.1) && *status == required.2
+                }),
+                "semantic MIR fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+        assert!(expected_facts.iter().any(|(_, _, _, precision)| {
+            matches!(
+                *precision,
+                Some("setup_aware" | "heuristic" | "unsupported")
+            )
+        }));
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_observes_unknown_and_unsupported_rows() {
+        let run = run_semantic_mir_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("semantic-MIR core case");
+
+        for status in [
+            ObservedStatus::Partial,
+            ObservedStatus::Unknown,
+            ObservedStatus::Unsupported,
+        ] {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => fact.status == Some(status),
+                    _ => false,
+                }),
+                "semantic MIR fixture should observe {status:?}: {:#?}",
+                case.observed
+            );
+        }
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "semantic_mir.current_determinism"
+                    && invariant.value == "cold_warm_equal"
+            }
+            _ => false,
+        }));
     }
 }

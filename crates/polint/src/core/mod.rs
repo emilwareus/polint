@@ -1,3 +1,8 @@
+use crate::analysis::error::AnalysisError;
+use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+use crate::analysis::places::{PlaceFact, PlaceStatus};
+use crate::analysis::store::SemanticStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
@@ -31,6 +36,7 @@ const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
+pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -599,6 +605,7 @@ pub struct AnalysisDb {
     ts_classes: Vec<TsClassFact>,
     string_literals: Vec<StringLiteralFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
+    semantic: Option<SemanticStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -884,6 +891,56 @@ impl AnalysisDb {
         self.stable_exports = stable_exports;
         self.rebuild_semantic_index_indexes();
         self.refresh_semantic_index_metadata();
+    }
+
+    pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
+        self.semantic = Some(SemanticStore::from_output(output)?);
+        self.refresh_semantic_mir_metadata();
+        Ok(())
+    }
+
+    fn refresh_semantic_mir_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::MirBody);
+        self.fact_meta.remove_family(FactFamily::MirOperation);
+        self.fact_meta.remove_family(FactFamily::Place);
+        self.fact_meta
+            .remove_family(FactFamily::UnsupportedSemantic);
+
+        let body_metadata = self
+            .mir_bodies()
+            .iter()
+            .map(|body| (body.id.0, self.mir_body_metadata(body)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in body_metadata {
+            self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
+        }
+
+        let operation_metadata = self
+            .mir_operations()
+            .iter()
+            .map(|operation| (operation.id.0, self.mir_operation_metadata(operation)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in operation_metadata {
+            self.record_fact_meta(FactFamily::MirOperation, run_id, metadata);
+        }
+
+        let place_metadata = self
+            .mir_places()
+            .iter()
+            .map(|place| (place.id.0, self.place_metadata(place)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in place_metadata {
+            self.record_fact_meta(FactFamily::Place, run_id, metadata);
+        }
+
+        let unsupported_metadata = self
+            .unsupported_semantics()
+            .iter()
+            .map(|row| (row.id.0, self.unsupported_semantic_metadata(row)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unsupported_metadata {
+            self.record_fact_meta(FactFamily::UnsupportedSemantic, run_id, metadata);
+        }
     }
 
     fn refresh_module_graph_metadata(&mut self) {
@@ -1498,6 +1555,22 @@ impl AnalysisDb {
                 stable_export.id.0,
             );
         }
+        for body in self.mir_bodies() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirBody, body.id.0);
+        }
+        for operation in self.mir_operations() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirOperation, operation.id.0);
+        }
+        for place in self.mir_places() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Place, place.id.0);
+        }
+        for row in self.unsupported_semantics() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::UnsupportedSemantic,
+                row.id.0,
+            );
+        }
         for symbol in self.symbols() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
         }
@@ -1673,6 +1746,28 @@ impl AnalysisDb {
 
     pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
         &self.stable_exports
+    }
+
+    pub(crate) fn semantic_store(&self) -> Option<&SemanticStore> {
+        self.semantic.as_ref()
+    }
+
+    pub(crate) fn mir_bodies(&self) -> &[MirBody] {
+        self.semantic_store().map_or(&[], SemanticStore::mir_bodies)
+    }
+
+    pub(crate) fn mir_operations(&self) -> &[MirOperation] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::mir_operations)
+    }
+
+    pub(crate) fn mir_places(&self) -> &[PlaceFact] {
+        self.semantic_store().map_or(&[], SemanticStore::places)
+    }
+
+    pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::unsupported_semantics)
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
@@ -2383,6 +2478,119 @@ impl AnalysisDb {
         )
     }
 
+    fn mir_body_metadata(&self, body: &MirBody) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(body.status);
+        fact_meta_from_stable_key(
+            FactFamily::MirBody,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            body.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(body.status).to_string()),
+                ("language", language_label(body.language).to_string()),
+                ("file_key", self.source_file_key(body.file)),
+                (
+                    "function_key",
+                    self.function_key(body.function, "", &body.span),
+                ),
+                ("owner_stable_key", body.owner_stable_key.clone()),
+                (
+                    "package",
+                    body.package
+                        .map(|package| package.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "module",
+                    body.module
+                        .map(|module| module.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                ("span", span_metadata_value(&body.span)),
+            ]),
+        )
+    }
+
+    fn mir_operation_metadata(&self, operation: &MirOperation) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(operation.status);
+        fact_meta_from_stable_key(
+            FactFamily::MirOperation,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            operation.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(operation.status).to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, operation.body.0),
+                ),
+                ("ordinal", operation.ordinal.to_string()),
+                ("span", span_metadata_value(&operation.span)),
+            ]),
+        )
+    }
+
+    fn place_metadata(&self, place: &PlaceFact) -> FactMeta {
+        let (precision, confidence) = place_status_metadata(place.status);
+        fact_meta_from_stable_key(
+            FactFamily::Place,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            place.stable_key.clone(),
+            stable_parts([
+                ("status", place_status_label(place.status).to_string()),
+                ("language", language_label(place.language).to_string()),
+                ("path", option_file_path(self, place.file)),
+                ("function", option_function_id(place.function)),
+                ("projection_count", place.projections.len().to_string()),
+            ]),
+        )
+    }
+
+    fn unsupported_semantic_metadata(&self, row: &UnsupportedSemanticFact) -> FactMeta {
+        let (precision, confidence) = mir_status_metadata(row.status);
+        fact_meta_from_stable_key(
+            FactFamily::UnsupportedSemantic,
+            SEMANTIC_MIR_PROVIDER_ID,
+            precision,
+            confidence,
+            row.stable_key.clone(),
+            stable_parts([
+                ("status", mir_status_label(row.status).to_string()),
+                ("language", language_label(row.language).to_string()),
+                ("path", self.path_for(row.file)),
+                ("span", span_metadata_value(&row.span)),
+                ("construct", row.construct.clone()),
+                ("source_evidence", row.source_evidence.clone()),
+                (
+                    "body_key",
+                    row.body
+                        .map(|body| self.fact_stable_key(FactFamily::MirBody, body.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    row.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "affected_places",
+                    row.affected_places
+                        .iter()
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+            ]),
+        )
+    }
+
     fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
         self.metadata_for(FactRef::new(family, run_id))
             .map(|metadata| metadata.stable_key.clone())
@@ -2754,6 +2962,24 @@ fn semantic_status_metadata(status: SemanticStatus) -> (FactPrecision, FactConfi
     }
 }
 
+fn mir_status_metadata(status: MirStatus) -> (FactPrecision, FactConfidence) {
+    match status {
+        MirStatus::Resolved => (FactPrecision::SetupAware, FactConfidence::High),
+        MirStatus::Partial => (FactPrecision::Heuristic, FactConfidence::Medium),
+        MirStatus::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        MirStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
+fn place_status_metadata(status: PlaceStatus) -> (FactPrecision, FactConfidence) {
+    match status {
+        PlaceStatus::Resolved => (FactPrecision::SetupAware, FactConfidence::High),
+        PlaceStatus::Partial => (FactPrecision::Heuristic, FactConfidence::Medium),
+        PlaceStatus::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        PlaceStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
 fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
     match precision {
         TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile => {
@@ -2776,6 +3002,24 @@ fn semantic_status_label(status: SemanticStatus) -> &'static str {
         SemanticStatus::External => "external",
         SemanticStatus::SetupMissing => "setup_missing",
         SemanticStatus::Unsupported => "unsupported",
+    }
+}
+
+fn mir_status_label(status: MirStatus) -> &'static str {
+    match status {
+        MirStatus::Resolved => "resolved",
+        MirStatus::Partial => "partial",
+        MirStatus::Unknown => "unknown",
+        MirStatus::Unsupported => "unsupported",
+    }
+}
+
+fn place_status_label(status: PlaceStatus) -> &'static str {
+    match status {
+        PlaceStatus::Resolved => "resolved",
+        PlaceStatus::Partial => "partial",
+        PlaceStatus::Unknown => "unknown",
+        PlaceStatus::Unsupported => "unsupported",
     }
 }
 
@@ -3449,6 +3693,13 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{
+        AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+        UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
+    };
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -3630,6 +3881,457 @@ mod tests {
             scope_path,
             kind: ScopeKind::Function,
             status,
+        }
+    }
+
+    fn test_mir_body(id: u64, file: FileId, stable_key: &str) -> MirBody {
+        MirBody {
+            id: MirBodyId(id),
+            language: Language::TypeScript,
+            file,
+            function: FunctionId(id),
+            package: None,
+            module: None,
+            owner_stable_key: format!("function:{stable_key}"),
+            span: test_span(file, 1),
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn test_place(id: u64, file: FileId, stable_key: &str) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::TypeScript,
+            file: Some(file),
+            function: Some(FunctionId(0)),
+            root: PlaceRoot::Local {
+                function: FunctionId(0),
+                name: stable_key.to_string(),
+            },
+            projections: Vec::new(),
+            stable_key: stable_key.to_string(),
+            status: PlaceStatus::Resolved,
+        }
+    }
+
+    fn test_mir_operation(
+        id: u64,
+        body: MirBodyId,
+        place: PlaceId,
+        value: PlaceId,
+        stable_key: &str,
+    ) -> MirOperation {
+        MirOperation {
+            id: MirOpId(id),
+            body,
+            ordinal: id as u32,
+            span: test_span(FileId(0), 1),
+            kind: MirOperationKind::Assign {
+                place,
+                value: MirValue::Place(value),
+                mode: AssignMode::Overwrite,
+            },
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn test_unsupported(stable_key: &str) -> UnsupportedSemanticFact {
+        UnsupportedSemanticFact {
+            id: UnsupportedId(
+                stable_key
+                    .bytes()
+                    .fold(0_u64, |sum, byte| sum + u64::from(byte)),
+            ),
+            body: None,
+            operation: None,
+            language: Language::TypeScript,
+            file: FileId(0),
+            span: test_span(FileId(0), 1),
+            construct: "dynamic-property".to_string(),
+            source_evidence: "target[key]".to_string(),
+            affected_places: Vec::new(),
+            affected_domains: vec![UnsupportedDomain::Mir],
+            conservative_action: ConservativeAction::HavocAffectedPlaces,
+            precision: UnsupportedPrecision::Unsupported,
+            status: MirStatus::Unsupported,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    mod semantic_mir_storage {
+        use super::*;
+
+        #[test]
+        fn replace_semantic_mir_removes_stale_rows_from_prior_run() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let first = MirOutput {
+                bodies: vec![test_mir_body(9, file, "body:first")],
+                places: vec![test_place(9, file, "place:first")],
+                operations: vec![test_mir_operation(
+                    9,
+                    MirBodyId(9),
+                    PlaceId(9),
+                    PlaceId(9),
+                    "op:first",
+                )],
+                unsupported: vec![test_unsupported("unsupported:first")],
+            };
+            let second = MirOutput {
+                bodies: vec![test_mir_body(4, file, "body:second")],
+                places: vec![test_place(4, file, "place:second")],
+                operations: vec![test_mir_operation(
+                    4,
+                    MirBodyId(4),
+                    PlaceId(4),
+                    PlaceId(4),
+                    "op:second",
+                )],
+                unsupported: Vec::new(),
+            };
+
+            db.replace_semantic_mir(first).expect("first MIR replace");
+            db.replace_semantic_mir(second).expect("second MIR replace");
+
+            assert_eq!(
+                db.mir_bodies()
+                    .iter()
+                    .map(|body| (body.id, body.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(MirBodyId(0), "body:second")]
+            );
+            assert_eq!(db.mir_operations()[0].stable_key, "op:second");
+            assert_eq!(db.mir_places()[0].stable_key, "place:second");
+            assert!(db.unsupported_semantics().is_empty());
+        }
+
+        #[test]
+        fn replace_semantic_mir_reassigns_ids_by_stable_key_order() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let output = MirOutput {
+                bodies: vec![
+                    test_mir_body(20, file, "body:z"),
+                    test_mir_body(10, file, "body:a"),
+                ],
+                places: vec![
+                    test_place(20, file, "place:z"),
+                    test_place(10, file, "place:a"),
+                ],
+                operations: vec![
+                    test_mir_operation(20, MirBodyId(20), PlaceId(20), PlaceId(10), "op:z"),
+                    test_mir_operation(10, MirBodyId(10), PlaceId(10), PlaceId(20), "op:a"),
+                ],
+                unsupported: vec![
+                    test_unsupported("unsupported:z"),
+                    test_unsupported("unsupported:a"),
+                ],
+            };
+
+            db.replace_semantic_mir(output)
+                .expect("semantic MIR replace");
+
+            assert_eq!(
+                db.mir_bodies()
+                    .iter()
+                    .map(|body| (body.id, body.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(MirBodyId(0), "body:a"), (MirBodyId(1), "body:z")]
+            );
+            assert_eq!(
+                db.mir_operations()
+                    .iter()
+                    .map(|operation| (operation.id, operation.body, operation.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (MirOpId(0), MirBodyId(0), "op:a"),
+                    (MirOpId(1), MirBodyId(1), "op:z"),
+                ]
+            );
+            assert_eq!(
+                db.mir_places()
+                    .iter()
+                    .map(|place| (place.id, place.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(PlaceId(0), "place:a"), (PlaceId(1), "place:z")]
+            );
+            assert_eq!(
+                db.unsupported_semantics()
+                    .iter()
+                    .map(|row| (row.id, row.stable_key.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (UnsupportedId(0), "unsupported:a"),
+                    (UnsupportedId(1), "unsupported:z"),
+                ]
+            );
+            let store = db.semantic_store().expect("semantic store exists");
+            assert_eq!(
+                store
+                    .mir_body(MirBodyId(1))
+                    .map(|body| body.stable_key.as_str()),
+                Some("body:z")
+            );
+            assert_eq!(
+                store
+                    .mir_operation(MirOpId(0))
+                    .map(|operation| operation.stable_key.as_str()),
+                Some("op:a")
+            );
+            assert_eq!(
+                store
+                    .place(PlaceId(0))
+                    .map(|place| place.stable_key.as_str()),
+                Some("place:a")
+            );
+            assert_eq!(
+                store
+                    .unsupported_semantic(UnsupportedId(1))
+                    .map(|row| row.stable_key.as_str()),
+                Some("unsupported:z")
+            );
+        }
+
+        #[test]
+        fn replace_semantic_mir_rejects_dangling_operation_references() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let output = MirOutput {
+                bodies: vec![test_mir_body(0, file, "body:a")],
+                places: vec![test_place(0, file, "place:a")],
+                operations: vec![test_mir_operation(
+                    0,
+                    MirBodyId(99),
+                    PlaceId(0),
+                    PlaceId(0),
+                    "op:dangling",
+                )],
+                unsupported: Vec::new(),
+            };
+
+            let error = db
+                .replace_semantic_mir(output)
+                .expect_err("dangling MIR body reference should fail");
+
+            assert!(error.to_string().contains("dangling MIR operation body"));
+        }
+    }
+
+    mod semantic_mir_metadata {
+        use super::*;
+
+        fn replace_with_semantic_rows(db: &mut AnalysisDb, file: FileId) {
+            db.replace_semantic_mir(MirOutput {
+                bodies: vec![test_mir_body(2, file, "body:metadata")],
+                places: vec![test_place(2, file, "place:metadata")],
+                operations: vec![test_mir_operation(
+                    2,
+                    MirBodyId(2),
+                    PlaceId(2),
+                    PlaceId(2),
+                    "op:metadata",
+                )],
+                unsupported: vec![test_unsupported("unsupported:metadata")],
+            })
+            .expect("semantic MIR replace");
+        }
+
+        #[test]
+        fn replace_semantic_mir_records_metadata_for_every_stored_row() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+
+            replace_with_semantic_rows(&mut db, file);
+
+            for family in [
+                FactFamily::MirBody,
+                FactFamily::MirOperation,
+                FactFamily::Place,
+                FactFamily::UnsupportedSemantic,
+            ] {
+                let metadata = db
+                    .metadata_for(FactRef::new(family, 0))
+                    .expect("semantic MIR metadata exists");
+                assert_eq!(metadata.producer_id, "polint.semantic_mir");
+                assert_eq!(metadata.layer_id, "polint.semantic_mir");
+                assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
+                assert_ne!(metadata.precision, FactPrecision::Exact);
+            }
+        }
+
+        #[test]
+        fn semantic_mir_missing_metadata_reports_rows_when_refresh_is_bypassed() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+
+            replace_with_semantic_rows(&mut db, file);
+            for family in [
+                FactFamily::MirBody,
+                FactFamily::MirOperation,
+                FactFamily::Place,
+                FactFamily::UnsupportedSemantic,
+            ] {
+                db.remove_fact_metadata_for_test(FactRef::new(family, 0));
+            }
+
+            assert_eq!(
+                db.missing_fact_metadata(),
+                vec![
+                    MissingFactMeta {
+                        family: FactFamily::MirBody,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::MirOperation,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::Place,
+                        run_id: 0,
+                    },
+                    MissingFactMeta {
+                        family: FactFamily::UnsupportedSemantic,
+                        run_id: 0,
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn semantic_mir_metadata_maps_unknown_and_unsupported_to_low_precision() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { return 1; }\n".to_string(),
+            );
+            let mut body = test_mir_body(1, file, "body:unknown");
+            body.status = MirStatus::Unknown;
+            let mut place = test_place(1, file, "place:partial");
+            place.status = PlaceStatus::Partial;
+
+            db.replace_semantic_mir(MirOutput {
+                bodies: vec![body],
+                places: vec![place],
+                operations: Vec::new(),
+                unsupported: vec![test_unsupported("unsupported:metadata")],
+            })
+            .expect("semantic MIR replace");
+
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::MirBody, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Unresolved, FactConfidence::Low))
+            );
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::Place, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Heuristic, FactConfidence::Medium))
+            );
+            assert_eq!(
+                db.metadata_for(FactRef::new(FactFamily::UnsupportedSemantic, 0))
+                    .map(|metadata| (metadata.precision, metadata.confidence)),
+                Some((FactPrecision::Unsupported, FactConfidence::Low))
+            );
+        }
+    }
+
+    mod semantic_mir_storage_public_boundary {
+        use std::fs;
+        use std::path::Path;
+
+        const FORBIDDEN_PUBLIC_TOKENS: &[&str] = &[
+            "MirBody",
+            "MirOperation",
+            "PlaceFact",
+            "SemanticStore",
+            "UnsupportedSemanticFact",
+            "polint.semantic_mir",
+            "semantic-mir-facts",
+        ];
+
+        fn assert_no_forbidden_tokens(label: &str, source: &str) {
+            for token in FORBIDDEN_PUBLIC_TOKENS {
+                assert!(
+                    !source.contains(token),
+                    "{label} leaked private semantic MIR token `{token}`"
+                );
+            }
+        }
+
+        #[test]
+        fn sdk_runner_and_bench_sources_do_not_leak_semantic_mir_storage() {
+            let sources = [
+                ("sdk/mod.rs", include_str!("../sdk/mod.rs")),
+                ("sdk/facts.rs", include_str!("../sdk/facts.rs")),
+                ("runner/mod.rs", include_str!("../runner/mod.rs")),
+                ("lib.rs", include_str!("../lib.rs")),
+            ];
+
+            for (label, source) in sources {
+                assert_no_forbidden_tokens(label, source);
+            }
+        }
+
+        #[test]
+        fn crate_root_keeps_analysis_module_crate_private_and_out_of_bench() {
+            let lib = include_str!("../lib.rs");
+            assert!(lib.contains("pub(crate) mod analysis;"));
+
+            let bench_surface = lib.split("pub mod _bench").nth(1).unwrap_or_default();
+            assert!(!bench_surface.contains("pub mod analysis"));
+            assert!(!bench_surface.contains("pub use crate::analysis"));
+            assert_no_forbidden_tokens("_bench", bench_surface);
+        }
+
+        #[test]
+        fn docs_and_readme_do_not_advertise_private_semantic_mir_facts() {
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let repo_root = manifest_dir
+                .parent()
+                .and_then(Path::parent)
+                .expect("workspace root");
+            let docs_root = repo_root.join("docs/facts");
+            let mut sources = vec![(
+                "README.md".to_string(),
+                fs::read_to_string(repo_root.join("README.md")).expect("README.md"),
+            )];
+
+            for entry in fs::read_dir(&docs_root).expect("docs/facts exists") {
+                let entry = entry.expect("docs/facts entry");
+                if entry.file_type().expect("docs/facts file type").is_file() {
+                    sources.push((
+                        entry.path().display().to_string(),
+                        fs::read_to_string(entry.path()).expect("docs/facts source"),
+                    ));
+                }
+            }
+
+            for (label, source) in sources {
+                assert_no_forbidden_tokens(&label, &source);
+            }
         }
     }
 

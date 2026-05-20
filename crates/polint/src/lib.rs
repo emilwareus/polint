@@ -14,6 +14,7 @@ pub fn run_main() -> anyhow::Result<u8> {
     cli::run()
 }
 
+pub(crate) mod analysis;
 pub(crate) mod analysis_kernel;
 pub(crate) mod analysis_plan;
 pub(crate) mod baseline;
@@ -66,7 +67,7 @@ pub mod _bench {
         pub use crate::ts::analyze_with_options;
     }
     #[doc(hidden)]
-    pub mod analysis_keys {
+    pub mod keys {
         use crate::config::LoadedConfig;
         use crate::core::{Rule, RuleOptions};
         use std::collections::BTreeMap;

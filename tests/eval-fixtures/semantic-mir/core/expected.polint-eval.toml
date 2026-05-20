@@ -1,0 +1,59 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "semantic-mir-core"
+area = "semantic-mir"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+fact = { family = "MirBody", stable_key = "service.go", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "MirBody", stable_key = "app.ts", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "MirOperation", stable_key = "call", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "MirOperation", stable_key = "assign", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "MirOperation", stable_key = "branch", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "parameter", mode = "partial", producer_id = "polint.semantic_mir", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "local", mode = "partial", producer_id = "polint.semantic_mir", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "global", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "temporary", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+# CallReturn place root from call-shaped MIR operations.
+fact = { family = "Place", stable_key = "call_return", mode = "partial", producer_id = "polint.semantic_mir", precision = "heuristic", status = "partial" }
+
+[[expected]]
+fact = { family = "Place", stable_key = "unknown", mode = "partial", producer_id = "polint.semantic_mir", precision = "unresolved", status = "unknown" }
+
+[[expected]]
+# Index projection evidence from Go and TS element access.
+fact = { family = "Place", stable_key = "index_unknown:index", mode = "partial", producer_id = "polint.semantic_mir", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "UnsupportedSemantic", stable_key = "defer_statement", mode = "partial", producer_id = "polint.semantic_mir", precision = "unsupported", status = "unsupported" }
+
+[[expected]]
+fact = { family = "UnsupportedSemantic", stable_key = "eval", mode = "partial", producer_id = "polint.semantic_mir", precision = "unsupported", status = "unsupported" }
+
+[[expected]]
+invariant = { name = "semantic_mir.current_determinism", value = "cold_warm_equal", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "semantic-mir-core", max_runtime_ms = 120000, mode = "exact" }

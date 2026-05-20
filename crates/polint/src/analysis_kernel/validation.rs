@@ -3,6 +3,7 @@ use std::fmt::Debug;
 
 use serde::Serialize;
 
+use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
@@ -37,11 +38,240 @@ pub(crate) fn validate_fact_metadata(
     validate_spans(db, &ids.files, &mut diagnostics);
     validate_semantic_index(db, &ids, &mut diagnostics);
     validate_topology_facts(db, &ids, &mut diagnostics);
+    validate_semantic_mir(db, &ids, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+#[cfg(test)]
+mod semantic_mir {
+    use super::validate_fact_metadata;
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{
+        ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedPrecision,
+        UnsupportedSemanticFact,
+    };
+    use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
+    use crate::analysis_kernel::{
+        AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
+        ValidationStatus,
+    };
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn semantic_mir_validation_reports_malformed_rows_with_required_evidence() {
+        let mut db = base_db();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![
+                body(0, FunctionId(0), span(FileId(0), 0, 20), "body:dup"),
+                body(1, FunctionId(99), span(FileId(0), 0, 999), "body:dup"),
+            ],
+            places: vec![
+                place(
+                    0,
+                    FunctionId(99),
+                    vec![PlaceProjection::IndexUnknown {
+                        evidence: String::new(),
+                    }],
+                    "place:bad",
+                ),
+                call_return_place(1, "place:return"),
+            ],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(FileId(0), 0, 20),
+                kind: MirOperationKind::Call {
+                    site: CallSiteId(0),
+                    callee: MirValue::Unknown {
+                        evidence: "dynamic".to_string(),
+                    },
+                    arguments: vec![PlaceId(0)],
+                    return_place: PlaceId(1),
+                },
+                stable_key: "op:call".to_string(),
+                status: MirStatus::Partial,
+            }],
+            unsupported: vec![UnsupportedSemanticFact {
+                id: UnsupportedId(0),
+                body: Some(MirBodyId(0)),
+                operation: Some(MirOpId(0)),
+                language: Language::TypeScript,
+                file: FileId(0),
+                span: span(FileId(0), 0, 20),
+                construct: String::new(),
+                source_evidence: String::new(),
+                affected_places: Vec::new(),
+                affected_domains: Vec::new(),
+                conservative_action: ConservativeAction::HavocAffectedPlaces,
+                precision: UnsupportedPrecision::Unsupported,
+                status: MirStatus::Unsupported,
+                stable_key: "unsupported:bad".to_string(),
+            }],
+        })
+        .expect("semantic rows should store for validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let semantic_mir = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Semantic MIR validation failed")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            semantic_mir.len() >= 5,
+            "expected semantic MIR diagnostics: {diagnostics:#?}"
+        );
+        assert!(semantic_mir.iter().all(|diagnostic| {
+            let labels = evidence_labels(diagnostic);
+            labels.contains("family")
+                && labels.contains("stable_key")
+                && labels.contains("field")
+                && labels.contains("reason")
+        }));
+    }
+
+    #[test]
+    fn semantic_mir_validation_rejects_exact_provider_precision() {
+        let mut db = base_db();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body(0, FunctionId(0), span(FileId(0), 0, 20), "body:ok")],
+            places: Vec::new(),
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("semantic rows should store");
+        db.fact_meta_mut_for_test()
+            .remove_for_test(FactRef::new(FactFamily::MirBody, 0));
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::MirBody, 0),
+            FactMeta {
+                stable_key: "body:ok".to_string(),
+                producer_id: "polint.semantic_mir",
+                layer_id: "polint.semantic_mir",
+                precision: FactPrecision::Exact,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:exact-mir".to_string(),
+            },
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Semantic MIR validation failed")
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "reason" && evidence.value.contains("precision ceiling")
+                    })
+            }),
+            "expected semantic MIR precision ceiling diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    fn base_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() { return 1; }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span(file, 0, 33),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db
+    }
+
+    fn body(id: u64, function: FunctionId, span: Span, stable_key: &str) -> MirBody {
+        MirBody {
+            id: MirBodyId(id),
+            language: Language::TypeScript,
+            file: span.file,
+            function,
+            package: None,
+            module: None,
+            owner_stable_key: format!("function:{}", function.0),
+            span,
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Partial,
+        }
+    }
+
+    fn place(
+        id: u64,
+        function: FunctionId,
+        projections: Vec<PlaceProjection>,
+        stable_key: &str,
+    ) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            function: Some(function),
+            root: PlaceRoot::Local {
+                function,
+                name: "value".to_string(),
+            },
+            projections,
+            stable_key: stable_key.to_string(),
+            status: PlaceStatus::Partial,
+        }
+    }
+
+    fn call_return_place(id: u64, stable_key: &str) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            function: Some(FunctionId(0)),
+            root: PlaceRoot::CallReturn {
+                call: CallSiteId(0),
+            },
+            projections: Vec::new(),
+            stable_key: stable_key.to_string(),
+            status: PlaceStatus::Partial,
+        }
+    }
+
+    fn span(file: FileId, start_byte: u32, end_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: end_byte + 1,
+        }
+    }
+
+    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
+        diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| evidence.label.as_str())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -652,7 +882,7 @@ mod topology {
 }
 
 #[derive(Debug, Default)]
-struct IdSets {
+pub(crate) struct IdSets {
     files: BTreeSet<FileId>,
     packages: BTreeSet<PackageId>,
     functions: BTreeSet<FunctionId>,

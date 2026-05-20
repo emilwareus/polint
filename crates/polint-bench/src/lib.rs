@@ -4,11 +4,11 @@
 //! goes: config, disk+`AnalysisDb`, Go parse/facts, TS parse/facts, `run_rules`.
 
 use anyhow::Result;
-use polint::_bench::analysis_keys::config_hash;
 use polint::_bench::cache;
 use polint::_bench::config::load_config;
 use polint::_bench::core::{AnalysisDb, Rule, RuleOptions, run_rules};
 use polint::_bench::fs::{LoadSourcesTimings, load_analysis_files_with_timings};
+use polint::_bench::keys::config_hash;
 use polint::_bench::{go, ts};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -32,6 +32,8 @@ Phase 23 of v1.2 completed on 2026-05-18. polint now records internal input snap
 
 Phase 24 of v1.2 completed on 2026-05-18. Existing cheap fact layers now persist through a crate-private layer cache for Go and TS/JS syntax, imports, module graph, symbol/reference, and metrics providers, with dependency indexes, change sets, deterministic hit/miss reporting, stale-reuse safeguards, and public no-leak proof.
 
+Phase 28 of v1.2 completed on 2026-05-20. polint now has private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots, explicit unsupported semantic rows, provider/cache/debug/validation wiring, internal eval coverage, and public no-leak proof.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -100,13 +102,13 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] **SAE-FND-03**: polint has an internal evaluation harness MVP with deterministic expected/observed JSON, matchers, metrics, and native fixtures for kernel, provenance, cache, and extension invariants. Validated in Phase 22: Internal Evaluation Harness MVP.
 - [x] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation. Validated in Phase 23: Input Snapshot and Cache Identity.
 - [x] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards. Validated in Phase 24: Persistent Layer Cache for Existing Cheap Facts.
+- [x] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations. Validated in Phase 28: Private Semantic MIR and Place Identity.
 
 ### Active
 
 - [ ] **SAE-FND-06**: Rule macro metadata generates rule manifests, `polint inspect rule --format json` is available as an intentional CLI surface, and the first `polint test` fixture runner proves public-SDK rule behavior.
 - [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
 - [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
-- [ ] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations.
 - [ ] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
 - [ ] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
 - [ ] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
@@ -222,4 +224,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-17 after completing Phase 22 Internal Evaluation Harness MVP*
+*Last updated: 2026-05-20 after completing Phase 28 Private Semantic MIR and Place Identity*

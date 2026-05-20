@@ -2,7 +2,7 @@
 
 ## Goal
 
-Fulfill the `Cfg<'_>` typed view with real intra-procedural control-flow graph
+Fulfill the CFG typed view with real intra-procedural control-flow graph
 facts for Go and TS/JS first.
 
 ## Why
@@ -21,13 +21,13 @@ The current graph placeholder is not enough for rule authors.
 - `CfgNodeId`
 - `CfgEdge`
 - `CfgEdgeKind`
-- `Cfg<'_>::for_function(function_id)`
+- function-to-CFG query on the typed view
 
 ## Build Method
 
 1. Add shared CFG graph types in the public SDK surface.
 2. Store CFGs in `AnalysisDb` keyed by `FunctionId`.
-3. Add `Cfg<'_>::for_function(function_id) -> Option<&ControlFlowGraph>`.
+3. Add a function-to-CFG query returning an optional `ControlFlowGraph`.
 4. For TS/JS, adapt Oxc semantic CFG output into polint's graph model.
 5. For Go, expand existing branch extraction into entry, exit, sequential,
    branch, loop, switch, defer, panic, and return edges.
@@ -37,7 +37,7 @@ The current graph placeholder is not enough for rule authors.
 ## Done When
 
 - Go and TS/JS functions can expose a real CFG.
-- A generated external rule can consume `Cfg<'_>` and query a function CFG.
+- A generated external rule can consume the CFG typed view and query a function CFG.
 - Docs explain precision limits.
 
 ## Later Languages

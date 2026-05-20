@@ -20,6 +20,9 @@ pub(crate) const TOPOLOGY_FACT_FAMILIES: &[&str] = &[
     "RepoTopologyOverlay",
 ];
 
+pub(crate) const SEMANTIC_MIR_FACT_FAMILIES: &[&str] =
+    &["MirBody", "MirOperation", "Place", "UnsupportedSemantic"];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -49,6 +52,8 @@ pub(crate) enum FixtureArea {
     SemanticIndex,
     #[serde(rename = "module-topology")]
     ModuleTopology,
+    #[serde(rename = "semantic-mir")]
+    SemanticMir,
     Facts,
     Graphs,
     Paths,
@@ -228,6 +233,7 @@ pub(crate) struct ObservedRuntimeBudget {
 pub(crate) enum ObservedStatus {
     Present,
     Resolved,
+    Partial,
     Unknown,
     Unresolved,
     Ambiguous,

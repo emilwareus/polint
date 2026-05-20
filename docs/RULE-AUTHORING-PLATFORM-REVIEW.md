@@ -232,8 +232,9 @@ The TS adapter does the same for TS/JS facts:
 
 The API says "declare what facts your rule needs," but the implementation mostly
 treats that declaration as metadata. A user may believe that setting
-`CoverageFacts<'_>` or `CallGraph<'_>` gives them those underlying models, when
-that is not true in the same way as `StringLiterals<'_>` or `Imports<'_>`.
+reserved coverage or call-relationship fact views give them those underlying
+models, when that is not true in the same way as `StringLiterals<'_>` or
+`Imports<'_>`.
 
 ### Fix Direction
 

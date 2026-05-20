@@ -24,4 +24,7 @@ invariant = { name = "provider_order.4", value = "polint.symbol_graph", mode = "
 invariant = { name = "provider_order.5", value = "polint.module_topology", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.6", value = "polint.metrics", mode = "exact" }
+invariant = { name = "provider_order.6", value = "polint.semantic_mir", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.7", value = "polint.metrics", mode = "exact" }
