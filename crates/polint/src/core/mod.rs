@@ -3939,7 +3939,11 @@ mod tests {
 
     fn test_unsupported(stable_key: &str) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
-            id: UnsupportedId(9),
+            id: UnsupportedId(
+                stable_key
+                    .bytes()
+                    .fold(0_u64, |sum, byte| sum + u64::from(byte)),
+            ),
             body: None,
             operation: None,
             language: Language::TypeScript,
