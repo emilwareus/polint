@@ -685,14 +685,16 @@ impl<'source> FunctionLowering<'source> {
                 evidence: "call".to_string(),
             });
         let mut arguments = Vec::new();
-        for index in 1..node.named_child_count() as u32 {
-            let Some(child) = node.named_child(index) else {
-                continue;
-            };
-            if let Some(shape) =
-                self.lower_expression(child, places, operations, unsupported, false)
-            {
-                arguments.push(shape.key);
+        if let Some(argument_list) = node.child_by_field_name("arguments") {
+            for index in 0..argument_list.named_child_count() as u32 {
+                let Some(argument) = argument_list.named_child(index) else {
+                    continue;
+                };
+                if let Some(shape) =
+                    self.lower_expression(argument, places, operations, unsupported, false)
+                {
+                    arguments.push(shape.key);
+                }
             }
         }
         self.push_operation(
@@ -1766,6 +1768,7 @@ func flow(token string, count int) bool {
             .collect::<Vec<_>>();
 
         assert_eq!(first_calls.len(), 1);
+        assert_eq!(first_calls[0].3.len(), 2);
         assert_eq!(
             first_calls
                 .iter()
