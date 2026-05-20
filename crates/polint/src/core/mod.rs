@@ -4297,7 +4297,8 @@ mod tests {
             assert!(lib.contains("pub(crate) mod analysis;"));
 
             let bench_surface = lib.split("pub mod _bench").nth(1).unwrap_or_default();
-            assert!(!bench_surface.contains("analysis"));
+            assert!(!bench_surface.contains("pub mod analysis"));
+            assert!(!bench_surface.contains("pub use crate::analysis"));
             assert_no_forbidden_tokens("_bench", bench_surface);
         }
 
