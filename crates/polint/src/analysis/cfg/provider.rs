@@ -2,7 +2,11 @@ use crate::analysis::cfg::derived::{
     derive_control_dependence, derive_dominators, derive_postdominators, derive_reachability,
 };
 use crate::analysis::cfg::facts::CfgView;
+use crate::analysis::cfg::ids::{
+    BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId, UnsupportedControlFlowId,
+};
 use crate::analysis::cfg::lower_go::lower_go_cfg;
+use crate::analysis::cfg::lower_ts::lower_ts_cfg;
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -53,7 +57,78 @@ pub(crate) fn derive_cfg_with_cache_stats(
 }
 
 fn derive_cfg_output(db: &AnalysisDb) -> CfgOutput {
-    lower_go_cfg(db)
+    let mut output = lower_go_cfg(db);
+    merge_base_output(&mut output, lower_ts_cfg(db));
+    output.normalized()
+}
+
+fn merge_base_output(left: &mut CfgOutput, mut right: CfgOutput) {
+    let function_offset = left.functions.iter().map(|row| row.id.0).max().unwrap_or(0);
+    let node_offset = left.nodes.iter().map(|row| row.id.0).max().unwrap_or(0);
+    let block_offset = left.blocks.iter().map(|row| row.id.0).max().unwrap_or(0);
+    let edge_offset = left.edges.iter().map(|row| row.id.0).max().unwrap_or(0);
+    let unsupported_offset = left
+        .unsupported
+        .iter()
+        .map(|row| row.id.0)
+        .max()
+        .unwrap_or(0);
+
+    for row in &mut right.functions {
+        row.id = offset_function(row.id, function_offset);
+        row.entry_node = offset_node(row.entry_node, node_offset);
+        row.normal_exit_node = offset_node(row.normal_exit_node, node_offset);
+        row.exceptional_exit_node = row
+            .exceptional_exit_node
+            .map(|node| offset_node(node, node_offset));
+    }
+    for row in &mut right.nodes {
+        row.id = offset_node(row.id, node_offset);
+        row.cfg_function = offset_function(row.cfg_function, function_offset);
+        row.block = offset_block(row.block, block_offset);
+    }
+    for row in &mut right.blocks {
+        row.id = offset_block(row.id, block_offset);
+        row.cfg_function = offset_function(row.cfg_function, function_offset);
+        row.first_node = row.first_node.map(|node| offset_node(node, node_offset));
+        row.last_node = row.last_node.map(|node| offset_node(node, node_offset));
+    }
+    for row in &mut right.edges {
+        row.id = offset_edge(row.id, edge_offset);
+        row.cfg_function = offset_function(row.cfg_function, function_offset);
+        row.from = offset_node(row.from, node_offset);
+        row.to = offset_node(row.to, node_offset);
+        row.from_block = offset_block(row.from_block, block_offset);
+        row.to_block = offset_block(row.to_block, block_offset);
+    }
+    for row in &mut right.unsupported {
+        row.id = UnsupportedControlFlowId(row.id.0 + unsupported_offset);
+        row.cfg_function = row
+            .cfg_function
+            .map(|function| offset_function(function, function_offset));
+    }
+
+    left.functions.extend(right.functions);
+    left.nodes.extend(right.nodes);
+    left.blocks.extend(right.blocks);
+    left.edges.extend(right.edges);
+    left.unsupported.extend(right.unsupported);
+}
+
+fn offset_function(id: CfgFunctionId, offset: u64) -> CfgFunctionId {
+    CfgFunctionId(id.0 + offset)
+}
+
+fn offset_node(id: CfgNodeId, offset: u64) -> CfgNodeId {
+    CfgNodeId(id.0 + offset)
+}
+
+fn offset_block(id: BasicBlockId, offset: u64) -> BasicBlockId {
+    BasicBlockId(id.0 + offset)
+}
+
+fn offset_edge(id: CfgEdgeId, offset: u64) -> CfgEdgeId {
+    CfgEdgeId(id.0 + offset)
 }
 
 fn append_derived_rows(output: &mut CfgOutput, view: CfgView) {

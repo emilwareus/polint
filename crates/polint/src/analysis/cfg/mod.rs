@@ -5,6 +5,7 @@ pub(crate) mod facts;
 pub(crate) mod graph;
 pub(crate) mod ids;
 pub(crate) mod lower_go;
+pub(crate) mod lower_ts;
 pub(crate) mod provider;
 pub(crate) mod store;
 pub(crate) mod validate;
