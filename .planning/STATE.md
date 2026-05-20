@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-20T09:09:43.276Z"
+status: verifying
+last_updated: "2026-05-20T09:25:46.952Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 22
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 46
-  completed_plans: 45
-  percent: 98
+  completed_plans: 46
+  percent: 100
 ---
 
 # State: polint
@@ -40,8 +40,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 28 (Private Semantic MIR and Place Identity) — EXECUTING
+Status: Phase complete — ready for verification
+Phase: 28 (Private Semantic MIR and Place Identity) — COMPLETE
 Plan: 7 of 7
 Last activity: 2026-05-20
 
@@ -57,7 +57,7 @@ Last activity: 2026-05-20
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
-| 28 | In Progress | 6/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, and semantic-MIR eval snapshots done; requirement SAE-SEM-03 |
+| 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
@@ -205,6 +205,9 @@ Last activity: 2026-05-20
 - [Phase 28-private-semantic-mir-and-place-identity]: Keep semantic-MIR eval observation crate-private and test-facing, sourced only from metadata_debug_json_for_test.
 - [Phase 28-private-semantic-mir-and-place-identity]: Use compact semicolon payload fragments for MIR eval evidence instead of raw source, AST dumps, absolute paths, or dense IDs as identity.
 - [Phase 28-private-semantic-mir-and-place-identity]: Treat Partial semantic-MIR rows as unknown-like evidence in matcher outcomes and metrics.
+- [Phase 28-private-semantic-mir-and-place-identity]: Keep semantic MIR/place internals out of public check JSON, inspect JSON, polint test JSON, CLI help, SDK, runner, crate-root public exports, README, and docs.
+- [Phase 28-private-semantic-mir-and-place-identity]: Use an external temp-repo rule that requests only supported public fact views to prove existing rule-author workflows remain compatible.
+- [Phase 28-private-semantic-mir-and-place-identity]: Offset private MIR/place/unsupported IDs per language output before merge so validation does not cross-wire Go and TS/JS run-local IDs.
 
 ## Execution Metrics
 
@@ -245,12 +248,13 @@ Last activity: 2026-05-20
 | 28-private-semantic-mir-and-place-identity | 04 | 17 min | 2 | 2 |
 | 28-private-semantic-mir-and-place-identity | 05 | 26 min | 3 | 12 |
 | 28-private-semantic-mir-and-place-identity | 06 | 12 min | 2 | 13 |
+| 28-private-semantic-mir-and-place-identity | 07 | 11 min | 1 | 6 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed 28-06 semantic MIR eval fixture snapshots.
-- Stopped at: Completed 28-private-semantic-mir-and-place-identity-06-PLAN.md; Phase 28 plan 07 is next.
+- Last activity: 2026-05-20 - Completed 28-07 semantic MIR public-boundary proof.
+- Stopped at: Completed 28-private-semantic-mir-and-place-identity-07-PLAN.md; Phase 28 is ready for verification.
 
 ### Quick Tasks Completed
 
@@ -267,4 +271,4 @@ Last activity: 2026-05-20
 
 ## Next Action
 
-Phase 28 plan 07 is ready for execution.
+Phase 28 is ready for verification.
