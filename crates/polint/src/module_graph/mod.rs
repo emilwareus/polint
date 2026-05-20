@@ -1,36 +1,57 @@
+pub(crate) mod formats;
 pub(crate) mod go;
 pub(crate) mod model;
 pub(crate) mod paths;
 pub(crate) mod query;
+pub(crate) mod topology;
 pub(crate) mod ts;
 
-use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
+    semantic_provider_parameter_digest,
 };
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
-    ImportFact, Language, ModuleNodeId, ResolutionStatus, ResolvedImportId, SourceFile,
+    ImportFact, Language, ModuleNodeId, ModuleNodeKind, ResolutionStatus, ResolvedImportId,
+    SourceFile, UnresolvedReason,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::symbol_graph::semantic::{SemanticImportFact, SemanticImportKind, SemanticStatus};
 use model::{
-    MODULE_GRAPH_LAYER_SCHEMA, ModuleGraphBuilder, ModuleGraphLayerPayload, ResolverInput,
-    sort_packages,
+    MODULE_GRAPH_LAYER_SCHEMA, MODULE_TOPOLOGY_LAYER_SCHEMA, ModuleGraphBuilder,
+    ModuleGraphLayerPayload, ModuleTopologyLayerPayload, ResolverInput, sort_packages,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use topology::{
+    DependencyRequirementFact, ImportContextKind, ImportToPackageFact, ImportToPackageId,
+    ImportToPackageStatus, RepoTopologyOverlayFact, RepoTopologyOverlayId, RepoTopologyOverlayKind,
+    ResolvedDependencyEdgeFact, SourceSetFact, SourceSetKind, TopologyOutput, TopologyPackageFact,
+    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
+};
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
     &["resolved_imports", "module_graph", "symbols", "references"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) capability_support: Vec<CapabilitySupport>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModuleTopologyDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
@@ -55,6 +76,7 @@ impl ModuleGraphDerivation {
 }
 
 pub(crate) fn module_graph_layer_key(
+    root: &Path,
     db: &AnalysisDb,
     manifest: &ProviderManifest,
     config_digest: Digest,
@@ -62,10 +84,12 @@ pub(crate) fn module_graph_layer_key(
     ts_js_lifecycle_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> LayerKey {
+    let mut source_package_digests = module_graph_source_package_digests(db);
+    source_package_digests.extend(module_graph_topology_input_digests(root, db));
     LayerKey::module_graph_layer_key(
         manifest,
         module_graph_import_shape_digests(db),
-        module_graph_source_package_digests(db),
+        source_package_digests,
         config_digest,
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
@@ -74,7 +98,34 @@ pub(crate) fn module_graph_layer_key(
     )
 }
 
+pub(crate) fn module_topology_layer_key(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+) -> LayerKey {
+    LayerKey::module_topology_layer_key(
+        manifest,
+        module_graph_import_shape_digests(db),
+        module_topology_base_topology_digests(db),
+        config_digest,
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
+        module_graph_output_digest,
+        symbol_graph_output_digest,
+        semantic_provider_parameter_digest(),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dependency-index rows are built from explicit cache-key inputs to avoid bundling unrelated state"
+)]
 pub(crate) fn module_graph_layer_dependency_edges(
+    root: &Path,
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
@@ -107,6 +158,37 @@ pub(crate) fn module_graph_layer_dependency_edges(
                 db.path_for(package.file),
                 language_cache_label(package.language),
                 package.name
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for (relative_path, digest) in module_graph_topology_input_digest_rows(root, db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!("topology_input:{relative_path}:{digest}")),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for file in sorted_files(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "topology_source_set:{}:{}",
+                normalized_file_path(file),
+                language_cache_label(file.language)
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "topology_overlay_path:{}",
+                normalized_file_path(file)
             )),
             DependencyKind::Input,
             ShapeKind::ModuleTopology,
@@ -177,6 +259,127 @@ pub(crate) fn module_graph_layer_dependency_edges(
     edges
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "module topology cache dependencies mirror the explicit layer-key inputs"
+)]
+pub(crate) fn module_topology_layer_dependency_edges(
+    db: &AnalysisDb,
+    key: &LayerKey,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+    config_digest: Digest,
+    go_lifecycle_digest: Digest,
+    ts_js_lifecycle_digest: Digest,
+) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(key.clone());
+    let mut edges = Vec::new();
+
+    for import in sorted_imports(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "module_topology_import:{}:{}:{}",
+                db.path_for(import.file),
+                import.path,
+                import.span.start_byte
+            )),
+            DependencyKind::ImportShape,
+            ShapeKind::Import,
+        ));
+    }
+
+    for digest in module_topology_base_topology_digests(db) {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!("module_topology_base:{digest}")),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    for semantic_import in db.semantic_imports() {
+        edges.push(dependency_edge(
+            &from,
+            CacheNode::Input(format!(
+                "semantic_import:{}:{}",
+                semantic_import.stable_key, semantic_import.import_path
+            )),
+            DependencyKind::Input,
+            ShapeKind::ModuleTopology,
+        ));
+    }
+
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("config:{}", config_digest)),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "provider_schema:{}:{}",
+            manifest.id,
+            manifest.primary_schema_label()
+        )),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input(format!(
+            "semantic_parameters:{}",
+            semantic_provider_parameter_digest()
+        )),
+        DependencyKind::Provider,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Input("toolchain:module_topology:absent".to_string()),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Layer(upstream_layer_key(
+            LayerKind::ModuleGraph,
+            "polint.module_graph",
+            module_graph_output_digest,
+        )),
+        DependencyKind::UpstreamLayer,
+        ShapeKind::Output,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        CacheNode::Layer(upstream_layer_key(
+            LayerKind::SymbolGraph,
+            "polint.symbol_graph",
+            symbol_graph_output_digest,
+        )),
+        DependencyKind::UpstreamLayer,
+        ShapeKind::Output,
+    ));
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
 pub(crate) fn module_graph_import_shape_digests(db: &AnalysisDb) -> Vec<Digest> {
     sorted_imports(db)
         .into_iter()
@@ -221,6 +424,51 @@ pub(crate) fn module_graph_source_package_digests(db: &AnalysisDb) -> Vec<Digest
     digests
 }
 
+pub(crate) fn module_topology_base_topology_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let mut digests = Vec::new();
+    digests.extend(db.workspace_roots().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_workspace_root",
+            &[row.stable_key.as_str(), row.root_path.as_str()],
+        )
+    }));
+    digests.extend(db.topology_packages().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_package",
+            &[
+                row.stable_key.as_str(),
+                row.name.as_str(),
+                row.path.as_str(),
+            ],
+        )
+    }));
+    digests.extend(db.source_sets().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_source_set",
+            &[row.stable_key.as_str(), row.path.as_str()],
+        )
+    }));
+    digests.extend(db.dependency_requirements().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_dependency_requirement",
+            &[row.stable_key.as_str(), row.target_name.as_str()],
+        )
+    }));
+    digests.extend(db.resolved_dependency_edges().iter().map(|row| {
+        Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "topology_resolved_dependency",
+            &[row.stable_key.as_str(), row.package_name.as_str()],
+        )
+    }));
+    digests.sort();
+    digests
+}
+
 pub(crate) fn module_graph_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
@@ -249,6 +497,562 @@ pub(crate) fn derive_requested_module_graph(
     derive_requested_module_graph_uncached(db, loaded, plan)
 }
 
+pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPackageFact> {
+    let resolved_by_import = db
+        .resolved_imports()
+        .iter()
+        .map(|fact| (fact.import, fact))
+        .collect::<BTreeMap<_, _>>();
+    let semantic_by_file_path = semantic_imports_by_file_path(db.semantic_imports());
+    let source_sets_by_file = source_sets_by_file(db.source_sets());
+
+    sorted_imports(db)
+        .into_iter()
+        .enumerate()
+        .map(|(index, import)| {
+            let resolved = resolved_by_import.get(&import.id).copied();
+            let semantic_candidates = semantic_by_file_path
+                .get(&(import.file, import.path.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let semantic = semantic_import_match(semantic_candidates);
+            let source_set = source_sets_by_file.get(&import.file).and_then(|sets| {
+                sets.iter()
+                    .filter_map(|id| source_set_by_id(db.source_sets(), *id))
+                    .min_by_key(|set| set.stable_key.as_str())
+            });
+            let from_package = source_set
+                .and_then(|set| set.package)
+                .and_then(|id| topology_package_by_id(db.topology_packages(), id));
+            let target_node = resolved.and_then(|fact| fact.target_node);
+            let mut candidates = target_node
+                .map(|node| package_candidates_for_node(db, node))
+                .unwrap_or_default();
+            if candidates.is_empty()
+                && let Some(node) = target_node.and_then(|id| module_node_by_id(db, id))
+                && let Some(file) = node.file
+            {
+                candidates.extend(package_candidates_for_file(db, file));
+            }
+            candidates.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            candidates.dedup_by_key(|package| package.id);
+
+            let status = import_to_package_status(
+                import,
+                resolved,
+                semantic,
+                target_node.and_then(|id| module_node_by_id(db, id)),
+                &candidates,
+                from_package,
+                RequirementScope {
+                    requirements: db.dependency_requirements(),
+                    packages: db.topology_packages(),
+                },
+            );
+            let to_package = if status == ImportToPackageStatus::Resolved && candidates.len() == 1 {
+                candidates.first().copied()
+            } else {
+                None
+            };
+            let import_path = semantic
+                .unique
+                .map(|fact| fact.import_path.clone())
+                .unwrap_or_else(|| import.path.clone());
+            let from_package_stable_key = from_package.map(|package| package.stable_key.clone());
+            let to_package_stable_key = to_package.map(|package| package.stable_key.clone());
+            let source_set_stable_key = source_set.map(|set| set.stable_key.clone());
+            let stable_key = stable_key_from_parts(
+                FactFamily::ImportToPackage,
+                &[
+                    ("import_id", import.id.0.to_string()),
+                    ("path", import_path.clone()),
+                    ("from_file", db.path_for(import.file)),
+                    ("status", import_to_package_status_label(status).to_string()),
+                ],
+            );
+
+            ImportToPackageFact {
+                id: ImportToPackageId(index as u64),
+                syntax_import: Some(import.id),
+                resolved_import: resolved.map(|fact| fact.id),
+                semantic_import_stable_key: semantic.unique.map(|fact| fact.stable_key.clone()),
+                from_file: Some(import.file),
+                from_package: from_package.map(|package| package.id),
+                to_package: to_package.map(|package| package.id),
+                target_node,
+                from_package_stable_key,
+                to_package_stable_key,
+                source_set_stable_key,
+                import_path,
+                context: import_context_for_source_set(source_set, db.file(import.file)),
+                stable_key,
+                producer_id: "polint.module_topology",
+                precision: import_to_package_precision(status),
+                status,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn derive_module_topology_with_cache_stats(
+    db: &mut AnalysisDb,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    module_graph_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+) -> ModuleTopologyDerivation {
+    if db.imports().is_empty() {
+        db.replace_import_to_package_facts(Vec::new());
+        return ModuleTopologyDerivation {
+            output_digest: Some(module_topology_output_digest_for_payload(
+                &ModuleTopologyLayerPayload {
+                    schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+                    diagnostics: Vec::new(),
+                    capability_support: Vec::new(),
+                    import_to_package_edges: Vec::new(),
+                },
+                None,
+            )),
+            ..ModuleTopologyDerivation::default()
+        };
+    }
+
+    let config_digest = input_snapshot.config.digest.clone();
+    let go_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::GoLifecycle,
+        "module_topology_go_lifecycle",
+        &input_snapshot.go_lifecycle.components,
+    );
+    let ts_js_lifecycle_digest = lifecycle_component_digest(
+        DigestKind::TsJsLifecycle,
+        "module_topology_ts_js_lifecycle",
+        &input_snapshot.ts_js_lifecycle.components,
+    );
+    let layer_key = module_topology_layer_key(
+        db,
+        manifest,
+        config_digest.clone(),
+        go_lifecycle_digest.clone(),
+        ts_js_lifecycle_digest.clone(),
+        module_graph_output_digest.clone(),
+        symbol_graph_output_digest.clone(),
+    );
+    let store = LayerCacheStore::new(cache.layer_cache_dir(), cache.is_enabled());
+    let mut cache_stats = CacheStats::default();
+    let read = store.read_json_validated::<ModuleTopologyLayerPayload, _>(
+        &layer_key,
+        validate_module_topology_layer_payload,
+    );
+
+    match read.status {
+        LayerCacheReadStatus::Hit => {
+            cache_stats.record_hit();
+            cache_stats.record_verified_reuse();
+            let payload = read
+                .value
+                .expect("layer cache hit should include module topology payload");
+            restore_module_topology_layer_payload(db, &payload);
+            ModuleTopologyDerivation {
+                diagnostics: payload.diagnostics,
+                capability_support: payload.capability_support,
+                cache_stats,
+                output_digest: read.output_digest,
+            }
+        }
+        LayerCacheReadStatus::BypassedDisabled => {
+            cache_stats.record_disabled_bypass();
+            cache_stats.record_recompute();
+            let mut derivation = derive_module_topology_uncached(db);
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
+            if read.status == LayerCacheReadStatus::Miss {
+                cache_stats.record_miss();
+            } else {
+                cache_stats.record_invalid_evicted_read();
+            }
+            cache_stats.record_recompute();
+            let mut derivation = derive_module_topology_uncached(db);
+            let payload = module_topology_layer_payload(db, &derivation);
+            let dependencies = module_topology_layer_dependency_edges(
+                db,
+                &layer_key,
+                manifest,
+                module_graph_output_digest,
+                symbol_graph_output_digest,
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+            );
+            derivation.output_digest = write_module_topology_layer_payload(
+                &store,
+                layer_key,
+                &payload,
+                dependencies,
+                &mut cache_stats,
+                &mut derivation.diagnostics,
+            );
+            derivation.cache_stats = cache_stats;
+            derivation
+        }
+    }
+}
+
+fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivation {
+    let import_to_package_edges = derive_import_to_package_edges(db);
+    db.replace_import_to_package_facts(import_to_package_edges);
+    let payload = ModuleTopologyLayerPayload {
+        schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+        diagnostics: Vec::new(),
+        capability_support: Vec::new(),
+        import_to_package_edges: db.import_to_package_edges().to_vec(),
+    };
+    ModuleTopologyDerivation {
+        diagnostics: Vec::new(),
+        capability_support: Vec::new(),
+        cache_stats: CacheStats::default(),
+        output_digest: Some(module_topology_output_digest_for_payload(&payload, None)),
+    }
+}
+
+fn semantic_imports_by_file_path(
+    semantic_imports: &[SemanticImportFact],
+) -> BTreeMap<(FileId, String), Vec<&SemanticImportFact>> {
+    let mut imports = semantic_imports.iter().collect::<Vec<_>>();
+    imports.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    let mut by_file_path = BTreeMap::new();
+    for import in imports {
+        if let Some(file) = import.file {
+            by_file_path
+                .entry((file, import.import_path.clone()))
+                .or_insert_with(Vec::new)
+                .push(import);
+        }
+    }
+    by_file_path
+}
+
+#[derive(Clone, Copy)]
+struct SemanticImportMatch<'a> {
+    unique: Option<&'a SemanticImportFact>,
+    duplicate_status: Option<ImportToPackageStatus>,
+}
+
+fn semantic_import_match<'a>(
+    semantic_imports: &[&'a SemanticImportFact],
+) -> SemanticImportMatch<'a> {
+    SemanticImportMatch {
+        unique: semantic_imports
+            .first()
+            .copied()
+            .filter(|_| semantic_imports.len() == 1),
+        duplicate_status: duplicate_semantic_import_status(semantic_imports),
+    }
+}
+
+fn duplicate_semantic_import_status(
+    semantic_imports: &[&SemanticImportFact],
+) -> Option<ImportToPackageStatus> {
+    if semantic_imports.len() <= 1 {
+        return None;
+    }
+    let any_dynamic = semantic_imports
+        .iter()
+        .any(|fact| semantic_import_is_dynamic(fact));
+    if any_dynamic {
+        return if semantic_imports
+            .iter()
+            .all(|fact| semantic_import_is_dynamic(fact))
+        {
+            Some(ImportToPackageStatus::Dynamic)
+        } else {
+            Some(ImportToPackageStatus::Ambiguous)
+        };
+    }
+
+    let first = semantic_imports[0];
+    if semantic_imports
+        .iter()
+        .any(|fact| fact.status != first.status || fact.kind != first.kind)
+    {
+        return Some(ImportToPackageStatus::Ambiguous);
+    }
+
+    match first.status {
+        SemanticStatus::Ambiguous | SemanticStatus::Cycle => Some(ImportToPackageStatus::Ambiguous),
+        SemanticStatus::SetupMissing => Some(ImportToPackageStatus::SetupMissing),
+        SemanticStatus::Unsupported => Some(ImportToPackageStatus::Unsupported),
+        SemanticStatus::Dynamic
+        | SemanticStatus::Resolved
+        | SemanticStatus::Unresolved
+        | SemanticStatus::Generated
+        | SemanticStatus::External => None,
+    }
+}
+
+fn semantic_import_is_dynamic(fact: &SemanticImportFact) -> bool {
+    fact.status == SemanticStatus::Dynamic
+        || matches!(
+            fact.kind,
+            SemanticImportKind::DynamicImport | SemanticImportKind::Dynamic
+        )
+}
+
+fn source_sets_by_file(
+    source_sets: &[SourceSetFact],
+) -> BTreeMap<FileId, Vec<topology::SourceSetId>> {
+    let mut by_file = BTreeMap::<FileId, Vec<_>>::new();
+    for source_set in source_sets {
+        for file in &source_set.files {
+            by_file.entry(*file).or_default().push(source_set.id);
+        }
+    }
+    by_file
+}
+
+fn source_set_by_id(
+    source_sets: &[SourceSetFact],
+    id: topology::SourceSetId,
+) -> Option<&SourceSetFact> {
+    source_sets.iter().find(|source_set| source_set.id == id)
+}
+
+fn topology_package_by_id(
+    packages: &[TopologyPackageFact],
+    id: topology::TopologyPackageId,
+) -> Option<&TopologyPackageFact> {
+    packages.iter().find(|package| package.id == id)
+}
+
+fn module_node_by_id(db: &AnalysisDb, id: ModuleNodeId) -> Option<&crate::core::ModuleNode> {
+    db.module_nodes().iter().find(|node| node.id == id)
+}
+
+fn package_candidates_for_node(db: &AnalysisDb, node: ModuleNodeId) -> Vec<&TopologyPackageFact> {
+    let mut candidates = db
+        .topology_packages()
+        .iter()
+        .filter(|package| package.module_node == Some(node))
+        .collect::<Vec<_>>();
+    if candidates.is_empty()
+        && let Some(node) = module_node_by_id(db, node)
+        && node.language == Some(Language::Go)
+        && node.kind == ModuleNodeKind::Package
+    {
+        candidates.extend(db.topology_packages().iter().filter(|package| {
+            package.language == Some(Language::Go)
+                && package.kind == TopologyPackageKind::Package
+                && package.name == node.label
+        }));
+    }
+    candidates
+}
+
+fn package_candidates_for_file(db: &AnalysisDb, file: FileId) -> Vec<&TopologyPackageFact> {
+    db.source_sets()
+        .iter()
+        .filter(|source_set| source_set.files.contains(&file))
+        .filter_map(|source_set| source_set.package)
+        .filter_map(|package| topology_package_by_id(db.topology_packages(), package))
+        .collect()
+}
+
+fn import_to_package_status(
+    import: &ImportFact,
+    resolved: Option<&crate::core::ResolvedImportFact>,
+    semantic: SemanticImportMatch<'_>,
+    target_node: Option<&crate::core::ModuleNode>,
+    candidates: &[&TopologyPackageFact],
+    from_package: Option<&TopologyPackageFact>,
+    requirement_scope: RequirementScope<'_>,
+) -> ImportToPackageStatus {
+    if resolved.is_some_and(|fact| fact.reason == Some(UnresolvedReason::OutsideWorkspace)) {
+        return ImportToPackageStatus::OutsideWorkspace;
+    }
+    if let Some(status) = semantic.duplicate_status {
+        return status;
+    }
+    if semantic.unique.is_some_and(semantic_import_is_dynamic)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Dynamic)
+    {
+        return ImportToPackageStatus::Dynamic;
+    }
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::SetupMissing)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::SetupMissing)
+    {
+        return ImportToPackageStatus::SetupMissing;
+    }
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::Unsupported)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::Unsupported)
+    {
+        return ImportToPackageStatus::Unsupported;
+    }
+    if semantic
+        .unique
+        .is_some_and(|fact| fact.status == SemanticStatus::Ambiguous)
+        || candidates.len() > 1
+    {
+        return ImportToPackageStatus::Ambiguous;
+    }
+    if target_node.is_none() || resolved.is_none_or(|fact| fact.target_node.is_none()) {
+        return ImportToPackageStatus::Unresolved;
+    }
+    if target_node.is_some_and(|node| node.kind == ModuleNodeKind::External)
+        || resolved.is_some_and(|fact| fact.status == ResolutionStatus::External)
+        || semantic
+            .unique
+            .is_some_and(|fact| fact.status == SemanticStatus::External)
+    {
+        if declared_requirement_exists(import, from_package, requirement_scope) {
+            ImportToPackageStatus::External
+        } else {
+            ImportToPackageStatus::Undeclared
+        }
+    } else if candidates.len() == 1 {
+        ImportToPackageStatus::Resolved
+    } else {
+        ImportToPackageStatus::Unresolved
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RequirementScope<'a> {
+    requirements: &'a [DependencyRequirementFact],
+    packages: &'a [TopologyPackageFact],
+}
+
+fn declared_requirement_exists(
+    import: &ImportFact,
+    from_package: Option<&TopologyPackageFact>,
+    scope: RequirementScope<'_>,
+) -> bool {
+    scope.requirements.iter().any(|requirement| {
+        requirement_matches_import(requirement, import)
+            && from_package.is_none_or(|package| {
+                requirement_applies_to_package(requirement, package, scope.packages)
+            })
+    })
+}
+
+fn requirement_matches_import(
+    requirement: &DependencyRequirementFact,
+    import: &ImportFact,
+) -> bool {
+    if import.language == Language::Go {
+        import.path == requirement.target_name
+            || import
+                .path
+                .strip_prefix(requirement.target_name.as_str())
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    } else {
+        requirement.target_name == external_package_name(&import.path)
+    }
+}
+
+fn requirement_applies_to_package(
+    requirement: &DependencyRequirementFact,
+    package: &TopologyPackageFact,
+    packages: &[TopologyPackageFact],
+) -> bool {
+    if requirement.from_package == Some(package.id) {
+        return true;
+    }
+    if package.language != Some(Language::Go) {
+        return false;
+    }
+    requirement
+        .from_package
+        .and_then(|id| topology_package_by_id(packages, id))
+        .is_some_and(|requirement_package| {
+            requirement_package.language == Some(Language::Go)
+                && requirement_package.kind == TopologyPackageKind::Workspace
+                && requirement_package.workspace_root == package.workspace_root
+        })
+}
+
+fn external_package_name(path: &str) -> &str {
+    if let Some(stripped) = path.strip_prefix('@') {
+        let mut parts = stripped.split('/');
+        let Some(scope_name) = parts.next() else {
+            return path;
+        };
+        let Some(package_name) = parts.next() else {
+            return path;
+        };
+        let end = 1 + scope_name.len() + 1 + package_name.len();
+        &path[..end]
+    } else {
+        path.split('/').next().unwrap_or(path)
+    }
+}
+
+fn import_context_for_source_set(
+    source_set: Option<&SourceSetFact>,
+    file: Option<&SourceFile>,
+) -> ImportContextKind {
+    match source_set.map(|set| set.kind) {
+        Some(SourceSetKind::Test) => ImportContextKind::Test,
+        Some(SourceSetKind::Generated) => ImportContextKind::Generated,
+        Some(SourceSetKind::Vendor) => ImportContextKind::Vendor,
+        Some(SourceSetKind::External) => ImportContextKind::External,
+        Some(SourceSetKind::Source) => ImportContextKind::Source,
+        Some(SourceSetKind::Unknown) | None => file
+            .map(|file| path_context(&file.relative_path))
+            .unwrap_or(ImportContextKind::Unknown),
+    }
+}
+
+fn path_context(relative_path: &str) -> ImportContextKind {
+    let normalized = relative_path.replace('\\', "/");
+    if normalized.contains("/vendor/") || normalized.starts_with("vendor/") {
+        ImportContextKind::Vendor
+    } else if normalized.contains(".generated.") || normalized.contains("/generated/") {
+        ImportContextKind::Generated
+    } else if normalized.ends_with("_test.go")
+        || normalized.contains(".test.")
+        || normalized.contains(".spec.")
+    {
+        ImportContextKind::Test
+    } else {
+        ImportContextKind::Source
+    }
+}
+
+fn import_to_package_precision(status: ImportToPackageStatus) -> TopologyPrecision {
+    match status {
+        ImportToPackageStatus::Resolved | ImportToPackageStatus::External => {
+            TopologyPrecision::ExactStatic
+        }
+        ImportToPackageStatus::Unsupported => TopologyPrecision::Unsupported,
+        ImportToPackageStatus::Ambiguous => TopologyPrecision::Heuristic,
+        ImportToPackageStatus::Unresolved
+        | ImportToPackageStatus::SetupMissing
+        | ImportToPackageStatus::Dynamic
+        | ImportToPackageStatus::Undeclared
+        | ImportToPackageStatus::OutsideWorkspace => TopologyPrecision::Unknown,
+    }
+}
+
+fn import_to_package_status_label(status: ImportToPackageStatus) -> &'static str {
+    match status {
+        ImportToPackageStatus::Resolved => "resolved",
+        ImportToPackageStatus::External => "external",
+        ImportToPackageStatus::Unresolved => "unresolved",
+        ImportToPackageStatus::SetupMissing => "setup-missing",
+        ImportToPackageStatus::Unsupported => "unsupported",
+        ImportToPackageStatus::Dynamic => "dynamic",
+        ImportToPackageStatus::Ambiguous => "ambiguous",
+        ImportToPackageStatus::Undeclared => "undeclared",
+        ImportToPackageStatus::OutsideWorkspace => "outside-workspace",
+    }
+}
+
 pub(crate) fn derive_requested_module_graph_with_cache_stats(
     db: &mut AnalysisDb,
     loaded: &LoadedConfig,
@@ -274,6 +1078,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         &input_snapshot.ts_js_lifecycle.components,
     );
     let layer_key = module_graph_layer_key(
+        loaded.root.as_path(),
         db,
         manifest,
         config_digest.clone(),
@@ -320,6 +1125,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
             let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
             let payload = module_graph_layer_payload(db, &derivation);
             let dependencies = module_graph_layer_dependency_edges(
+                loaded.root.as_path(),
                 db,
                 &layer_key,
                 manifest,
@@ -476,6 +1282,9 @@ fn derive_requested_module_graph_uncached(
 
     let output = builder.finish();
     db.replace_module_graph_facts(resolved_imports, output.nodes, output.edges);
+    let base_topology =
+        derive_base_topology(loaded, db, &go_metadata, ts_resolver_context.as_ref());
+    db.replace_topology_facts(base_topology);
 
     let capability_support =
         setup_missing_support(plan, saw_setup_missing, setup_missing_reason.as_deref());
@@ -487,6 +1296,12 @@ fn derive_requested_module_graph_uncached(
             db.resolved_imports(),
             db.module_nodes(),
             db.module_edges(),
+            db.workspace_roots(),
+            db.topology_packages(),
+            db.source_sets(),
+            db.dependency_requirements(),
+            db.resolved_dependency_edges(),
+            db.repo_topology_overlays(),
         ),
         None,
     ));
@@ -524,6 +1339,24 @@ fn module_graph_layer_payload(
         resolved_imports: db.resolved_imports().to_vec(),
         nodes: db.module_nodes().to_vec(),
         edges: db.module_edges().to_vec(),
+        workspace_roots: db.workspace_roots().to_vec(),
+        topology_packages: db.topology_packages().to_vec(),
+        source_sets: db.source_sets().to_vec(),
+        dependency_requirements: db.dependency_requirements().to_vec(),
+        resolved_dependency_edges: db.resolved_dependency_edges().to_vec(),
+        repo_topology_overlays: db.repo_topology_overlays().to_vec(),
+    }
+}
+
+fn module_topology_layer_payload(
+    db: &AnalysisDb,
+    derivation: &ModuleTopologyDerivation,
+) -> ModuleTopologyLayerPayload {
+    ModuleTopologyLayerPayload {
+        schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+        diagnostics: derivation.diagnostics.clone(),
+        capability_support: derivation.capability_support.clone(),
+        import_to_package_edges: db.import_to_package_edges().to_vec(),
     }
 }
 
@@ -533,6 +1366,22 @@ fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraph
         payload.nodes.clone(),
         payload.edges.clone(),
     );
+    db.replace_topology_facts(TopologyOutput {
+        workspace_roots: payload.workspace_roots.clone(),
+        packages: payload.topology_packages.clone(),
+        source_sets: payload.source_sets.clone(),
+        dependency_requirements: payload.dependency_requirements.clone(),
+        resolved_dependency_edges: payload.resolved_dependency_edges.clone(),
+        import_to_package_edges: Vec::new(),
+        overlays: payload.repo_topology_overlays.clone(),
+    });
+}
+
+fn restore_module_topology_layer_payload(
+    db: &mut AnalysisDb,
+    payload: &ModuleTopologyLayerPayload,
+) {
+    db.replace_import_to_package_facts(payload.import_to_package_edges.clone());
 }
 
 fn validate_module_graph_layer_payload(
@@ -540,8 +1389,25 @@ fn validate_module_graph_layer_payload(
     manifest: &LayerCacheManifest,
 ) -> bool {
     payload.schema == MODULE_GRAPH_LAYER_SCHEMA
+        && topology_payload_stable_keys_are_unique(payload)
         && manifest.output_digest
             == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+pub(crate) fn validate_module_topology_layer_payload(
+    payload: &ModuleTopologyLayerPayload,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    payload.schema == MODULE_TOPOLOGY_LAYER_SCHEMA
+        && import_to_package_payload_stable_keys_are_unique(&payload.import_to_package_edges)
+        && manifest.output_digest
+            == module_topology_output_digest_for_payload(payload, Some(&manifest.key))
+}
+
+fn import_to_package_payload_stable_keys_are_unique(rows: &[ImportToPackageFact]) -> bool {
+    let mut seen = BTreeSet::new();
+    rows.iter()
+        .all(|row| seen.insert(row.stable_key.as_str().to_string()))
 }
 
 fn write_module_graph_layer_payload(
@@ -578,6 +1444,40 @@ fn write_module_graph_layer_payload(
     Some(output_digest)
 }
 
+fn write_module_topology_layer_payload(
+    store: &LayerCacheStore,
+    layer_key: LayerKey,
+    payload: &ModuleTopologyLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Digest> {
+    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+        Ok(digest) => digest,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module topology layer", error));
+            return None;
+        }
+    };
+    let output_digest = module_topology_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest.clone(),
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        "native_trusted",
+        Vec::new(),
+    );
+
+    match store.write_json(&manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module topology layer", error)),
+    }
+    Some(output_digest)
+}
+
 fn module_graph_output_digest_for_payload(
     payload: &ModuleGraphLayerPayload,
     layer_key: Option<&LayerKey>,
@@ -595,6 +1495,24 @@ fn module_graph_output_digest_for_payload(
     }
 }
 
+fn module_topology_output_digest_for_payload(
+    payload: &ModuleTopologyLayerPayload,
+    layer_key: Option<&LayerKey>,
+) -> Digest {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload).unwrap_or_else(|_| {
+        Digest::unsupported(DigestKind::LayerOutput, "module_topology", "json")
+    });
+    if let Some(layer_key) = layer_key {
+        module_topology_output_digest(layer_key, &payload_digest)
+    } else {
+        Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "module_topology_layer_output",
+            &[&payload_digest.to_string()],
+        )
+    }
+}
+
 fn module_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
     let layer_key_json =
         serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
@@ -605,12 +1523,32 @@ fn module_graph_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> 
     )
 }
 
+fn module_topology_output_digest(layer_key: &LayerKey, payload_digest: &Digest) -> Digest {
+    let layer_key_json =
+        serde_json::to_string(layer_key).unwrap_or_else(|_| "unserializable_layer_key".to_string());
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "module_topology_layer_output",
+        &[&payload_digest.to_string(), &layer_key_json],
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "payload construction keeps persisted row families explicit and schema-aligned"
+)]
 fn module_graph_layer_payload_parts(
     diagnostics: &[Diagnostic],
     capability_support: &[CapabilitySupport],
     resolved_imports: &[crate::core::ResolvedImportFact],
     nodes: &[crate::core::ModuleNode],
     edges: &[crate::core::ModuleEdge],
+    workspace_roots: &[WorkspaceRootFact],
+    topology_packages: &[TopologyPackageFact],
+    source_sets: &[SourceSetFact],
+    dependency_requirements: &[DependencyRequirementFact],
+    resolved_dependency_edges: &[ResolvedDependencyEdgeFact],
+    repo_topology_overlays: &[RepoTopologyOverlayFact],
 ) -> ModuleGraphLayerPayload {
     ModuleGraphLayerPayload {
         schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
@@ -619,7 +1557,338 @@ fn module_graph_layer_payload_parts(
         resolved_imports: resolved_imports.to_vec(),
         nodes: nodes.to_vec(),
         edges: edges.to_vec(),
+        workspace_roots: workspace_roots.to_vec(),
+        topology_packages: topology_packages.to_vec(),
+        source_sets: source_sets.to_vec(),
+        dependency_requirements: dependency_requirements.to_vec(),
+        resolved_dependency_edges: resolved_dependency_edges.to_vec(),
+        repo_topology_overlays: repo_topology_overlays.to_vec(),
     }
+}
+
+fn topology_payload_stable_keys_are_unique(payload: &ModuleGraphLayerPayload) -> bool {
+    topology_stable_keys_unique(
+        "WorkspaceRootFact",
+        payload
+            .workspace_roots
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "TopologyPackageFact",
+        payload
+            .topology_packages
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "SourceSetFact",
+        payload
+            .source_sets
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "DependencyRequirementFact",
+        payload
+            .dependency_requirements
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "ResolvedDependencyEdgeFact",
+        payload
+            .resolved_dependency_edges
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    ) && topology_stable_keys_unique(
+        "RepoTopologyOverlayFact",
+        payload
+            .repo_topology_overlays
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    )
+}
+
+fn topology_stable_keys_unique<'a>(
+    family: &'static str,
+    stable_keys: impl Iterator<Item = &'a str>,
+) -> bool {
+    let mut seen = BTreeSet::new();
+    for stable_key in stable_keys {
+        if !seen.insert(stable_key) {
+            let _stable_key_conflict = (family, stable_key);
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn derive_base_topology(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    go_metadata: &go::GoPackageIndex,
+    ts_resolver_context: Option<&ts::TsResolverContext>,
+) -> TopologyOutput {
+    let mut output = go::collect_go_topology(loaded, db, go_metadata);
+    output.merge(ts::collect_ts_topology(loaded, db, ts_resolver_context));
+    output.overlays.extend(collect_repo_topology_overlays(
+        loaded.root.as_path(),
+        db,
+        &output,
+    ));
+    output.normalized()
+}
+
+pub(crate) fn collect_repo_topology_overlays(
+    root: &Path,
+    _db: &AnalysisDb,
+    topology: &TopologyOutput,
+) -> Vec<RepoTopologyOverlayFact> {
+    let mut overlays = Vec::new();
+    let mut seen_keys = BTreeSet::new();
+
+    for path in codeowner_paths(root) {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::OwnershipZone,
+            format!("CODEOWNERS:{path}"),
+            Some(path.clone()),
+            format!("repo-topology:ownership-zone:{path}"),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+
+    for source_set in &topology.source_sets {
+        match source_set.kind {
+            SourceSetKind::Generated => push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::GeneratedZone,
+                format!("generated:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!("repo-topology:generated-zone:{}", source_set.path),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            ),
+            SourceSetKind::Test => push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::TestOnlyVisibility,
+                format!("test-only:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!("repo-topology:test-only-visibility:{}", source_set.path),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            ),
+            SourceSetKind::Source
+            | SourceSetKind::Vendor
+            | SourceSetKind::External
+            | SourceSetKind::Unknown => {}
+        }
+
+        if let Some(layer) = conventional_architecture_layer(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::ArchitectureLayer,
+                format!("{layer}:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:architecture-layer:{layer}:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::Heuristic,
+                TopologyStatus::Present,
+            );
+        }
+        if let Some(deploy_unit) = conventional_deploy_unit(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::DeployUnit,
+                format!("{deploy_unit}:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:deploy-unit:{deploy_unit}:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::Heuristic,
+                TopologyStatus::Present,
+            );
+        }
+        if is_internal_path(&source_set.path) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                RepoTopologyOverlayKind::InternalPublicApiBoundary,
+                format!("internal:{}", source_set.path),
+                Some(source_set.path.clone()),
+                format!(
+                    "repo-topology:internal-public-api-boundary:internal:{}",
+                    source_set.path
+                ),
+                TopologyPrecision::ExactStatic,
+                TopologyStatus::Present,
+            );
+        }
+    }
+
+    for package in &topology.packages {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            format!("package:{}", package.name),
+            Some(package.path.clone()),
+            format!(
+                "repo-topology:source-of-truth-directory:package:{}",
+                package.path
+            ),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+    for workspace_root in &topology.workspace_roots {
+        push_repo_overlay(
+            &mut overlays,
+            &mut seen_keys,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            format!("workspace-root:{}", workspace_root.root_path),
+            Some(workspace_root.root_path.clone()),
+            format!(
+                "repo-topology:source-of-truth-directory:workspace-root:{}",
+                workspace_root.root_path
+            ),
+            TopologyPrecision::ExactStatic,
+            TopologyStatus::Present,
+        );
+    }
+
+    for (kind, label, stable_key, always_emit) in [
+        (
+            RepoTopologyOverlayKind::OwnershipZone,
+            "ownership-zone:unknown",
+            "repo-topology:ownership-zone:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            "architecture-layer:unknown",
+            "repo-topology:architecture-layer:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::DeployUnit,
+            "deploy-unit:unknown",
+            "repo-topology:deploy-unit:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::GeneratedZone,
+            "generated-zone:unknown",
+            "repo-topology:generated-zone:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            "test-only-visibility:unknown",
+            "repo-topology:test-only-visibility:unknown",
+            false,
+        ),
+        (
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            "internal-public-api-boundary:unknown",
+            "repo-topology:internal-public-api-boundary:unknown",
+            true,
+        ),
+        (
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+            "source-of-truth-directory:unknown",
+            "repo-topology:source-of-truth-directory:unknown",
+            false,
+        ),
+    ] {
+        if always_emit || !overlays.iter().any(|overlay| overlay.kind == kind) {
+            push_repo_overlay(
+                &mut overlays,
+                &mut seen_keys,
+                kind,
+                label.to_string(),
+                None,
+                stable_key.to_string(),
+                TopologyPrecision::Unknown,
+                TopologyStatus::Unknown,
+            );
+        }
+    }
+
+    overlays
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "overlay construction records every topology evidence field at the call site"
+)]
+fn push_repo_overlay(
+    overlays: &mut Vec<RepoTopologyOverlayFact>,
+    seen_keys: &mut BTreeSet<String>,
+    kind: RepoTopologyOverlayKind,
+    label: String,
+    path: Option<String>,
+    stable_key: String,
+    precision: TopologyPrecision,
+    status: TopologyStatus,
+) {
+    if !seen_keys.insert(stable_key.clone()) {
+        return;
+    }
+    overlays.push(RepoTopologyOverlayFact {
+        id: RepoTopologyOverlayId(overlays.len() as u64),
+        root: None,
+        package: None,
+        source_set: None,
+        kind,
+        label,
+        path,
+        stable_key,
+        producer_id: "polint.module_graph",
+        precision,
+        status,
+    });
+}
+
+fn codeowner_paths(root: &Path) -> Vec<String> {
+    [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+        .into_iter()
+        .filter(|relative_path| root.join(relative_path).is_file())
+        .map(str::to_string)
+        .collect()
+}
+
+fn conventional_architecture_layer(path: &str) -> Option<&'static str> {
+    match first_component(path) {
+        Some("apps" | "cmd" | "services") => Some("entrypoint"),
+        Some("internal") => Some("internal"),
+        Some("pkg" | "packages" | "libs" | "lib") => Some("library"),
+        Some("src") => Some("source"),
+        Some("test" | "tests" | "__tests__") => Some("test"),
+        Some("generated" | "gen") => Some("generated"),
+        _ => None,
+    }
+}
+
+fn conventional_deploy_unit(path: &str) -> Option<&'static str> {
+    match first_component(path) {
+        Some("apps" | "cmd" | "services") => Some("service"),
+        _ => None,
+    }
+}
+
+fn is_internal_path(path: &str) -> bool {
+    path == "internal" || path.starts_with("internal/") || path.contains("/internal/")
+}
+
+fn first_component(path: &str) -> Option<&str> {
+    path.split('/').find(|part| !part.is_empty())
 }
 
 fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
@@ -701,6 +1970,14 @@ fn upstream_syntax_layer_key(index: usize, output_digest: Digest) -> LayerKey {
         1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
         _ => (LayerKind::Extension, "polint.unknown_upstream"),
     };
+    upstream_layer_key(layer_kind, provider_id, output_digest)
+}
+
+fn upstream_layer_key(
+    layer_kind: LayerKind,
+    provider_id: &'static str,
+    output_digest: Digest,
+) -> LayerKey {
     let output_dependency = dependency_layer_digest(output_digest);
 
     LayerKey::new(
@@ -869,7 +2146,8 @@ mod tests {
     use super::model::ModuleGraphBuilder;
     use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerKey, ShapeKind,
+        CacheNode, DependencyKind, Digest, DigestKind, InputSnapshot, LayerCacheStore, LayerKey,
+        ShapeKind,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -882,6 +2160,7 @@ mod tests {
         ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision, ResolutionStatus, Span,
         UnresolvedReason,
     };
+    use crate::module_graph::topology::WorkspaceRootId;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -954,7 +2233,12 @@ mod tests {
     }
 
     fn module_graph_key(db: &AnalysisDb) -> LayerKey {
+        module_graph_key_for_root(Path::new("."), db)
+    }
+
+    fn module_graph_key_for_root(root: &Path, db: &AnalysisDb) -> LayerKey {
         super::module_graph_layer_key(
+            root,
             db,
             module_graph_manifest(),
             Digest::from_parts(DigestKind::Config, "config", &["base"]),
@@ -1004,6 +2288,35 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
             ],
         )
+    }
+
+    fn topology_stable_keys(db: &AnalysisDb) -> Vec<Vec<String>> {
+        vec![
+            db.workspace_roots()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.topology_packages()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.source_sets()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.dependency_requirements()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.resolved_dependency_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.repo_topology_overlays()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+        ]
     }
 
     fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
@@ -1100,6 +2413,231 @@ mod tests {
         assert_eq!(
             second.resolved_imports()[0].status,
             ResolutionStatus::Resolved
+        );
+    }
+
+    #[test]
+    fn module_graph_layer_cache_topology_cold_warm_restores_identical_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut first, app, "react", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert!(!first.workspace_roots().is_empty());
+        let first_keys = topology_stable_keys(&first);
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut second, app, "react", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(topology_stable_keys(&second), first_keys);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_invalidates_when_source_less_workspace_member_manifest_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let loaded = loaded_config_for(temp.path());
+        let mut first = AnalysisDb::new();
+        add_file(&mut first, temp.path(), "src/app.ts", "export {};\n");
+
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert!(
+            first
+                .topology_packages()
+                .iter()
+                .all(|package| package.path != "packages/ui")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let mut second = AnalysisDb::new();
+        add_file(&mut second, temp.path(), "src/app.ts", "export {};\n");
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.misses, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert!(
+            second
+                .topology_packages()
+                .iter()
+                .any(|package| { package.path == "packages/ui" && package.name == "@acme/ui" })
+        );
+    }
+
+    #[test]
+    fn module_graph_layer_cache_topology_payload_contains_schema_v2_and_normalized_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = loaded_config_for(temp.path());
+
+        let result = derive_module_graph_with_cache(&mut db, &loaded, &cache, &plan, "config");
+
+        assert_eq!(result.cache_stats.writes, 1);
+        let payload_path = first_layer_file(&cache_root, "blobs");
+        let payload_text = fs::read_to_string(payload_path).expect("payload JSON readable");
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_text).expect("payload is JSON");
+        assert_eq!(payload["schema"], "module-graph-facts-v2");
+        for field in [
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "repo_topology_overlays",
+        ] {
+            assert!(
+                payload[field]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty()),
+                "{field} should contain normalized topology rows"
+            );
+        }
+        assert!(!payload_text.contains(temp.path().to_string_lossy().as_ref()));
+        assert!(!payload_text.contains("import React from 'react'"));
+    }
+
+    #[test]
+    fn module_graph_layer_cache_rejects_duplicate_topology_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["module_graph"]);
+        let mut first = AnalysisDb::new();
+        add_file(&mut first, temp.path(), "src/app.ts", "export {};\n");
+        let loaded = loaded_config_for(temp.path());
+
+        let derivation =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        let mut payload = super::module_graph_layer_payload(&first, &derivation);
+        let mut duplicate_root = payload.workspace_roots[0].clone();
+        duplicate_root.id = WorkspaceRootId(99);
+        duplicate_root.root_path = "conflicting-root".to_string();
+        payload.workspace_roots.push(duplicate_root);
+        let upstream = vec![
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["stable"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
+        ];
+        let snapshot = module_graph_input_snapshot(&loaded, &first, &plan, "config");
+        let config_digest = snapshot.config.digest.clone();
+        let go_lifecycle_digest = super::lifecycle_component_digest(
+            DigestKind::GoLifecycle,
+            "module_graph_go_lifecycle",
+            &snapshot.go_lifecycle.components,
+        );
+        let ts_js_lifecycle_digest = super::lifecycle_component_digest(
+            DigestKind::TsJsLifecycle,
+            "module_graph_ts_js_lifecycle",
+            &snapshot.ts_js_lifecycle.components,
+        );
+        let key = super::module_graph_layer_key(
+            temp.path(),
+            &first,
+            module_graph_manifest(),
+            config_digest.clone(),
+            go_lifecycle_digest.clone(),
+            ts_js_lifecycle_digest.clone(),
+            upstream.clone(),
+        );
+        let dependencies = super::module_graph_layer_dependency_edges(
+            temp.path(),
+            &first,
+            &key,
+            module_graph_manifest(),
+            &upstream,
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+        );
+        let store = LayerCacheStore::new(cache.layer_cache_dir(), true);
+        let mut stats = crate::analysis_kernel::incremental::CacheStats::default();
+        let mut diagnostics = Vec::new();
+        super::write_module_graph_layer_payload(
+            &store,
+            key,
+            &payload,
+            dependencies,
+            &mut stats,
+            &mut diagnostics,
+        )
+        .expect("corrupt payload writes");
+
+        let mut second = AnalysisDb::new();
+        add_file(&mut second, temp.path(), "src/app.ts", "export {};\n");
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(
+            second
+                .workspace_roots()
+                .iter()
+                .filter(|row| row.stable_key == "repository:.")
+                .count(),
+            1
         );
     }
 
@@ -1273,6 +2811,7 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]);
 
         let edges = super::module_graph_layer_dependency_edges(
+            temp.path(),
             &db,
             &key,
             module_graph_manifest(),
@@ -1294,6 +2833,60 @@ mod tests {
             (CacheNode::Layer(layer), CacheNode::Input(input), ShapeKind::Import)
                 if layer == &key && input.contains("import:src/app.ts:react")
         )));
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_dependency_edges_include_manifest_lock_workspace_and_overlay_inputs()
+     {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for (path, source) in [
+            ("go.mod", "module example.com/repo\n"),
+            ("go.sum", "github.com/acme/lib v1.0.0 h1:abc\n"),
+            ("go.work", "go 1.22\nuse ./services/api\n"),
+            ("package.json", r#"{"name":"root"}"#),
+            ("package-lock.json", r#"{"lockfileVersion":3}"#),
+            ("pnpm-workspace.yaml", "packages:\n  - packages/*\n"),
+            ("tsconfig.json", r#"{"compilerOptions":{"baseUrl":"."}}"#),
+        ] {
+            write_file(temp.path(), path, source);
+        }
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+        let key = module_graph_key_for_root(temp.path(), &db);
+
+        let edges = super::module_graph_layer_dependency_edges(
+            temp.path(),
+            &db,
+            &key,
+            module_graph_manifest(),
+            &[],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+        );
+
+        for file_name in [
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "package.json",
+            "package-lock.json",
+            "pnpm-workspace.yaml",
+            "tsconfig.json",
+        ] {
+            assert!(
+                edges.iter().any(|edge| matches!(
+                    (&edge.from, &edge.to, edge.kind, edge.required_shape),
+                    (
+                        CacheNode::Layer(layer),
+                        CacheNode::Input(input),
+                        DependencyKind::Input,
+                        ShapeKind::ModuleTopology
+                    ) if layer == &key && input.contains(file_name)
+                )),
+                "missing topology dependency edge for {file_name}"
+            );
+        }
     }
 
     fn node_label(db: &AnalysisDb, id: Option<ModuleNodeId>) -> Option<&str> {
@@ -2279,5 +3872,1638 @@ mod tests {
         assert!(db.module_edges().iter().any(|edge| {
             edge.kind == ModuleEdgeKind::DependsOn && edge.from == module && edge.to == external
         }));
+    }
+}
+
+#[cfg(test)]
+mod base_topology {
+    use super::derive_requested_module_graph;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{AnalysisDb, ImportFact, ImportId, Language, Span};
+    use crate::module_graph::topology::{RepoTopologyOverlayKind, TopologyStatus};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn span(file: crate::core::FileId, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 1,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: start_byte + 2,
+        }
+    }
+
+    fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test fixture path has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write fixture");
+        path
+    }
+
+    fn add_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_file(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn push_ts_import(db: &mut AnalysisDb, file: crate::core::FileId, path: &str, start_byte: u32) {
+        db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span(file, start_byte),
+            language: Language::TypeScript,
+        });
+    }
+
+    #[test]
+    fn module_graph_derivation_stores_mixed_go_ts_base_topology() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "go.mod",
+            "module example.com/repo\n\ngo 1.22\n\nrequire github.com/acme/lib v1.2.3\n",
+        );
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "cmd/api/main.go", "package main\n");
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        assert!(!db.workspace_roots().is_empty());
+        assert!(!db.topology_packages().is_empty());
+        assert!(!db.source_sets().is_empty());
+        assert!(!db.dependency_requirements().is_empty());
+        assert!(!db.resolved_dependency_edges().is_empty());
+        assert!(!db.repo_topology_overlays().is_empty());
+    }
+
+    #[test]
+    fn base_topology_stable_keys_are_byte_identical_across_derivations() {
+        let first = derive_stable_keys_for_fixture();
+        let second = derive_stable_keys_for_fixture();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn declared_dependencies_and_actual_imports_remain_separate_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        assert!(
+            db.dependency_requirements()
+                .iter()
+                .any(|row| row.target_name == "react")
+        );
+        assert!(
+            db.resolved_imports()
+                .iter()
+                .any(|row| row.import == ImportId(0))
+        );
+        assert!(db.import_to_package_edges().is_empty());
+    }
+
+    #[test]
+    fn base_topology_emits_d21_overlay_rows_or_unknowns() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let mut db = AnalysisDb::new();
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.generated.ts",
+            "export const app = true;\n",
+        );
+        add_file(
+            &mut db,
+            temp.path(),
+            "src/app.test.ts",
+            "export const app = true;\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        let overlays = db.repo_topology_overlays();
+        for kind in [
+            RepoTopologyOverlayKind::OwnershipZone,
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            RepoTopologyOverlayKind::DeployUnit,
+            RepoTopologyOverlayKind::GeneratedZone,
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+        ] {
+            assert!(
+                overlays.iter().any(|overlay| overlay.kind == kind),
+                "missing overlay kind {kind:?}"
+            );
+        }
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:ownership-zone:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:architecture-layer:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:deploy-unit:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+        assert!(overlays.iter().any(|overlay| {
+            overlay.stable_key == "repo-topology:internal-public-api-boundary:unknown"
+                && overlay.status == TopologyStatus::Unknown
+        }));
+    }
+
+    fn derive_stable_keys_for_fixture() -> Vec<Vec<String>> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_file(
+            temp.path(),
+            "package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"18.2.0"}}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        let app = add_file(
+            &mut db,
+            temp.path(),
+            "src/app.ts",
+            "import React from 'react';\n",
+        );
+        push_ts_import(&mut db, app, "react", 0);
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        derive_requested_module_graph(
+            &mut db,
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["module_graph"]),
+        );
+
+        vec![
+            db.workspace_roots()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.topology_packages()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.source_sets()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.dependency_requirements()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.resolved_dependency_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+            db.repo_topology_overlays()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect(),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod topology_overlay_categories {
+    use crate::module_graph::topology::RepoTopologyOverlayKind;
+
+    #[test]
+    fn overlay_kind_contains_d21_categories() {
+        let kinds = [
+            RepoTopologyOverlayKind::OwnershipZone,
+            RepoTopologyOverlayKind::ArchitectureLayer,
+            RepoTopologyOverlayKind::DeployUnit,
+            RepoTopologyOverlayKind::GeneratedZone,
+            RepoTopologyOverlayKind::TestOnlyVisibility,
+            RepoTopologyOverlayKind::InternalPublicApiBoundary,
+            RepoTopologyOverlayKind::SourceOfTruthDirectory,
+        ];
+
+        assert_eq!(kinds.len(), 7);
+    }
+}
+
+#[cfg(test)]
+mod import_to_package {
+    use super::derive_import_to_package_edges;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span, UnresolvedReason,
+    };
+    use crate::module_graph::topology::{
+        DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
+        ImportToPackageStatus, RequirementKind, SourceSetFact, SourceSetId, SourceSetKind,
+        TopologyOutput, TopologyPackageFact, TopologyPackageId, TopologyPackageKind,
+        TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    };
+    use crate::symbol_graph::semantic::{
+        SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn span(file: FileId, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 1,
+            start_line: 1,
+            start_col: start_byte + 1,
+            end_line: 1,
+            end_col: start_byte + 2,
+        }
+    }
+
+    fn add_file(db: &mut AnalysisDb, relative_path: &str, language: Language) -> FileId {
+        db.add_source_file(
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            language,
+            Arc::from(""),
+            format!("hash:{relative_path}"),
+        )
+    }
+
+    fn push_import(
+        db: &mut AnalysisDb,
+        file: FileId,
+        path: &str,
+        language: Language,
+        status: SemanticStatus,
+        kind: SemanticImportKind,
+    ) -> ImportId {
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file,
+            package: None,
+            path: path.to_string(),
+            span: span(file, 0),
+            language,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![SemanticImportFact {
+                id: SemanticImportId(0),
+                language,
+                file: Some(file),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: path.to_string(),
+                local_name: None,
+                imported_name: None,
+                namespace: crate::core::SymbolNamespace::Value,
+                kind,
+                stable_key: format!("semantic-import:{path}"),
+                status,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        import
+    }
+
+    fn replace_graph(
+        db: &mut AnalysisDb,
+        import: ImportId,
+        from_file: FileId,
+        target_node: Option<ModuleNodeId>,
+        status: ResolutionStatus,
+        reason: Option<UnresolvedReason>,
+        nodes: Vec<ModuleNode>,
+    ) {
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file,
+                target_node,
+                status,
+                precision: ResolutionPrecision::ExactFile,
+                reason,
+            }],
+            nodes,
+            Vec::new(),
+        );
+    }
+
+    fn replace_topology(
+        db: &mut AnalysisDb,
+        from_file: FileId,
+        target_file: Option<FileId>,
+        context: SourceSetKind,
+        requirements: Vec<DependencyRequirementFact>,
+        extra_packages: Vec<TopologyPackageFact>,
+    ) {
+        let mut packages = vec![TopologyPackageFact {
+            id: TopologyPackageId(0),
+            workspace_root: Some(WorkspaceRootId(0)),
+            package: None,
+            module_node: Some(ModuleNodeId(0)),
+            kind: TopologyPackageKind::Workspace,
+            name: "app".to_string(),
+            version: None,
+            path: ".".to_string(),
+            language: Some(Language::TypeScript),
+            stable_key: "package:app".to_string(),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        }];
+        packages.push(TopologyPackageFact {
+            id: TopologyPackageId(1),
+            workspace_root: Some(WorkspaceRootId(0)),
+            package: None,
+            module_node: Some(ModuleNodeId(1)),
+            kind: TopologyPackageKind::Workspace,
+            name: "target".to_string(),
+            version: None,
+            path: "src/target.ts".to_string(),
+            language: Some(Language::TypeScript),
+            stable_key: "package:target".to_string(),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        packages.extend(extra_packages);
+        let mut source_files = vec![from_file];
+        if let Some(target_file) = target_file {
+            source_files.push(target_file);
+        }
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::Repository,
+                root_path: ".".to_string(),
+                manifest_path: None,
+                language: None,
+                stable_key: "root:repo".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages,
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(0)),
+                root: Some(WorkspaceRootId(0)),
+                kind: context,
+                path: ".".to_string(),
+                language: Some(Language::TypeScript),
+                files: source_files,
+                stable_key: format!("source-set:{context:?}"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            dependency_requirements: requirements,
+            ..TopologyOutput::default()
+        });
+    }
+
+    fn external_requirement(target: &str) -> DependencyRequirementFact {
+        DependencyRequirementFact {
+            id: DependencyRequirementId(0),
+            from_package: Some(TopologyPackageId(0)),
+            target_package: None,
+            target_name: target.to_string(),
+            version_requirement: Some("^1.0.0".to_string()),
+            kind: RequirementKind::Runtime,
+            manifest_path: Some("package.json".to_string()),
+            stable_key: format!("requirement:{target}"),
+            producer_id: "test",
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        }
+    }
+
+    #[test]
+    fn static_ts_import_to_workspace_package_emits_resolved_source_edge() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let import = push_import(
+            &mut db,
+            from,
+            "./target",
+            Language::TypeScript,
+            SemanticStatus::Resolved,
+            SemanticImportKind::StaticDefault,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::Resolved,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        let edge = &edges[0];
+        assert_eq!(edge.syntax_import, Some(import));
+        assert_eq!(edge.resolved_import, Some(ResolvedImportId(0)));
+        assert_eq!(
+            edge.semantic_import_stable_key.as_deref(),
+            Some("semantic-import:./target")
+        );
+        assert_eq!(edge.from_package_stable_key.as_deref(), Some("package:app"));
+        assert_eq!(
+            edge.to_package_stable_key.as_deref(),
+            Some("package:target")
+        );
+        assert_eq!(
+            edge.source_set_stable_key.as_deref(),
+            Some("source-set:Source")
+        );
+        assert_eq!(edge.context, ImportContextKind::Source);
+        assert_eq!(edge.status, ImportToPackageStatus::Resolved);
+    }
+
+    #[test]
+    fn mixed_duplicate_semantic_import_paths_are_ambiguous_not_exact() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let first_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 0),
+            language: Language::TypeScript,
+        });
+        let second_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 10),
+            language: Language::TypeScript,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![
+                SemanticImportFact {
+                    id: SemanticImportId(0),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+                SemanticImportFact {
+                    id: SemanticImportId(1),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::StaticDefault,
+                    stable_key: "semantic-import:static".to_string(),
+                    status: SemanticStatus::Resolved,
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(0),
+                    import: first_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(1),
+                    import: second_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.status == ImportToPackageStatus::Ambiguous)
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.semantic_import_stable_key.is_none())
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.to_package_stable_key.is_none())
+        );
+    }
+
+    #[test]
+    fn duplicate_dynamic_import_paths_remain_dynamic_without_unique_semantic_link() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+        let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+        let first_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 0),
+            language: Language::TypeScript,
+        });
+        let second_import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from, 10),
+            language: Language::TypeScript,
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![
+                SemanticImportFact {
+                    id: SemanticImportId(0),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic-a".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+                SemanticImportFact {
+                    id: SemanticImportId(1),
+                    language: Language::TypeScript,
+                    file: Some(from),
+                    package: None,
+                    module: None,
+                    scope: None,
+                    import_path: "./target".to_string(),
+                    local_name: None,
+                    imported_name: None,
+                    namespace: crate::core::SymbolNamespace::Value,
+                    kind: SemanticImportKind::DynamicImport,
+                    stable_key: "semantic-import:dynamic-b".to_string(),
+                    status: SemanticStatus::Dynamic,
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db.replace_module_graph_facts(
+            vec![
+                ResolvedImportFact {
+                    id: ResolvedImportId(0),
+                    import: first_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+                ResolvedImportFact {
+                    id: ResolvedImportId(1),
+                    import: second_import,
+                    from_file: from,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                },
+            ],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        replace_topology(
+            &mut db,
+            from,
+            Some(target),
+            SourceSetKind::Source,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 2);
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.status == ImportToPackageStatus::Dynamic)
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.semantic_import_stable_key.is_none())
+        );
+        assert!(
+            edges
+                .iter()
+                .all(|edge| edge.to_package_stable_key.is_none())
+        );
+    }
+
+    #[test]
+    fn go_local_package_import_resolves_by_import_path_package_label() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "cmd/app/main.go", Language::Go);
+        let target = add_file(&mut db, "internal/foo/foo.go", Language::Go);
+        let import_path = "example.com/app/internal/foo";
+        let import = push_import(
+            &mut db,
+            from,
+            import_path,
+            Language::Go,
+            SemanticStatus::Resolved,
+            SemanticImportKind::StaticNamed,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::Resolved,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "example.com/app/cmd/app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: import_path.to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+            ],
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::GoModule,
+                root_path: ".".to_string(),
+                manifest_path: Some("go.mod".to_string()),
+                language: Some(Language::Go),
+                stable_key: "go-root:.".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: "example.com/app/cmd/app".to_string(),
+                    version: None,
+                    path: "cmd/app".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: import_path.to_string(),
+                    version: None,
+                    path: "internal/foo".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: format!("go-package:{import_path}"),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![
+                SourceSetFact {
+                    id: SourceSetId(0),
+                    package: Some(TopologyPackageId(0)),
+                    root: Some(WorkspaceRootId(0)),
+                    kind: SourceSetKind::Source,
+                    path: "cmd/app/main.go".to_string(),
+                    language: Some(Language::Go),
+                    files: vec![from],
+                    stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                SourceSetFact {
+                    id: SourceSetId(1),
+                    package: Some(TopologyPackageId(1)),
+                    root: Some(WorkspaceRootId(0)),
+                    kind: SourceSetKind::Source,
+                    path: "internal/foo/foo.go".to_string(),
+                    language: Some(Language::Go),
+                    files: vec![target],
+                    stable_key: "go-source-set:source:internal/foo/foo.go".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            ..TopologyOutput::default()
+        });
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].status, ImportToPackageStatus::Resolved);
+        assert_eq!(edges[0].to_package, Some(TopologyPackageId(1)));
+        assert_eq!(
+            edges[0].to_package_stable_key.as_deref(),
+            Some("go-package:example.com/app/internal/foo")
+        );
+    }
+
+    #[test]
+    fn go_external_import_uses_module_requirement_for_local_package() {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "cmd/app/main.go", Language::Go);
+        let import_path = "github.com/acme/lib/subpkg";
+        let import = push_import(
+            &mut db,
+            from,
+            import_path,
+            Language::Go,
+            SemanticStatus::External,
+            SemanticImportKind::StaticNamed,
+        );
+        replace_graph(
+            &mut db,
+            import,
+            from,
+            Some(ModuleNodeId(1)),
+            ResolutionStatus::External,
+            None,
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "example.com/app/cmd/app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::External,
+                    label: import_path.to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::Go),
+                },
+            ],
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::GoModule,
+                root_path: ".".to_string(),
+                manifest_path: Some("go.mod".to_string()),
+                language: Some(Language::Go),
+                stable_key: "go-root:.".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Workspace,
+                    name: "example.com/app".to_string(),
+                    version: None,
+                    path: ".".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-module:.:example.com/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: None,
+                    kind: TopologyPackageKind::Package,
+                    name: "example.com/app/cmd/app".to_string(),
+                    version: None,
+                    path: "cmd/app".to_string(),
+                    language: Some(Language::Go),
+                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(1)),
+                root: Some(WorkspaceRootId(0)),
+                kind: SourceSetKind::Source,
+                path: "cmd/app/main.go".to_string(),
+                language: Some(Language::Go),
+                files: vec![from],
+                stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            dependency_requirements: vec![DependencyRequirementFact {
+                id: DependencyRequirementId(0),
+                from_package: Some(TopologyPackageId(0)),
+                target_package: None,
+                target_name: "github.com/acme/lib".to_string(),
+                version_requirement: Some("v1.2.3".to_string()),
+                kind: RequirementKind::Direct,
+                manifest_path: Some("go.mod".to_string()),
+                stable_key: "go-require:go.mod:github.com/acme/lib:v1.2.3".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            ..TopologyOutput::default()
+        });
+
+        let edges = derive_import_to_package_edges(&db);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].status, ImportToPackageStatus::External);
+        assert_eq!(edges[0].from_package, Some(TopologyPackageId(1)));
+    }
+
+    #[test]
+    fn source_set_ownership_classifies_test_generated_and_vendor_contexts() {
+        for (path, source_set, expected) in [
+            (
+                "pkg/service_test.go",
+                SourceSetKind::Test,
+                ImportContextKind::Test,
+            ),
+            (
+                "src/app.generated.ts",
+                SourceSetKind::Generated,
+                ImportContextKind::Generated,
+            ),
+            (
+                "vendor/lib/index.ts",
+                SourceSetKind::Vendor,
+                ImportContextKind::Vendor,
+            ),
+        ] {
+            let mut db = AnalysisDb::new();
+            let from = add_file(&mut db, path, Language::TypeScript);
+            let import = push_import(
+                &mut db,
+                from,
+                "./missing",
+                Language::TypeScript,
+                SemanticStatus::Unresolved,
+                SemanticImportKind::StaticDefault,
+            );
+            replace_graph(
+                &mut db,
+                import,
+                from,
+                None,
+                ResolutionStatus::Unresolved,
+                Some(UnresolvedReason::NotFound),
+                vec![ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                }],
+            );
+            replace_topology(&mut db, from, None, source_set, Vec::new(), Vec::new());
+
+            let edges = derive_import_to_package_edges(&db);
+
+            assert_eq!(edges[0].context, expected);
+        }
+    }
+
+    #[test]
+    fn uncertainty_statuses_cover_dynamic_unresolved_undeclared_outside_and_ambiguous() {
+        let cases = [
+            (
+                ResolutionStatus::Dynamic,
+                SemanticStatus::Dynamic,
+                None,
+                None,
+                Vec::new(),
+                ImportToPackageStatus::Dynamic,
+            ),
+            (
+                ResolutionStatus::Unresolved,
+                SemanticStatus::Unresolved,
+                None,
+                Some(UnresolvedReason::NotFound),
+                Vec::new(),
+                ImportToPackageStatus::Unresolved,
+            ),
+            (
+                ResolutionStatus::External,
+                SemanticStatus::External,
+                Some(ModuleNodeId(1)),
+                None,
+                Vec::new(),
+                ImportToPackageStatus::Undeclared,
+            ),
+            (
+                ResolutionStatus::Resolved,
+                SemanticStatus::Resolved,
+                Some(ModuleNodeId(1)),
+                Some(UnresolvedReason::OutsideWorkspace),
+                Vec::new(),
+                ImportToPackageStatus::OutsideWorkspace,
+            ),
+            (
+                ResolutionStatus::Resolved,
+                SemanticStatus::Resolved,
+                Some(ModuleNodeId(1)),
+                None,
+                vec![TopologyPackageFact {
+                    id: TopologyPackageId(2),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(1)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "second-target".to_string(),
+                    version: None,
+                    path: "src/target.ts".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:second-target".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                }],
+                ImportToPackageStatus::Ambiguous,
+            ),
+        ];
+
+        for (index, (resolution, semantic, target_node, reason, extra_packages, expected)) in
+            cases.into_iter().enumerate()
+        {
+            let mut db = AnalysisDb::new();
+            let from = add_file(&mut db, "src/app.ts", Language::TypeScript);
+            let target = add_file(&mut db, "src/target.ts", Language::TypeScript);
+            let path = if resolution == ResolutionStatus::External {
+                "react"
+            } else {
+                "./target"
+            };
+            let import = push_import(
+                &mut db,
+                from,
+                path,
+                Language::TypeScript,
+                semantic,
+                if resolution == ResolutionStatus::Dynamic {
+                    SemanticImportKind::DynamicImport
+                } else {
+                    SemanticImportKind::StaticDefault
+                },
+            );
+            replace_graph(
+                &mut db,
+                import,
+                from,
+                target_node,
+                resolution,
+                reason,
+                vec![
+                    ModuleNode {
+                        id: ModuleNodeId(0),
+                        kind: ModuleNodeKind::Package,
+                        label: "app".to_string(),
+                        file: None,
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                    ModuleNode {
+                        id: ModuleNodeId(1),
+                        kind: if resolution == ResolutionStatus::External {
+                            ModuleNodeKind::External
+                        } else {
+                            ModuleNodeKind::Package
+                        },
+                        label: path.to_string(),
+                        file: Some(target),
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                ],
+            );
+            let requirements = if expected == ImportToPackageStatus::Undeclared {
+                Vec::new()
+            } else if resolution == ResolutionStatus::External {
+                vec![external_requirement(path)]
+            } else {
+                Vec::new()
+            };
+            replace_topology(
+                &mut db,
+                from,
+                Some(target),
+                SourceSetKind::Source,
+                requirements,
+                extra_packages,
+            );
+
+            let edges = derive_import_to_package_edges(&db);
+
+            assert_eq!(edges[0].status, expected, "case {index}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod module_topology_layer_cache {
+    use super::{
+        derive_module_topology_with_cache_stats, lifecycle_component_digest,
+        module_topology_layer_dependency_edges, module_topology_layer_key,
+        module_topology_layer_payload, write_module_topology_layer_payload,
+    };
+    use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::Cache;
+    use crate::config::load_config;
+    use crate::core::{
+        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
+        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+        ResolvedImportId, Span,
+    };
+    use crate::module_graph::topology::{
+        ImportContextKind, ImportToPackageFact, ImportToPackageId, ImportToPackageStatus,
+        SourceSetFact, SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact,
+        TopologyPackageId, TopologyPackageKind, TopologyPrecision, TopologyStatus,
+        WorkspaceRootFact, WorkspaceRootId, WorkspaceRootKind,
+    };
+    use crate::symbol_graph::semantic::{
+        SemanticImportFact, SemanticImportId, SemanticImportKind, SemanticStatus,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn module_topology_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_topology")
+            .expect("module topology provider manifest exists")
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
+    }
+
+    fn add_file(db: &mut AnalysisDb, relative_path: &str) -> FileId {
+        db.add_source_file(
+            PathBuf::from(relative_path),
+            relative_path.to_string(),
+            Language::TypeScript,
+            Arc::from(""),
+            format!("hash:{relative_path}"),
+        )
+    }
+
+    fn db_with_import_to_package_inputs() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let from = add_file(&mut db, "src/app.ts");
+        let target = add_file(&mut db, "src/target.ts");
+        let import = db.push_import(ImportFact {
+            id: ImportId(99),
+            file: from,
+            package: None,
+            path: "./target".to_string(),
+            span: span(from),
+            language: Language::TypeScript,
+        });
+        db.replace_module_graph_facts(
+            vec![ResolvedImportFact {
+                id: ResolvedImportId(0),
+                import,
+                from_file: from,
+                target_node: Some(ModuleNodeId(1)),
+                status: ResolutionStatus::Resolved,
+                precision: ResolutionPrecision::ExactFile,
+                reason: None,
+            }],
+            vec![
+                ModuleNode {
+                    id: ModuleNodeId(0),
+                    kind: ModuleNodeKind::Package,
+                    label: "app".to_string(),
+                    file: None,
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+                ModuleNode {
+                    id: ModuleNodeId(1),
+                    kind: ModuleNodeKind::Package,
+                    label: "target".to_string(),
+                    file: Some(target),
+                    package: None,
+                    language: Some(Language::TypeScript),
+                },
+            ],
+            Vec::new(),
+        );
+        db.replace_topology_facts(TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(0),
+                kind: WorkspaceRootKind::Repository,
+                root_path: ".".to_string(),
+                manifest_path: None,
+                language: None,
+                stable_key: "root:repo".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![
+                TopologyPackageFact {
+                    id: TopologyPackageId(0),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(0)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "app".to_string(),
+                    version: None,
+                    path: ".".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:app".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+                TopologyPackageFact {
+                    id: TopologyPackageId(1),
+                    workspace_root: Some(WorkspaceRootId(0)),
+                    package: None,
+                    module_node: Some(ModuleNodeId(1)),
+                    kind: TopologyPackageKind::Workspace,
+                    name: "target".to_string(),
+                    version: None,
+                    path: "src/target.ts".to_string(),
+                    language: Some(Language::TypeScript),
+                    stable_key: "package:target".to_string(),
+                    producer_id: "test",
+                    precision: TopologyPrecision::ExactStatic,
+                    status: TopologyStatus::Present,
+                },
+            ],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(0),
+                package: Some(TopologyPackageId(0)),
+                root: Some(WorkspaceRootId(0)),
+                kind: SourceSetKind::Source,
+                path: ".".to_string(),
+                language: Some(Language::TypeScript),
+                files: vec![from, target],
+                stable_key: "source-set:source".to_string(),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            ..TopologyOutput::default()
+        });
+        db.replace_semantic_index_facts(
+            Vec::new(),
+            vec![SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::TypeScript,
+                file: Some(from),
+                package: None,
+                module: None,
+                scope: None,
+                import_path: "./target".to_string(),
+                local_name: None,
+                imported_name: None,
+                namespace: crate::core::SymbolNamespace::Value,
+                kind: SemanticImportKind::StaticDefault,
+                stable_key: "semantic-import:target".to_string(),
+                status: SemanticStatus::Resolved,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        db
+    }
+
+    #[test]
+    fn empty_imports_clear_stale_import_to_package_edges_before_cache_return() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut db = AnalysisDb::new();
+        db.replace_import_to_package_facts(vec![ImportToPackageFact {
+            id: ImportToPackageId(0),
+            syntax_import: None,
+            resolved_import: None,
+            semantic_import_stable_key: None,
+            from_file: None,
+            from_package: None,
+            to_package: None,
+            target_node: None,
+            from_package_stable_key: None,
+            to_package_stable_key: None,
+            source_set_stable_key: None,
+            import_path: "stale".to_string(),
+            context: ImportContextKind::Unknown,
+            stable_key: "import-to-package:stale".to_string(),
+            producer_id: "polint.module_topology",
+            precision: TopologyPrecision::Unknown,
+            status: ImportToPackageStatus::Unresolved,
+        }]);
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        let result = derive_module_topology_with_cache_stats(
+            &mut db,
+            &cache,
+            &snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["empty"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["empty"]),
+        );
+
+        assert_eq!(db.import_to_package_edges(), &[]);
+        assert!(result.output_digest.is_some());
+    }
+
+    #[test]
+    fn warm_cache_restore_preserves_import_to_package_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut first = db_with_import_to_package_inputs();
+        let first_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &first,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        let first_result = derive_module_topology_with_cache_stats(
+            &mut first,
+            &cache,
+            &first_snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+        );
+        let first_keys = first
+            .import_to_package_edges()
+            .iter()
+            .map(|row| row.stable_key.clone())
+            .collect::<Vec<_>>();
+
+        let mut second = db_with_import_to_package_inputs();
+        let second_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &second,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let second_result = derive_module_topology_with_cache_stats(
+            &mut second,
+            &cache,
+            &second_snapshot,
+            module_topology_manifest(),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+        );
+
+        assert_eq!(first_result.cache_stats.misses, 1);
+        assert_eq!(first_result.cache_stats.writes, 1);
+        assert_eq!(second_result.cache_stats.hits, 1);
+        assert_eq!(
+            second
+                .import_to_package_edges()
+                .iter()
+                .map(|row| row.stable_key.clone())
+                .collect::<Vec<_>>(),
+            first_keys
+        );
+    }
+
+    #[test]
+    fn module_topology_layer_cache_rejects_duplicate_stable_keys() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let mut first = db_with_import_to_package_inputs();
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &first,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let module_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]);
+        let symbol_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]);
+        let derivation = derive_module_topology_with_cache_stats(
+            &mut first,
+            &cache,
+            &snapshot,
+            module_topology_manifest(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+        );
+        let mut payload = module_topology_layer_payload(&first, &derivation);
+        let mut duplicate = payload.import_to_package_edges[0].clone();
+        duplicate.id = crate::module_graph::topology::ImportToPackageId(99);
+        duplicate.import_path = "conflicting".to_string();
+        payload.import_to_package_edges.push(duplicate);
+
+        let config_digest = snapshot.config.digest.clone();
+        let go_lifecycle_digest = lifecycle_component_digest(
+            DigestKind::GoLifecycle,
+            "module_topology_go_lifecycle",
+            &snapshot.go_lifecycle.components,
+        );
+        let ts_js_lifecycle_digest = lifecycle_component_digest(
+            DigestKind::TsJsLifecycle,
+            "module_topology_ts_js_lifecycle",
+            &snapshot.ts_js_lifecycle.components,
+        );
+        let key = module_topology_layer_key(
+            &first,
+            module_topology_manifest(),
+            config_digest.clone(),
+            go_lifecycle_digest.clone(),
+            ts_js_lifecycle_digest.clone(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+        );
+        let dependencies = module_topology_layer_dependency_edges(
+            &first,
+            &key,
+            module_topology_manifest(),
+            module_digest.clone(),
+            symbol_digest.clone(),
+            config_digest,
+            go_lifecycle_digest,
+            ts_js_lifecycle_digest,
+        );
+        let store = crate::analysis_kernel::incremental::LayerCacheStore::new(
+            cache.layer_cache_dir(),
+            true,
+        );
+        let mut stats = CacheStats::default();
+        let mut diagnostics = Vec::new();
+        write_module_topology_layer_payload(
+            &store,
+            key,
+            &payload,
+            dependencies,
+            &mut stats,
+            &mut diagnostics,
+        )
+        .expect("corrupt module topology payload writes");
+
+        let mut second = db_with_import_to_package_inputs();
+        let second_snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &second,
+            "config",
+            "rules",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let second_result = derive_module_topology_with_cache_stats(
+            &mut second,
+            &cache,
+            &second_snapshot,
+            module_topology_manifest(),
+            module_digest,
+            symbol_digest,
+        );
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second.import_to_package_edges().len(), 1);
     }
 }

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-19T09:59:09.000Z"
-last_activity: 2026-05-19
+last_updated: "2026-05-20T05:44:23Z"
+last_activity: 2026-05-20
 progress:
   total_phases: 22
-  completed_phases: 7
-  total_plans: 32
-  completed_plans: 32
+  completed_phases: 8
+  total_plans: 39
+  completed_plans: 39
   percent: 100
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 27 — layered-module-package-topology-graph
+**Current focus:** Phase 28 — Private Semantic MIR and Place Identity
 
 ## Current Status
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 27
+Phase: 28
 Plan: Not started
-Last activity: 2026-05-19
+Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager topology review findings with TDD tests and deep review
 
 ## Phase Progress
 
@@ -56,7 +56,7 @@ Last activity: 2026-05-19
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
-| 27 | Pending | Layered module/package/topology graph; requirement SAE-SEM-02 |
+| 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
@@ -167,6 +167,26 @@ Last activity: 2026-05-19
 - [Phase 26-semantic-index-deepening]: Keep semantic eval support crate-private/test-facing; no public eval CLI, SDK view, or generic semantic graph API was added.
 - [Phase 26-semantic-index-deepening]: Represent semantic unknown statuses explicitly in eval reports so ambiguous, unresolved, dynamic, external, cycle, generated, setup-missing, and unsupported rows count as unknown evidence.
 - [Phase 26-semantic-index-deepening]: Document only existing Symbols<'_> and References<'_> behavior; scopes/import closure/resolution-step rows remain internal.
+- [Phase 27-layered-module-package-topology-graph]: Keep topology contracts crate-private under module_graph::topology with no SDK, runner, CLI, crate-root, or public docs promotion.
+- [Phase 27-layered-module-package-topology-graph]: Use polint.module_graph for base topology metadata and polint.module_topology for import-to-package metadata.
+- [Phase 27-layered-module-package-topology-graph]: Advertise only base topology outputs on the existing polint.module_graph provider; import_to_package_edges remains deferred to the later semantic-aware module topology pass.
+- [Phase 27-layered-module-package-topology-graph]: Go module topology reuses GoAnalysisConfig::from_loaded so configured module_roots take precedence and nearest go.mod discovery remains centralized.
+- [Phase 27-layered-module-package-topology-graph]: go.mod requirements, replace/exclude directives, and go.sum checksum rows remain separate topology facts rather than import or DependsOn edges.
+- [Phase 27-layered-module-package-topology-graph]: Missing go.sum evidence for external requirements is represented as explicit MissingLockfile topology uncertainty.
+- [Phase 27-layered-module-package-topology-graph]: Represent package-manager and tsconfig evidence as internal repo topology overlay rows until a dedicated manager-evidence fact family is introduced.
+- [Phase 27-layered-module-package-topology-graph]: Treat package-lock.json packages as exact lockfile-selected rows while marking pnpm, Yarn, and Bun lockfile presence as unsupported evidence.
+- [Phase 27-layered-module-package-topology-graph]: Use workspace: dependency ranges to override the dependency-section kind with RequirementKind::Workspace.
+- [Phase 27-layered-module-package-topology-graph]: Base topology is stored by the existing polint.module_graph provider immediately after resolved imports, module nodes, and module edges are replaced.
+- [Phase 27-layered-module-package-topology-graph]: Module graph layer payload schema v2 persists base topology rows but keeps import_to_package_edges out for the later semantic-aware topology pass.
+- [Phase 27-layered-module-package-topology-graph]: Topology cache identity hashes checked-in manifest, lockfile, workspace, and tsconfig files under topology-relevant roots while preserving absent-only extension handling.
+- [Phase 27-layered-module-package-topology-graph]: Add semantic-aware import-to-package facts in crate-private polint.module_topology instead of widening public module graph contracts.
+- [Phase 27-layered-module-package-topology-graph]: Run module topology after polint.symbol_graph so semantic import rows are available without creating a provider cycle.
+- [Phase 27-layered-module-package-topology-graph]: Reject duplicate cached import-to-package stable keys before restore so stale or conflicting topology payloads are recomputed.
+- [Phase 27-layered-module-package-topology-graph]: Kept topology eval observation crate-private and test-facing, with no SDK, runner, CLI, or public crate-root topology API.
+- [Phase 27-layered-module-package-topology-graph]: Represented topology expected rows through stable keys, status labels, precision labels, and compact payload fragments instead of raw source or absolute paths.
+- [Phase 27-layered-module-package-topology-graph]: Updated existing layer-cache expectations so polint.module_topology is part of the managed provider cache proof.
+- [Phase 27-layered-module-package-topology-graph]: Keep Phase 27 topology internals private and prove the boundary with public CLI JSON, help text, and source-surface assertions rather than adding any SDK topology view.
+- [Phase 27-layered-module-package-topology-graph]: Document ResolvedImports<'_> and ModuleGraphFacts<'_> as the supported relationship surfaces while explicitly leaving richer package/workspace topology internals outside SDK facts.
 
 ## Execution Metrics
 
@@ -194,21 +214,33 @@ Last activity: 2026-05-19
 | 26-semantic-index-deepening | 04 | 23min | 3 | 6 |
 | 26-semantic-index-deepening | 05 | 13 min | 3 | 4 |
 | 26-semantic-index-deepening | 06 | 17 min | 3 | 14 |
+| 27-layered-module-package-topology-graph | 01 | 12 min | 3 | 8 |
+| 27-layered-module-package-topology-graph | 02 | 14 min | 3 | 5 |
+| 27-layered-module-package-topology-graph | 03 | 16 min | 3 | 5 |
+| 27-layered-module-package-topology-graph | 04 | 14 min | 3 | 6 |
+| 27-layered-module-package-topology-graph | 05 | 23 min | 3 | 12 |
+| 27-layered-module-package-topology-graph | 06 | 17 min | 2 | 21 |
+| 27-layered-module-package-topology-graph | 07 | 5 min | 1 | 2 |
 
 ## Session
 
-- Last session: 2026-05-19
-- Last activity: 2026-05-19 - Fixed attached Phase 26 CI failures for the active PR.
-- Stopped at: Phase 26 CI fixes ready for verification and PR update; Phase 27 remains ready for planning/execution.
+- Last session: 2026-05-20
+- Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager topology review findings with TDD tests and deep review.
+- Stopped at: Completed 27-layered-module-package-topology-graph-07-PLAN.md; Phase 27 is complete and Phase 28 is next.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260520-ai8 | Fix package-manager topology review findings with TDD tests and deep review | 2026-05-20 | implemented | [260520-ai8-fix-package-manager-topology-review-find](./quick/260520-ai8-fix-package-manager-topology-review-find/) |
+| 260520-a6t | Fix pnpm workspace package-manager review findings | 2026-05-20 | implemented | [260520-a6t-fix-pnpm-workspace-package-manager-revie](./quick/260520-a6t-fix-pnpm-workspace-package-manager-revie/) |
+| 260520-9jr | Fix package-manager topology review findings | 2026-05-20 | implemented | [260520-9jr-fix-package-manager-topology-review-find](./quick/260520-9jr-fix-package-manager-topology-review-find/) |
+| 260519-vl1 | Full lockfile-based package manager support for TS/JS topology | 2026-05-19 | implemented | [260519-vl1-full-lockfile-based-package-manager-supp](./quick/260519-vl1-full-lockfile-based-package-manager-supp/) |
+| 260519-qdf | Fix second Phase 27 topology review findings | 2026-05-19 | cbb635e | [260519-qdf-fix-second-phase-27-topology-review-find](./quick/260519-qdf-fix-second-phase-27-topology-review-find/) |
 | 260519-ci | Fix attached Phase 26 CI failures for manifest version, cross-platform path validation, and layer-cache eval budget | 2026-05-19 | implemented | [260519-ci-fix-phase-26-ci-failures](./quick/260519-ci-fix-phase-26-ci-failures/) |
 | 260519-fqg | Fix PR review findings for semantic index keys, validation, lint failures, and rerun deep review | 2026-05-19 | implemented | [260519-fqg-fix-pr-review-findings-for-semantic-inde](./quick/260519-fqg-fix-pr-review-findings-for-semantic-inde/) |
 | 260518-qzd | Research and plan ai-friendly polint check output format | 2026-05-18 | implemented | [260518-qzd-research-and-plan-ai-friendly-polint-che](./quick/260518-qzd-research-and-plan-ai-friendly-polint-che/) |
 
 ## Next Action
 
-Phase 27 is ready for planning/execution.
+Phase 28 is ready for planning/execution.

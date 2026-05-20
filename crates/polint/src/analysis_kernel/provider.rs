@@ -153,13 +153,18 @@ const TS_SYNTAX_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const MODULE_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "module-graph-facts-1",
-    version: 1,
+    name: "module-graph-facts-2",
+    version: 2,
 }];
 
 const SYMBOL_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "symbol-graph-facts-2",
     version: 2,
+}];
+
+const MODULE_TOPOLOGY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "module-topology-facts-1",
+    version: 1,
 }];
 
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -219,7 +224,17 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         id: "polint.module_graph",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &["source_files", "packages", "imports"],
-        outputs: &["resolved_imports", "module_nodes", "module_edges"],
+        outputs: &[
+            "resolved_imports",
+            "module_nodes",
+            "module_edges",
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "repo_topology_overlays",
+        ],
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_GRAPH_SCHEMA,
@@ -252,6 +267,28 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SYMBOL_GRAPH_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
+        id: "polint.module_topology",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "imports",
+            "resolved_imports",
+            "module_nodes",
+            "module_edges",
+            "workspace_roots",
+            "topology_packages",
+            "source_sets",
+            "dependency_requirements",
+            "resolved_dependency_edges",
+            "semantic_imports",
+        ],
+        outputs: &["import_to_package_edges"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: MODULE_TOPOLOGY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
@@ -297,6 +334,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );
@@ -312,6 +350,7 @@ mod tests {
                 "polint.ts.syntax",
                 "polint.module_graph",
                 "polint.symbol_graph",
+                "polint.module_topology",
                 "polint.metrics",
             ]
         );
@@ -342,6 +381,67 @@ mod tests {
                 version: 2,
             }]
         );
+    }
+
+    #[test]
+    fn module_graph_manifest_declares_base_topology_outputs_without_reordering_providers() {
+        assert_eq!(
+            provider_order_for_test(),
+            vec![
+                "polint.source",
+                "polint.go.syntax",
+                "polint.ts.syntax",
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.module_topology",
+                "polint.metrics",
+            ]
+        );
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_graph")
+            .expect("module graph manifest should exist");
+
+        assert_eq!(
+            manifest.outputs,
+            &[
+                "resolved_imports",
+                "module_nodes",
+                "module_edges",
+                "workspace_roots",
+                "topology_packages",
+                "source_sets",
+                "dependency_requirements",
+                "resolved_dependency_edges",
+                "repo_topology_overlays",
+            ]
+        );
+        assert!(!manifest.outputs.contains(&"import_to_package_edges"));
+        assert_eq!(
+            manifest.schema_versions,
+            &[SchemaVersion {
+                name: "module-graph-facts-2",
+                version: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn topology_outputs_are_not_sdk_prelude_exports() {
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let prelude = read_source(&crate_root.join("src/sdk/mod.rs"));
+
+        for term in [
+            ["Packages", "<'_"].concat(),
+            ["Dependencies", "<'_"].concat(),
+            ["SourceSets", "<'_"].concat(),
+            ["RepoTopology", "<'_"].concat(),
+        ] {
+            assert!(
+                !prelude.contains(&term),
+                "unexpected topology SDK prelude export `{term}`"
+            );
+        }
     }
 
     #[test]
@@ -390,7 +490,17 @@ mod tests {
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
                     inputs: vec!["source_files", "packages", "imports"],
-                    outputs: vec!["resolved_imports", "module_nodes", "module_edges"],
+                    outputs: vec![
+                        "resolved_imports",
+                        "module_nodes",
+                        "module_edges",
+                        "workspace_roots",
+                        "topology_packages",
+                        "source_sets",
+                        "dependency_requirements",
+                        "resolved_dependency_edges",
+                        "repo_topology_overlays",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.symbol_graph",
@@ -417,6 +527,25 @@ mod tests {
                         "generated_symbols",
                         "stable_exports",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.module_topology",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "imports",
+                        "resolved_imports",
+                        "module_nodes",
+                        "module_edges",
+                        "workspace_roots",
+                        "topology_packages",
+                        "source_sets",
+                        "dependency_requirements",
+                        "resolved_dependency_edges",
+                        "semantic_imports",
+                    ],
+                    outputs: vec!["import_to_package_edges"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

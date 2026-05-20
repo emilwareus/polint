@@ -21,6 +21,7 @@ parameter is how polint derives the `imports` capability.
   [`ResolvedImports<'_>`](resolved-imports.md) and
   [`ModuleGraphFacts<'_>`](resolved-imports.md) when a rule needs setup-aware
   TS/JS or Go resolution.
+- `ResolvedImports<'_>` and `ModuleGraphFacts<'_>` remain the supported public relationship surfaces; richer package and workspace topology internals are not SDK fact views.
 - `package` is best-effort and may be `None` for common unaliased imports.
 - Dynamic imports and unusual parser recovery cases may be incomplete.
 

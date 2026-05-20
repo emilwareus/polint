@@ -321,10 +321,13 @@ fn observed_unknown_outcome(observed: &ObservedItem) -> bool {
                 | ObservedStatus::Ambiguous
                 | ObservedStatus::Dynamic
                 | ObservedStatus::SetupMissing
+                | ObservedStatus::MissingLockfile
                 | ObservedStatus::Unsupported
                 | ObservedStatus::External
                 | ObservedStatus::Cycle
                 | ObservedStatus::Generated
+                | ObservedStatus::Undeclared
+                | ObservedStatus::OutsideWorkspace
         )
     )
 }

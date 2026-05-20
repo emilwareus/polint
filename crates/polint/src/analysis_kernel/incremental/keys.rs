@@ -7,10 +7,30 @@
 )]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
 use crate::cache::{CACHE_VERSION, CacheKey};
+use crate::core::AnalysisDb;
+use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
+
+pub(crate) const MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES: &[&str] = &[
+    "go.mod",
+    "go.work",
+    "go.sum",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "tsconfig.json",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +40,7 @@ pub(crate) enum LayerKind {
     TsSyntax,
     ModuleGraph,
     SymbolGraph,
+    ModuleTopology,
     Metrics,
     Extension,
 }
@@ -312,6 +333,72 @@ impl LayerKey {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Module topology identity must keep base topology, semantic, and upstream provider inputs explicit."
+    )]
+    pub(crate) fn module_topology_layer_key(
+        manifest: &ProviderManifest,
+        import_shape_digests: Vec<Digest>,
+        base_topology_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        module_graph_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        semantic_provider_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.module_topology",
+            "module topology layer keys require the module topology provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_topology_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "module_topology_parameters",
+            vec![
+                semantic_provider_parameter_digest.clone(),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "module_topology_outputs",
+                    &["import_to_package_edges"],
+                ),
+            ],
+        );
+        let mut input_digests =
+            Vec::with_capacity(3 + import_shape_digests.len() + base_topology_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(semantic_provider_parameter_digest);
+        input_digests.extend(import_shape_digests);
+        input_digests.extend(base_topology_digests);
+
+        Self::new(
+            LayerKind::ModuleTopology,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "module_topology_toolchain"),
+            input_digests,
+            vec![
+                dependency_layer_digest(module_graph_output_digest),
+                dependency_layer_digest(symbol_graph_output_digest),
+            ],
+            vec![Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent",
+            )],
+        )
+    }
+
     pub(crate) fn metrics_layer_key(
         manifest: &ProviderManifest,
         source_text_digests: Vec<Digest>,
@@ -425,6 +512,337 @@ pub(crate) fn dependency_layer_digest(output_digest: Digest) -> Digest {
     )
 }
 
+pub(crate) fn module_graph_topology_input_digests(root: &Path, db: &AnalysisDb) -> Vec<Digest> {
+    module_graph_topology_input_digest_rows(root, db)
+        .into_iter()
+        .map(|(_, digest)| digest)
+        .collect()
+}
+
+pub(crate) fn module_graph_topology_input_digest_rows(
+    root: &Path,
+    db: &AnalysisDb,
+) -> Vec<(String, Digest)> {
+    let dirs = topology_relevant_dirs(db);
+    let mut candidate_paths = dirs
+        .into_iter()
+        .flat_map(|dir| {
+            MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES
+                .iter()
+                .map(move |file_name| topology_input_relative_path(&dir, file_name))
+        })
+        .collect::<Vec<_>>();
+    candidate_paths.extend(workspace_member_topology_input_candidates(
+        root,
+        candidate_paths.iter().map(String::as_str),
+    ));
+    candidate_paths.extend(extended_ts_config_candidates(
+        root,
+        candidate_paths.iter().map(String::as_str),
+    ));
+
+    let mut rows = candidate_paths
+        .into_iter()
+        .filter_map(|relative_path| {
+            let path = root.join(&relative_path);
+            let bytes = fs::read(path).ok()?;
+            let content_hash = stable_hash_bytes(&bytes);
+            let digest = Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "module_graph_topology_input",
+                &[relative_path.as_str(), content_hash.as_str()],
+            );
+            Some((relative_path, digest))
+        })
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+fn workspace_member_topology_input_candidates<'a>(
+    root: &Path,
+    initial_candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut package_paths = BTreeSet::new();
+    for candidate in initial_candidates {
+        if Path::new(candidate)
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some("package.json")
+        {
+            continue;
+        }
+        let Some(package_path) = package_path_for_manifest_path(candidate) else {
+            continue;
+        };
+        let manifest_path = root.join(candidate);
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        for workspace in package_json_workspace_patterns(&contents) {
+            package_paths.extend(expand_package_workspace_glob(
+                root,
+                &package_path,
+                &workspace,
+            ));
+        }
+    }
+    if let Ok(contents) = fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+        for workspace in parse_pnpm_workspace_packages(&contents) {
+            package_paths.extend(expand_package_workspace_glob(root, ".", &workspace));
+        }
+    }
+
+    package_paths
+        .into_iter()
+        .flat_map(|package_path| {
+            MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES
+                .iter()
+                .map(move |file_name| topology_input_relative_path(&package_path, file_name))
+        })
+        .collect()
+}
+
+fn package_path_for_manifest_path(relative_path: &str) -> Option<String> {
+    if relative_path == "package.json" {
+        Some(".".to_string())
+    } else {
+        relative_path
+            .strip_suffix("/package.json")
+            .map(str::to_string)
+    }
+}
+
+fn package_json_workspace_patterns(contents: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(contents) else {
+        return Vec::new();
+    };
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    match object.get("workspaces") {
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::Object(object)) => object
+            .get("packages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn expand_package_workspace_glob(root: &Path, package_path: &str, pattern: &str) -> Vec<String> {
+    let Some(base) = pattern.strip_suffix("/*") else {
+        return Vec::new();
+    };
+    let base_path = if package_path == "." {
+        PathBuf::from(base)
+    } else {
+        Path::new(package_path).join(base)
+    };
+    let Ok(entries) = fs::read_dir(root.join(base_path)) else {
+        return Vec::new();
+    };
+    let mut members = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_type().ok()?.is_dir().then_some(entry.path()))
+        .filter(|path| path.join("package.json").is_file())
+        .filter_map(|path| repo_relative_path(root, &path))
+        .collect::<Vec<_>>();
+    members.sort();
+    members
+}
+
+fn topology_relevant_dirs(db: &AnalysisDb) -> BTreeSet<String> {
+    let mut dirs = BTreeSet::from([".".to_string()]);
+    for file in db.files() {
+        let normalized = normalize_relative_path(&file.relative_path);
+        let mut current = Path::new(&normalized).parent();
+        while let Some(dir) = current {
+            dirs.insert(path_to_repo_string(dir));
+            current = dir.parent();
+        }
+    }
+    dirs
+}
+
+fn extended_ts_config_candidates<'a>(
+    root: &Path,
+    initial_candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    let mut discovered = BTreeSet::new();
+    for candidate in initial_candidates {
+        let file_name = Path::new(candidate)
+            .file_name()
+            .and_then(|name| name.to_str());
+        if !matches!(file_name, Some("tsconfig.json" | "jsconfig.json")) {
+            continue;
+        }
+        collect_extended_ts_configs(root, &root.join(candidate), &mut visited, &mut discovered);
+    }
+    discovered.into_iter().collect()
+}
+
+fn collect_extended_ts_configs(
+    root: &Path,
+    config_path: &Path,
+    visited: &mut BTreeSet<PathBuf>,
+    discovered: &mut BTreeSet<String>,
+) {
+    let Some(config_path) = normalize_existing_path(config_path) else {
+        return;
+    };
+    if !visited.insert(config_path.clone()) {
+        return;
+    }
+    let Some(config) = read_tsconfig_extends_wire(&config_path) else {
+        return;
+    };
+    let Some(config_dir) = config_path.parent() else {
+        return;
+    };
+    for specifier in config
+        .extends
+        .into_iter()
+        .flat_map(TsconfigExtendsWire::into_specifiers)
+    {
+        let Some(extended_path) = resolve_tsconfig_extends_path(config_dir, &specifier) else {
+            continue;
+        };
+        if let Some(relative_path) = repo_relative_path(root, &extended_path) {
+            discovered.insert(relative_path);
+        }
+        collect_extended_ts_configs(root, &extended_path, visited, discovered);
+    }
+}
+
+fn read_tsconfig_extends_wire(path: &Path) -> Option<TsconfigExtendsOnlyWire> {
+    let Ok(mut source) = fs::read_to_string(path) else {
+        return None;
+    };
+    if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        source = stripped.to_string();
+    }
+    if json_strip_comments::strip(&mut source).is_err() {
+        return None;
+    }
+    serde_json::from_str::<TsconfigExtendsOnlyWire>(&source).ok()
+}
+
+fn resolve_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let specifier_path = Path::new(specifier);
+    if specifier_path.is_absolute() {
+        return resolve_tsconfig_file_candidate(specifier_path);
+    }
+    if specifier.starts_with('.') {
+        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+    }
+    resolve_package_tsconfig_extends_path(config_dir, specifier)
+}
+
+fn resolve_package_tsconfig_extends_path(config_dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let mut current = normalize_existing_path(config_dir)?;
+    loop {
+        let candidate = current.join("node_modules").join(specifier);
+        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+            return Some(resolved);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_tsconfig_file_candidate(base: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![base.to_path_buf()];
+    if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        let mut with_json = base.as_os_str().to_owned();
+        with_json.push(".json");
+        candidates.push(PathBuf::from(with_json));
+    }
+    candidates.push(base.join("tsconfig.json"));
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| normalize_existing_path(&candidate))
+}
+
+fn normalize_existing_path(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok()
+}
+
+fn repo_relative_path(root: &Path, path: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    let relative = path.strip_prefix(root).ok()?;
+    Some(path_to_repo_string(relative))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TsconfigExtendsOnlyWire {
+    #[serde(default)]
+    extends: Option<TsconfigExtendsWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TsconfigExtendsWire {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl TsconfigExtendsWire {
+    fn into_specifiers(self) -> Vec<String> {
+        match self {
+            Self::Single(specifier) => vec![specifier],
+            Self::Multiple(specifiers) => specifiers,
+        }
+    }
+}
+
+fn topology_input_relative_path(dir: &str, file_name: &str) -> String {
+    if dir == "." {
+        file_name.to_string()
+    } else {
+        format!("{dir}/{file_name}")
+    }
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn path_to_repo_string(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if path.is_empty() {
+        ".".to_string()
+    } else {
+        path
+    }
+}
+
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    crate::cache::stable_hash(&[hex.as_str()])
+}
+
 pub(crate) fn semantic_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
@@ -446,6 +864,9 @@ pub(crate) fn semantic_provider_parameter_digest() -> Digest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::AnalysisDb;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     fn digest(label: &str, value: &str) -> Digest {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
@@ -490,6 +911,13 @@ mod tests {
             .iter()
             .find(|manifest| manifest.id == "polint.symbol_graph")
             .expect("symbol graph provider manifest exists")
+    }
+
+    fn module_topology_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.module_topology")
+            .expect("module topology provider manifest exists")
     }
 
     fn symbol_graph_key(
@@ -550,6 +978,26 @@ mod tests {
         )
     }
 
+    fn module_topology_key(
+        import_shape_digest: Digest,
+        base_topology_digest: Digest,
+        module_graph_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        semantic_parameter_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::module_topology_layer_key(
+            module_topology_manifest(),
+            vec![import_shape_digest],
+            vec![base_topology_digest],
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            module_graph_output_digest,
+            symbol_graph_output_digest,
+            semantic_parameter_digest,
+        )
+    }
+
     fn syntax_key(source_text_digests: Vec<Digest>) -> LayerKey {
         LayerKey::syntax_layer_key(
             LayerKind::GoSyntax,
@@ -562,6 +1010,194 @@ mod tests {
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
         )
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_change_on_manifest_lock_workspace_and_tsconfig() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let topology_files = [
+            "go.mod",
+            "go.work",
+            "go.sum",
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "tsconfig.json",
+        ];
+        for name in topology_files {
+            write_file(temp.path(), name, &format!("{name}: base\n"));
+        }
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digests(temp.path(), &db);
+        assert_eq!(base.len(), topology_files.len());
+
+        for changed_name in topology_files {
+            write_file(
+                temp.path(),
+                changed_name,
+                &format!("{changed_name}: changed\n"),
+            );
+            let changed = module_graph_topology_input_digests(temp.path(), &db);
+            assert_ne!(
+                base, changed,
+                "{changed_name} should affect topology inputs"
+            );
+            write_file(
+                temp.path(),
+                changed_name,
+                &format!("{changed_name}: base\n"),
+            );
+        }
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_tsconfig_extends() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "tsconfig.json",
+            r#"{"extends":"./tsconfig.base.json"}"#,
+        );
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(base.iter().any(|(path, _)| path == "tsconfig.base.json"));
+
+        write_file(
+            temp.path(),
+            "tsconfig.base.json",
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        );
+        let changed = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_workspace_member_manifests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            base.iter()
+                .all(|(path, _)| path != "packages/ui/package.json")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let with_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            with_member
+                .iter()
+                .any(|(path, _)| path == "packages/ui/package.json")
+        );
+        assert_ne!(base, with_member);
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.1"}"#,
+        );
+        let changed_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert_ne!(with_member, changed_member);
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_follow_pnpm_workspace_member_manifests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        write_file(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            r#"packages: ["packages/*"]"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+
+        let base = module_graph_topology_input_digest_rows(temp.path(), &db);
+        assert!(
+            base.iter()
+                .all(|(path, _)| path != "packages/ui/package.json")
+        );
+
+        write_file(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"@acme/ui","version":"1.0.0"}"#,
+        );
+        let with_member = module_graph_topology_input_digest_rows(temp.path(), &db);
+
+        assert!(
+            with_member
+                .iter()
+                .any(|(path, _)| path == "packages/ui/package.json")
+        );
+        assert_ne!(base, with_member);
+    }
+
+    #[test]
+    fn module_graph_layer_key_topology_inputs_include_absent_extension_placeholder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_file(temp.path(), "package.json", r#"{"name":"root"}"#);
+        let mut db = AnalysisDb::new();
+        add_file(&mut db, temp.path(), "src/app.ts", "export {};\n");
+        let topology_inputs = module_graph_topology_input_digests(temp.path(), &db);
+
+        let key = LayerKey::module_graph_layer_key(
+            module_graph_manifest(),
+            Vec::new(),
+            topology_inputs,
+            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+            Vec::new(),
+            Digest::from_parts(DigestKind::ProviderParameters, "module_graph", &["base"]),
+        );
+
+        assert!(key.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+    }
+
+    fn write_file(root: &Path, relative_path: &str, source: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("test file has parent")).expect("mkdirs");
+        fs::write(&path, source).expect("write file");
+        path
+    }
+
+    fn add_file(
+        db: &mut AnalysisDb,
+        root: &Path,
+        relative_path: &str,
+        source: &str,
+    ) -> crate::core::FileId {
+        let path = write_file(root, relative_path, source);
+        db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
     #[test]
@@ -611,7 +1247,7 @@ mod tests {
         let mut changed_provider_version = base.clone();
         changed_provider_version.provider_version = "different-provider-version".to_string();
         let mut changed_schema = base.clone();
-        changed_schema.schema_version = "module-graph-facts-2:2".to_string();
+        changed_schema.schema_version = "module-graph-facts-3:3".to_string();
 
         for changed in [
             changed_import,
@@ -624,6 +1260,82 @@ mod tests {
         ] {
             assert_ne!(base, changed);
         }
+    }
+
+    #[test]
+    fn module_topology_layer_key_changes_on_import_topology_module_symbol_and_semantic_inputs() {
+        let base = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_import = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["vue"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_topology = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:b"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_module = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["changed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_symbol = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["changed"]),
+            semantic_provider_parameter_digest(),
+        );
+        let changed_semantic = module_topology_key(
+            Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "base_topology",
+                &["package:a"],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            Digest::from_parts(DigestKind::ProviderParameters, "semantic", &["changed"]),
+        );
+
+        assert_ne!(base, changed_import);
+        assert_ne!(base, changed_topology);
+        assert_ne!(base, changed_module);
+        assert_ne!(base, changed_symbol);
+        assert_ne!(base, changed_semantic);
     }
 
     #[test]

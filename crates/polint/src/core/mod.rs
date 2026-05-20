@@ -6,6 +6,11 @@ use crate::analysis_kernel::{
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
+use crate::module_graph::topology::{
+    DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
+    ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
+    TopologyPrecision, WorkspaceRootFact,
+};
 use crate::rule_error::RuleResult;
 use crate::rule_manifest::{FactViewRequirement, RuleManifest};
 use crate::symbol_graph::semantic::{
@@ -24,6 +29,7 @@ const SOURCE_PROVIDER_ID: &str = "polint.source";
 const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
 const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
+const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
@@ -553,6 +559,13 @@ pub struct AnalysisDb {
     resolved_imports: Vec<ResolvedImportFact>,
     module_nodes: Vec<ModuleNode>,
     module_edges: Vec<ModuleEdge>,
+    workspace_roots: Vec<WorkspaceRootFact>,
+    topology_packages: Vec<TopologyPackageFact>,
+    source_sets: Vec<SourceSetFact>,
+    dependency_requirements: Vec<DependencyRequirementFact>,
+    resolved_dependency_edges: Vec<ResolvedDependencyEdgeFact>,
+    import_to_package_edges: Vec<ImportToPackageFact>,
+    repo_topology_overlays: Vec<RepoTopologyOverlayFact>,
     scopes: Vec<ScopeFact>,
     semantic_imports: Vec<SemanticImportFact>,
     exports: Vec<ExportFact>,
@@ -750,6 +763,28 @@ impl AnalysisDb {
         self.refresh_module_graph_metadata();
     }
 
+    pub(crate) fn replace_topology_facts(&mut self, output: TopologyOutput) {
+        let output = output.normalized();
+        self.workspace_roots = output.workspace_roots;
+        self.topology_packages = output.packages;
+        self.source_sets = output.source_sets;
+        self.dependency_requirements = output.dependency_requirements;
+        self.resolved_dependency_edges = output.resolved_dependency_edges;
+        self.import_to_package_edges = output.import_to_package_edges;
+        self.repo_topology_overlays = output.overlays;
+        self.refresh_topology_metadata();
+    }
+
+    pub(crate) fn replace_import_to_package_facts(&mut self, edges: Vec<ImportToPackageFact>) {
+        let output = TopologyOutput {
+            import_to_package_edges: edges,
+            ..TopologyOutput::default()
+        }
+        .normalized();
+        self.import_to_package_edges = output.import_to_package_edges;
+        self.refresh_import_to_package_metadata();
+    }
+
     pub(crate) fn replace_symbol_graph_facts(
         &mut self,
         symbols: Vec<SymbolFact>,
@@ -881,6 +916,156 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
+        }
+    }
+
+    fn refresh_topology_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::WorkspaceRoot);
+        self.fact_meta.remove_family(FactFamily::TopologyPackage);
+        self.fact_meta.remove_family(FactFamily::SourceSet);
+        self.fact_meta
+            .remove_family(FactFamily::DependencyRequirement);
+        self.fact_meta
+            .remove_family(FactFamily::ResolvedDependencyEdge);
+        self.fact_meta
+            .remove_family(FactFamily::RepoTopologyOverlay);
+        self.refresh_import_to_package_metadata();
+
+        let root_metadata = self
+            .workspace_roots
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::WorkspaceRoot,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in root_metadata {
+            self.record_fact_meta(FactFamily::WorkspaceRoot, run_id, metadata);
+        }
+
+        let package_metadata = self
+            .topology_packages
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::TopologyPackage,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in package_metadata {
+            self.record_fact_meta(FactFamily::TopologyPackage, run_id, metadata);
+        }
+
+        let source_set_metadata = self
+            .source_sets
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::SourceSet,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in source_set_metadata {
+            self.record_fact_meta(FactFamily::SourceSet, run_id, metadata);
+        }
+
+        let requirement_metadata = self
+            .dependency_requirements
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::DependencyRequirement,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in requirement_metadata {
+            self.record_fact_meta(FactFamily::DependencyRequirement, run_id, metadata);
+        }
+
+        let resolved_metadata = self
+            .resolved_dependency_edges
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::ResolvedDependencyEdge,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in resolved_metadata {
+            self.record_fact_meta(FactFamily::ResolvedDependencyEdge, run_id, metadata);
+        }
+
+        let overlay_metadata = self
+            .repo_topology_overlays
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::RepoTopologyOverlay,
+                        MODULE_GRAPH_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in overlay_metadata {
+            self.record_fact_meta(FactFamily::RepoTopologyOverlay, run_id, metadata);
+        }
+    }
+
+    fn refresh_import_to_package_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::ImportToPackage);
+
+        let metadata = self
+            .import_to_package_edges
+            .iter()
+            .map(|fact| {
+                (
+                    fact.id.0,
+                    topology_fact_metadata(
+                        FactFamily::ImportToPackage,
+                        MODULE_TOPOLOGY_PROVIDER_ID,
+                        fact.precision,
+                        &fact.stable_key,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in metadata {
+            self.record_fact_meta(FactFamily::ImportToPackage, run_id, metadata);
         }
     }
 
@@ -1247,6 +1432,43 @@ impl AnalysisDb {
         for module_edge in self.module_edges() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleEdge, module_edge.id.0);
         }
+        for root in self.workspace_roots() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::WorkspaceRoot, root.id.0);
+        }
+        for package in self.topology_packages() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::TopologyPackage,
+                package.id.0,
+            );
+        }
+        for source_set in self.source_sets() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::SourceSet, source_set.id.0);
+        }
+        for requirement in self.dependency_requirements() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::DependencyRequirement,
+                requirement.id.0,
+            );
+        }
+        for edge in self.resolved_dependency_edges() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ResolvedDependencyEdge,
+                edge.id.0,
+            );
+        }
+        for edge in self.import_to_package_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ImportToPackage, edge.id.0);
+        }
+        for overlay in self.repo_topology_overlays() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::RepoTopologyOverlay,
+                overlay.id.0,
+            );
+        }
         for scope in self.scopes() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Scope, scope.id.0);
         }
@@ -1395,6 +1617,34 @@ impl AnalysisDb {
 
     pub fn module_edges(&self) -> &[ModuleEdge] {
         &self.module_edges
+    }
+
+    pub(crate) fn workspace_roots(&self) -> &[WorkspaceRootFact] {
+        &self.workspace_roots
+    }
+
+    pub(crate) fn topology_packages(&self) -> &[TopologyPackageFact] {
+        &self.topology_packages
+    }
+
+    pub(crate) fn source_sets(&self) -> &[SourceSetFact] {
+        &self.source_sets
+    }
+
+    pub(crate) fn dependency_requirements(&self) -> &[DependencyRequirementFact] {
+        &self.dependency_requirements
+    }
+
+    pub(crate) fn resolved_dependency_edges(&self) -> &[ResolvedDependencyEdgeFact] {
+        &self.resolved_dependency_edges
+    }
+
+    pub(crate) fn import_to_package_edges(&self) -> &[ImportToPackageFact] {
+        &self.import_to_package_edges
+    }
+
+    pub(crate) fn repo_topology_overlays(&self) -> &[RepoTopologyOverlayFact] {
+        &self.repo_topology_overlays
     }
 
     pub(crate) fn scopes(&self) -> &[ScopeFact] {
@@ -2349,6 +2599,23 @@ fn fact_meta_from_stable_key<const EXTRA: usize>(
     }
 }
 
+fn topology_fact_metadata(
+    family: FactFamily,
+    producer_id: &'static str,
+    precision: TopologyPrecision,
+    stable_key: &str,
+) -> FactMeta {
+    let (precision, confidence) = topology_precision_metadata(precision);
+    fact_meta_from_stable_key(
+        family,
+        producer_id,
+        precision,
+        confidence,
+        stable_key.to_string(),
+        stable_parts([]),
+    )
+}
+
 fn stable_parts<const N: usize>(parts: [(&'static str, String); N]) -> [(&'static str, String); N] {
     parts
 }
@@ -2484,6 +2751,17 @@ fn semantic_status_metadata(status: SemanticStatus) -> (FactPrecision, FactConfi
         SemanticStatus::Dynamic => (FactPrecision::Heuristic, FactConfidence::Low),
         SemanticStatus::External => (FactPrecision::SetupAware, FactConfidence::Medium),
         SemanticStatus::SetupMissing => (FactPrecision::SetupMissing, FactConfidence::High),
+    }
+}
+
+fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+    match precision {
+        TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile => {
+            (FactPrecision::SetupAware, FactConfidence::High)
+        }
+        TopologyPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
+        TopologyPrecision::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        TopologyPrecision::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
     }
 }
 
@@ -3353,6 +3631,196 @@ mod tests {
             kind: ScopeKind::Function,
             status,
         }
+    }
+
+    fn topology_output(prefix: &str) -> crate::module_graph::topology::TopologyOutput {
+        use crate::module_graph::topology::{
+            DependencyRequirementFact, DependencyRequirementId, ImportContextKind,
+            ImportToPackageFact, ImportToPackageId, ImportToPackageStatus, RepoTopologyOverlayFact,
+            RepoTopologyOverlayId, RepoTopologyOverlayKind, ResolvedDependencyEdgeFact,
+            ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact, SourceSetId,
+            SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
+            TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact,
+            WorkspaceRootId, WorkspaceRootKind,
+        };
+
+        TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                id: WorkspaceRootId(99),
+                kind: WorkspaceRootKind::Repository,
+                root_path: ".".to_string(),
+                manifest_path: None,
+                language: None,
+                stable_key: format!("{prefix}:root"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            packages: vec![TopologyPackageFact {
+                id: TopologyPackageId(99),
+                workspace_root: Some(WorkspaceRootId(99)),
+                package: None,
+                module_node: None,
+                kind: TopologyPackageKind::Workspace,
+                name: format!("{prefix}-package"),
+                version: None,
+                path: ".".to_string(),
+                language: Some(Language::TypeScript),
+                stable_key: format!("{prefix}:package"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            source_sets: vec![SourceSetFact {
+                id: SourceSetId(99),
+                package: Some(TopologyPackageId(99)),
+                root: Some(WorkspaceRootId(99)),
+                kind: SourceSetKind::Source,
+                path: "src".to_string(),
+                language: Some(Language::TypeScript),
+                files: vec![FileId(0)],
+                stable_key: format!("{prefix}:source-set"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            dependency_requirements: vec![DependencyRequirementFact {
+                id: DependencyRequirementId(99),
+                from_package: Some(TopologyPackageId(99)),
+                target_package: None,
+                target_name: "react".to_string(),
+                version_requirement: Some("^18".to_string()),
+                kind: crate::module_graph::topology::RequirementKind::Runtime,
+                manifest_path: Some("package.json".to_string()),
+                stable_key: format!("{prefix}:requirement"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: TopologyStatus::Present,
+            }],
+            resolved_dependency_edges: vec![ResolvedDependencyEdgeFact {
+                id: ResolvedDependencyEdgeId(99),
+                requirement: Some(DependencyRequirementId(99)),
+                from_package: Some(TopologyPackageId(99)),
+                to_package: None,
+                package_name: "react".to_string(),
+                resolved_version: Some("18.2.0".to_string()),
+                kind: ResolvedDependencyKind::Lockfile,
+                stable_key: format!("{prefix}:resolved"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactLockfile,
+                status: TopologyStatus::Resolved,
+            }],
+            import_to_package_edges: vec![ImportToPackageFact {
+                id: ImportToPackageId(99),
+                syntax_import: None,
+                resolved_import: None,
+                semantic_import_stable_key: None,
+                from_file: Some(FileId(0)),
+                from_package: Some(TopologyPackageId(99)),
+                to_package: None,
+                target_node: None,
+                from_package_stable_key: Some(format!("{prefix}:package")),
+                to_package_stable_key: None,
+                source_set_stable_key: Some(format!("{prefix}:source-set")),
+                import_path: "react".to_string(),
+                context: ImportContextKind::Source,
+                stable_key: format!("{prefix}:import-to-package"),
+                producer_id: "test",
+                precision: TopologyPrecision::ExactStatic,
+                status: ImportToPackageStatus::Resolved,
+            }],
+            overlays: vec![RepoTopologyOverlayFact {
+                id: RepoTopologyOverlayId(99),
+                root: Some(WorkspaceRootId(99)),
+                package: Some(TopologyPackageId(99)),
+                source_set: Some(SourceSetId(99)),
+                kind: RepoTopologyOverlayKind::OwnershipZone,
+                label: "team-platform".to_string(),
+                path: Some("src".to_string()),
+                stable_key: format!("{prefix}:overlay"),
+                producer_id: "test",
+                precision: TopologyPrecision::Heuristic,
+                status: TopologyStatus::Present,
+            }],
+        }
+    }
+
+    #[test]
+    fn topology_storage_replaces_rows_and_rebuilds_metadata() {
+        let mut db = AnalysisDb::new();
+        db.replace_topology_facts(topology_output("first"));
+        db.replace_topology_facts(topology_output("second"));
+
+        assert_eq!(db.workspace_roots().len(), 1);
+        assert_eq!(db.workspace_roots()[0].id.0, 0);
+        assert_eq!(db.workspace_roots()[0].stable_key, "second:root");
+        assert_eq!(db.topology_packages()[0].id.0, 0);
+        assert_eq!(db.source_sets()[0].id.0, 0);
+        assert_eq!(db.dependency_requirements()[0].id.0, 0);
+        assert_eq!(db.resolved_dependency_edges()[0].id.0, 0);
+        assert_eq!(db.import_to_package_edges()[0].id.0, 0);
+        assert_eq!(db.repo_topology_overlays()[0].id.0, 0);
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::WorkspaceRoot, 1))
+                .is_none()
+        );
+        assert!(
+            db.metadata_for(FactRef::new(FactFamily::WorkspaceRoot, 0))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn topology_storage_replaces_import_to_package_edges_only() {
+        let mut db = AnalysisDb::new();
+        db.replace_topology_facts(topology_output("base"));
+        let mut edges = topology_output("updated").import_to_package_edges;
+        edges[0].id = crate::module_graph::topology::ImportToPackageId(42);
+
+        db.replace_import_to_package_facts(edges);
+
+        assert_eq!(db.workspace_roots()[0].stable_key, "base:root");
+        assert_eq!(db.topology_packages()[0].stable_key, "base:package");
+        assert_eq!(db.source_sets()[0].stable_key, "base:source-set");
+        assert_eq!(
+            db.dependency_requirements()[0].stable_key,
+            "base:requirement"
+        );
+        assert_eq!(
+            db.resolved_dependency_edges()[0].stable_key,
+            "base:resolved"
+        );
+        assert_eq!(db.repo_topology_overlays()[0].stable_key, "base:overlay");
+        assert_eq!(
+            db.import_to_package_edges()[0].stable_key,
+            "updated:import-to-package"
+        );
+        assert_eq!(db.import_to_package_edges()[0].id.0, 0);
+    }
+
+    #[test]
+    fn topology_storage_records_provider_metadata_for_every_row() {
+        let mut db = AnalysisDb::new();
+        db.replace_topology_facts(topology_output("meta"));
+
+        for family in [
+            FactFamily::WorkspaceRoot,
+            FactFamily::TopologyPackage,
+            FactFamily::SourceSet,
+            FactFamily::DependencyRequirement,
+            FactFamily::ResolvedDependencyEdge,
+            FactFamily::RepoTopologyOverlay,
+        ] {
+            let metadata = db
+                .metadata_for(FactRef::new(family, 0))
+                .expect("topology metadata exists");
+            assert_eq!(metadata.producer_id, MODULE_GRAPH_PROVIDER_ID);
+        }
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::ImportToPackage, 0))
+            .expect("import-to-package metadata exists");
+        assert_eq!(metadata.producer_id, MODULE_TOPOLOGY_PROVIDER_ID);
     }
 
     #[test]

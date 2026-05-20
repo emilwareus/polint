@@ -27,12 +27,16 @@ use crate::cache::keys::{config_hash, rule_hash};
 #[cfg(test)]
 use crate::config::load_config;
 #[cfg(test)]
+use crate::core::AnalysisDb;
+#[cfg(test)]
 use crate::eval::fixtures::NativeFixture;
 #[cfg(test)]
 use crate::eval::model::{
     AssertionMode, ExpectedItem, ObservedDiagnostic, ObservedFact, ObservedInvariant, ObservedItem,
     ObservedRuntimeBudget, ObservedStatus,
 };
+#[cfg(test)]
+use crate::module_graph::topology::{ImportToPackageStatus, TopologyPrecision, TopologyStatus};
 
 #[cfg(test)]
 const SEMANTIC_DEBUG_SECTIONS: &[&str] = &[
@@ -98,6 +102,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(metadata_debug_facts(
         &AnalysisKernel::metadata_debug_json_for_test(&output.db),
     ));
+    observed.extend(topology_facts(&output.db));
     observed.extend(snapshot_invariants(&output.run_report));
     observed.extend(layer_key_invariants(&output.run_report));
     observed.extend(provider_output_invariants(&output.run_report));
@@ -332,6 +337,7 @@ fn is_layer_cache_provider(provider_id: &str) -> bool {
             | "polint.ts.syntax"
             | "polint.module_graph"
             | "polint.symbol_graph"
+            | "polint.module_topology"
             | "polint.metrics"
     )
 }
@@ -419,6 +425,189 @@ fn bool_string(value: bool) -> &'static str {
 #[cfg(test)]
 pub(crate) fn metadata_debug_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     metadata_debug_facts(debug_json)
+}
+
+#[cfg(test)]
+pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
+    topology_facts(db)
+}
+
+#[cfg(test)]
+fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+
+    facts.extend(db.workspace_roots().iter().map(|row| {
+        topology_fact(
+            "WorkspaceRoot",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "kind:{:?};root:{};manifest:{}",
+                row.kind,
+                row.root_path,
+                row.manifest_path.as_deref().unwrap_or("")
+            ),
+        )
+    }));
+    facts.extend(db.topology_packages().iter().map(|row| {
+        topology_fact(
+            "TopologyPackage",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "kind:{:?};name:{};path:{};root:{:?}",
+                row.kind, row.name, row.path, row.workspace_root
+            ),
+        )
+    }));
+    facts.extend(db.source_sets().iter().map(|row| {
+        topology_fact(
+            "SourceSet",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "kind:{:?};path:{};package:{:?};root:{:?}",
+                row.kind, row.path, row.package, row.root
+            ),
+        )
+    }));
+    facts.extend(db.dependency_requirements().iter().map(|row| {
+        topology_fact(
+            "DependencyRequirement",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "target:{};kind:{:?};from:{:?};to:{:?};manifest:{}",
+                row.target_name,
+                row.kind,
+                row.from_package,
+                row.target_package,
+                row.manifest_path.as_deref().unwrap_or("")
+            ),
+        )
+    }));
+    facts.extend(db.resolved_dependency_edges().iter().map(|row| {
+        topology_fact(
+            "ResolvedDependencyEdge",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "package:{};kind:{:?};requirement:{:?};from:{:?};to:{:?}",
+                row.package_name, row.kind, row.requirement, row.from_package, row.to_package
+            ),
+        )
+    }));
+    facts.extend(db.import_to_package_edges().iter().map(|row| {
+        topology_fact(
+            "ImportToPackage",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            import_to_package_status(row.status),
+            format!(
+                "import:{};context:{:?};from:{};to:{};source_set:{};semantic:{}",
+                row.import_path,
+                row.context,
+                row.from_package_stable_key.as_deref().unwrap_or(""),
+                row.to_package_stable_key.as_deref().unwrap_or(""),
+                row.source_set_stable_key.as_deref().unwrap_or(""),
+                row.semantic_import_stable_key.as_deref().unwrap_or("")
+            ),
+        )
+    }));
+    facts.extend(db.repo_topology_overlays().iter().map(|row| {
+        topology_fact(
+            "RepoTopologyOverlay",
+            row.stable_key.as_str(),
+            row.producer_id,
+            row.precision,
+            topology_status(row.status),
+            format!(
+                "kind:{:?};label:{};path:{};root:{:?};package:{:?};source_set:{:?}",
+                row.kind,
+                row.label,
+                row.path.as_deref().unwrap_or(""),
+                row.root,
+                row.package,
+                row.source_set
+            ),
+        )
+    }));
+
+    facts
+}
+
+#[cfg(test)]
+fn topology_fact(
+    family: &str,
+    stable_key: &str,
+    producer_id: &'static str,
+    precision: TopologyPrecision,
+    status: ObservedStatus,
+    payload: String,
+) -> ObservedItem {
+    ObservedItem::Fact(ObservedFact {
+        family: family.to_string(),
+        stable_key: stable_key.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: Some(producer_id.to_string()),
+        provenance: Some(producer_id.to_string()),
+        precision: Some(topology_precision_label(precision).to_string()),
+        status: Some(status),
+        payload: Some(payload),
+    })
+}
+
+#[cfg(test)]
+fn topology_precision_label(precision: TopologyPrecision) -> &'static str {
+    match precision {
+        TopologyPrecision::ExactStatic => "exact_static",
+        TopologyPrecision::ExactLockfile => "exact_lockfile",
+        TopologyPrecision::Heuristic => "heuristic",
+        TopologyPrecision::Unknown => "unknown",
+        TopologyPrecision::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(test)]
+fn topology_status(status: TopologyStatus) -> ObservedStatus {
+    match status {
+        TopologyStatus::Present => ObservedStatus::Present,
+        TopologyStatus::Resolved => ObservedStatus::Resolved,
+        TopologyStatus::Ambiguous => ObservedStatus::Ambiguous,
+        TopologyStatus::Unresolved => ObservedStatus::Unresolved,
+        TopologyStatus::Unknown => ObservedStatus::Unknown,
+        TopologyStatus::SetupMissing => ObservedStatus::SetupMissing,
+        TopologyStatus::MissingLockfile => ObservedStatus::MissingLockfile,
+        TopologyStatus::Generated => ObservedStatus::Generated,
+        TopologyStatus::External => ObservedStatus::External,
+        TopologyStatus::Unsupported => ObservedStatus::Unsupported,
+    }
+}
+
+#[cfg(test)]
+fn import_to_package_status(status: ImportToPackageStatus) -> ObservedStatus {
+    match status {
+        ImportToPackageStatus::Resolved => ObservedStatus::Resolved,
+        ImportToPackageStatus::External => ObservedStatus::External,
+        ImportToPackageStatus::Unresolved => ObservedStatus::Unresolved,
+        ImportToPackageStatus::SetupMissing => ObservedStatus::SetupMissing,
+        ImportToPackageStatus::Unsupported => ObservedStatus::Unsupported,
+        ImportToPackageStatus::Dynamic => ObservedStatus::Dynamic,
+        ImportToPackageStatus::Ambiguous => ObservedStatus::Ambiguous,
+        ImportToPackageStatus::Undeclared => ObservedStatus::Undeclared,
+        ImportToPackageStatus::OutsideWorkspace => ObservedStatus::OutsideWorkspace,
+    }
 }
 
 #[cfg(test)]
@@ -515,10 +704,13 @@ fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
         "ambiguous" => Some(ObservedStatus::Ambiguous),
         "dynamic" => Some(ObservedStatus::Dynamic),
         "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "missing_lockfile" => Some(ObservedStatus::MissingLockfile),
         "unsupported" => Some(ObservedStatus::Unsupported),
         "external" => Some(ObservedStatus::External),
         "cycle" => Some(ObservedStatus::Cycle),
         "generated" => Some(ObservedStatus::Generated),
+        "undeclared" => Some(ObservedStatus::Undeclared),
+        "outside_workspace" => Some(ObservedStatus::OutsideWorkspace),
         _ => None,
     }
 }
@@ -866,7 +1058,8 @@ path = "repo"
                 ("provider_order.2", "polint.ts.syntax"),
                 ("provider_order.3", "polint.module_graph"),
                 ("provider_order.4", "polint.symbol_graph"),
-                ("provider_order.5", "polint.metrics"),
+                ("provider_order.5", "polint.module_topology"),
+                ("provider_order.6", "polint.metrics"),
             ]
         );
     }

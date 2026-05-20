@@ -24,10 +24,13 @@ invariant = { name = "layer_cache.provider.polint.symbol_graph.misses", value = 
 invariant = { name = "layer_cache.provider.polint.metrics.misses", value = "cold=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.misses", value = "cold=5", mode = "exact" }
+invariant = { name = "layer_cache.provider.polint.module_topology.misses", value = "cold=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.writes", value = "cold=5", mode = "exact" }
+invariant = { name = "layer_cache.aggregate.misses", value = "cold=6", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.writes", value = "cold=6", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.provider.polint.go.syntax.hits", value = "warm=1", mode = "exact" }
@@ -45,10 +48,13 @@ invariant = { name = "layer_cache.provider.polint.symbol_graph.hits", value = "w
 invariant = { name = "layer_cache.provider.polint.metrics.hits", value = "warm=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.hits", value = "warm=5", mode = "exact" }
+invariant = { name = "layer_cache.provider.polint.module_topology.hits", value = "warm=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.verified_reuse", value = "warm=5", mode = "exact" }
+invariant = { name = "layer_cache.aggregate.hits", value = "warm=6", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.verified_reuse", value = "warm=6", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.provider.polint.go.syntax.bypasses_disabled", value = "disabled=1", mode = "exact" }
@@ -66,7 +72,10 @@ invariant = { name = "layer_cache.provider.polint.symbol_graph.bypasses_disabled
 invariant = { name = "layer_cache.provider.polint.metrics.bypasses_disabled", value = "disabled=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.bypasses_disabled", value = "disabled=5", mode = "exact" }
+invariant = { name = "layer_cache.provider.polint.module_topology.bypasses_disabled", value = "disabled=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.bypasses_disabled", value = "disabled=6", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.aggregate.writes", value = "disabled=0", mode = "exact" }
@@ -93,7 +102,10 @@ invariant = { name = "layer_cache.provider.polint.metrics.misses", value = "impo
 invariant = { name = "layer_cache.aggregate.hits", value = "import_edit=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.misses", value = "import_edit=4", mode = "exact" }
+invariant = { name = "layer_cache.provider.polint.module_topology.misses", value = "import_edit=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "layer_cache.aggregate.misses", value = "import_edit=5", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.aggregate.invalid_evicted_reads", value = "import_edit=0", mode = "exact" }

@@ -18,7 +18,6 @@ Current rule-author fact views include:
 - `Functions<'_>`
 - `FunctionMetrics<'_>`
 - `ComplexityMetrics<'_>`
-- `Packages<'_>`
 - `Symbols<'_>`
 - `References<'_>`
 - `StringLiterals<'_>`

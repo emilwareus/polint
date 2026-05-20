@@ -4,14 +4,25 @@ use crate::core::{
     ResolutionStatus, UnresolvedReason,
 };
 use crate::go::lifecycle::{self, GoAnalysisConfig};
+use crate::module_graph::formats::go_mod::parse_go_mod;
+use crate::module_graph::formats::go_work::parse_go_work;
 use crate::module_graph::model::{
     ModuleGraphBuilder, ModuleNodeDraft, ResolvedImportDraft, ResolverInput,
 };
 use crate::module_graph::paths;
+use crate::module_graph::topology::{
+    DependencyRequirementFact, DependencyRequirementId, RequirementKind,
+    ResolvedDependencyEdgeFact, ResolvedDependencyEdgeId, ResolvedDependencyKind, SourceSetFact,
+    SourceSetId, SourceSetKind, TopologyOutput, TopologyPackageFact, TopologyPackageId,
+    TopologyPackageKind, TopologyPrecision, TopologyStatus, WorkspaceRootFact, WorkspaceRootId,
+    WorkspaceRootKind,
+};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+
+const GO_TOPOLOGY_PROVIDER_ID: &str = "polint.module_graph";
 
 #[derive(Debug, Clone)]
 pub(crate) struct GoPackageIndex {
@@ -233,6 +244,546 @@ pub(crate) fn seed_go_module_nodes(
     }
 
     ownership
+}
+
+pub(crate) fn collect_go_topology(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    metadata: &GoPackageIndex,
+) -> TopologyOutput {
+    let config = match GoAnalysisConfig::from_loaded(loaded, db) {
+        Ok(config) => config,
+        Err(_) => {
+            return TopologyOutput {
+                workspace_roots: vec![repository_root()],
+                source_sets: go_files_setup_missing(db, None),
+                ..TopologyOutput::default()
+            }
+            .normalized();
+        }
+    };
+
+    let mut output = TopologyOutput::default();
+    output.workspace_roots.push(repository_root());
+
+    let mut root_ids_by_path = BTreeMap::new();
+    for module_root in &config.module_roots {
+        let id = WorkspaceRootId(output.workspace_roots.len() as u64);
+        let go_mod_path = module_root_manifest_path(module_root, "go.mod");
+        let present = loaded.root.join(&go_mod_path).is_file();
+        output.workspace_roots.push(WorkspaceRootFact {
+            id,
+            kind: WorkspaceRootKind::GoModule,
+            root_path: module_root.clone(),
+            manifest_path: present.then_some(go_mod_path),
+            language: Some(Language::Go),
+            stable_key: format!("go-root:{module_root}"),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: if present {
+                TopologyStatus::Present
+            } else {
+                TopologyStatus::SetupMissing
+            },
+        });
+        root_ids_by_path.insert(module_root.clone(), id);
+    }
+
+    let go_work = loaded.root.join("go.work");
+    if go_work.is_file()
+        && lifecycle::go_work_covers_module_roots(&loaded.root, &go_work, &config.module_roots)
+    {
+        output.workspace_roots.push(WorkspaceRootFact {
+            id: WorkspaceRootId(output.workspace_roots.len() as u64),
+            kind: WorkspaceRootKind::GoWorkspace,
+            root_path: ".".to_string(),
+            manifest_path: Some("go.work".to_string()),
+            language: Some(Language::Go),
+            stable_key: "go-work:.".to_string(),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        if let Ok(contents) = std::fs::read_to_string(&go_work) {
+            let _ = parse_go_work("go.work", &contents);
+        }
+    }
+
+    let mut package_ids_by_import_path = BTreeMap::new();
+    let mut go_module_paths = Vec::new();
+    let mut module_requirements = BTreeMap::new();
+    let mut module_replacements = BTreeMap::new();
+    let mut module_package_ids = BTreeMap::new();
+    for module_root in &config.module_roots {
+        let go_mod_path = module_root_manifest_path(module_root, "go.mod");
+        let Ok(contents) = std::fs::read_to_string(loaded.root.join(&go_mod_path)) else {
+            continue;
+        };
+        let manifest = parse_go_mod(&go_mod_path, &contents);
+        let Some(module_path) = manifest.module_path.clone() else {
+            continue;
+        };
+        let id = TopologyPackageId(output.packages.len() as u64);
+        output.packages.push(TopologyPackageFact {
+            id,
+            workspace_root: root_ids_by_path.get(module_root).copied(),
+            package: None,
+            module_node: None,
+            kind: TopologyPackageKind::Workspace,
+            name: module_path.clone(),
+            version: None,
+            path: module_root.clone(),
+            language: Some(Language::Go),
+            stable_key: format!("go-module:{module_root}:{module_path}"),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        package_ids_by_import_path.insert(module_path.clone(), id);
+        go_module_paths.push(module_path);
+        module_package_ids.insert(module_root.clone(), id);
+        emit_go_mod_requirements(
+            &mut output,
+            id,
+            &go_mod_path,
+            &manifest.requirements,
+            &manifest.replacements,
+            &manifest.excludes,
+        );
+        module_requirements.insert(module_root.clone(), manifest.requirements);
+        module_replacements.insert(module_root.clone(), manifest.replacements);
+    }
+
+    for package in metadata.local_packages() {
+        let id = TopologyPackageId(output.packages.len() as u64);
+        let path = go_package_path(db, package);
+        output.packages.push(TopologyPackageFact {
+            id,
+            workspace_root: package
+                .module_path
+                .as_deref()
+                .and_then(|module_path| module_root_for_module_path(module_path, &config, &output))
+                .and_then(|module_root| root_ids_by_path.get(module_root).copied()),
+            package: None,
+            module_node: None,
+            kind: TopologyPackageKind::Package,
+            name: package.import_path.clone(),
+            version: package.module_version.clone(),
+            path,
+            language: Some(Language::Go),
+            stable_key: format!("go-package:{}", package.import_path),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status: TopologyStatus::Present,
+        });
+        package_ids_by_import_path.insert(package.import_path.clone(), id);
+    }
+
+    let files_without_roots = config
+        .files_without_module_root
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for file in lifecycle::go_files(db) {
+        let (root, status) = if files_without_roots.contains(&file.relative_path) {
+            (None, TopologyStatus::SetupMissing)
+        } else {
+            (
+                module_root_for_file(&file.relative_path, &config.module_roots)
+                    .and_then(|root| root_ids_by_path.get(root).copied()),
+                TopologyStatus::Present,
+            )
+        };
+        let package = metadata
+            .file_to_import_path
+            .get(&file.id)
+            .and_then(|import_path| package_ids_by_import_path.get(import_path))
+            .copied();
+        let kind = classify_go_source_set(file);
+        output.source_sets.push(SourceSetFact {
+            id: SourceSetId(output.source_sets.len() as u64),
+            package,
+            root,
+            kind,
+            path: file.relative_path.clone(),
+            language: Some(Language::Go),
+            files: vec![file.id],
+            stable_key: format!(
+                "go-source-set:{}:{}",
+                source_set_kind_label(kind),
+                file.relative_path
+            ),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::ExactStatic,
+            status,
+        });
+    }
+
+    emit_go_sum_edges(
+        &mut output,
+        &loaded.root,
+        &config.module_roots,
+        &module_requirements,
+        &module_replacements,
+        &module_package_ids,
+        &go_module_paths,
+    );
+
+    output.normalized()
+}
+
+fn repository_root() -> WorkspaceRootFact {
+    WorkspaceRootFact {
+        id: WorkspaceRootId(0),
+        kind: WorkspaceRootKind::Repository,
+        root_path: ".".to_string(),
+        manifest_path: None,
+        language: None,
+        stable_key: "repository:.".to_string(),
+        producer_id: GO_TOPOLOGY_PROVIDER_ID,
+        precision: TopologyPrecision::ExactStatic,
+        status: TopologyStatus::Present,
+    }
+}
+
+fn go_files_setup_missing(db: &AnalysisDb, root: Option<WorkspaceRootId>) -> Vec<SourceSetFact> {
+    lifecycle::go_files(db)
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| SourceSetFact {
+            id: SourceSetId(index as u64),
+            package: None,
+            root,
+            kind: classify_go_source_set(file),
+            path: file.relative_path.clone(),
+            language: Some(Language::Go),
+            files: vec![file.id],
+            stable_key: format!(
+                "go-source-set:{}:{}",
+                source_set_kind_label(classify_go_source_set(file)),
+                file.relative_path
+            ),
+            producer_id: GO_TOPOLOGY_PROVIDER_ID,
+            precision: TopologyPrecision::Unknown,
+            status: TopologyStatus::SetupMissing,
+        })
+        .collect()
+}
+
+fn emit_go_mod_requirements(
+    output: &mut TopologyOutput,
+    from_package: TopologyPackageId,
+    manifest_path: &str,
+    requirements: &[crate::module_graph::formats::go_mod::GoRequirementDirective],
+    replacements: &[crate::module_graph::formats::go_mod::GoReplacementDirective],
+    excludes: &[crate::module_graph::formats::go_mod::GoRequirementDirective],
+) {
+    for requirement in requirements {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: requirement.target_name.clone(),
+                version_requirement: requirement.version_requirement.clone(),
+                kind: RequirementKind::Direct,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-require:{manifest_path}:{}:{}",
+                    requirement.target_name,
+                    requirement.version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: requirement.precision,
+                status: requirement.status,
+            });
+    }
+    for replacement in replacements {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: replacement.target_name.clone(),
+                version_requirement: replacement.version_requirement.clone(),
+                kind: RequirementKind::Replace,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-replace:{manifest_path}:{}:{}=>{}:{}",
+                    replacement.target_name,
+                    replacement.version_requirement.as_deref().unwrap_or(""),
+                    replacement.replacement_target,
+                    replacement.replacement_version.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: replacement.precision,
+                status: replacement.status,
+            });
+    }
+    for exclude in excludes {
+        output
+            .dependency_requirements
+            .push(DependencyRequirementFact {
+                id: DependencyRequirementId(output.dependency_requirements.len() as u64),
+                from_package: Some(from_package),
+                target_package: None,
+                target_name: exclude.target_name.clone(),
+                version_requirement: exclude.version_requirement.clone(),
+                kind: RequirementKind::Exclude,
+                manifest_path: Some(manifest_path.to_string()),
+                stable_key: format!(
+                    "go-exclude:{manifest_path}:{}:{}",
+                    exclude.target_name,
+                    exclude.version_requirement.as_deref().unwrap_or("")
+                ),
+                producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                precision: exclude.precision,
+                status: exclude.status,
+            });
+    }
+}
+
+fn emit_go_sum_edges(
+    output: &mut TopologyOutput,
+    root: &Path,
+    module_roots: &[String],
+    module_requirements: &BTreeMap<
+        String,
+        Vec<crate::module_graph::formats::go_mod::GoRequirementDirective>,
+    >,
+    module_replacements: &BTreeMap<
+        String,
+        Vec<crate::module_graph::formats::go_mod::GoReplacementDirective>,
+    >,
+    module_package_ids: &BTreeMap<String, TopologyPackageId>,
+    go_module_paths: &[String],
+) {
+    for module_root in module_roots {
+        let go_sum_path = module_root_manifest_path(module_root, "go.sum");
+        let source_label = "go.sum";
+        let module_package = module_package_ids.get(module_root).copied();
+        let requirements = module_requirements
+            .get(module_root)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let replacements = module_replacements
+            .get(module_root)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let path = root.join(&go_sum_path);
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            for (line_index, line) in contents.lines().enumerate() {
+                if let Some((package_name, resolved_version)) = parse_go_sum_line(line) {
+                    output.resolved_dependency_edges.push(ResolvedDependencyEdgeFact {
+                        id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                        requirement: requirement_id_for(
+                            output,
+                            module_package,
+                            &package_name,
+                            Some(&resolved_version),
+                        ),
+                        from_package: module_package,
+                        to_package: None,
+                        package_name: package_name.clone(),
+                        resolved_version: Some(resolved_version.clone()),
+                        kind: ResolvedDependencyKind::ChecksumEvidence,
+                        stable_key: format!(
+                            "go-sum-line:{go_sum_path}:{line_index}:{package_name}:{resolved_version}:source_label={source_label}"
+                        ),
+                        producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                        precision: TopologyPrecision::ExactLockfile,
+                        status: TopologyStatus::Resolved,
+                    });
+                }
+            }
+            continue;
+        }
+
+        for requirement in requirements.iter().filter(|requirement| {
+            is_external_requirement(&requirement.target_name, go_module_paths)
+                && !requirement_has_local_replacement(requirement, replacements)
+        }) {
+            let resolved_version = requirement.version_requirement.clone();
+            output
+                .resolved_dependency_edges
+                .push(ResolvedDependencyEdgeFact {
+                    id: ResolvedDependencyEdgeId(output.resolved_dependency_edges.len() as u64),
+                    requirement: requirement_id_for(
+                        output,
+                        module_package,
+                        &requirement.target_name,
+                        resolved_version.as_deref(),
+                    ),
+                    from_package: module_package,
+                    to_package: None,
+                    package_name: requirement.target_name.clone(),
+                    resolved_version,
+                    kind: ResolvedDependencyKind::ChecksumEvidence,
+                    stable_key: format!(
+                        "go.sum:absent:{go_sum_path}:{}:{}:source_label={source_label}",
+                        requirement.target_name,
+                        requirement.version_requirement.as_deref().unwrap_or("")
+                    ),
+                    producer_id: GO_TOPOLOGY_PROVIDER_ID,
+                    precision: TopologyPrecision::Unknown,
+                    status: TopologyStatus::MissingLockfile,
+                });
+        }
+    }
+}
+
+fn requirement_has_local_replacement(
+    requirement: &crate::module_graph::formats::go_mod::GoRequirementDirective,
+    replacements: &[crate::module_graph::formats::go_mod::GoReplacementDirective],
+) -> bool {
+    replacements.iter().any(|replacement| {
+        replacement.target_name == requirement.target_name
+            && (replacement.version_requirement.is_none()
+                || replacement.version_requirement == requirement.version_requirement)
+            && replacement.replacement_version.is_none()
+            && is_local_go_replacement_target(&replacement.replacement_target)
+    })
+}
+
+fn is_local_go_replacement_target(target: &str) -> bool {
+    matches!(target, "." | "..")
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || Path::new(target).is_absolute()
+}
+
+fn parse_go_sum_line(line: &str) -> Option<(String, String)> {
+    let mut parts = line.split_whitespace();
+    let package_name = parts.next()?.to_string();
+    let version = parts.next()?.trim_end_matches("/go.mod").to_string();
+    let _checksum = parts.next()?;
+    Some((package_name, version))
+}
+
+fn requirement_id_for(
+    output: &TopologyOutput,
+    from_package: Option<TopologyPackageId>,
+    target_name: &str,
+    version_requirement: Option<&str>,
+) -> Option<DependencyRequirementId> {
+    output
+        .dependency_requirements
+        .iter()
+        .find(|requirement| {
+            requirement.from_package == from_package
+                && requirement.target_name == target_name
+                && requirement.version_requirement.as_deref() == version_requirement
+        })
+        .map(|requirement| requirement.id)
+}
+
+fn is_external_requirement(target_name: &str, go_module_paths: &[String]) -> bool {
+    !go_module_paths
+        .iter()
+        .any(|module_path| import_is_within_module(target_name, module_path))
+}
+
+fn module_root_manifest_path(module_root: &str, manifest_name: &str) -> String {
+    if module_root == "." {
+        manifest_name.to_string()
+    } else {
+        format!("{module_root}/{manifest_name}")
+    }
+}
+
+fn module_root_for_file<'a>(relative_path: &str, module_roots: &'a [String]) -> Option<&'a str> {
+    module_roots
+        .iter()
+        .filter(|module_root| file_is_under_module_root(relative_path, module_root))
+        .max_by_key(|module_root| module_root.len())
+        .map(String::as_str)
+}
+
+fn file_is_under_module_root(relative_path: &str, module_root: &str) -> bool {
+    module_root == "."
+        || relative_path == module_root
+        || relative_path
+            .strip_prefix(module_root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn module_root_for_module_path<'a>(
+    module_path: &str,
+    config: &'a GoAnalysisConfig,
+    output: &TopologyOutput,
+) -> Option<&'a str> {
+    output
+        .packages
+        .iter()
+        .find(|package| {
+            package.kind == TopologyPackageKind::Workspace && package.name == module_path
+        })
+        .and_then(|package| {
+            config
+                .module_roots
+                .iter()
+                .find(|module_root| package.path == module_root.as_str())
+        })
+        .map(String::as_str)
+}
+
+fn go_package_path(db: &AnalysisDb, package: &GoPackageMetadata) -> String {
+    package
+        .files
+        .iter()
+        .filter_map(|file| db.files().iter().find(|source| source.id == *file))
+        .filter_map(|file| parent_path(&file.relative_path))
+        .next()
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn parent_path(relative_path: &str) -> Option<String> {
+    relative_path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .or_else(|| Some(".".to_string()))
+}
+
+fn classify_go_source_set(file: &crate::core::SourceFile) -> SourceSetKind {
+    if path_contains_vendor(&file.relative_path) {
+        return SourceSetKind::Vendor;
+    }
+    if file.relative_path.ends_with("_test.go") {
+        return SourceSetKind::Test;
+    }
+    if file.relative_path.ends_with(".pb.go") || first_comment_is_generated(&file.source) {
+        return SourceSetKind::Generated;
+    }
+    SourceSetKind::Source
+}
+
+fn path_contains_vendor(relative_path: &str) -> bool {
+    relative_path == "vendor"
+        || relative_path.starts_with("vendor/")
+        || relative_path.contains("/vendor/")
+}
+
+fn first_comment_is_generated(source: &str) -> bool {
+    source
+        .lines()
+        .map(str::trim_start)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| {
+            line.starts_with("// Code generated") || line.starts_with("/* Code generated")
+        })
+}
+
+fn source_set_kind_label(kind: SourceSetKind) -> &'static str {
+    match kind {
+        SourceSetKind::Source => "source",
+        SourceSetKind::Test => "test",
+        SourceSetKind::Generated => "generated",
+        SourceSetKind::Vendor => "vendor",
+        SourceSetKind::External => "external",
+        SourceSetKind::Unknown => "unknown",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -472,6 +1023,439 @@ fn is_go_stdlib_import_path(import_path: &str) -> bool {
         .split('/')
         .next()
         .is_some_and(|first| !first.contains('.') && !first.is_empty())
+}
+
+#[cfg(test)]
+mod topology_monorepo {
+    use super::*;
+    use crate::config::load_config;
+    use crate::module_graph::topology::{SourceSetKind, TopologyStatus, WorkspaceRootKind};
+    use std::path::Path;
+
+    #[test]
+    fn topology_monorepo_infers_go_module_roots_without_repo_go_mod() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+        std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+        std::fs::write(
+            temp.path().join("services/api/go.mod"),
+            "module example.com/api\n\ngo 1.24\n",
+        )
+        .expect("write api go.mod");
+        std::fs::write(
+            temp.path().join("libs/common/go.mod"),
+            "module example.com/common\n\ngo 1.24\n",
+        )
+        .expect("write common go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/api/main.go",
+            "package api\n",
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "libs/common/common.go",
+            "package common\n",
+        );
+        let metadata = go_index_with_module_path(
+            temp.path(),
+            &db,
+            "example.com/api",
+            &[("example.com/api", "services/api", &["main.go"], false)],
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &metadata);
+        let module_roots = output
+            .workspace_roots
+            .iter()
+            .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+            .map(|root| (root.root_path.as_str(), root.status))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            module_roots,
+            vec![
+                ("libs/common", TopologyStatus::Present),
+                ("services/api", TopologyStatus::Present),
+            ]
+        );
+    }
+
+    #[test]
+    fn topology_monorepo_configured_module_roots_win_over_nearest_discovery() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+        std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+        std::fs::write(
+            temp.path().join(".polint.toml"),
+            "[languages.go]\nmodule_roots = [\"services/api\"]\n",
+        )
+        .expect("write config");
+        std::fs::write(
+            temp.path().join("services/api/go.mod"),
+            "module example.com/api\n\ngo 1.24\n",
+        )
+        .expect("write api go.mod");
+        std::fs::write(
+            temp.path().join("libs/common/go.mod"),
+            "module example.com/common\n\ngo 1.24\n",
+        )
+        .expect("write common go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/api/main.go",
+            "package api\n",
+        );
+        let outside = add_go_file(
+            &mut db,
+            temp.path(),
+            "libs/common/common.go",
+            "package common\n",
+        );
+        let metadata = GoPackageIndex::default();
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &metadata);
+        let module_roots = output
+            .workspace_roots
+            .iter()
+            .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+            .map(|root| root.root_path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_roots, vec!["services/api"]);
+        assert!(output.source_sets.iter().any(|source_set| {
+            source_set.files == vec![outside] && source_set.status == TopologyStatus::SetupMissing
+        }));
+    }
+
+    #[test]
+    fn topology_source_sets_classify_tests_vendor_and_generated_go_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        let source = add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let test = add_go_file(&mut db, temp.path(), "main_test.go", "package app\n");
+        let proto = add_go_file(&mut db, temp.path(), "api.pb.go", "package app\n");
+        let generated = add_go_file(
+            &mut db,
+            temp.path(),
+            "generated.go",
+            "// Code generated by tool. DO NOT EDIT.\npackage app\n",
+        );
+        let vendor = add_go_file(
+            &mut db,
+            temp.path(),
+            "vendor/github.com/acme/lib/lib.go",
+            "package lib\n",
+        );
+        let metadata = go_index(
+            temp.path(),
+            &db,
+            &[(
+                "example.com/app",
+                ".",
+                &["main.go", "main_test.go", "api.pb.go", "generated.go"],
+                false,
+            )],
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &metadata);
+
+        assert!(source_set_for_file(&output, source, SourceSetKind::Source));
+        assert!(source_set_for_file(&output, test, SourceSetKind::Test));
+        assert!(source_set_for_file(
+            &output,
+            proto,
+            SourceSetKind::Generated
+        ));
+        assert!(source_set_for_file(
+            &output,
+            generated,
+            SourceSetKind::Generated
+        ));
+        assert!(source_set_for_file(&output, vendor, SourceSetKind::Vendor));
+    }
+
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("test fixture has parent"))
+            .expect("create parent dirs");
+        std::fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
+
+    fn go_index(
+        root: &Path,
+        db: &AnalysisDb,
+        packages: &[(&str, &str, &[&str], bool)],
+    ) -> GoPackageIndex {
+        go_index_with_module_path(root, db, "example.com/app", packages)
+    }
+
+    fn go_index_with_module_path(
+        root: &Path,
+        db: &AnalysisDb,
+        module_path: &str,
+        packages: &[(&str, &str, &[&str], bool)],
+    ) -> GoPackageIndex {
+        let stdout = packages
+            .iter()
+            .map(|(import_path, dir, files, standard)| {
+                let dir = root.join(dir);
+                let files = files
+                    .iter()
+                    .map(|file| serde_json::to_string(file).expect("serialize file"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    r#"{{"ImportPath":{},"Name":"pkg","Dir":{},"GoFiles":[{}],"Standard":{},"Module":{{"Path":{}}}}}"#,
+                    serde_json::to_string(import_path).expect("serialize import path"),
+                    serde_json::to_string(&dir.to_string_lossy()).expect("serialize dir"),
+                    files,
+                    standard,
+                    serde_json::to_string(module_path).expect("serialize module path")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        GoPackageIndex::load_with_runner_for_test(root, db, || GoCommandOutput {
+            status: successful_status(),
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+        })
+    }
+
+    fn source_set_for_file(
+        output: &crate::module_graph::topology::TopologyOutput,
+        file: FileId,
+        kind: SourceSetKind,
+    ) -> bool {
+        output
+            .source_sets
+            .iter()
+            .any(|source_set| source_set.files == vec![file] && source_set.kind == kind)
+    }
+
+    fn successful_status() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod dependency_topology {
+    use super::*;
+    use crate::config::load_config;
+    use crate::module_graph::topology::{
+        RequirementKind, ResolvedDependencyKind, TopologyPrecision, TopologyStatus,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn dependency_topology_emits_direct_requirements_from_go_mod() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.dependency_requirements.iter().any(|requirement| {
+            requirement.target_name == "github.com/acme/lib"
+                && requirement.version_requirement.as_deref() == Some("v1.2.3")
+                && requirement.kind == RequirementKind::Direct
+                && requirement.manifest_path.as_deref() == Some("go.mod")
+                && requirement.precision == TopologyPrecision::ExactStatic
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_emits_go_sum_checksum_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("go.sum"),
+            "github.com/acme/lib v1.2.3 h1:abc\ngithub.com/acme/lib v1.2.3/go.mod h1:def\n",
+        )
+        .expect("write go.sum");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.resolved_version.as_deref() == Some("v1.2.3")
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.precision == TopologyPrecision::ExactLockfile
+                && edge.status == TopologyStatus::Resolved
+                && edge.stable_key.contains("go-sum-line")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_scopes_go_sum_edges_to_module_package() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for module_root in ["services/api", "services/worker"] {
+            std::fs::create_dir_all(temp.path().join(module_root)).expect("mkdir module");
+            std::fs::write(
+                temp.path().join(module_root).join("go.mod"),
+                format!(
+                    "module example.com/{}\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+                    module_root
+                        .rsplit('/')
+                        .next()
+                        .expect("module root has name")
+                ),
+            )
+            .expect("write go.mod");
+            std::fs::write(
+                temp.path().join(module_root).join("go.sum"),
+                "github.com/acme/lib v1.2.3 h1:abc\n",
+            )
+            .expect("write go.sum");
+        }
+        let mut db = AnalysisDb::new();
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/api/main.go",
+            "package api\n",
+        );
+        add_go_file(
+            &mut db,
+            temp.path(),
+            "services/worker/main.go",
+            "package worker\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+        let api_package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "services/api")
+            .expect("api module package exists");
+        let worker_package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "services/worker")
+            .expect("worker module package exists");
+        let api_requirement = output
+            .dependency_requirements
+            .iter()
+            .find(|requirement| {
+                requirement.from_package == Some(api_package.id)
+                    && requirement.target_name == "github.com/acme/lib"
+                    && requirement.version_requirement.as_deref() == Some("v1.2.3")
+            })
+            .expect("api requirement exists");
+        let worker_requirement = output
+            .dependency_requirements
+            .iter()
+            .find(|requirement| {
+                requirement.from_package == Some(worker_package.id)
+                    && requirement.target_name == "github.com/acme/lib"
+                    && requirement.version_requirement.as_deref() == Some("v1.2.3")
+            })
+            .expect("worker requirement exists");
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.from_package == Some(api_package.id)
+                && edge.requirement == Some(api_requirement.id)
+                && edge.package_name == "github.com/acme/lib"
+                && edge.stable_key.contains("services/api/go.sum")
+        }));
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.from_package == Some(worker_package.id)
+                && edge.requirement == Some(worker_requirement.id)
+                && edge.package_name == "github.com/acme/lib"
+                && edge.stable_key.contains("services/worker/go.sum")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_marks_external_requirements_missing_lockfile_when_go_sum_absent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.resolved_version.as_deref() == Some("v1.2.3")
+                && edge.status == TopologyStatus::MissingLockfile
+                && edge.precision == TopologyPrecision::Unknown
+                && edge.stable_key.contains("go.sum:absent")
+        }));
+    }
+
+    #[test]
+    fn dependency_topology_does_not_mark_local_replacements_missing_go_sum() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.com/app\n\ngo 1.24\n\nrequire github.com/acme/lib v1.2.3\n\nreplace github.com/acme/lib => ../lib\n",
+        )
+        .expect("write go.mod");
+        let mut db = AnalysisDb::new();
+        add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_go_topology(&loaded, &db, &GoPackageIndex::default());
+
+        assert!(!output.resolved_dependency_edges.iter().any(|edge| {
+            edge.package_name == "github.com/acme/lib"
+                && edge.kind == ResolvedDependencyKind::ChecksumEvidence
+                && edge.status == TopologyStatus::MissingLockfile
+                && edge.stable_key.contains("go.sum:absent")
+        }));
+    }
+
+    fn add_go_file(db: &mut AnalysisDb, root: &Path, relative_path: &str, source: &str) -> FileId {
+        let path = root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("test fixture has parent"))
+            .expect("create parent dirs");
+        std::fs::write(&path, source).expect("write fixture");
+        db.add_file(path, relative_path.to_string(), source.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -908,6 +1892,180 @@ mod tests {
 
         assert!(!ran.load(Ordering::SeqCst));
         assert!(rule_diagnostics.is_empty());
+    }
+
+    mod topology {
+        use super::*;
+        use crate::module_graph::go::collect_go_topology;
+        use crate::module_graph::topology::{SourceSetKind, TopologyStatus, WorkspaceRootKind};
+
+        #[test]
+        fn topology_monorepo_infers_go_module_roots_without_repo_go_mod() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+            std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+            std::fs::write(
+                temp.path().join("services/api/go.mod"),
+                "module example.com/api\n\ngo 1.24\n",
+            )
+            .expect("write api go.mod");
+            std::fs::write(
+                temp.path().join("libs/common/go.mod"),
+                "module example.com/common\n\ngo 1.24\n",
+            )
+            .expect("write common go.mod");
+            let mut db = AnalysisDb::new();
+            add_go_file(
+                &mut db,
+                temp.path(),
+                "services/api/main.go",
+                "package api\n",
+            );
+            add_go_file(
+                &mut db,
+                temp.path(),
+                "libs/common/common.go",
+                "package common\n",
+            );
+            let metadata = go_index_with_module_path(
+                temp.path(),
+                &db,
+                "example.com/api",
+                &[("example.com/api", "services/api", &["main.go"], false)],
+            );
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+            let module_roots = output
+                .workspace_roots
+                .iter()
+                .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+                .map(|root| (root.root_path.as_str(), root.status))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                module_roots,
+                vec![
+                    ("libs/common", TopologyStatus::Present),
+                    ("services/api", TopologyStatus::Present),
+                ]
+            );
+        }
+
+        #[test]
+        fn topology_monorepo_configured_module_roots_win_over_nearest_discovery() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(temp.path().join("services/api")).expect("mkdir api");
+            std::fs::create_dir_all(temp.path().join("libs/common")).expect("mkdir common");
+            std::fs::write(
+                temp.path().join(".polint.toml"),
+                "[languages.go]\nmodule_roots = [\"services/api\"]\n",
+            )
+            .expect("write config");
+            std::fs::write(
+                temp.path().join("services/api/go.mod"),
+                "module example.com/api\n\ngo 1.24\n",
+            )
+            .expect("write api go.mod");
+            std::fs::write(
+                temp.path().join("libs/common/go.mod"),
+                "module example.com/common\n\ngo 1.24\n",
+            )
+            .expect("write common go.mod");
+            let mut db = AnalysisDb::new();
+            add_go_file(
+                &mut db,
+                temp.path(),
+                "services/api/main.go",
+                "package api\n",
+            );
+            let outside = add_go_file(
+                &mut db,
+                temp.path(),
+                "libs/common/common.go",
+                "package common\n",
+            );
+            let metadata = GoPackageIndex::default();
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+            let module_roots = output
+                .workspace_roots
+                .iter()
+                .filter(|root| root.kind == WorkspaceRootKind::GoModule)
+                .map(|root| root.root_path.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!(module_roots, vec!["services/api"]);
+            assert!(output.source_sets.iter().any(|source_set| {
+                source_set.files == vec![outside]
+                    && source_set.status == TopologyStatus::SetupMissing
+            }));
+        }
+
+        #[test]
+        fn topology_source_sets_classify_tests_vendor_and_generated_go_files() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::write(
+                temp.path().join("go.mod"),
+                "module example.com/app\n\ngo 1.24\n",
+            )
+            .expect("write go.mod");
+            let mut db = AnalysisDb::new();
+            let source = add_go_file(&mut db, temp.path(), "main.go", "package app\n");
+            let test = add_go_file(&mut db, temp.path(), "main_test.go", "package app\n");
+            let proto = add_go_file(&mut db, temp.path(), "api.pb.go", "package app\n");
+            let generated = add_go_file(
+                &mut db,
+                temp.path(),
+                "generated.go",
+                "// Code generated by tool. DO NOT EDIT.\npackage app\n",
+            );
+            let vendor = add_go_file(
+                &mut db,
+                temp.path(),
+                "vendor/github.com/acme/lib/lib.go",
+                "package lib\n",
+            );
+            let metadata = go_index(
+                temp.path(),
+                &db,
+                &[(
+                    "example.com/app",
+                    ".",
+                    &["main.go", "main_test.go", "api.pb.go", "generated.go"],
+                    false,
+                )],
+            );
+            let loaded = load_config(temp.path()).expect("config loads");
+
+            let output = collect_go_topology(&loaded, &db, &metadata);
+
+            assert!(source_set_for_file(&output, source, SourceSetKind::Source));
+            assert!(source_set_for_file(&output, test, SourceSetKind::Test));
+            assert!(source_set_for_file(
+                &output,
+                proto,
+                SourceSetKind::Generated
+            ));
+            assert!(source_set_for_file(
+                &output,
+                generated,
+                SourceSetKind::Generated
+            ));
+            assert!(source_set_for_file(&output, vendor, SourceSetKind::Vendor));
+        }
+
+        fn source_set_for_file(
+            output: &crate::module_graph::topology::TopologyOutput,
+            file: FileId,
+            kind: SourceSetKind,
+        ) -> bool {
+            output
+                .source_sets
+                .iter()
+                .any(|source_set| source_set.files == vec![file] && source_set.kind == kind)
+        }
     }
 
     fn add_go_file(

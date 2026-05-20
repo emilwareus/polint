@@ -353,10 +353,13 @@ fn status_key(status: ObservedStatus) -> &'static str {
         ObservedStatus::Ambiguous => "ambiguous",
         ObservedStatus::Dynamic => "dynamic",
         ObservedStatus::SetupMissing => "setup_missing",
+        ObservedStatus::MissingLockfile => "missing_lockfile",
         ObservedStatus::Unsupported => "unsupported",
         ObservedStatus::External => "external",
         ObservedStatus::Cycle => "cycle",
         ObservedStatus::Generated => "generated",
+        ObservedStatus::Undeclared => "undeclared",
+        ObservedStatus::OutsideWorkspace => "outside_workspace",
         ObservedStatus::Rejected => "rejected",
         ObservedStatus::Accepted => "accepted",
     }

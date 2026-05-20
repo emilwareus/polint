@@ -101,8 +101,8 @@ The product direction is simple:
   Add Java with setup-aware parsing, packages, symbols, test facts, and coverage
   through the same public rule-authoring model. Java support should expect
   classpath/build setup when deeper facts are requested, but rule authors should
-  still consume normalized polint facts rather than raw javac, Maven, Gradle, or
-  JaCoCo output.
+  still consume normalized framework facts rather than raw javac, Maven, Gradle,
+  or JaCoCo output.
 
 ## Release Gate For Each Item
 

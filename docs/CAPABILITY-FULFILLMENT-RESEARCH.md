@@ -113,8 +113,9 @@ Examples:
   project metadata, classpaths, JaCoCo reports, or language-server/compiler
   output for symbols and types.
 
-The important boundary is that rule authors consume polint facts, not raw
-language-tool output. External tools are implementation details behind adapters.
+The important boundary is that rule authors consume normalized framework data,
+not raw language-tool output. External tools are implementation details behind
+adapters.
 
 ## Setup Expectations
 

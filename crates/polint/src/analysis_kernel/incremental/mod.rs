@@ -92,8 +92,9 @@ pub(crate) use invalidation::{
     )
 )]
 pub(crate) use keys::{
-    DiagnosticKey, LayerKey, LayerKind, PrecisionTier, QueryKey, SummaryKey,
-    dependency_layer_digest, semantic_provider_parameter_digest,
+    DiagnosticKey, LayerKey, LayerKind, MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES, PrecisionTier,
+    QueryKey, SummaryKey, dependency_layer_digest, module_graph_topology_input_digest_rows,
+    module_graph_topology_input_digests, semantic_provider_parameter_digest,
 };
 #[cfg_attr(
     test,

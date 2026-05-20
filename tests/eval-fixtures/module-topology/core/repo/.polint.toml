@@ -1,0 +1,12 @@
+[workspace]
+include = ["services/api/**/*.go", "web/**/*.ts"]
+exclude = []
+
+[languages.go]
+module_roots = ["services/api"]
+package_patterns = ["./..."]
+include_tests = true
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"
