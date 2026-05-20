@@ -2,6 +2,7 @@ use crate::analysis::cfg::derived::{
     derive_control_dependence, derive_dominators, derive_postdominators, derive_reachability,
 };
 use crate::analysis::cfg::facts::CfgView;
+use crate::analysis::cfg::lower_go::lower_go_cfg;
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
@@ -51,8 +52,8 @@ pub(crate) fn derive_cfg_with_cache_stats(
     }
 }
 
-fn derive_cfg_output(_db: &AnalysisDb) -> CfgOutput {
-    CfgOutput::empty()
+fn derive_cfg_output(db: &AnalysisDb) -> CfgOutput {
+    lower_go_cfg(db)
 }
 
 fn append_derived_rows(output: &mut CfgOutput, view: CfgView) {

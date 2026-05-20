@@ -184,6 +184,17 @@ impl CfgBuilder {
             .expect("CfgBuilder::start_function must create a normal exit block")
     }
 
+    pub(crate) fn exceptional_exit_block(&self) -> Option<BasicBlockId> {
+        let function = self.expect_function();
+        self.output
+            .blocks
+            .iter()
+            .find(|block| {
+                block.cfg_function == function && block.kind == BasicBlockKind::ExitExceptional
+            })
+            .map(|block| block.id)
+    }
+
     pub(crate) fn start_block(&mut self, kind: BasicBlockKind) -> BasicBlockId {
         let function = self.expect_function();
         let ordinal = self.output.blocks.len() as u32;
