@@ -214,7 +214,34 @@ impl AnalysisKernel {
             "polint.semantic_mir",
             &db,
             polint_semantic_mir_cache_stats,
-            semantic_mir_output_digest,
+            semantic_mir_output_digest.clone(),
+        ));
+
+        let semantic_mir_dependency_output_digest =
+            semantic_mir_output_digest.unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.semantic_mir",
+                )
+            });
+        let cfg = crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.cfg"),
+            semantic_mir_dependency_output_digest,
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
+        let polint_cfg_cache_stats = cfg.cache_stats.clone();
+        let cfg_output_digest = cfg.output_digest.clone();
+        diagnostics.extend(cfg.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.cfg",
+            &db,
+            polint_cfg_cache_stats,
+            cfg_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -854,6 +881,34 @@ mod tests {
         assert_eq!(semantic_mir.schema_version, "semantic-mir-facts-1:1");
         assert!(!semantic_mir.output_digest.value.is_empty());
         assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+    }
+
+    #[test]
+    fn kernel_run_report_cfg_row_carries_output_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let cfg = provider_output(&output, "polint.cfg");
+
+        assert_eq!(cfg.schema_version, "cfg-facts-1:1");
+        assert!(!cfg.output_digest.value.is_empty());
+        assert_eq!(cfg.cache_stats.recomputes, 1);
     }
 
     #[test]

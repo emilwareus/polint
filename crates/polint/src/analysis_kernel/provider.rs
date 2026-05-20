@@ -172,6 +172,11 @@ const SEMANTIC_MIR_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const CFG_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "cfg-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -320,6 +325,33 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.cfg",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "unsupported_semantics",
+        ],
+        outputs: &[
+            "cfg_functions",
+            "cfg_nodes",
+            "basic_blocks",
+            "cfg_edges",
+            "cfg_reachability",
+            "cfg_dominators",
+            "cfg_postdominators",
+            "cfg_control_dependence",
+            "unsupported_control_flow",
+        ],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: CFG_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -364,6 +396,7 @@ mod tests {
                 "polint.symbol_graph",
                 "polint.module_topology",
                 "polint.semantic_mir",
+                "polint.cfg",
                 "polint.metrics",
             ]
         );
@@ -381,6 +414,7 @@ mod tests {
                 "polint.symbol_graph",
                 "polint.module_topology",
                 "polint.semantic_mir",
+                "polint.cfg",
                 "polint.metrics",
             ]
         );
@@ -425,6 +459,7 @@ mod tests {
                 "polint.symbol_graph",
                 "polint.module_topology",
                 "polint.semantic_mir",
+                "polint.cfg",
                 "polint.metrics",
             ]
         );
@@ -596,6 +631,30 @@ mod tests {
                         "mir_operations",
                         "places",
                         "unsupported_semantics",
+                    ],
+                },
+                ProviderOrderRow {
+                    id: "polint.cfg",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "unsupported_semantics",
+                    ],
+                    outputs: vec![
+                        "cfg_functions",
+                        "cfg_nodes",
+                        "basic_blocks",
+                        "cfg_edges",
+                        "cfg_reachability",
+                        "cfg_dominators",
+                        "cfg_postdominators",
+                        "cfg_control_dependence",
+                        "unsupported_control_flow",
                     ],
                 },
                 ProviderOrderRow {

@@ -3,6 +3,7 @@ use std::fmt::Debug;
 
 use serde::Serialize;
 
+use crate::analysis::cfg::validate::validate_cfg;
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
@@ -39,6 +40,7 @@ pub(crate) fn validate_fact_metadata(
     validate_semantic_index(db, &ids, &mut diagnostics);
     validate_topology_facts(db, &ids, &mut diagnostics);
     validate_semantic_mir(db, &ids, &mut diagnostics);
+    validate_cfg(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
@@ -263,6 +265,248 @@ mod semantic_mir {
             end_line: 1,
             end_col: end_byte + 1,
         }
+    }
+
+    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
+        diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| evidence.label.as_str())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod cfg {
+    use super::validate_fact_metadata;
+    use crate::analysis::cfg::facts::{
+        BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
+        CfgNodeKind, CfgPrecision, CfgStatus, CfgView,
+    };
+    use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
+    use crate::analysis::cfg::store::CfgOutput;
+    use crate::analysis::ids::MirBodyId;
+    use crate::analysis_kernel::{
+        AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
+        ValidationStatus,
+    };
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cfg_validation_reports_malformed_rows_with_required_evidence() {
+        let mut db = base_db();
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![
+                function(
+                    "cfg:function:dup",
+                    CfgFunctionId(0),
+                    CfgNodeId(404),
+                    CfgNodeId(405),
+                ),
+                function(
+                    "cfg:function:dup",
+                    CfgFunctionId(1),
+                    CfgNodeId(0),
+                    CfgNodeId(1),
+                ),
+            ],
+            nodes: vec![CfgNodeFact {
+                id: CfgNodeId(0),
+                cfg_function: CfgFunctionId(99),
+                body: MirBodyId(99),
+                operation: None,
+                block: BasicBlockId(99),
+                kind: CfgNodeKind::Operation,
+                span: Some(Span {
+                    file: FileId(0),
+                    start_byte: 10,
+                    end_byte: 1,
+                    start_line: 1,
+                    start_col: 11,
+                    end_line: 1,
+                    end_col: 2,
+                }),
+                generated: false,
+                operation_ordinal: 0,
+                stable_key: "cfg:node:bad".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            blocks: vec![BasicBlockFact {
+                id: BasicBlockId(0),
+                cfg_function: CfgFunctionId(0),
+                kind: BasicBlockKind::StraightLine,
+                first_node: None,
+                last_node: None,
+                reachable: true,
+                reverse_postorder: 0,
+                stable_key: "cfg:block:bad".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            edges: vec![
+                edge(
+                    "cfg:edge:one",
+                    CfgEdgeId(0),
+                    BasicBlockId(0),
+                    BasicBlockId(1),
+                ),
+                edge(
+                    "cfg:edge:two",
+                    CfgEdgeId(1),
+                    BasicBlockId(0),
+                    BasicBlockId(1),
+                ),
+            ],
+            ..CfgOutput::empty()
+        })
+        .expect("cfg rows should store for validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let cfg = cfg_diagnostics(&diagnostics);
+
+        assert!(
+            cfg.len() >= 6,
+            "expected CFG validation diagnostics: {diagnostics:#?}"
+        );
+        assert!(cfg.iter().all(|diagnostic| {
+            let labels = evidence_labels(diagnostic);
+            labels.contains("family")
+                && labels.contains("stable_key")
+                && labels.contains("field")
+                && labels.contains("reason")
+        }));
+    }
+
+    #[test]
+    fn cfg_validation_rejects_exact_provider_precision() {
+        let mut db = base_db();
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![function(
+                "cfg:function:ok",
+                CfgFunctionId(0),
+                CfgNodeId(0),
+                CfgNodeId(1),
+            )],
+            ..CfgOutput::empty()
+        })
+        .expect("cfg rows should store");
+        db.fact_meta_mut_for_test()
+            .remove_for_test(FactRef::new(FactFamily::CfgFunction, 0));
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::CfgFunction, 0),
+            FactMeta {
+                stable_key: "cfg:function:ok".to_string(),
+                producer_id: "polint.cfg",
+                layer_id: "polint.cfg",
+                precision: FactPrecision::Exact,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:exact-cfg".to_string(),
+            },
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Fact metadata precision ceiling violated")
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "family" && evidence.value == "CfgFunction"
+                    })
+            }),
+            "expected CFG precision ceiling diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    fn base_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() { return 1; }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span(file),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db
+    }
+
+    fn function(
+        stable_key: &str,
+        id: CfgFunctionId,
+        entry_node: CfgNodeId,
+        normal_exit_node: CfgNodeId,
+    ) -> CfgFunctionFact {
+        CfgFunctionFact {
+            id,
+            body: MirBodyId(0),
+            function: FunctionId(0),
+            language: Language::TypeScript,
+            file: FileId(0),
+            span: span(FileId(0)),
+            entry_node,
+            normal_exit_node,
+            exceptional_exit_node: None,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn edge(
+        stable_key: &str,
+        id: CfgEdgeId,
+        from_block: BasicBlockId,
+        to_block: BasicBlockId,
+    ) -> CfgEdgeFact {
+        CfgEdgeFact {
+            id,
+            cfg_function: CfgFunctionId(0),
+            view: CfgView::NormalControl,
+            from: CfgNodeId(0),
+            to: CfgNodeId(1),
+            from_block,
+            to_block,
+            kind: CfgEdgeKind::Normal,
+            label: None,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 10,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 11,
+        }
+    }
+
+    fn cfg_diagnostics(
+        diagnostics: &[crate::diagnostics::Diagnostic],
+    ) -> Vec<&crate::diagnostics::Diagnostic> {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.starts_with("CFG validation failed"))
+            .collect()
     }
 
     fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
@@ -2782,7 +3026,7 @@ fn precision_within_ceiling(precision: FactPrecision, ceiling: PrecisionCeiling)
                 | FactPrecision::SetupMissing
                 | FactPrecision::Unsupported
         ),
-        PrecisionCeiling::SetupAware => true,
+        PrecisionCeiling::SetupAware => !matches!(precision, FactPrecision::Exact),
     }
 }
 

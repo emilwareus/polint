@@ -341,6 +341,7 @@ fn is_layer_cache_provider(provider_id: &str) -> bool {
             | "polint.module_graph"
             | "polint.symbol_graph"
             | "polint.module_topology"
+            | "polint.cfg"
             | "polint.metrics"
     )
 }
@@ -1182,7 +1183,8 @@ path = "repo"
                 ("provider_order.4", "polint.symbol_graph"),
                 ("provider_order.5", "polint.module_topology"),
                 ("provider_order.6", "polint.semantic_mir"),
-                ("provider_order.7", "polint.metrics"),
+                ("provider_order.7", "polint.cfg"),
+                ("provider_order.8", "polint.metrics"),
             ]
         );
     }
