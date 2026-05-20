@@ -1622,3 +1622,118 @@ mod module_topology_core {
         }
     }
 }
+
+#[cfg(test)]
+mod semantic_mir_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/semantic-mir/core")
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_fixture_passes() {
+        let run = run_semantic_mir_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("semantic-MIR core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "semantic-mir-core");
+        assert_eq!(case.area, FixtureArea::SemanticMir);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_manifest_covers_required_taxonomy() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            ("MirBody", "service.go", Some(ObservedStatus::Partial)),
+            ("MirBody", "app.ts", Some(ObservedStatus::Partial)),
+            ("MirOperation", "call", Some(ObservedStatus::Partial)),
+            ("Place", "root_kind:parameter", Some(ObservedStatus::Resolved)),
+            ("Place", "root_kind:local", Some(ObservedStatus::Resolved)),
+            ("Place", "root_kind:global", Some(ObservedStatus::Unknown)),
+            ("Place", "root_kind:temporary", Some(ObservedStatus::Partial)),
+            ("Place", "root_kind:call_return", Some(ObservedStatus::Partial)),
+            ("Place", "root_kind:unknown", Some(ObservedStatus::Unknown)),
+            (
+                "UnsupportedSemantic",
+                "defer_statement",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "UnsupportedSemantic",
+                "eval",
+                Some(ObservedStatus::Unsupported),
+            ),
+        ] {
+            assert!(
+                expected_facts.iter().any(|(family, key, status, _)| {
+                    *family == required.0 && key.contains(required.1) && *status == required.2
+                }),
+                "semantic MIR fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+        assert!(expected_facts.iter().any(|(_, _, _, precision)| {
+            matches!(*precision, Some("setup_aware" | "heuristic" | "unsupported"))
+        }));
+    }
+
+    #[test]
+    fn eval_semantic_mir_core_observes_unknown_and_unsupported_rows() {
+        let run = run_semantic_mir_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("semantic-MIR core case");
+
+        for status in [
+            ObservedStatus::Partial,
+            ObservedStatus::Unknown,
+            ObservedStatus::Unsupported,
+        ] {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => fact.status == Some(status),
+                    _ => false,
+                }),
+                "semantic MIR fixture should observe {status:?}: {:#?}",
+                case.observed
+            );
+        }
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "semantic_mir.current_determinism"
+                    && invariant.value == "cold_warm_equal"
+            }
+            _ => false,
+        }));
+    }
+}
