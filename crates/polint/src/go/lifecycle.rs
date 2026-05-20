@@ -1,7 +1,11 @@
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
+use crate::module_graph::paths::{
+    TOPOLOGY_MANIFEST_MAX_BYTES, read_repo_file_to_string_with_limit, repo_file_exists,
+    repo_relative_existing_path,
+};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -30,20 +34,12 @@ impl GoLifecycleError {
 #[derive(Debug)]
 pub(crate) struct GoWorkspaceEnv {
     value: String,
-    cleanup_path: Option<PathBuf>,
+    _temp_file: Option<tempfile::NamedTempFile>,
 }
 
 impl GoWorkspaceEnv {
     pub(crate) fn value(&self) -> &str {
         &self.value
-    }
-}
-
-impl Drop for GoWorkspaceEnv {
-    fn drop(&mut self) {
-        if let Some(path) = &self.cleanup_path {
-            let _ = fs::remove_file(path);
-        }
     }
 }
 
@@ -70,9 +66,14 @@ impl GoAnalysisConfig {
         } else {
             infer_go_module_roots(&loaded.root, files)
         };
+        let package_patterns = validate_package_patterns(string_or_array_setting(
+            settings,
+            "package_patterns",
+            &["./..."],
+        ))?;
         Ok(Self {
             module_roots,
-            package_patterns: string_or_array_setting(settings, "package_patterns", &["./..."]),
+            package_patterns,
             build_tags: string_or_array_setting(settings, "build_tags", &[]),
             include_tests: settings
                 .get("include_tests")
@@ -100,22 +101,25 @@ pub(crate) fn workspace_env(
     module_roots: &[String],
 ) -> Result<GoWorkspaceEnv, GoLifecycleError> {
     let checked_in = root.join("go.work");
-    if checked_in.is_file() && go_work_covers_module_roots(root, &checked_in, module_roots) {
+    if repo_file_exists(root, "go.work")
+        && go_work_covers_module_roots(root, &checked_in, module_roots)
+    {
         return Ok(GoWorkspaceEnv {
             value: checked_in.to_string_lossy().to_string(),
-            cleanup_path: None,
+            _temp_file: None,
         });
     }
     if needs_synthetic_workspace(root, module_roots) {
-        let path = write_synthetic_go_work(root, module_roots)?;
+        let file = write_synthetic_go_work(root, module_roots)?;
+        let value = file.path().to_string_lossy().to_string();
         return Ok(GoWorkspaceEnv {
-            value: path.to_string_lossy().to_string(),
-            cleanup_path: Some(path),
+            value,
+            _temp_file: Some(file),
         });
     }
     Ok(GoWorkspaceEnv {
         value: "off".to_string(),
-        cleanup_path: None,
+        _temp_file: None,
     })
 }
 
@@ -205,8 +209,10 @@ fn nearest_go_module_root(root: &Path, relative_path: &str) -> Option<String> {
     let file_path = root.join(relative_path);
     let mut current = file_path.parent()?.to_path_buf();
     loop {
-        if current.join("go.mod").is_file() {
-            return module_root_relative_path(root, &current);
+        if let Some(module_root) = module_root_relative_path(root, &current)
+            && repo_file_exists(root, module_root_manifest_path(&module_root, "go.mod"))
+        {
+            return Some(module_root);
         }
         if current == root || !current.pop() {
             return None;
@@ -224,10 +230,14 @@ fn module_root_relative_path(root: &Path, module_root: &Path) -> Option<String> 
 }
 
 fn module_root_has_go_mod(root: &Path, module_root: &str) -> bool {
+    repo_file_exists(root, module_root_manifest_path(module_root, "go.mod"))
+}
+
+fn module_root_manifest_path(module_root: &str, file_name: &str) -> String {
     if module_root == "." {
-        root.join("go.mod").is_file()
+        file_name.to_string()
     } else {
-        root.join(module_root).join("go.mod").is_file()
+        format!("{module_root}/{file_name}")
     }
 }
 
@@ -274,6 +284,17 @@ fn string_or_array_value(value: Option<&toml::Value>, default: &[&str]) -> Vec<S
     }
 }
 
+fn validate_package_patterns(patterns: Vec<String>) -> Result<Vec<String>, GoLifecycleError> {
+    for pattern in &patterns {
+        if pattern.starts_with('-') {
+            return Err(error(format!(
+                "Go package pattern `{pattern}` must not start with `-` because it would be interpreted as a go list flag."
+            )));
+        }
+    }
+    Ok(patterns)
+}
+
 fn split_comma(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -318,7 +339,7 @@ fn needs_synthetic_workspace(root: &Path, module_roots: &[String]) -> bool {
     if module_roots.len() != 1 || module_roots[0] != "." {
         return true;
     }
-    !root.join("go.mod").is_file()
+    !repo_file_exists(root, "go.mod")
 }
 
 pub(crate) fn go_work_covers_module_roots(
@@ -326,7 +347,12 @@ pub(crate) fn go_work_covers_module_roots(
     go_work: &Path,
     module_roots: &[String],
 ) -> bool {
-    let Ok(contents) = fs::read_to_string(go_work) else {
+    let Some(relative_path) = repo_relative_existing_path(root, go_work) else {
+        return false;
+    };
+    let Ok(contents) =
+        read_repo_file_to_string_with_limit(root, &relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)
+    else {
         return false;
     };
     let roots = parse_go_work_use_roots(root, &contents);
@@ -440,13 +466,19 @@ fn parse_go_work_path_token(token: &str) -> Option<String> {
 fn write_synthetic_go_work(
     root: &Path,
     module_roots: &[String],
-) -> Result<PathBuf, GoLifecycleError> {
+) -> Result<tempfile::NamedTempFile, GoLifecycleError> {
     let directory = root.parent().unwrap_or_else(|| Path::new("."));
-    let path = directory.join(format!(
-        "polint-go-work-{}-{}.work",
-        std::process::id(),
-        unique_suffix()
-    ));
+    let mut file = tempfile::Builder::new()
+        .prefix("polint-go-work-")
+        .suffix(".work")
+        .tempfile_in(directory)
+        .map_err(|source| {
+            error(format!(
+                "failed to create temporary Go workspace in `{}`: {source}",
+                directory.display()
+            ))
+        })?;
+    let path = file.path().to_path_buf();
     let work_dir = path.parent().unwrap_or(directory);
     let mut contents = format!(
         "go {}\n\nuse (\n",
@@ -463,13 +495,19 @@ fn write_synthetic_go_work(
         contents.push('\n');
     }
     contents.push_str(")\n");
-    fs::write(&path, contents).map_err(|source| {
+    file.write_all(contents.as_bytes()).map_err(|source| {
         error(format!(
             "failed to write temporary Go workspace `{}`: {source}",
             path.display()
         ))
     })?;
-    Ok(path)
+    file.flush().map_err(|source| {
+        error(format!(
+            "failed to flush temporary Go workspace `{}`: {source}",
+            path.display()
+        ))
+    })?;
+    Ok(file)
 }
 
 fn go_work_use_path(work_dir: &Path, module_path: &Path) -> String {
@@ -483,12 +521,7 @@ fn go_work_use_path(work_dir: &Path, module_path: &Path) -> String {
 fn synthetic_go_work_version(root: &Path, module_roots: &[String]) -> String {
     let mut version = MIN_SYNTHETIC_GO_WORK_VERSION.to_string();
     for module_root in module_roots {
-        let go_mod = if module_root == "." {
-            root.join("go.mod")
-        } else {
-            root.join(module_root).join("go.mod")
-        };
-        let Some(module_version) = go_mod_version(&go_mod) else {
+        let Some(module_version) = go_mod_version(root, module_root) else {
             continue;
         };
         if go_version_is_greater(&module_version, &version) {
@@ -498,8 +531,13 @@ fn synthetic_go_work_version(root: &Path, module_roots: &[String]) -> String {
     version
 }
 
-fn go_mod_version(path: &Path) -> Option<String> {
-    let contents = fs::read_to_string(path).ok()?;
+fn go_mod_version(root: &Path, module_root: &str) -> Option<String> {
+    let contents = read_repo_file_to_string_with_limit(
+        root,
+        module_root_manifest_path(module_root, "go.mod"),
+        TOPOLOGY_MANIFEST_MAX_BYTES,
+    )
+    .ok()?;
     contents.lines().find_map(|line| {
         let line = line.trim();
         let version = line.strip_prefix("go ")?;
@@ -525,13 +563,6 @@ fn go_version_is_greater(left: &str, right: &str) -> bool {
 
 fn quote_go_work_path(path: &str) -> String {
     format!("{path:?}")
-}
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
 }
 
 fn error(reason: String) -> GoLifecycleError {
@@ -637,5 +668,29 @@ mod tests {
             "{generated}"
         );
         assert!(generated.contains("services/app"), "{generated}");
+    }
+
+    #[test]
+    fn go_analysis_config_rejects_package_patterns_that_start_with_dash() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(".polint.toml"),
+            "[languages.go]\npackage_patterns = [\"-json\"]\n",
+        )
+        .expect("write config");
+        let mut db = crate::core::AnalysisDb::new();
+        let source = "package main\n";
+        let path = temp.path().join("main.go");
+        std::fs::write(&path, source).expect("write go file");
+        db.add_file(path, "main.go".to_string(), source.to_string());
+        let loaded = crate::config::load_config(temp.path()).expect("config loads");
+
+        let error = GoAnalysisConfig::from_loaded(&loaded, &db).expect_err("pattern is rejected");
+
+        assert!(
+            error.reason().contains(
+                "must not start with `-` because it would be interpreted as a go list flag"
+            )
+        );
     }
 }

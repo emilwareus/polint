@@ -4,8 +4,12 @@ use super::{Digest, DigestKind};
 use crate::analysis_kernel::{CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
+use crate::module_graph::paths::{
+    TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
+    normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
+    repo_file_exists, repo_file_path, repo_relative_existing_path,
+};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 
 pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
@@ -542,16 +546,31 @@ fn file_digest_component(
     let mut present_paths = Vec::new();
     let mut digest_parts = Vec::new();
     let mut unreadable = Vec::new();
+    let mut unsupported = Vec::new();
     for relative_path in paths {
         let normalized = normalize_relative_path(&relative_path);
-        let path = root.join(&normalized);
-        if !path.is_file() {
-            continue;
-        }
-        let contents = match fs::read(&path) {
+        let contents = match read_repo_file_with_limit(
+            root,
+            &normalized,
+            topology_input_max_bytes(&normalized),
+        ) {
             Ok(contents) => contents,
+            Err(error) if error.is_not_found() => continue,
             Err(error) => {
-                unreadable.push(format!("unreadable={normalized}: {error}"));
+                let detail = format!("unsupported={normalized}: {}", error.stable_reason());
+                if matches!(
+                    error,
+                    crate::module_graph::paths::RepoFileReadError::TooLarge { .. }
+                        | crate::module_graph::paths::RepoFileReadError::AbsolutePath
+                        | crate::module_graph::paths::RepoFileReadError::EscapesRepo
+                ) {
+                    unsupported.push(detail);
+                } else {
+                    unreadable.push(format!(
+                        "unreadable={normalized}: {}",
+                        error.stable_reason()
+                    ));
+                }
                 continue;
             }
         };
@@ -563,13 +582,32 @@ fn file_digest_component(
     if !unreadable.is_empty() {
         let mut detail = present_paths;
         detail.extend(unreadable.clone());
+        detail.extend(unsupported.clone());
         let mut setup_missing_digest_parts = digest_parts;
         setup_missing_digest_parts.extend(unreadable);
+        setup_missing_digest_parts.extend(unsupported);
         return InputComponent::setup_missing_with_digest_parts(
             name,
             digest_kind,
             detail,
             setup_missing_digest_parts,
+        );
+    }
+
+    if !unsupported.is_empty() {
+        let mut detail = present_paths;
+        detail.extend(unsupported.clone());
+        let mut unsupported_digest_parts = digest_parts;
+        unsupported_digest_parts.extend(unsupported);
+        let digest_refs = unsupported_digest_parts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        return InputComponent::new(
+            name,
+            InputComponentStatus::Unsupported,
+            Digest::from_parts(digest_kind, name, &digest_refs),
+            detail,
         );
     }
 
@@ -584,6 +622,22 @@ fn file_digest_component(
         Digest::from_parts(digest_kind, name, &digest_refs),
         present_paths,
     )
+}
+
+fn topology_input_max_bytes(relative_path: &str) -> u64 {
+    match FsPath::new(relative_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some(
+            "package-lock.json"
+            | "npm-shrinkwrap.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lock",
+        ) => TOPOLOGY_LOCKFILE_MAX_BYTES,
+        _ => TOPOLOGY_MANIFEST_MAX_BYTES,
+    }
 }
 
 fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> {
@@ -626,7 +680,7 @@ fn go_work_candidates(module_roots: &[String]) -> Vec<String> {
 
 fn go_environment_policy(loaded: &LoadedConfig, module_roots: &[String]) -> String {
     let checked_in_go_work = loaded.root.join("go.work");
-    if checked_in_go_work.is_file()
+    if repo_file_exists(&loaded.root, "go.work")
         && crate::go::lifecycle::go_work_covers_module_roots(
             &loaded.root,
             &checked_in_go_work,
@@ -636,7 +690,7 @@ fn go_environment_policy(loaded: &LoadedConfig, module_roots: &[String]) -> Stri
         "checked_in_workspace_file".to_string()
     } else if module_roots.len() == 1
         && module_roots[0] == "."
-        && loaded.root.join("go.mod").is_file()
+        && repo_file_exists(&loaded.root, "go.mod")
     {
         "single_root_module".to_string()
     } else if module_roots.is_empty() {
@@ -740,38 +794,42 @@ fn extended_ts_config_candidates<'a>(
 fn collect_extended_ts_configs(
     root: &FsPath,
     config_path: &FsPath,
-    visited: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<String>,
     discovered: &mut BTreeSet<String>,
 ) {
-    let Some(config_path) = normalize_existing_path(config_path) else {
+    let Some(config_path) = repo_relative_existing_path(root, config_path) else {
         return;
     };
     if !visited.insert(config_path.clone()) {
         return;
     }
-    let Some(config) = read_tsconfig_extends_wire(&config_path) else {
+    let Some(config) = read_tsconfig_extends_wire(root, &config_path) else {
         return;
     };
-    let Some(config_dir) = config_path.parent() else {
-        return;
-    };
+    let config_dir = FsPath::new(&config_path)
+        .parent()
+        .unwrap_or(FsPath::new(""));
     for specifier in config
         .extends
         .into_iter()
         .flat_map(TsconfigExtendsWire::into_specifiers)
     {
-        let Some(extended_path) = resolve_tsconfig_extends_path(config_dir, &specifier) else {
+        let Some(extended_path) = resolve_tsconfig_extends_path(root, config_dir, &specifier)
+        else {
             continue;
         };
-        if let Some(relative_path) = repo_relative_path(root, &extended_path) {
-            discovered.insert(relative_path);
-        }
-        collect_extended_ts_configs(root, &extended_path, visited, discovered);
+        discovered.insert(extended_path.clone());
+        collect_extended_ts_configs(root, &root.join(&extended_path), visited, discovered);
     }
 }
 
-fn read_tsconfig_extends_wire(path: &FsPath) -> Option<TsconfigExtendsOnlyWire> {
-    let Ok(mut source) = fs::read_to_string(path) else {
+fn read_tsconfig_extends_wire(
+    root: &FsPath,
+    relative_path: &str,
+) -> Option<TsconfigExtendsOnlyWire> {
+    let Ok(mut source) =
+        read_repo_file_to_string_with_limit(root, relative_path, TOPOLOGY_MANIFEST_MAX_BYTES)
+    else {
         return None;
     };
     if let Some(stripped) = source.strip_prefix('\u{feff}') {
@@ -783,31 +841,44 @@ fn read_tsconfig_extends_wire(path: &FsPath) -> Option<TsconfigExtendsOnlyWire> 
     serde_json::from_str::<TsconfigExtendsOnlyWire>(&source).ok()
 }
 
-fn resolve_tsconfig_extends_path(config_dir: &FsPath, specifier: &str) -> Option<PathBuf> {
+fn resolve_tsconfig_extends_path(
+    root: &FsPath,
+    config_dir: &FsPath,
+    specifier: &str,
+) -> Option<String> {
     let specifier_path = FsPath::new(specifier);
     if specifier_path.is_absolute() {
-        return resolve_tsconfig_file_candidate(specifier_path);
+        return None;
     }
     if specifier.starts_with('.') {
-        return resolve_tsconfig_file_candidate(&config_dir.join(specifier_path));
+        return resolve_tsconfig_file_candidate(root, &config_dir.join(specifier_path));
     }
-    resolve_package_tsconfig_extends_path(config_dir, specifier)
+    resolve_package_tsconfig_extends_path(root, config_dir, specifier)
 }
 
-fn resolve_package_tsconfig_extends_path(config_dir: &FsPath, specifier: &str) -> Option<PathBuf> {
-    let mut current = normalize_existing_path(config_dir)?;
+fn resolve_package_tsconfig_extends_path(
+    root: &FsPath,
+    config_dir: &FsPath,
+    specifier: &str,
+) -> Option<String> {
+    let mut current = normalize_repo_relative_input(config_dir)?;
     loop {
-        let candidate = current.join("node_modules").join(specifier);
-        if let Some(resolved) = resolve_tsconfig_file_candidate(&candidate) {
+        let candidate = if current.as_os_str().is_empty() {
+            PathBuf::from("node_modules").join(specifier)
+        } else {
+            current.join("node_modules").join(specifier)
+        };
+        if let Some(resolved) = resolve_tsconfig_file_candidate(root, &candidate) {
             return Some(resolved);
         }
-        if !current.pop() {
+        if current.as_os_str().is_empty() {
             return None;
         }
+        current.pop();
     }
 }
 
-fn resolve_tsconfig_file_candidate(base: &FsPath) -> Option<PathBuf> {
+fn resolve_tsconfig_file_candidate(root: &FsPath, base: &FsPath) -> Option<String> {
     let mut candidates = vec![base.to_path_buf()];
     if base.extension().and_then(|extension| extension.to_str()) != Some("json") {
         let mut with_json = base.as_os_str().to_owned();
@@ -818,18 +889,19 @@ fn resolve_tsconfig_file_candidate(base: &FsPath) -> Option<PathBuf> {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.is_file())
-        .and_then(|candidate| normalize_existing_path(&candidate))
+        .filter_map(|candidate| normalized_existing_repo_file(root, &candidate))
+        .next()
 }
 
-fn normalize_existing_path(path: &FsPath) -> Option<PathBuf> {
-    path.canonicalize().ok()
-}
-
-fn repo_relative_path(root: &FsPath, path: &FsPath) -> Option<String> {
-    let root = root.canonicalize().ok()?;
-    let relative = path.strip_prefix(root).ok()?;
-    Some(normalize_relative_path(&relative.to_string_lossy()))
+fn normalized_existing_repo_file(root: &FsPath, candidate: &FsPath) -> Option<String> {
+    repo_file_path(root, candidate).ok()?;
+    let normalized = normalize_repo_relative_input(candidate)?;
+    let relative = normalized.to_string_lossy();
+    if relative.is_empty() {
+        None
+    } else {
+        normalize_repo_relative(relative)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1584,6 +1656,75 @@ mod lifecycle {
             component(components, "ts_js.source_set_membership").detail,
             vec!["src/app.ts", "src/view.tsx"]
         );
+    }
+
+    #[test]
+    fn ts_js_lifecycle_rejects_absolute_tsconfig_extends_outside_repo() {
+        let repo = TempDir::new().expect("create temp repo");
+        let outside = TempDir::new().expect("create outside tempdir");
+        write_file(
+            outside.path(),
+            "tsconfig.base.json",
+            "{\"compilerOptions\":{\"baseUrl\":\".\"}}\n",
+        );
+        let outside_config = outside.path().join("tsconfig.base.json");
+        write_file(
+            repo.path(),
+            &ts_config_name(),
+            &format!(
+                "{{\"extends\":{}}}\n",
+                serde_json::to_string(&outside_config).unwrap()
+            ),
+        );
+        let loaded = default_loaded_config(repo.path());
+        let db = db_with_files(repo.path(), &[("src/app.ts", "export const app = 1;\n")]);
+
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let config_files = component(&snapshot.ts_js_lifecycle.components, "ts_js.config_files");
+
+        assert_eq!(config_files.detail, vec![ts_config_name()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ts_js_lifecycle_does_not_hash_symlink_escape_contents() {
+        let repo = TempDir::new().expect("create temp repo");
+        let outside = TempDir::new().expect("create outside tempdir");
+        write_file(
+            outside.path(),
+            "package.json",
+            "{\"name\":\"outside-one\"}\n",
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            repo.path().join("package.json"),
+        )
+        .expect("create symlink");
+
+        let first = file_digest_component(
+            "ts_js.package_manifests",
+            DigestKind::TsJsLifecycle,
+            repo.path(),
+            vec!["package.json".to_string()],
+        );
+        write_file(
+            outside.path(),
+            "package.json",
+            "{\"name\":\"outside-two\"}\n",
+        );
+        let second = file_digest_component(
+            "ts_js.package_manifests",
+            DigestKind::TsJsLifecycle,
+            repo.path(),
+            vec!["package.json".to_string()],
+        );
+
+        assert_eq!(first.digest, second.digest);
+        assert_eq!(first.status, InputComponentStatus::Unsupported);
     }
 
     #[test]

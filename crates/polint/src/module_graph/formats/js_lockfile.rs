@@ -98,6 +98,22 @@ pub(crate) fn parse_js_lockfile(
     }
 }
 
+pub(crate) fn unsupported_js_lockfile(
+    kind: JsLockfileKind,
+    relative_path: &str,
+    reason: &str,
+) -> JsLockfileManifest {
+    let mut manifest = empty_manifest(
+        relative_path,
+        kind.file_name(),
+        format!("{}-unknown", kind.manager().label()),
+    );
+    manifest
+        .unsupported
+        .push(unsupported(relative_path, kind.file_name(), reason));
+    manifest
+}
+
 fn parse_npm_lock(relative_path: &str, contents: &str) -> JsLockfileManifest {
     let lock = parse_package_lock(relative_path, contents);
     let mut manifest = empty_manifest(
