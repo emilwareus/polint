@@ -348,6 +348,7 @@ fn status_key(status: ObservedStatus) -> &'static str {
     match status {
         ObservedStatus::Present => "present",
         ObservedStatus::Resolved => "resolved",
+        ObservedStatus::Partial => "partial",
         ObservedStatus::Unknown => "unknown",
         ObservedStatus::Unresolved => "unresolved",
         ObservedStatus::Ambiguous => "ambiguous",

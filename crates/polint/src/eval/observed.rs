@@ -50,6 +50,9 @@ const SEMANTIC_DEBUG_SECTIONS: &[&str] = &[
 ];
 
 #[cfg(test)]
+const SEMANTIC_MIR_DEBUG_SECTIONS: &[&str] = &["bodies", "operations", "places", "unsupported"];
+
+#[cfg(test)]
 pub(crate) fn observe_kernel_fixture(fixture: &NativeFixture) -> anyhow::Result<Vec<ObservedItem>> {
     let temp = copy_fixture_repo_for_test(fixture)?;
     observe_kernel_fixture_repo_for_test(fixture, temp.path(), true)
@@ -428,6 +431,11 @@ pub(crate) fn metadata_debug_facts_for_test(debug_json: &Value) -> Vec<ObservedI
 }
 
 #[cfg(test)]
+pub(crate) fn semantic_mir_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    semantic_mir_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
     topology_facts(db)
 }
@@ -636,7 +644,120 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
             }
         }
     }
+    facts.extend(semantic_mir_facts(debug_json));
     facts
+}
+
+#[cfg(test)]
+fn semantic_mir_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(mir) = debug_json.get("mir").and_then(Value::as_object) else {
+        return facts;
+    };
+    for &section in SEMANTIC_MIR_DEBUG_SECTIONS {
+        let Some(rows) = mir.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = semantic_mir_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+fn semantic_mir_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.mir".to_string()),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        status: Some(observed_status_from_metadata(row)),
+        payload: semantic_mir_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn semantic_mir_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "path", row.get("path"));
+    push_span_fragment(&mut parts, row.get("span"));
+    push_u64_fragment(&mut parts, "owner", row.get("owner_function"));
+    push_str_fragment(&mut parts, "kind", row.get("operation_kind"));
+    push_str_fragment(&mut parts, "root", row.get("place_root"));
+    push_list_fragment(&mut parts, "projections", row.get("place_projections"));
+    push_str_fragment(&mut parts, "construct", row.get("unsupported_construct"));
+    push_str_fragment(
+        &mut parts,
+        "conservative_action",
+        row.get("conservative_action"),
+    );
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn push_str_fragment(parts: &mut Vec<String>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("{key}={value}"));
+    }
+}
+
+#[cfg(test)]
+fn push_u64_fragment(parts: &mut Vec<String>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value.and_then(Value::as_u64) {
+        parts.push(format!("{key}={value}"));
+    }
+}
+
+#[cfg(test)]
+fn push_list_fragment(parts: &mut Vec<String>, key: &str, value: Option<&Value>) {
+    let Some(values) = value.and_then(Value::as_array) else {
+        return;
+    };
+    let labels = values
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if !labels.is_empty() {
+        parts.push(format!("{key}={}", labels.join(">")));
+    }
+}
+
+#[cfg(test)]
+fn push_span_fragment(parts: &mut Vec<String>, value: Option<&Value>) {
+    let Some(span) = value else {
+        return;
+    };
+    let (Some(start_line), Some(start_col), Some(end_line), Some(end_col)) = (
+        span.get("start_line").and_then(Value::as_u64),
+        span.get("start_col").and_then(Value::as_u64),
+        span.get("end_line").and_then(Value::as_u64),
+        span.get("end_col").and_then(Value::as_u64),
+    ) else {
+        return;
+    };
+    parts.push(format!(
+        "span={start_line}:{start_col}-{end_line}:{end_col}"
+    ));
 }
 
 #[cfg(test)]
@@ -699,6 +820,7 @@ fn observed_status_from_metadata(row: &Value) -> ObservedStatus {
 fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
     match label {
         "resolved" => Some(ObservedStatus::Resolved),
+        "partial" => Some(ObservedStatus::Partial),
         "unknown" => Some(ObservedStatus::Unknown),
         "unresolved" => Some(ObservedStatus::Unresolved),
         "ambiguous" => Some(ObservedStatus::Ambiguous),

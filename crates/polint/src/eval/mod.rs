@@ -503,8 +503,17 @@ fact = { family = "UnsupportedSemantic", stable_key = "unsupported:eval", mode =
         assert!(rendered.contains("projections=property:name>index_known:0"));
         assert!(rendered.contains("construct=eval"));
         assert!(rendered.contains("conservative_action=havoc_affected_places"));
-        for forbidden in ["raw_source", "source_text", "tree_sitter", "oxc_ast", "/tmp/"] {
-            assert!(!rendered.contains(forbidden), "unexpected payload leak: {forbidden}");
+        for forbidden in [
+            "raw_source",
+            "source_text",
+            "tree_sitter",
+            "oxc_ast",
+            "/tmp/",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "unexpected payload leak: {forbidden}"
+            );
         }
     }
 

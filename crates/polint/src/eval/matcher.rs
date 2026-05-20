@@ -317,6 +317,7 @@ fn observed_unknown_outcome(observed: &ObservedItem) -> bool {
         observed_status(observed),
         Some(
             ObservedStatus::Unknown
+                | ObservedStatus::Partial
                 | ObservedStatus::Unresolved
                 | ObservedStatus::Ambiguous
                 | ObservedStatus::Dynamic
