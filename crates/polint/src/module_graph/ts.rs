@@ -596,6 +596,127 @@ importers:
     }
 
     #[test]
+    fn collect_ts_topology_uses_pnpm_workspace_yaml_for_member_lockfile_selection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            "packages:\n  - packages/*\n",
+        );
+        write_fixture(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"ui","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-lock.yaml",
+            r#"
+lockfileVersion: '9.0'
+importers:
+  packages/ui:
+    dependencies:
+      react:
+        specifier: ^18.0.0
+        version: 18.2.0
+"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/ui/src/index.ts",
+            "export {};\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "packages/ui")
+            .expect("workspace member package exists");
+
+        assert!(output.workspace_roots.iter().any(|root| {
+            root.root_path == "."
+                && root.manifest_path.as_deref() == Some("package.json")
+                && root.status == TopologyStatus::Present
+        }));
+        assert_eq!(
+            lockfile_versions_for(&output, package.id, "react"),
+            vec!["18.2.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_ts_topology_prefers_root_explicit_manager_over_stale_member_lockfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-workspace.yaml",
+            "packages:\n  - packages/*\n",
+        );
+        write_fixture(
+            temp.path(),
+            "packages/ui/package.json",
+            r#"{"name":"ui","dependencies":{"react":"^18.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "packages/ui/package-lock.json",
+            r#"{"lockfileVersion":3,"packages":{"node_modules/react":{"version":"19.0.0"}}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "pnpm-lock.yaml",
+            r#"
+lockfileVersion: '9.0'
+importers:
+  packages/ui:
+    dependencies:
+      react:
+        specifier: ^18.0.0
+        version: 18.2.0
+"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(
+            &mut db,
+            temp.path(),
+            "packages/ui/src/index.ts",
+            "export {};\n",
+        );
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+        let package = output
+            .packages
+            .iter()
+            .find(|package| package.path == "packages/ui")
+            .expect("workspace member package exists");
+
+        assert_eq!(
+            lockfile_versions_for(&output, package.id, "react"),
+            vec!["18.2.0".to_string()]
+        );
+        assert!(!output.resolved_dependency_edges.iter().any(|edge| {
+            edge.from_package == Some(package.id)
+                && edge.package_name == "react"
+                && edge.resolved_version.as_deref() == Some("19.0.0")
+        }));
+    }
+
+    #[test]
     fn collect_ts_topology_emits_yarn_classic_selected_versions() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_fixture(
@@ -695,6 +816,46 @@ __metadata:
                 && edge.stable_key.contains("schema=bun-lock-v1")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
+        }));
+    }
+
+    #[test]
+    fn collect_ts_topology_reports_selected_lockfile_without_parseable_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture(
+            temp.path(),
+            "package.json",
+            r#"{"name":"root","packageManager":"bun@1.2.0","dependencies":{"uWebSockets.js":"^20.0.0"}}"#,
+        );
+        write_fixture(
+            temp.path(),
+            "bun.lock",
+            r#"{
+  "lockfileVersion": 1,
+  "packages": {
+    "uWebSockets.js": [
+      "git+https://github.com/uNetworking/uWebSockets.js.git#6609a88",
+      "",
+      {},
+      "uNetworking-uWebSockets.js-6609a88"
+    ]
+  }
+}"#,
+        );
+        let mut db = AnalysisDb::new();
+        add_fixture_file(&mut db, temp.path(), "src/index.ts", "export {};\n");
+        let loaded = load_config(temp.path()).expect("config loads");
+
+        let output = collect_ts_topology(&loaded, &db, None);
+
+        assert!(output.resolved_dependency_edges.iter().any(|edge| {
+            edge.stable_key.contains("js-lock-problem")
+                && edge.stable_key.contains("source=bun.lock")
+                && edge
+                    .stable_key
+                    .contains("reason=no-parseable-selected-lockfile-entries")
+                && edge.status == TopologyStatus::Unsupported
+                && edge.precision == TopologyPrecision::Unsupported
         }));
     }
 
@@ -1091,11 +1252,7 @@ pub(crate) fn collect_ts_topology(
         .filter(|file| file.language.is_ts_family())
         .collect::<Vec<_>>();
     let package_manifests = collect_package_manifests(loaded, &ts_files);
-    let workspace_roots = package_manifests
-        .iter()
-        .filter(|(_, manifest)| !manifest.workspaces.is_empty())
-        .map(|(path, _)| path.clone())
-        .collect::<BTreeSet<_>>();
+    let workspace_roots = js_workspace_roots(loaded, &package_manifests);
 
     let mut root_ids_by_path = BTreeMap::new();
     for package_path in &workspace_roots {
@@ -1246,7 +1403,29 @@ fn collect_package_manifests(
             manifests.insert(package_path, manifest);
         }
     }
+    for workspace in root_pnpm_workspace_patterns(loaded) {
+        for member in expand_workspace_glob(&loaded.root, ".", &workspace) {
+            if let Some(member_manifest) = read_package_manifest(loaded, &member) {
+                manifests.insert(member, member_manifest);
+            }
+        }
+    }
     manifests
+}
+
+fn js_workspace_roots(
+    loaded: &LoadedConfig,
+    package_manifests: &BTreeMap<String, PackageJsonManifest>,
+) -> BTreeSet<String> {
+    let mut roots = package_manifests
+        .iter()
+        .filter(|(_, manifest)| !manifest.workspaces.is_empty())
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    if package_manifests.contains_key(".") && !root_pnpm_workspace_patterns(loaded).is_empty() {
+        roots.insert(".".to_string());
+    }
+    roots
 }
 
 fn package_roots_for_relative_path(loaded: &LoadedConfig, relative_path: &str) -> Vec<String> {
@@ -1374,7 +1553,7 @@ fn lockfile_selection_root(
     package_manifests: &BTreeMap<String, PackageJsonManifest>,
     workspace_roots: &BTreeSet<String>,
 ) -> String {
-    if manifest.package_manager.is_some() || !detect_js_lockfiles(loaded, package_path).is_empty() {
+    if manifest.package_manager.is_some() {
         return package_path.to_string();
     }
     let Some(workspace_root) = workspace_root_for_package(package_path, workspace_roots) else {
@@ -1386,9 +1565,13 @@ fn lockfile_selection_root(
     let Some(root_manifest) = package_manifests.get(workspace_root) else {
         return package_path.to_string();
     };
-    if root_manifest.package_manager.is_some()
-        || !detect_js_lockfiles(loaded, workspace_root).is_empty()
-    {
+    if root_manifest.package_manager.is_some() {
+        return workspace_root.clone();
+    }
+    if !detect_js_lockfiles(loaded, package_path).is_empty() {
+        return package_path.to_string();
+    }
+    if !detect_js_lockfiles(loaded, workspace_root).is_empty() {
         workspace_root.clone()
     } else {
         package_path.to_string()
@@ -1740,14 +1923,29 @@ fn emit_js_lockfile_edges(
                 return;
             };
             let manifest = parse_js_lockfile(lockfile.kind, &relative_path, &contents);
-            emit_lockfile_unsupported_edges(output, package_path, package_id, &manifest);
-            emit_selected_lockfile_package_edges(
+            let unsupported_count =
+                emit_lockfile_unsupported_edges(output, package_path, package_id, &manifest);
+            let selected_count = emit_selected_lockfile_package_edges(
                 output,
                 package_path,
                 package_id,
                 selection,
                 &manifest,
             );
+            if unsupported_count == 0
+                && selected_count == 0
+                && package_has_lockfile_requirements(output, package_id)
+            {
+                emit_lockfile_problem_edge(
+                    output,
+                    package_path,
+                    package_id,
+                    lockfile.kind.file_name(),
+                    "no parseable selected lockfile entries",
+                    TopologyPrecision::Unsupported,
+                    TopologyStatus::Unsupported,
+                );
+            }
         }
         JsLockfileSelectionStatus::MissingLockfile => emit_missing_lockfile_edges(
             output,
@@ -1784,7 +1982,8 @@ fn emit_lockfile_unsupported_edges(
     package_path: &str,
     package_id: TopologyPackageId,
     manifest: &JsLockfileManifest,
-) {
+) -> usize {
+    let mut count = 0;
     for unsupported in &manifest.unsupported {
         let reason = stable_label_fragment(&unsupported.reason);
         output
@@ -1805,7 +2004,9 @@ fn emit_lockfile_unsupported_edges(
                 precision: unsupported.precision,
                 status: unsupported.status,
             });
+        count += 1;
     }
+    count
 }
 
 fn emit_selected_lockfile_package_edges(
@@ -1814,8 +2015,9 @@ fn emit_selected_lockfile_package_edges(
     package_id: TopologyPackageId,
     selection: &JsLockfileSelection,
     manifest: &JsLockfileManifest,
-) {
+) -> usize {
     let mut stable_keys = BTreeSet::new();
+    let mut count = 0;
     for package in &manifest.packages {
         if !lockfile_package_applies_to_package(
             output,
@@ -1852,7 +2054,20 @@ fn emit_selected_lockfile_package_edges(
                 precision: package.precision,
                 status: package.status,
             });
+        count += 1;
     }
+    count
+}
+
+fn package_has_lockfile_requirements(
+    output: &TopologyOutput,
+    package_id: TopologyPackageId,
+) -> bool {
+    output.dependency_requirements.iter().any(|requirement| {
+        requirement.from_package == Some(package_id)
+            && requirement.kind != RequirementKind::Workspace
+            && requirement.status == TopologyStatus::Present
+    })
 }
 
 fn lockfile_package_applies_to_package(
@@ -1984,10 +2199,7 @@ fn package_relative_path(package_path: &str, file_name: &str) -> String {
 
 fn emit_pnpm_workspace_overlays(output: &mut TopologyOutput, loaded: &LoadedConfig) {
     let relative_path = "pnpm-workspace.yaml";
-    let Ok(contents) = fs::read_to_string(loaded.root.join(relative_path)) else {
-        return;
-    };
-    for workspace in parse_pnpm_workspace_packages(&contents) {
+    for workspace in root_pnpm_workspace_patterns(loaded) {
         push_overlay(
             output,
             ".",
@@ -1997,6 +2209,13 @@ fn emit_pnpm_workspace_overlays(output: &mut TopologyOutput, loaded: &LoadedConf
             TopologyStatus::Present,
         );
     }
+}
+
+fn root_pnpm_workspace_patterns(loaded: &LoadedConfig) -> Vec<String> {
+    let relative_path = "pnpm-workspace.yaml";
+    fs::read_to_string(loaded.root.join(relative_path))
+        .map(|contents| parse_pnpm_workspace_packages(&contents))
+        .unwrap_or_default()
 }
 
 fn parse_pnpm_workspace_packages(contents: &str) -> Vec<String> {
