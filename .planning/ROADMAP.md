@@ -31,7 +31,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 26 | 6/6 | Complete    | 2026-05-19 |
 | 27 | 7/7 | Complete    | 2026-05-19 |
 | 28 | 7/7 | Complete    | 2026-05-20 |
-| 29 | 1/6 | In Progress|  |
+| 29 | 2/6 | In Progress|  |
 | 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
 | 31 | P0 Abstract-Domain Kernel | Add deterministic lattice/transfer infrastructure and first local domains. | SAE-INT-01 |
 | 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
