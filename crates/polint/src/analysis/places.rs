@@ -136,11 +136,11 @@ fn stable_key_for(
             "file".to_string(),
             optional_id(file.map(|id| u64::from(id.0))),
         ),
+        ("function".to_string(), optional_id(function.map(|id| id.0))),
         (
-            "function".to_string(),
-            optional_id(function.map(|id| id.0)),
+            "projection_count".to_string(),
+            projections.len().to_string(),
         ),
-        ("projection_count".to_string(), projections.len().to_string()),
     ];
     add_root_parts(&mut parts, root);
     for (index, projection) in projections.iter().enumerate() {
@@ -173,7 +173,10 @@ fn add_root_parts(parts: &mut Vec<(String, String)>, root: &PlaceRoot) {
         }
         PlaceRoot::Global { symbol, name } => {
             parts.push(("root_kind".to_string(), "global".to_string()));
-            parts.push(("root_symbol".to_string(), optional_id(symbol.map(|id| id.0))));
+            parts.push((
+                "root_symbol".to_string(),
+                optional_id(symbol.map(|id| id.0)),
+            ));
             parts.push(("root_name".to_string(), name.clone()));
         }
         PlaceRoot::Temporary { body, ordinal } => {
@@ -346,7 +349,10 @@ mod tests {
 
         let places = builder.finish();
 
-        assert_eq!(places.iter().map(|place| place.id).collect::<Vec<_>>(), vec![PlaceId(0), PlaceId(1)]);
+        assert_eq!(
+            places.iter().map(|place| place.id).collect::<Vec<_>>(),
+            vec![PlaceId(0), PlaceId(1)]
+        );
         assert!(places[0].stable_key < places[1].stable_key);
         assert!(!places[0].stable_key.contains("place_id"));
         assert!(!places[1].stable_key.contains("PlaceId"));

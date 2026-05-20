@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirValueId, PlaceId, UnsupportedId};
+use crate::analysis::ids::{
+    CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirValueId, PlaceId, UnsupportedId,
+};
 use crate::analysis::mir::body::MirStatus;
 use crate::core::{FileId, Language, Span};
 
@@ -17,24 +19,40 @@ pub(crate) struct MirOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum MirOperationKind {
-    StorageLive { place: PlaceId },
-    Bind { place: PlaceId, value: MirValue },
+    StorageLive {
+        place: PlaceId,
+    },
+    Bind {
+        place: PlaceId,
+        value: MirValue,
+    },
     Assign {
         place: PlaceId,
         value: MirValue,
         mode: AssignMode,
     },
-    Read { place: PlaceId },
-    Write { place: PlaceId, value: MirValue },
-    Branch { predicate: MirPredicateId },
+    Read {
+        place: PlaceId,
+    },
+    Write {
+        place: PlaceId,
+        value: MirValue,
+    },
+    Branch {
+        predicate: MirPredicateId,
+    },
     Call {
         site: CallSiteId,
         callee: MirValue,
         arguments: Vec<PlaceId>,
         return_place: PlaceId,
     },
-    Return { value: Option<MirValue> },
-    Unsupported { unsupported: UnsupportedId },
+    Return {
+        value: Option<MirValue>,
+    },
+    Unsupported {
+        unsupported: UnsupportedId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

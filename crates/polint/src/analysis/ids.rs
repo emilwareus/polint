@@ -73,7 +73,10 @@ mod tests {
         let mut hashed = HashSet::new();
         hashed.insert(PlaceId(1));
 
-        assert_eq!(ordered.into_iter().collect::<Vec<_>>(), vec![PlaceId(1), PlaceId(2)]);
+        assert_eq!(
+            ordered.into_iter().collect::<Vec<_>>(),
+            vec![PlaceId(1), PlaceId(2)]
+        );
         assert!(hashed.contains(&PlaceId(1)));
     }
 }

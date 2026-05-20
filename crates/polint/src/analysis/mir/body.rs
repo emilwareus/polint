@@ -196,15 +196,27 @@ mod tests {
         .normalized();
 
         assert_eq!(
-            output.bodies.iter().map(|body| body.stable_key.as_str()).collect::<Vec<_>>(),
+            output
+                .bodies
+                .iter()
+                .map(|body| body.stable_key.as_str())
+                .collect::<Vec<_>>(),
             vec!["body:a", "body:z"]
         );
         assert_eq!(
-            output.places.iter().map(|place| place.stable_key.as_str()).collect::<Vec<_>>(),
+            output
+                .places
+                .iter()
+                .map(|place| place.stable_key.as_str())
+                .collect::<Vec<_>>(),
             vec!["place:a", "place:z"]
         );
         assert_eq!(
-            output.operations.iter().map(|op| (op.body, op.ordinal, op.stable_key.as_str())).collect::<Vec<_>>(),
+            output
+                .operations
+                .iter()
+                .map(|op| (op.body, op.ordinal, op.stable_key.as_str()))
+                .collect::<Vec<_>>(),
             vec![
                 (MirBodyId(1), 1, "op:a"),
                 (MirBodyId(1), 1, "op:z"),
@@ -213,7 +225,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            output.unsupported.iter().map(|row| row.stable_key.as_str()).collect::<Vec<_>>(),
+            output
+                .unsupported
+                .iter()
+                .map(|row| row.stable_key.as_str())
+                .collect::<Vec<_>>(),
             vec!["unsupported:a", "unsupported:z"]
         );
     }
@@ -236,7 +252,10 @@ mod tests {
         ];
 
         for forbidden in forbidden {
-            assert!(!source.contains(forbidden), "forbidden parser type leaked: {forbidden}");
+            assert!(
+                !source.contains(forbidden),
+                "forbidden parser type leaked: {forbidden}"
+            );
         }
     }
 
