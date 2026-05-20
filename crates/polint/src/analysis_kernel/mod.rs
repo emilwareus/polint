@@ -596,6 +596,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
@@ -795,6 +796,39 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_semantic_mir_row_carries_output_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc answer() int { return 42 }\n",
+        )
+        .expect("write go");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let semantic_mir = provider_output(&output, "polint.semantic_mir");
+
+        assert_eq!(semantic_mir.schema_version, "semantic-mir-facts-1:1");
+        assert!(!semantic_mir.output_digest.value.is_empty());
+        assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+    }
+
+    #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(temp.path().join("src")).expect("create src");
@@ -896,6 +930,7 @@ mod tests {
             "polint.module_graph",
             "polint.symbol_graph",
             "polint.module_topology",
+            "polint.semantic_mir",
             "polint.metrics",
         ] {
             let row = provider_output(&output, provider_id);
@@ -972,6 +1007,7 @@ mod tests {
                 "polint.module_graph",
                 "polint.symbol_graph",
                 "polint.module_topology",
+                "polint.semantic_mir",
                 "polint.metrics",
             ]
         );
