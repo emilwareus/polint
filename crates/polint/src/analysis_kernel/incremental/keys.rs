@@ -1636,6 +1636,217 @@ mod tests {
         }
     }
 
+    mod semantic_mir_layer_key {
+        use super::*;
+
+        fn semantic_mir_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+            crate::analysis_kernel::AnalysisKernel::provider_manifests()
+                .iter()
+                .find(|manifest| manifest.id == "polint.semantic_mir")
+                .expect("semantic MIR provider manifest exists")
+        }
+
+        fn semantic_mir_key(
+            source_function_digest: Digest,
+            config_digest: Digest,
+            go_lifecycle_digest: Digest,
+            ts_js_lifecycle_digest: Digest,
+            syntax_output_digest: Digest,
+            symbol_graph_output_digest: Digest,
+            module_topology_output_digest: Digest,
+            parameter_digest: Digest,
+        ) -> LayerKey {
+            LayerKey::semantic_mir_layer_key(
+                semantic_mir_manifest(),
+                vec![source_function_digest],
+                config_digest,
+                go_lifecycle_digest,
+                ts_js_lifecycle_digest,
+                vec![syntax_output_digest],
+                symbol_graph_output_digest,
+                module_topology_output_digest,
+                parameter_digest,
+            )
+        }
+
+        #[test]
+        fn key_changes_on_source_lifecycle_config_parameters_and_upstream_outputs() {
+            let base = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+
+            let changed_source = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "changed"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_config = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_go_lifecycle = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_ts_lifecycle = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["changed"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_syntax = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_symbol = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["changed"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_topology = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let changed_parameters = semantic_mir_key(
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "source_function",
+                    &["src/app.ts", "base"],
+                ),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "semantic_mir_provider_parameters",
+                    &["changed"],
+                ),
+            );
+
+            for changed in [
+                changed_source,
+                changed_config,
+                changed_go_lifecycle,
+                changed_ts_lifecycle,
+                changed_syntax,
+                changed_symbol,
+                changed_topology,
+                changed_parameters,
+            ] {
+                assert_ne!(base, changed);
+            }
+        }
+
+        #[test]
+        fn key_includes_absent_extension_model_and_toolchain_slots_and_excludes_rule_code() {
+            let base = semantic_mir_key(
+                Digest::from_parts(DigestKind::SourceText, "source_function", &["base"]),
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
+                Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
+                crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
+            );
+            let rule_code = Digest::from_parts(DigestKind::RuleCode, "rule", &["changed"]);
+
+            assert_eq!(base.layer_kind, LayerKind::SemanticMir);
+            assert!(base.toolchain_digest.to_string().contains("tool_invocation"));
+            assert!(base.extension_digests.contains(&Digest::absent(
+                DigestKind::ExtensionCode,
+                "extension_digest_absent"
+            )));
+            assert!(base.extension_digests.contains(&Digest::absent(
+                DigestKind::ModelFile,
+                "model_digest_absent"
+            )));
+            assert!(!base.input_digests.contains(&rule_code));
+            assert!(!base.dependency_layer_digests.contains(&rule_code));
+            assert!(!base.extension_digests.contains(&rule_code));
+        }
+    }
+
     #[test]
     fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
         let base = metrics_key(
