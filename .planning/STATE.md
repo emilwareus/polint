@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-20T07:07:19.115Z"
-last_activity: 2026-05-20 -- Phase 28 execution started
+last_updated: "2026-05-20T07:29:37.520Z"
+last_activity: 2026-05-20
 progress:
   total_phases: 22
   completed_phases: 8
   total_plans: 46
-  completed_plans: 39
-  percent: 85
+  completed_plans: 40
+  percent: 87
 ---
 
 # State: polint
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 28
 Phase: 28 (Private Semantic MIR and Place Identity) — EXECUTING
-Plan: 1 of 7
-Last activity: 2026-05-20 -- Phase 28 execution started
+Plan: 2 of 7
+Last activity: 2026-05-20 -- Completed 28-01 private semantic MIR/place contract foundation
 
 ## Phase Progress
 
@@ -57,7 +57,7 @@ Last activity: 2026-05-20 -- Phase 28 execution started
 | 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
-| 28 | Pending | Private semantic MIR and place identity; requirement SAE-SEM-03 |
+| 28 | In Progress | 1/7 plans complete; private analysis module, ID/stable-key vocabulary, place contracts, and MIR row contracts done; requirement SAE-SEM-03 |
 | 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
@@ -187,6 +187,9 @@ Last activity: 2026-05-20 -- Phase 28 execution started
 - [Phase 27-layered-module-package-topology-graph]: Updated existing layer-cache expectations so polint.module_topology is part of the managed provider cache proof.
 - [Phase 27-layered-module-package-topology-graph]: Keep Phase 27 topology internals private and prove the boundary with public CLI JSON, help text, and source-surface assertions rather than adding any SDK topology view.
 - [Phase 27-layered-module-package-topology-graph]: Document ResolvedImports<'_> and ModuleGraphFacts<'_> as the supported relationship surfaces while explicitly leaving richer package/workspace topology internals outside SDK facts.
+- [Phase 28-private-semantic-mir-and-place-identity]: Keep the new analysis module crate-private and expose no SDK, runner, CLI, or public docs surface.
+- [Phase 28-private-semantic-mir-and-place-identity]: Use run-local dense IDs only as handles; persistent place and MIR identity is carried by stable keys.
+- [Phase 28-private-semantic-mir-and-place-identity]: Represent unsupported semantics as structured rows with source evidence and conservative action labels.
 
 ## Execution Metrics
 
@@ -221,12 +224,13 @@ Last activity: 2026-05-20 -- Phase 28 execution started
 | 27-layered-module-package-topology-graph | 05 | 23 min | 3 | 12 |
 | 27-layered-module-package-topology-graph | 06 | 17 min | 2 | 21 |
 | 27-layered-module-package-topology-graph | 07 | 5 min | 1 | 2 |
+| 28-private-semantic-mir-and-place-identity | 01 | 19 min | 3 | 12 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed quick task 260520-ai8: Fix package-manager topology review findings with TDD tests and deep review.
-- Stopped at: Completed 27-layered-module-package-topology-graph-07-PLAN.md; Phase 27 is complete and Phase 28 is next.
+- Last activity: 2026-05-20 - Completed 28-01 private semantic MIR/place contract foundation.
+- Stopped at: Completed 28-private-semantic-mir-and-place-identity-01-PLAN.md; Phase 28 plan 02 is next.
 
 ### Quick Tasks Completed
 
