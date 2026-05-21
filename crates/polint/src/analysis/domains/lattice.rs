@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "Phase 31 introduces private domain contracts before solver/provider integration consumes every hook."
+)]
+
 use std::collections::BTreeSet;
 use std::ops::{BitOr, BitOrAssign};
 
@@ -133,10 +138,10 @@ mod tests {
 
         fn leq(&self, other: &Self) -> bool {
             match (self, other) {
+                (Self::Top(left), Self::Top(right)) => left == right,
                 (Self::Bottom, _) => true,
                 (_, Self::Top(_)) => true,
                 (Self::Value(left), Self::Value(right)) => left == right,
-                (Self::Top(left), Self::Top(right)) => left == right,
                 _ => false,
             }
         }
