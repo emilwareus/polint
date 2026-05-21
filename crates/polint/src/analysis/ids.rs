@@ -62,6 +62,7 @@ mod tests {
         assert_small_id_contract::<PlaceId>();
         assert_small_id_contract::<UnsupportedId>();
         assert_small_id_contract::<CallSiteId>();
+        assert_small_id_contract::<CallTargetId>();
     }
 
     #[test]
