@@ -177,6 +177,11 @@ const CFG_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "calls-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -349,6 +354,28 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: CFG_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
+        id: "polint.calls",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "resolved_imports",
+            "import_to_package_edges",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "cfg_functions",
+            "cfg_edges",
+        ],
+        outputs: &["call_sites", "call_targets", "unresolved_calls"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: CALLS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
