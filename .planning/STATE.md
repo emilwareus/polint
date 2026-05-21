@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-21T09:38:32.743Z"
+status: verifying
+last_updated: "2026-05-21T09:51:49.137Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 60
-  completed_plans: 59
-  percent: 98
+  completed_plans: 60
+  percent: 100
 ---
 
 # State: polint
@@ -41,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 30 (direct-call-facts) — EXECUTING
+Status: Phase complete — ready for verification
+Phase: 30 (direct-call-facts) — COMPLETE
 Plan: 8 of 8
 Last activity: 2026-05-21
 
@@ -60,7 +60,7 @@ Last activity: 2026-05-21
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
-| 30 | In Progress | 6/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, and eval observation done; requirement SAE-SEM-05 |
+| 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
@@ -249,6 +249,9 @@ Last activity: 2026-05-21
 - [Phase 30-direct-call-facts]: Plan 30-07 kept direct-call fixture coverage internal and test-facing; no public CallGraph API was exposed.
 - [Phase 30-direct-call-facts]: Plan 30-07 uses nonzero eval invariants for direct-call debug count and D-10 index coverage instead of fragile exact counts.
 - [Phase 30-direct-call-facts]: Plan 30-07 derives missing call-site owner symbols from existing function/symbol facts before call-store indexing.
+- [Phase 30-direct-call-facts]: Plan 30-08 kept direct-call internals private and test-facing; no SDK, runner, CLI, README, or docs/facts call surface was promoted.
+- [Phase 30-direct-call-facts]: Plan 30-08 kept CallGraph as an inert reserved SDK view whose call_graph capability remains unsupported.
+- [Phase 30-direct-call-facts]: Plan 30-08 recorded the verification-only regression task as an empty test commit to preserve the per-task commit contract.
 
 ## Execution Metrics
 
@@ -301,12 +304,13 @@ Last activity: 2026-05-21
 | 30-direct-call-facts | 04 | 17 min | 3 | 7 |
 | 30-direct-call-facts | 05 | 14 min | 3 | 9 |
 | 30-direct-call-facts | 06 | 5min | 1 | 3 |
+| 30-direct-call-facts | 08 | 10 min | 3 | 2 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed Phase 30 Plan 06 direct call eval observation.
-- Stopped at: Completed 30-06-PLAN.md; ready for Phase 30 Plan 07.
+- Last activity: 2026-05-21 - Completed Phase 30 Plan 08 direct call public-boundary proof.
+- Stopped at: Completed 30-08-PLAN.md; Phase 30 ready for verification.
 
 ### Quick Tasks Completed
 
@@ -333,4 +337,4 @@ Last activity: 2026-05-21
 
 ## Next Action
 
-Phase 30 Plan 07 is next: public no-leak proof for direct call facts.
+Phase 30 is complete and ready for verification.
