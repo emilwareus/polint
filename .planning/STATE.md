@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T07:36:18.290Z"
+last_updated: "2026-05-21T07:56:27.765Z"
 last_activity: 2026-05-21 -- Phase 30 execution started
 progress:
   total_phases: 22
   completed_phases: 10
   total_plans: 60
-  completed_plans: 52
-  percent: 87
+  completed_plans: 53
+  percent: 88
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 30
 Phase: 30 (direct-call-facts) — EXECUTING
-Plan: 1 of 8
-Last activity: 2026-05-21 -- Phase 30 execution started
+Plan: 2 of 8
+Last activity: 2026-05-21 -- Completed Phase 30 Plan 01 direct call fact foundation
 
 ## Phase Progress
 
@@ -60,7 +60,7 @@ Last activity: 2026-05-21 -- Phase 30 execution started
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
-| 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
+| 30 | In Progress | 1/8 plans complete; private call fact contracts, deterministic storage indexes, AnalysisDb storage/accessors, and metadata families done; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
@@ -228,6 +228,9 @@ Last activity: 2026-05-21 -- Phase 30 execution started
 - [Phase 29-local-cfg-and-control-dependence]: Use the existing TOML eval fixture manifest format instead of adding JSON fixture files.
 - [Phase 29-local-cfg-and-control-dependence]: CFG stable keys must use MIR/body stable identity, not run-local CFG IDs, to avoid cross-language and cross-function collisions.
 - [Phase 29-local-cfg-and-control-dependence]: Keep reserved public cfg capability unsupported until a later intentional promotion phase.
+- [Phase 30-direct-call-facts]: Call facts remain crate-private under analysis::calls with no SDK, runner, CLI, or docs promotion.
+- [Phase 30-direct-call-facts]: CallStore validates target and unresolved site references before publishing indexes.
+- [Phase 30-direct-call-facts]: CALLS_PROVIDER_ID is polint.calls and call metadata uses compact status/kind/algorithm/reason/stable-key payload fragments.
 
 ## Execution Metrics
 
