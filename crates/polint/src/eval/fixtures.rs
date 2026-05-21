@@ -676,12 +676,16 @@ fn abstract_domain_observed_with_policy(
     let result = solver.solve(crate::analysis::domains::solver::SolverInput::from(
         &output.db,
     ));
-    let mut db = output.db.clone();
-    let valid_places = db.mir_places().iter().map(|place| place.id).collect();
+    let mut db = output.db;
+    let place_stable_keys = db
+        .mir_places()
+        .iter()
+        .map(|place| (place.id, place.stable_key.clone()))
+        .collect();
     db.replace_abstract_domain_facts(
-        crate::analysis::domains::store::DomainOutput::from_results_with_valid_places(
+        crate::analysis::domains::store::DomainOutput::from_results_with_place_keys(
             result.results(),
-            &valid_places,
+            &place_stable_keys,
         ),
     );
     let debug = crate::analysis_kernel::AnalysisKernel::metadata_debug_json_for_test(&db);

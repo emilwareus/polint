@@ -1033,6 +1033,7 @@ impl AnalysisDb {
         &self.unresolved_calls
     }
 
+    #[allow(dead_code)]
     pub(crate) fn call_store(&self) -> Option<&CallStore> {
         self.call_store.as_ref()
     }
@@ -1045,46 +1046,54 @@ impl AnalysisDb {
         &self.abstract_domain_events
     }
 
+    #[allow(dead_code)]
     pub(crate) fn abstract_domain_store(&self) -> Option<&DomainStore> {
         self.abstract_domain_store.as_ref()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.sites_by_caller(caller))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn call_targets_by_site(&self, site: CallSiteId) -> Vec<&CallTargetFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.targets_by_site(site))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn outgoing_calls_by_function(&self, caller: FunctionId) -> Vec<&CallTargetFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.outgoing_by_function(caller))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn outgoing_calls_by_symbol(&self, caller: SymbolId) -> Vec<&CallTargetFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.outgoing_by_symbol(caller))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn incoming_calls_by_symbol(&self, target: SymbolId) -> Vec<&CallTargetFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.incoming_by_symbol(target))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn incoming_calls_by_function(&self, target: FunctionId) -> Vec<&CallTargetFact> {
         self.call_store
             .as_ref()
             .map_or_else(Vec::new, |store| store.incoming_by_function(target))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn unresolved_calls_by_reason(
         &self,
         reason: UnresolvedCallReason,
@@ -1094,6 +1103,7 @@ impl AnalysisDb {
             .map_or_else(Vec::new, |store| store.unresolved_by_reason(reason))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn unresolved_calls_by_status(
         &self,
         status: CallTargetStatus,

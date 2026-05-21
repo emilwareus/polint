@@ -335,6 +335,7 @@ Last activity: 2026-05-21
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260521-m9k | Fix critical PR review findings for direct calls and abstract domains | 2026-05-21 | implemented | [260521-m9k-fix-critical-pr-review-findings-for-dire](./quick/260521-m9k-fix-critical-pr-review-findings-for-dire/) |
 | 260521-b38 | Fix CFG digest payload and stable unsupported control-flow keys | 2026-05-21 | implemented | [260521-b38-fix-cfg-digest-payload-and-stable-unsupp](./quick/260521-b38-fix-cfg-digest-payload-and-stable-unsupp/) |
 | 260521-af1 | Fix CFG stored reachability for synthetic exits | 2026-05-21 | implemented | [260521-af1-fix-cfg-stored-reachability-for-syntheti](./quick/260521-af1-fix-cfg-stored-reachability-for-syntheti/) |
 | 260521-a5k | Fix CFG PR review findings | 2026-05-21 | implemented | [260521-a5k-fix-cfg-pr-review-findings](./quick/260521-a5k-fix-cfg-pr-review-findings/) |

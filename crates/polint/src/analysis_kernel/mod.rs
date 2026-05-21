@@ -189,8 +189,8 @@ impl AnalysisKernel {
             module_topology_output_digest.clone(),
         ));
 
-        let module_topology_dependency_output_digest =
-            module_topology_output_digest.clone().unwrap_or_else(|| {
+        let module_topology_dependency_output_digest = module_topology_output_digest
+            .unwrap_or_else(|| {
                 incremental::Digest::absent(
                     incremental::DigestKind::ProviderOutput,
                     "polint.module_topology",

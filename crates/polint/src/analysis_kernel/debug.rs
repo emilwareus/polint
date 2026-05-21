@@ -883,6 +883,7 @@ fn abstract_domain_event_rows(db: &AnalysisDb) -> Vec<AbstractDomainEventDebugRo
     rows
 }
 
+#[allow(clippy::too_many_arguments)]
 fn abstract_domain_metadata_row(
     db: &AnalysisDb,
     family: FactFamily,
@@ -1154,6 +1155,7 @@ fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
     rows
 }
 
+#[allow(clippy::too_many_arguments)]
 fn call_metadata_row(
     db: &AnalysisDb,
     family: FactFamily,

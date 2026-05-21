@@ -21,6 +21,7 @@ pub(crate) struct CallsProviderOutput {
     pub(crate) output_digest: Option<Digest>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_calls_with_cache_stats(
     db: &mut AnalysisDb,
     input_snapshot: &InputSnapshot,
@@ -82,6 +83,7 @@ pub(crate) fn derive_calls_with_cache_stats(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn calls_output_digest(
     db: &AnalysisDb,
     manifest: &ProviderManifest,
@@ -470,12 +472,15 @@ mod calls_provider {
             .max();
         if let Some(max_function_id) = max_function_id {
             for id in 0..=max_function_id {
-                let name = output
+                let name = if output
                     .targets
                     .iter()
                     .any(|target| target.target_function == Some(FunctionId(id)))
-                    .then_some(target_function_name)
-                    .unwrap_or("placeholder");
+                {
+                    target_function_name
+                } else {
+                    "placeholder"
+                };
                 db.push_function(FunctionFact {
                     id: FunctionId(999),
                     file,

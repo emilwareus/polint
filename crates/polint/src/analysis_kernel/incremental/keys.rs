@@ -2712,6 +2712,7 @@ mod cfg_layer_key {
             .expect("CFG provider manifest exists")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn key(
         source_suffix: &str,
         config_suffix: &str,
@@ -2917,6 +2918,7 @@ mod calls_layer_key {
             .expect("calls provider manifest exists")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn key(
         source_suffix: &str,
         config_suffix: &str,

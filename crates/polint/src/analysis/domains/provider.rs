@@ -1,6 +1,8 @@
 use super::cache_key::abstract_domains_provider_parameter_digest;
 use super::solver::{LocalDomainSolver, SolverInput, SolverPolicy};
 use super::store::DomainOutput;
+use crate::analysis::cfg::ids::BasicBlockId;
+use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
@@ -15,6 +17,7 @@ pub(crate) struct AbstractDomainsProviderOutput {
     pub(crate) output_digest: Option<Digest>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_abstract_domains_with_cache_stats(
     db: &mut AnalysisDb,
     input_snapshot: &InputSnapshot,
@@ -28,8 +31,11 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
 ) -> AbstractDomainsProviderOutput {
     let solver = LocalDomainSolver::new(SolverPolicy::deterministic());
     let result = solver.solve(SolverInput::from(&*db));
-    let valid_places = db.mir_places().iter().map(|place| place.id).collect();
-    let output = DomainOutput::from_results_with_valid_places(result.results(), &valid_places);
+    let body_keys = body_stable_key_map(db);
+    let block_keys = block_stable_key_map(db);
+    let operation_keys = operation_stable_key_map(db);
+    let place_keys = place_stable_key_map(db);
+    let output = DomainOutput::from_results_with_place_keys(result.results(), &place_keys);
     let output_digest = abstract_domains_output_digest(
         manifest,
         input_snapshot,
@@ -39,6 +45,10 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
         &symbol_graph_output_digest,
         &module_topology_output_digest,
         &upstream_syntax_output_digests,
+        &body_keys,
+        &block_keys,
+        &operation_keys,
+        &place_keys,
         &output,
     );
     let mut cache_stats = CacheStats::default();
@@ -52,6 +62,7 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn abstract_domains_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
@@ -61,6 +72,10 @@ fn abstract_domains_output_digest(
     symbol_graph_output_digest: &Digest,
     module_topology_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
+    body_keys: &std::collections::BTreeMap<MirBodyId, String>,
+    block_keys: &std::collections::BTreeMap<BasicBlockId, String>,
+    operation_keys: &std::collections::BTreeMap<MirOpId, String>,
+    place_keys: &std::collections::BTreeMap<PlaceId, String>,
     output: &DomainOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -100,15 +115,15 @@ fn abstract_domains_output_digest(
         format!(
             "observation={} body={} block={} operation={} place={} slot={:?} location={:?} status={:?} precision={:?} value={:?}",
             row.stable_key,
-            row.body.0,
+            stable_body_key(body_keys, row.body),
             row.block
-                .map(|block| block.0.to_string())
+                .and_then(|block| block_keys.get(&block).cloned())
                 .unwrap_or_else(|| "none".to_string()),
             row.operation
-                .map(|operation| operation.0.to_string())
+                .and_then(|operation| operation_keys.get(&operation).cloned())
                 .unwrap_or_else(|| "none".to_string()),
             row.place
-                .map(|place| place.0.to_string())
+                .and_then(|place| place_keys.get(&place).cloned())
                 .unwrap_or_else(|| "none".to_string()),
             row.slot,
             row.location,
@@ -121,12 +136,12 @@ fn abstract_domains_output_digest(
         format!(
             "event={} body={} block={} operation={} slot={:?} status={:?} precision={:?} reason={}",
             row.stable_key,
-            row.body.0,
+            stable_body_key(body_keys, row.body),
             row.block
-                .map(|block| block.0.to_string())
+                .and_then(|block| block_keys.get(&block).cloned())
                 .unwrap_or_else(|| "none".to_string()),
             row.operation
-                .map(|operation| operation.0.to_string())
+                .and_then(|operation| operation_keys.get(&operation).cloned())
                 .unwrap_or_else(|| "none".to_string()),
             row.slot,
             row.status,
@@ -150,6 +165,44 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
             component.name, component.status, component.digest
         )
     }));
+}
+
+fn body_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {
+    db.mir_bodies()
+        .iter()
+        .map(|body| (body.id, body.stable_key.clone()))
+        .collect()
+}
+
+fn block_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<BasicBlockId, String> {
+    db.cfg_blocks()
+        .iter()
+        .map(|block| (block.id, block.stable_key.clone()))
+        .collect()
+}
+
+fn operation_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirOpId, String> {
+    db.mir_operations()
+        .iter()
+        .map(|operation| (operation.id, operation.stable_key.clone()))
+        .collect()
+}
+
+fn place_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<PlaceId, String> {
+    db.mir_places()
+        .iter()
+        .map(|place| (place.id, place.stable_key.clone()))
+        .collect()
+}
+
+fn stable_body_key(
+    body_keys: &std::collections::BTreeMap<MirBodyId, String>,
+    body: MirBodyId,
+) -> String {
+    body_keys
+        .get(&body)
+        .cloned()
+        .unwrap_or_else(|| "missing-body".to_string())
 }
 
 #[cfg(test)]

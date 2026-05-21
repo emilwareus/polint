@@ -3,7 +3,7 @@
     reason = "Phase 31 stores domain rows before provider/debug/eval plans consume every index."
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::core::{
     ConstantDomain, InitializednessDomain, NilnessDomain, ReachabilityDomain, StringDomain,
@@ -35,16 +35,16 @@ impl DomainOutput {
         Self::from_results_with_place_filter(results, None)
     }
 
-    pub(crate) fn from_results_with_valid_places(
+    pub(crate) fn from_results_with_place_keys(
         results: &DomainResults,
-        valid_places: &BTreeSet<PlaceId>,
+        place_stable_keys: &BTreeMap<PlaceId, String>,
     ) -> Self {
-        Self::from_results_with_place_filter(results, Some(valid_places))
+        Self::from_results_with_place_filter(results, Some(place_stable_keys))
     }
 
     fn from_results_with_place_filter(
         results: &DomainResults,
-        valid_places: Option<&BTreeSet<PlaceId>>,
+        place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
     ) -> Self {
         let mut output = Self::empty();
         for function in results.functions() {
@@ -56,7 +56,7 @@ impl DomainOutput {
                 DomainLocation::FunctionEntry,
                 &function.body_stable_key,
                 &function.entry_state,
-                valid_places,
+                place_stable_keys,
             );
             if function.status == SolverStatus::BudgetExceeded {
                 output.events.push(DomainEventFact {
@@ -87,7 +87,7 @@ impl DomainOutput {
                 DomainLocation::BlockEntry,
                 &block.stable_key,
                 &block.entry,
-                valid_places,
+                place_stable_keys,
             );
             push_state_observations(
                 &mut output.observations,
@@ -97,7 +97,7 @@ impl DomainOutput {
                 DomainLocation::BlockExit,
                 &block.stable_key,
                 &block.exit,
-                valid_places,
+                place_stable_keys,
             );
         }
         for operation in results.operations() {
@@ -109,7 +109,7 @@ impl DomainOutput {
                 DomainLocation::BeforeOperation,
                 &operation.stable_key,
                 &operation.before,
-                valid_places,
+                place_stable_keys,
             );
             push_state_observations(
                 &mut output.observations,
@@ -119,7 +119,7 @@ impl DomainOutput {
                 DomainLocation::AfterOperation,
                 &operation.stable_key,
                 &operation.after,
-                valid_places,
+                place_stable_keys,
             );
         }
         for event in results.unknown_top_events() {
@@ -201,6 +201,7 @@ impl DomainOutput {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_state_observations(
     rows: &mut Vec<DomainObservationFact>,
     body: MirBodyId,
@@ -209,7 +210,7 @@ fn push_state_observations(
     location: DomainLocation,
     source_stable_key: &str,
     state: &ProductState,
-    valid_places: Option<&BTreeSet<PlaceId>>,
+    place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
 ) {
     let (status, precision, value) = reachability_fact_value(&state.core.reachability);
     rows.push(observation(
@@ -227,13 +228,13 @@ fn push_state_observations(
     ));
     for (place, value) in &state.core.nilness {
         let (status, precision, value) = nilness_fact_value(value);
-        let place_ref = valid_place_ref(*place, valid_places);
+        let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
             body,
             block,
             operation,
             place_ref,
-            Some(*place),
+            stable_place,
             DomainSlot::Nilness,
             location,
             source_stable_key,
@@ -244,13 +245,13 @@ fn push_state_observations(
     }
     for (place, value) in &state.core.truthiness {
         let (status, precision, value) = truthiness_fact_value(value);
-        let place_ref = valid_place_ref(*place, valid_places);
+        let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
             body,
             block,
             operation,
             place_ref,
-            Some(*place),
+            stable_place,
             DomainSlot::Truthiness,
             location,
             source_stable_key,
@@ -261,13 +262,13 @@ fn push_state_observations(
     }
     for (place, value) in &state.core.constants {
         let (status, precision, value) = constant_fact_value(value);
-        let place_ref = valid_place_ref(*place, valid_places);
+        let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
             body,
             block,
             operation,
             place_ref,
-            Some(*place),
+            stable_place,
             DomainSlot::Constants,
             location,
             source_stable_key,
@@ -278,13 +279,13 @@ fn push_state_observations(
     }
     for (place, value) in &state.core.strings {
         let (status, precision, value) = string_fact_value(value);
-        let place_ref = valid_place_ref(*place, valid_places);
+        let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
             body,
             block,
             operation,
             place_ref,
-            Some(*place),
+            stable_place,
             DomainSlot::Strings,
             location,
             source_stable_key,
@@ -295,13 +296,13 @@ fn push_state_observations(
     }
     for (place, value) in &state.core.initializedness {
         let (status, precision, value) = initializedness_fact_value(value);
-        let place_ref = valid_place_ref(*place, valid_places);
+        let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
         rows.push(observation(
             body,
             block,
             operation,
             place_ref,
-            Some(*place),
+            stable_place,
             DomainSlot::Initializedness,
             location,
             source_stable_key,
@@ -312,10 +313,16 @@ fn push_state_observations(
     }
 }
 
-fn valid_place_ref(place: PlaceId, valid_places: Option<&BTreeSet<PlaceId>>) -> Option<PlaceId> {
-    match valid_places {
-        Some(valid_places) => valid_places.contains(&place).then_some(place),
-        None => Some(place),
+fn stable_place_ref(
+    place: PlaceId,
+    place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
+) -> (Option<PlaceId>, Option<String>) {
+    match place_stable_keys {
+        Some(place_stable_keys) => place_stable_keys
+            .get(&place)
+            .map(|stable_key| (Some(place), Some(stable_key.clone())))
+            .unwrap_or((None, None)),
+        None => (Some(place), Some(format!("place:{}", place.0))),
     }
 }
 
@@ -328,7 +335,7 @@ fn observation(
     block: Option<BasicBlockId>,
     operation: Option<MirOpId>,
     place: Option<PlaceId>,
-    stable_place: Option<PlaceId>,
+    stable_place: Option<String>,
     slot: DomainSlot,
     location: DomainLocation,
     source_stable_key: &str,
@@ -355,24 +362,7 @@ fn observation(
                 ("source", source_stable_key.to_string()),
                 ("slot", slot.as_str().to_string()),
                 ("location", location.as_str().to_string()),
-                (
-                    "block",
-                    block
-                        .map(|block| block.0.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
-                (
-                    "operation",
-                    operation
-                        .map(|operation| operation.0.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
-                (
-                    "place",
-                    stable_place
-                        .map(|place| place.0.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
+                ("place", stable_place.unwrap_or_else(|| "none".to_string())),
             ],
         ),
     }
@@ -672,6 +662,7 @@ impl DomainStore {
 mod tests {
     use super::*;
     use crate::analysis::cfg::ids::BasicBlockId;
+    use crate::analysis::domains::core::ConstantLiteral;
     use crate::analysis::domains::facts::{
         DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot, DomainStatus,
         DomainValue,
@@ -749,5 +740,46 @@ mod tests {
                 .get(FactRef::new(FactFamily::DomainObservation, 1))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn domain_observation_stable_key_uses_place_stable_key_not_dense_place_id() {
+        let first = domain_output_for_place(PlaceId(7), "place:stable");
+        let second = domain_output_for_place(PlaceId(99), "place:stable");
+        let first_key = first
+            .observations
+            .iter()
+            .find(|row| row.slot == DomainSlot::Constants)
+            .expect("constant row")
+            .stable_key
+            .clone();
+        let second_key = second
+            .observations
+            .iter()
+            .find(|row| row.slot == DomainSlot::Constants)
+            .expect("constant row")
+            .stable_key
+            .clone();
+
+        assert_eq!(first_key, second_key);
+    }
+
+    fn domain_output_for_place(place: PlaceId, place_key: &str) -> DomainOutput {
+        let mut results = DomainResults::new();
+        let mut state = ProductState::entry();
+        state.core.constants.insert(
+            place,
+            ConstantDomain::from_literal(ConstantLiteral::Bool(true)),
+        );
+        results.insert_function(
+            MirBodyId(1),
+            "body:stable".to_string(),
+            SolverStatus::Solved,
+            state,
+        );
+        DomainOutput::from_results_with_place_keys(
+            &results,
+            &BTreeMap::from([(place, place_key.to_string())]),
+        )
     }
 }

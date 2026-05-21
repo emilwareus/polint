@@ -107,11 +107,6 @@ fn site_for_unsupported<'site>(
                     && spans_overlap_or_touch(&site.span, &unsupported.span)
             })
         })
-        .or_else(|| {
-            sites
-                .iter()
-                .find(|site| site.file == unsupported.file && site.language == unsupported.language)
-        })
 }
 
 fn reason_for_unsupported(row: &UnsupportedSemanticFact) -> UnresolvedCallReason {
@@ -366,6 +361,31 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_call_evidence_without_operation_or_span_does_not_attach_to_arbitrary_file_call()
+    {
+        let (mut db, file, function) = db_with_function(Language::TypeScript, "src/app.ts");
+        let mut row = unsupported(1, Language::TypeScript, file, "dynamic property");
+        row.operation = None;
+        row.span = span(file, 99);
+        replace_unsupported(&mut db, Language::TypeScript, file, function, vec![row]);
+        let sites = vec![site(
+            Language::TypeScript,
+            file,
+            function,
+            10,
+            CallCallee::Identifier {
+                reference: Some(crate::core::ReferenceId(1)),
+                name: "run".to_string(),
+            },
+            CallSyntaxKind::Function,
+        )];
+
+        let unresolved = super::derive_unresolved_calls(&db, &sites);
+
+        assert!(unresolved.is_empty());
+    }
+
+    #[test]
     fn derive_unresolved_calls_emits_function_value_and_unknown_callee_rows() {
         let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
         let sites = vec![
@@ -486,7 +506,7 @@ mod tests {
             Language::TypeScript,
             file,
             caller,
-            10,
+            0,
             CallCallee::Unknown {
                 reason: UnresolvedCallReason::UnknownCallee,
             },
@@ -526,7 +546,7 @@ mod tests {
             Language::Go,
             file,
             caller,
-            10,
+            0,
             CallCallee::FunctionValue { place: PlaceId(1) },
             CallSyntaxKind::FunctionValue,
         )];

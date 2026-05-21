@@ -6,9 +6,10 @@
 use std::collections::BTreeMap;
 
 use super::core::{
-    ConstantDomain, ConstantLiteral, InitializednessDomain, NilnessDomain, TruthinessDomain,
+    ConstantDomain, ConstantLiteral, InitializednessDomain, NilnessDomain, ReachabilityDomain,
+    TruthinessDomain,
 };
-use super::lattice::TopReason;
+use super::lattice::{AbstractDomain, TopReason};
 use super::state::ProductState;
 use crate::analysis::calls::facts::{UnresolvedCallFact, UnresolvedCallReason};
 use crate::analysis::ids::{CallSiteId, PlaceId, UnsupportedId};
@@ -155,7 +156,7 @@ impl OperationTransfer {
                     .core
                     .initializedness
                     .entry(*place)
-                    .or_insert(InitializednessDomain::Initialized);
+                    .or_insert(InitializednessDomain::MaybeUninitialized);
             }
             MirOperationKind::Write { place, .. } => {
                 havoc(state, HavocTarget::Place(*place), TopReason::DynamicWrite);
@@ -192,25 +193,87 @@ impl EdgeTransfer {
         };
         match sense {
             BranchSense::True => {
-                state
-                    .core
-                    .truthiness
-                    .insert(place, TruthinessDomain::Truthy);
-                state.core.nilness.insert(place, NilnessDomain::NonNil);
-                state.core.constants.insert(
-                    place,
-                    ConstantDomain::from_literal(ConstantLiteral::Bool(true)),
-                );
+                if !refine_truthiness(state, place, TruthinessDomain::Truthy)
+                    || !refine_nilness_for_truthy(state, place)
+                    || !refine_bool_constant(state, place, true)
+                {
+                    state.core.reachability = ReachabilityDomain::Unreachable;
+                    return;
+                }
             }
             BranchSense::False => {
-                state.core.truthiness.insert(place, TruthinessDomain::Falsy);
-                state.core.constants.insert(
-                    place,
-                    ConstantDomain::from_literal(ConstantLiteral::Bool(false)),
-                );
+                if !refine_truthiness(state, place, TruthinessDomain::Falsy)
+                    || !refine_bool_constant(state, place, false)
+                {
+                    state.core.reachability = ReachabilityDomain::Unreachable;
+                    return;
+                }
             }
         }
         state.reduce_value_only(4);
+    }
+}
+
+fn refine_truthiness(state: &mut ProductState, place: PlaceId, desired: TruthinessDomain) -> bool {
+    let current = state
+        .core
+        .truthiness
+        .get(&place)
+        .copied()
+        .unwrap_or_else(TruthinessDomain::bottom);
+    match (current, desired) {
+        (TruthinessDomain::Truthy, TruthinessDomain::Falsy)
+        | (TruthinessDomain::Falsy, TruthinessDomain::Truthy) => false,
+        (TruthinessDomain::Top(_), desired) => {
+            state.core.truthiness.insert(place, desired);
+            true
+        }
+        (_, desired) => {
+            state.core.truthiness.insert(place, desired);
+            true
+        }
+    }
+}
+
+fn refine_nilness_for_truthy(state: &mut ProductState, place: PlaceId) -> bool {
+    let current = state
+        .core
+        .nilness
+        .get(&place)
+        .copied()
+        .unwrap_or_else(NilnessDomain::bottom);
+    match current {
+        NilnessDomain::Nil => false,
+        NilnessDomain::NonNil => true,
+        NilnessDomain::Bottom | NilnessDomain::MaybeNil | NilnessDomain::Top(_) => {
+            state.core.nilness.insert(place, NilnessDomain::NonNil);
+            true
+        }
+    }
+}
+
+fn refine_bool_constant(state: &mut ProductState, place: PlaceId, desired: bool) -> bool {
+    let Some(current) = state.core.constants.get(&place).cloned() else {
+        return true;
+    };
+    let ConstantDomain::Values(values) = current else {
+        return true;
+    };
+    if values
+        .iter()
+        .all(|literal| matches!(literal, ConstantLiteral::Bool(_)))
+    {
+        if values.contains(&ConstantLiteral::Bool(desired)) {
+            state.core.constants.insert(
+                place,
+                ConstantDomain::from_literal(ConstantLiteral::Bool(desired)),
+            );
+            true
+        } else {
+            false
+        }
+    } else {
+        true
     }
 }
 
@@ -312,7 +375,7 @@ fn apply_call(
     state: &mut ProductState,
 ) {
     if let Some(unresolved) = cx.unresolved_calls.get(&site) {
-        let reason = top_reason_for_unresolved(*unresolved);
+        let reason = top_reason_for_unresolved(unresolved);
         havoc(state, HavocTarget::ReturnPlace(return_place), reason);
         for argument in arguments {
             havoc(state, HavocTarget::Argument(*argument), reason);
@@ -482,6 +545,14 @@ mod tests {
     fn branch_assumption_refines_truthiness_and_constant_bools() {
         let place = PlaceId(7);
         let mut state = ProductState::entry();
+        state
+            .core
+            .truthiness
+            .insert(place, TruthinessDomain::Top(TopReason::UnknownValue));
+        state
+            .core
+            .nilness
+            .insert(place, NilnessDomain::Top(TopReason::UnknownValue));
         state.core.constants.insert(
             place,
             ConstantDomain::from_literal(ConstantLiteral::Bool(true)),
@@ -495,6 +566,7 @@ mod tests {
         );
 
         assert_eq!(state.core.truthiness[&place], TruthinessDomain::Truthy);
+        assert_eq!(state.core.nilness[&place], NilnessDomain::NonNil);
     }
 
     #[test]
@@ -571,6 +643,60 @@ mod tests {
         assert_eq!(
             state.core.constants[&place],
             ConstantDomain::top(TopReason::DynamicWrite)
+        );
+    }
+
+    #[test]
+    fn read_without_prior_write_is_maybe_uninitialized_not_initialized() {
+        let place = PlaceId(1);
+        let operation = operation(MirOperationKind::Read { place });
+        let mut state = ProductState::entry();
+
+        OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
+
+        assert_eq!(
+            state.core.initializedness[&place],
+            InitializednessDomain::MaybeUninitialized
+        );
+    }
+
+    #[test]
+    fn branch_true_contradicting_falsy_state_marks_path_unreachable() {
+        let place = PlaceId(1);
+        let mut state = ProductState::entry();
+        state.core.truthiness.insert(place, TruthinessDomain::Falsy);
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            BranchSense::True,
+            &mut state,
+        );
+
+        assert_eq!(state.core.reachability, ReachabilityDomain::Unreachable);
+        assert_eq!(state.core.truthiness[&place], TruthinessDomain::Falsy);
+    }
+
+    #[test]
+    fn branch_refines_existing_boolean_constant_without_inventing_contradictions() {
+        let place = PlaceId(1);
+        let mut state = ProductState::entry();
+        state.core.constants.insert(
+            place,
+            ConstantDomain::from_literal(ConstantLiteral::Bool(false)),
+        );
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            Some(place),
+            BranchSense::True,
+            &mut state,
+        );
+
+        assert_eq!(state.core.reachability, ReachabilityDomain::Unreachable);
+        assert_eq!(
+            state.core.constants[&place],
+            ConstantDomain::from_literal(ConstantLiteral::Bool(false))
         );
     }
 
