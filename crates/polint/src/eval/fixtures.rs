@@ -654,6 +654,68 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_direct_summaries_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deterministic {
+        observed.push(direct_summaries_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn abstract_domain_observed_with_policy(
     repo_root: &Path,
     plan: &crate::analysis_plan::AnalysisPlan,
@@ -787,6 +849,19 @@ fn abstract_domains_determinism_observed_invariant() -> crate::eval::model::Obse
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("abstract_domains.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn direct_summaries_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "direct_summaries.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("direct_summaries.current_behavior".to_string()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -1749,6 +1824,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "abstract-domains-core"
         {
             run_abstract_domains_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::DirectSummaries
+            && fixture.manifest.case_id == "direct-summaries-core"
+        {
+            run_direct_summaries_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -2908,6 +2987,185 @@ mod abstract_domains_core {
                 case.observed
             );
         }
+    }
+
+    fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {
+        let mut markers = std::collections::BTreeSet::new();
+        for path in paths {
+            let source = std::fs::read_to_string(fixture_dir().join("repo").join(path))
+                .expect("fixture source should be readable");
+            for marker in source.lines().filter_map(feature_marker) {
+                markers.insert(marker);
+            }
+        }
+        markers
+    }
+
+    fn feature_marker(line: &str) -> Option<String> {
+        Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod direct_summaries_core {
+    use std::path::PathBuf;
+
+    use crate::eval::fixtures::{load_native_fixture, run_direct_summaries_core_fixture_for_test};
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/eval-fixtures/direct-summaries/core"
+        ))
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repo root should resolve")
+    }
+
+    fn to_deterministic_json_pretty(run: &crate::eval::report::EvaluationRun) -> String {
+        serde_json::to_string_pretty(run).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    #[test]
+    fn direct_summaries_core_fixture_passes() {
+        let run = run_direct_summaries_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct-summaries core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "direct-summaries-core");
+        assert_eq!(case.area, FixtureArea::DirectSummaries);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn direct_summaries_core_manifest_covers_four_domains_and_events() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                    fact.producer_id.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            (
+                "summary_control",
+                "control_effects",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "summary_call",
+                "call_effects",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "summary_memory",
+                "memory_effects",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "summary_tito",
+                "data_flow_tito",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "summary_event",
+                "SummaryEvent",
+                Some(ObservedStatus::Unknown),
+            ),
+        ] {
+            assert!(
+                expected_facts
+                    .iter()
+                    .any(|(family, key, status, _, producer)| {
+                        *family == required.0
+                            && key.contains(required.1)
+                            && *status == required.2
+                            && *producer == Some("polint.direct_summaries")
+                    }),
+                "direct-summaries fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_summaries_core_observes_domain_counts_and_determinism() {
+        let run = run_direct_summaries_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct-summaries core case");
+
+        for required in [
+            (
+                "direct_summaries.domain_counts.control_effects.nonzero",
+                "true",
+            ),
+            (
+                "direct_summaries.domain_counts.call_effects.nonzero",
+                "true",
+            ),
+            (
+                "direct_summaries.domain_counts.memory_effects.nonzero",
+                "true",
+            ),
+            (
+                "direct_summaries.domain_counts.data_flow_tito.nonzero",
+                "true",
+            ),
+            (
+                "direct_summaries.current_determinism",
+                "cold_warm_no_cache_equal",
+            ),
+        ] {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == required.0 && invariant.value == required.1
+                    }
+                    _ => false,
+                }),
+                "direct-summaries fixture should observe invariant {required:?}: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    #[test]
+    fn direct_summaries_core_source_documents_supported_language_features() {
+        let markers = fixture_feature_markers(&["summary.go", "web/src/summary.ts"]);
+        let expected = [
+            "direct-summaries/go/global-read",
+            "direct-summaries/go/panic-does-not-return",
+            "direct-summaries/go/param-to-return-tito",
+            "direct-summaries/go/pure-function",
+            "direct-summaries/go/receiver-mutation",
+            "direct-summaries/go/unresolved-call",
+            "direct-summaries/ts/dynamic-callback",
+            "direct-summaries/ts/no-effects",
+            "direct-summaries/ts/param-to-return-tito",
+            "direct-summaries/ts/param-write",
+            "direct-summaries/ts/throw-does-not-return",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(markers, expected);
     }
 
     fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {

@@ -1234,7 +1234,15 @@ fn direct_summary_count_invariants(
         return Vec::new();
     };
     let mut invariants = Vec::new();
-    for field in ["total", "present", "unknown", "unsupported", "setup_missing", "budget_exceeded", "events"] {
+    for field in [
+        "total",
+        "present",
+        "unknown",
+        "unsupported",
+        "setup_missing",
+        "budget_exceeded",
+        "events",
+    ] {
         if let Some(value) = counts.get(field).and_then(Value::as_u64) {
             invariants.push(observed_invariant(
                 format!("direct_summaries.counts.{field}"),

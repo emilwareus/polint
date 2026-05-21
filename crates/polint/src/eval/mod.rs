@@ -501,7 +501,7 @@ fact = { family = "DomainEvent", stable_key = "domain-event:budget", mode = "par
 #[cfg(test)]
 mod direct_summary {
     use crate::eval::model::{
-        DIRECT_SUMMARY_FACT_FAMILIES, AssertionMode, ExpectedFact, ExpectedItem, FixtureArea,
+        AssertionMode, DIRECT_SUMMARY_FACT_FAMILIES, ExpectedFact, ExpectedItem, FixtureArea,
         ObservedFact, ObservedItem, ObservedStatus,
     };
     use serde_json::json;
@@ -529,7 +529,7 @@ fact = { family = "summary_memory", stable_key = "summary:memory:write", mode = 
 fact = { family = "summary_tito", stable_key = "summary:tito:param-return", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
 
 [[expected]]
-fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = "partial", producer_id = "polint.direct_summaries", precision = "unknown_top", status = "unknown" }
+fact = { family = "summary_event", stable_key = "SummaryEvent", mode = "partial", producer_id = "polint.direct_summaries", precision = "unknown_top", status = "unknown" }
 "#;
 
         let parsed: crate::eval::fixtures::NativeFixtureManifest =
@@ -659,8 +659,7 @@ fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = 
 
         assert!(observed.iter().any(|item| match item {
             ObservedItem::Fact(fact) => {
-                fact.family == "summary_memory"
-                    && fact.status == Some(ObservedStatus::Present)
+                fact.family == "summary_memory" && fact.status == Some(ObservedStatus::Present)
             }
             _ => false,
         }));
@@ -669,9 +668,10 @@ fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = 
             ObservedItem::Fact(fact) => {
                 fact.family == "summary_tito"
                     && fact.status == Some(ObservedStatus::Present)
-                    && fact.payload.as_deref().is_some_and(|p| {
-                        p.contains("provenance=lifted_from_domain")
-                    })
+                    && fact
+                        .payload
+                        .as_deref()
+                        .is_some_and(|p| p.contains("provenance=lifted_from_domain"))
             }
             _ => false,
         }));
@@ -704,7 +704,12 @@ fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = 
         }));
 
         // Check domain count invariants
-        for domain in ["control_effects", "call_effects", "memory_effects", "data_flow_tito"] {
+        for domain in [
+            "control_effects",
+            "call_effects",
+            "memory_effects",
+            "data_flow_tito",
+        ] {
             assert!(
                 observed.iter().any(|item| match item {
                     ObservedItem::Invariant(inv) => {
@@ -790,11 +795,12 @@ fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = 
         let metrics = compute_metrics(&summaries);
 
         assert_eq!(
-            summaries
-                .iter()
-                .map(|s| s.outcome)
-                .collect::<Vec<_>>(),
-            vec![MatchOutcome::Unknown, MatchOutcome::Unknown, MatchOutcome::Unknown]
+            summaries.iter().map(|s| s.outcome).collect::<Vec<_>>(),
+            vec![
+                MatchOutcome::Unknown,
+                MatchOutcome::Unknown,
+                MatchOutcome::Unknown
+            ]
         );
         assert_eq!(metrics.unknown_count, 3);
     }
