@@ -1,5 +1,203 @@
+use std::collections::BTreeMap;
+
+use crate::analysis::calls::facts::{
+    CallAlgorithm, CallCallee, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
+    CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+};
+use crate::analysis::ids::MirOpId;
+use crate::analysis::mir::op::{UnsupportedDomain, UnsupportedSemanticFact};
+use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis_kernel::FactFamily;
+use crate::core::AnalysisDb;
+
+pub(crate) fn derive_unresolved_calls(
+    db: &AnalysisDb,
+    sites: &[CallSiteFact],
+) -> Vec<UnresolvedCallFact> {
+    let mut rows = BTreeMap::new();
+
+    for site in sites {
+        if let Some(reason) = reason_for_site(site) {
+            insert_unresolved(&mut rows, site, reason, "call-site-shape");
+        }
+    }
+
+    let sites_by_operation = sites
+        .iter()
+        .map(|site| (site.operation, site))
+        .collect::<BTreeMap<_, _>>();
+    for unsupported in db
+        .unsupported_semantics()
+        .iter()
+        .filter(|row| row.affected_domains.contains(&UnsupportedDomain::Calls))
+    {
+        let Some(site) = site_for_unsupported(unsupported, sites, &sites_by_operation) else {
+            continue;
+        };
+        let reason = reason_for_unsupported(unsupported);
+        insert_unresolved(&mut rows, site, reason, &unsupported.stable_key);
+    }
+
+    rows.into_values().collect()
+}
+
+fn insert_unresolved(
+    rows: &mut BTreeMap<String, UnresolvedCallFact>,
+    site: &CallSiteFact,
+    reason: UnresolvedCallReason,
+    evidence: &str,
+) {
+    let status = status_for_reason(reason);
+    let stable_key = unresolved_stable_key(site, reason, status, evidence);
+    rows.entry(stable_key.clone())
+        .or_insert(UnresolvedCallFact {
+            site: site.id,
+            caller: site.caller,
+            status,
+            reason,
+            algorithm: algorithm_for_reason(reason),
+            provenance: CallProvenance::MirShape,
+            precision: precision_for_reason(reason),
+            stable_key,
+        });
+}
+
+fn reason_for_site(site: &CallSiteFact) -> Option<UnresolvedCallReason> {
+    match &site.callee {
+        CallCallee::FunctionValue { .. } => Some(UnresolvedCallReason::FunctionValue),
+        CallCallee::Unknown { reason } => Some(normalize_unknown_reason(*reason)),
+        CallCallee::Index { .. } => Some(UnresolvedCallReason::DynamicProperty),
+        CallCallee::Member { .. } if matches!(site.kind, CallSyntaxKind::Member) => {
+            Some(UnresolvedCallReason::DynamicProperty)
+        }
+        CallCallee::Import | CallCallee::Constructor { .. }
+            if matches!(site.kind, CallSyntaxKind::DynamicImport) =>
+        {
+            Some(UnresolvedCallReason::DynamicImport)
+        }
+        _ => None,
+    }
+}
+
+fn normalize_unknown_reason(reason: UnresolvedCallReason) -> UnresolvedCallReason {
+    match reason {
+        UnresolvedCallReason::Unknown => UnresolvedCallReason::UnknownCallee,
+        other => other,
+    }
+}
+
+fn site_for_unsupported<'site>(
+    unsupported: &UnsupportedSemanticFact,
+    sites: &'site [CallSiteFact],
+    sites_by_operation: &BTreeMap<MirOpId, &'site CallSiteFact>,
+) -> Option<&'site CallSiteFact> {
+    unsupported
+        .operation
+        .and_then(|operation| sites_by_operation.get(&operation).copied())
+        .or_else(|| {
+            sites
+                .iter()
+                .find(|site| site.file == unsupported.file && site.language == unsupported.language)
+        })
+}
+
+fn reason_for_unsupported(row: &UnsupportedSemanticFact) -> UnresolvedCallReason {
+    let construct = row.construct.to_ascii_lowercase();
+    let evidence = row.source_evidence.to_ascii_lowercase();
+    let labels = [construct.as_str(), evidence.as_str()];
+    if any_contains(
+        &labels,
+        &["setup missing", "setup-missing", "package missing"],
+    ) {
+        UnresolvedCallReason::SetupMissing
+    } else if any_contains(&labels, &["interface"]) {
+        UnresolvedCallReason::InterfaceDispatch
+    } else if any_contains(&labels, &["reflect"]) {
+        UnresolvedCallReason::Reflection
+    } else if any_contains(&labels, &["go_statement", "goroutine", "go statement"]) {
+        UnresolvedCallReason::GoroutineBoundary
+    } else if any_contains(&labels, &["eval"]) {
+        UnresolvedCallReason::Eval
+    } else if any_contains(&labels, &["dynamic import", "import("]) {
+        UnresolvedCallReason::DynamicImport
+    } else if any_contains(&labels, &["call/apply/bind", ".call", ".apply", ".bind"]) {
+        UnresolvedCallReason::CallApplyBind
+    } else if any_contains(&labels, &["proxy", "getter", "setter", "accessor"]) {
+        UnresolvedCallReason::ProxyOrAccessor
+    } else if any_contains(&labels, &["framework", "decorator"]) {
+        UnresolvedCallReason::FrameworkDispatch
+    } else if any_contains(&labels, &["dynamic property", "index", "computed"]) {
+        UnresolvedCallReason::DynamicProperty
+    } else if any_contains(&labels, &["unsupported", "parser", "syntax"]) {
+        UnresolvedCallReason::UnsupportedSyntax
+    } else {
+        UnresolvedCallReason::UnknownCallee
+    }
+}
+
+fn any_contains(values: &[&str], needles: &[&str]) -> bool {
+    values
+        .iter()
+        .any(|value| needles.iter().any(|needle| value.contains(needle)))
+}
+
+fn unresolved_stable_key(
+    site: &CallSiteFact,
+    reason: UnresolvedCallReason,
+    status: CallTargetStatus,
+    evidence: &str,
+) -> String {
+    semantic_stable_key(
+        FactFamily::UnresolvedCall,
+        &[
+            ("site", site.stable_key.clone()),
+            ("reason", format!("{reason:?}")),
+            ("status", format!("{status:?}")),
+            ("algorithm", format!("{:?}", algorithm_for_reason(reason))),
+            ("evidence", evidence.to_string()),
+        ],
+    )
+    .into_string()
+}
+
+fn status_for_reason(reason: UnresolvedCallReason) -> CallTargetStatus {
+    match reason {
+        UnresolvedCallReason::SetupMissing => CallTargetStatus::SetupMissing,
+        UnresolvedCallReason::UnsupportedSyntax
+        | UnresolvedCallReason::Reflection
+        | UnresolvedCallReason::GoroutineBoundary
+        | UnresolvedCallReason::FrameworkDispatch
+        | UnresolvedCallReason::ProxyOrAccessor => CallTargetStatus::Unsupported,
+        _ => CallTargetStatus::Unresolved,
+    }
+}
+
+fn precision_for_reason(reason: UnresolvedCallReason) -> CallPrecision {
+    match reason {
+        UnresolvedCallReason::SetupMissing => CallPrecision::Unsupported,
+        UnresolvedCallReason::UnsupportedSyntax
+        | UnresolvedCallReason::Reflection
+        | UnresolvedCallReason::GoroutineBoundary
+        | UnresolvedCallReason::FrameworkDispatch
+        | UnresolvedCallReason::ProxyOrAccessor => CallPrecision::Unsupported,
+        _ => CallPrecision::Unknown,
+    }
+}
+
+fn algorithm_for_reason(reason: UnresolvedCallReason) -> CallAlgorithm {
+    match reason {
+        UnresolvedCallReason::FrameworkDispatch => CallAlgorithm::FrameworkModel,
+        UnresolvedCallReason::UnsupportedSyntax
+        | UnresolvedCallReason::Reflection
+        | UnresolvedCallReason::GoroutineBoundary
+        | UnresolvedCallReason::ProxyOrAccessor => CallAlgorithm::Unsupported,
+        _ => CallAlgorithm::SyntaxOnly,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     use crate::analysis::calls::facts::{
@@ -229,7 +427,7 @@ mod tests {
         let reasons = super::derive_unresolved_calls(&db, &sites)
             .into_iter()
             .map(|row| row.reason)
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
 
         assert!(reasons.contains(&UnresolvedCallReason::Eval));
         assert!(reasons.contains(&UnresolvedCallReason::DynamicProperty));
@@ -267,7 +465,7 @@ mod tests {
         let reasons = super::derive_unresolved_calls(&db, &sites)
             .into_iter()
             .map(|row| row.reason)
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
 
         assert!(reasons.contains(&UnresolvedCallReason::InterfaceDispatch));
         assert!(reasons.contains(&UnresolvedCallReason::Reflection));

@@ -3734,6 +3734,7 @@ fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
         UnresolvedCallReason::CallApplyBind => "call_apply_bind",
         UnresolvedCallReason::FrameworkDispatch => "framework_dispatch",
         UnresolvedCallReason::Reflection => "reflection",
+        UnresolvedCallReason::GoroutineBoundary => "goroutine_boundary",
         UnresolvedCallReason::DynamicImport => "dynamic_import",
         UnresolvedCallReason::ProxyOrAccessor => "proxy_or_accessor",
         UnresolvedCallReason::MissingSemanticReference => "missing_semantic_reference",
@@ -3741,6 +3742,7 @@ fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
         UnresolvedCallReason::SetupMissing => "setup_missing",
         UnresolvedCallReason::UnsupportedSyntax => "unsupported_syntax",
         UnresolvedCallReason::BudgetExceeded => "budget_exceeded",
+        UnresolvedCallReason::UnknownCallee => "unknown_callee",
         UnresolvedCallReason::Unknown => "unknown",
     }
 }

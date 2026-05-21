@@ -153,6 +153,7 @@ pub(crate) enum UnresolvedCallReason {
     CallApplyBind,
     FrameworkDispatch,
     Reflection,
+    GoroutineBoundary,
     DynamicImport,
     ProxyOrAccessor,
     MissingSemanticReference,
@@ -160,6 +161,7 @@ pub(crate) enum UnresolvedCallReason {
     SetupMissing,
     UnsupportedSyntax,
     BudgetExceeded,
+    UnknownCallee,
     Unknown,
 }
 
