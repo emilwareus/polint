@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-21T11:59:19.740Z"
-last_activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, and provider-order proof
+status: verifying
+last_updated: "2026-05-21T12:49:49.484Z"
+last_activity: 2026-05-21
 progress:
   total_phases: 22
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 65
-  completed_plans: 64
-  percent: 98
+  completed_plans: 65
+  percent: 100
 ---
 
 # State: polint
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Phase: 31 (p0-abstract-domain-kernel) — EXECUTING
 Plan: 5 of 5
-Last activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, and provider-order proof
+Last activity: 2026-05-21
 
 ## Phase Progress
 
@@ -263,6 +263,9 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, 
 - [Phase 31-p0-abstract-domain-kernel]: Make abstract-domain cache identity include provider policy, MIR, CFG, calls, symbol graph, module topology, syntax, lifecycle/config, and absent extension/model/toolchain slots.
 - [Phase 31-p0-abstract-domain-kernel]: Represent domain bottom/no-info rows as explicit unknown top reasons before validation so malformed unknown rows fail closed.
 - [Phase 31-p0-abstract-domain-kernel]: Record compact eval provider-output schema evidence for polint.abstract_domains without exposing a public provider surface.
+- [Phase 31-p0-abstract-domain-kernel]: Abstract-domain facts remain internal eval/debug evidence, not SDK or CLI contract.
+- [Phase 31-p0-abstract-domain-kernel]: Deterministic top and budget fixture rows use private test-only solver policies rather than changing production solver defaults.
+- [Phase 31-p0-abstract-domain-kernel]: Transient domain place IDs are retained in stable keys but not exposed as invalid indexed references.
 
 ## Execution Metrics
 
@@ -320,11 +323,12 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, 
 | 31-p0-abstract-domain-kernel | 02 | 14 min | 3 | 5 |
 | 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
 | 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
+| 31-p0-abstract-domain-kernel | 05 | 43 min | 3 | 19 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 04 validation, debug JSON, and provider-order proof.
+- Last activity: 2026-05-21 - Completed 31-p0-abstract-domain-kernel-05-PLAN.md.
 - Stopped at: Completed 31-p0-abstract-domain-kernel-04-PLAN.md; ready for Plan 31-05.
 
 ### Quick Tasks Completed
