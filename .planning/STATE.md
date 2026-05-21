@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-21T10:29:49.640Z"
+status: ready_to_plan
+last_updated: "2026-05-21T10:31:44Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
@@ -17,11 +17,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-18)
+See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 30 — direct-call-facts
+**Current focus:** Phase 31 — P0 Abstract-Domain Kernel
 
 ## Current Status
 
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
+Status: Ready to plan
 Phase: 31
 Plan: Not started
 Last activity: 2026-05-21
@@ -309,8 +309,8 @@ Last activity: 2026-05-21
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed Phase 30 Plan 08 direct call public-boundary proof.
-- Stopped at: Completed 30-08-PLAN.md; Phase 30 ready for verification.
+- Last activity: 2026-05-21 - Completed and verified Phase 30 Direct Call Facts; roadmap advanced to Phase 31.
+- Stopped at: Phase 30 complete, ready to discuss Phase 31.
 
 ### Quick Tasks Completed
 
@@ -337,4 +337,4 @@ Last activity: 2026-05-21
 
 ## Next Action
 
-Phase 30 is complete and ready for verification.
+Phase 31 is next: discuss P0 Abstract-Domain Kernel.
