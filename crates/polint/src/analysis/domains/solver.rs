@@ -431,6 +431,7 @@ mod tests {
     };
     use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
     use crate::analysis::cfg::store::CfgOutput;
+    use crate::analysis::domains::core::{ConstantDomain, ConstantLiteral, ReachabilityDomain};
     use crate::analysis::domains::lattice::TopReason;
     use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
@@ -480,6 +481,66 @@ mod tests {
         assert!(result.has_top_reason(TopReason::BudgetExceeded));
     }
 
+    #[test]
+    fn cursor_after_operation_exposes_transfer_materialized_state() {
+        let input = test_fixture::solver_input(false);
+        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+            max_iterations: 16,
+            widening_fuel: 2,
+        }));
+
+        let result = solver.solve(input);
+        let before = result
+            .results()
+            .before_operation(MirOpId(0))
+            .expect("before operation state");
+        let after = result
+            .results()
+            .after_operation(MirOpId(0))
+            .expect("after operation state");
+
+        assert!(!before.core.constants.contains_key(&PlaceId(0)));
+        assert_eq!(
+            after.core.constants[&PlaceId(0)],
+            ConstantDomain::from_literal(ConstantLiteral::String("ready".to_string()))
+        );
+    }
+
+    #[test]
+    fn unreachable_blocks_expose_unreachable_without_value_facts() {
+        let input = test_fixture::unreachable_solver_input();
+        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+            max_iterations: 16,
+            widening_fuel: 2,
+        }));
+
+        let result = solver.solve(input);
+        let unreachable_entry = result
+            .results()
+            .block_entry(BasicBlockId(4))
+            .expect("unreachable block state");
+
+        assert_eq!(
+            unreachable_entry.core.reachability,
+            ReachabilityDomain::Unreachable
+        );
+        assert!(unreachable_entry.observed_places().is_empty());
+    }
+
+    #[test]
+    fn solving_same_function_twice_returns_identical_stable_result_rows() {
+        let input = test_fixture::solver_input(false);
+        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+            max_iterations: 16,
+            widening_fuel: 2,
+        }));
+
+        let first = solver.solve(input).stable_digest_parts();
+        let second = solver.solve(input).stable_digest_parts();
+
+        assert_eq!(first, second);
+    }
+
     mod test_fixture {
         use super::*;
 
@@ -499,6 +560,29 @@ mod tests {
                 .expect("semantic MIR should store");
             db.replace_cfg_facts(cfg_output(false, true))
                 .expect("CFG should store");
+            let db = Box::leak(Box::new(db));
+            (&*db).into()
+        }
+
+        pub(super) fn unreachable_solver_input() -> SolverInput<'static> {
+            let mut db = AnalysisDb::new();
+            db.replace_semantic_mir(mir_output(false))
+                .expect("semantic MIR should store");
+            let mut cfg = cfg_output(false, false);
+            cfg.blocks.push(BasicBlockFact {
+                id: BasicBlockId(4),
+                cfg_function: CfgFunctionId(1),
+                kind: BasicBlockKind::Unreachable,
+                first_node: Some(CfgNodeId(4)),
+                last_node: Some(CfgNodeId(4)),
+                reachable: false,
+                reverse_postorder: 3,
+                stable_key: "block:unreachable".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            });
+            cfg.nodes.push(node(4, 4, None, 3, "node:unreachable"));
+            db.replace_cfg_facts(cfg).expect("CFG should store");
             let db = Box::leak(Box::new(db));
             (&*db).into()
         }

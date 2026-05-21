@@ -190,8 +190,20 @@ impl DomainResults {
         self.functions.values().map(|function| function.status)
     }
 
+    pub(crate) fn functions(&self) -> impl Iterator<Item = &FunctionResult> {
+        let mut functions = self.functions.values().collect::<Vec<_>>();
+        functions.sort_by(|left, right| left.body_stable_key.cmp(&right.body_stable_key));
+        functions.into_iter()
+    }
+
     pub(crate) fn top_events(&self) -> impl Iterator<Item = &TopEvent> {
         self.top_events.values()
+    }
+
+    pub(crate) fn unknown_top_events(&self) -> impl Iterator<Item = &TopEvent> {
+        let mut events = self.top_events.values().collect::<Vec<_>>();
+        events.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        events.into_iter()
     }
 
     pub(crate) fn blocks(&self) -> impl Iterator<Item = &BlockState> {
