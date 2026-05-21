@@ -134,14 +134,7 @@ fn call_callee(
             CallSyntaxKind::FunctionValue,
             format!("call_return:{}", site.0),
         ),
-        MirValue::Unknown { evidence } => (
-            CallCallee::Unknown {
-                reason: UnresolvedCallReason::Unknown,
-            },
-            None,
-            CallSyntaxKind::Unknown,
-            format!("unknown:{}", evidence.trim()),
-        ),
+        MirValue::Unknown { evidence } => evidence_callee(evidence, language),
         MirValue::Literal { value } => (
             CallCallee::Unknown {
                 reason: UnresolvedCallReason::UnsupportedSyntax,
@@ -151,6 +144,145 @@ fn call_callee(
             format!("literal:{}", value.trim()),
         ),
     }
+}
+
+fn evidence_callee(
+    evidence: &str,
+    language: Language,
+) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {
+    let evidence = evidence.trim();
+    if evidence.is_empty() {
+        return unknown_evidence_callee(evidence, UnresolvedCallReason::Unknown);
+    }
+
+    if let Some(name) = constructor_evidence_name(evidence) {
+        return (
+            CallCallee::Constructor {
+                reference: None,
+                name: Some(name.to_string()),
+            },
+            None,
+            CallSyntaxKind::Constructor,
+            format!("constructor:{name}"),
+        );
+    }
+
+    if evidence.starts_with("import(") {
+        return (
+            CallCallee::Import,
+            None,
+            CallSyntaxKind::DynamicImport,
+            "dynamic_import".to_string(),
+        );
+    }
+
+    if evidence.to_ascii_lowercase().contains("dynamicimport") {
+        return unknown_evidence_callee(evidence, UnresolvedCallReason::DynamicImport);
+    }
+
+    if evidence.to_ascii_lowercase().contains("setupmissing")
+        || evidence.to_ascii_lowercase().contains("setup missing")
+    {
+        return unknown_evidence_callee(evidence, UnresolvedCallReason::SetupMissing);
+    }
+
+    if evidence == "eval" {
+        return unknown_evidence_callee(evidence, UnresolvedCallReason::Eval);
+    }
+
+    if let Some((_, property)) = evidence.rsplit_once('.')
+        && is_identifier_like(property)
+    {
+        if matches!(property, "call" | "apply" | "bind") {
+            return unknown_evidence_callee(evidence, UnresolvedCallReason::CallApplyBind);
+        }
+        let kind = if is_static_member_evidence(language, evidence) {
+            CallSyntaxKind::StaticMember
+        } else {
+            CallSyntaxKind::Member
+        };
+        return (
+            CallCallee::Member {
+                base: PlaceId(u64::MAX),
+                property: property.to_string(),
+            },
+            None,
+            kind,
+            format!("member:{property}"),
+        );
+    }
+
+    if matches!(evidence, "fn" | "callable" | "callback") {
+        return (
+            CallCallee::FunctionValue {
+                place: PlaceId(u64::MAX),
+            },
+            None,
+            CallSyntaxKind::FunctionValue,
+            "function_value".to_string(),
+        );
+    }
+
+    if is_identifier_like(evidence) {
+        if is_constructor_name(language, evidence) {
+            return (
+                CallCallee::Constructor {
+                    reference: None,
+                    name: Some(evidence.to_string()),
+                },
+                None,
+                CallSyntaxKind::Constructor,
+                format!("constructor:{evidence}"),
+            );
+        }
+        return (
+            CallCallee::Identifier {
+                reference: None,
+                name: evidence.to_string(),
+            },
+            None,
+            CallSyntaxKind::Function,
+            format!("identifier:{evidence}"),
+        );
+    }
+
+    unknown_evidence_callee(evidence, UnresolvedCallReason::Unknown)
+}
+
+fn unknown_evidence_callee(
+    evidence: &str,
+    reason: UnresolvedCallReason,
+) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {
+    (
+        CallCallee::Unknown { reason },
+        None,
+        CallSyntaxKind::Unknown,
+        format!("unknown:{}", evidence.trim()),
+    )
+}
+
+fn constructor_evidence_name(evidence: &str) -> Option<&str> {
+    evidence
+        .strip_prefix("new ")
+        .and_then(|rest| rest.split(['(', '<', ' ']).next())
+        .filter(|name| is_identifier_like(name))
+}
+
+fn is_static_member_evidence(language: Language, evidence: &str) -> bool {
+    matches!(language, Language::TypeScript | Language::JavaScript)
+        && evidence
+            .split('.')
+            .next()
+            .is_some_and(|base| base.chars().next().is_some_and(char::is_uppercase))
+}
+
+fn is_identifier_like(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first == '$' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
 }
 
 fn temporary_callee(value: MirValueId) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {

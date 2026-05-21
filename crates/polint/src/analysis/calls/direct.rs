@@ -5,13 +5,13 @@ use crate::analysis::calls::facts::{
     CallSyntaxKind, CallTargetFact, CallTargetStatus,
 };
 use crate::analysis::ids::CallTargetId;
+use crate::analysis::mir::op::UnsupportedDomain;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, ReferenceFact, ReferenceId, Span, SymbolFact,
-    SymbolId, SymbolPrecision, SymbolResolutionStatus,
+    SymbolId, SymbolKind, SymbolPrecision, SymbolResolutionStatus,
 };
-use crate::module_graph::topology::ImportToPackageStatus;
 use crate::symbol_graph::semantic::SemanticStatus;
 
 pub(crate) fn resolve_direct_call_targets(
@@ -22,6 +22,9 @@ pub(crate) fn resolve_direct_call_targets(
     let mut rows = Vec::new();
 
     for site in sites {
+        if has_unsupported_call_evidence(db, site) {
+            continue;
+        }
         let Some(reference) = index.reference_for_site(site) else {
             continue;
         };
@@ -34,6 +37,9 @@ pub(crate) fn resolve_direct_call_targets(
         let Some(symbol) = index.symbols_by_id.get(&target_symbol).copied() else {
             continue;
         };
+        if !is_direct_callable_symbol(symbol) {
+            continue;
+        }
 
         let algorithm = if index.is_import_binding(site, reference) {
             CallAlgorithm::ImportBinding
@@ -146,9 +152,11 @@ impl<'db> DirectIndex<'db> {
 
     fn is_import_binding(&self, site: &CallSiteFact, reference: &ReferenceFact) -> bool {
         matches!(reference.precision, SymbolPrecision::ModuleLinked)
+            || reference
+                .target
+                .and_then(|target| self.symbols_by_id.get(&target))
+                .is_some_and(|symbol| symbol.kind == SymbolKind::Import)
             || self.semantic_import_matches(site, reference)
-            || self.resolved_import_matches(site)
-            || self.import_to_package_matches(site)
     }
 
     fn semantic_import_matches(&self, site: &CallSiteFact, reference: &ReferenceFact) -> bool {
@@ -157,21 +165,6 @@ impl<'db> DirectIndex<'db> {
                 && import.status == SemanticStatus::Resolved
                 && (import.local_name.as_deref() == Some(reference.name.as_str())
                     || import.imported_name.as_deref() == Some(reference.name.as_str()))
-        })
-    }
-
-    fn resolved_import_matches(&self, site: &CallSiteFact) -> bool {
-        self.db
-            .resolved_imports()
-            .iter()
-            .any(|import| import.from_file == site.file && import.target_node.is_some())
-    }
-
-    fn import_to_package_matches(&self, site: &CallSiteFact) -> bool {
-        self.db.import_to_package_edges().iter().any(|edge| {
-            edge.from_file == Some(site.file)
-                && edge.target_node.is_some()
-                && edge.status == ImportToPackageStatus::Resolved
         })
     }
 
@@ -184,6 +177,40 @@ impl<'db> DirectIndex<'db> {
             })
             .map(|function| function.id)
     }
+}
+
+fn has_unsupported_call_evidence(db: &AnalysisDb, site: &CallSiteFact) -> bool {
+    db.unsupported_semantics().iter().any(|row| {
+        row.file == site.file
+            && row.affected_domains.contains(&UnsupportedDomain::Calls)
+            && spans_overlap_or_touch(&row.span, &site.span)
+            && unsupported_call_construct_blocks_direct_target(&row.construct, &row.source_evidence)
+    })
+}
+
+fn unsupported_call_construct_blocks_direct_target(construct: &str, evidence: &str) -> bool {
+    let construct = construct.to_ascii_lowercase();
+    let evidence = evidence.to_ascii_lowercase();
+    let labels = [construct.as_str(), evidence.as_str()];
+    labels.iter().any(|label| {
+        label.contains("reflect")
+            || label.contains("go_statement")
+            || label.contains("goroutine")
+            || label.contains("eval")
+            || label.contains("dynamic import")
+            || label.contains("import(")
+            || label.contains("call/apply/bind")
+            || label.contains(".call")
+            || label.contains(".apply")
+            || label.contains(".bind")
+    })
+}
+
+fn is_direct_callable_symbol(symbol: &SymbolFact) -> bool {
+    matches!(
+        symbol.kind,
+        SymbolKind::Function | SymbolKind::Method | SymbolKind::Class | SymbolKind::Import
+    )
 }
 
 fn is_precise_resolved_reference(reference: &ReferenceFact) -> bool {

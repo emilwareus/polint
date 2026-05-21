@@ -103,6 +103,15 @@ fn site_for_unsupported<'site>(
         .or_else(|| {
             sites
                 .iter()
+                .find(|site| {
+                    site.file == unsupported.file
+                        && site.language == unsupported.language
+                        && spans_overlap_or_touch(&site.span, &unsupported.span)
+                })
+        })
+        .or_else(|| {
+            sites
+                .iter()
                 .find(|site| site.file == unsupported.file && site.language == unsupported.language)
         })
 }
@@ -145,6 +154,12 @@ fn any_contains(values: &[&str], needles: &[&str]) -> bool {
     values
         .iter()
         .any(|value| needles.iter().any(|needle| value.contains(needle)))
+}
+
+fn spans_overlap_or_touch(left: &crate::core::Span, right: &crate::core::Span) -> bool {
+    left.file == right.file
+        && left.start_byte <= right.end_byte
+        && right.start_byte <= left.end_byte
 }
 
 fn unresolved_stable_key(

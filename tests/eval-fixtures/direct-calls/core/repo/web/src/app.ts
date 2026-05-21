@@ -20,7 +20,13 @@ function localTarget(value: string): string {
   return Formatter.normalize(value);
 }
 
+function dynamicImport(path: string): Promise<unknown> {
+  return import(path);
+}
+
 export function handler(input: string, bag: DynamicBag): string {
+  const ctorValue = Formatter("direct" as never);
+  void ctorValue;
   const formatter = new Formatter("direct");
   const direct = localTarget(input);
   const imported = importedHelper(direct);
@@ -32,6 +38,6 @@ export function handler(input: string, bag: DynamicBag): string {
   const viaApply = localTarget.apply(null, [viaCall]);
   const viaBind = localTarget.bind(null)(viaApply);
   eval("direct-call fixture");
-  import("./lazy");
+  dynamicImport("./lazy");
   return viaBind;
 }
