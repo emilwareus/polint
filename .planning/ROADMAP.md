@@ -34,7 +34,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 29 | 6/6 | Complete    | 2026-05-20 |
 | 30 | 8/8 | Complete    | 2026-05-21 |
 | 31 | 5/5 | Complete    | 2026-05-21 |
-| 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
+| 32 | 7/7 | Complete    | 2026-05-21 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
 | 34 | Rust Extension/Provider Sink | Add the first advanced repo-local Rust provider boundary with validation and cache participation. | SAE-INT-04 |
 | 35 | Framework Entrypoints and Trust Boundaries | Add native and extension-overlay facts for entrypoints, lifecycle, dispatch, and trust boundaries. | SAE-INT-05 |
@@ -293,7 +293,7 @@ Plans:
 **Goal:** Add summary keys, stores, typed summary domains, local/direct summaries, effects, TITO, memory-touch approximations, and metadata.
 **Requirements:** SAE-INT-02
 **Research:** `research/effects-summaries/FINAL-REPORT.md`, `research/effects-summaries/RECOMMENDED_IMPLEMENTATION.md`, `research/effects-summaries/VALIDATION.md`
-**Plans:** 7 plans
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
@@ -316,7 +316,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 32-07-PLAN.md — Public no-leak boundary proof and full verification
+- [x] 32-07-PLAN.md — Public no-leak boundary proof and full verification
 
 **Success criteria:**
 

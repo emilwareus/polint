@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T19:37:01Z"
-last_activity: 2026-05-21 -- Phase 32 Plan 06 complete
+last_updated: "2026-05-21T19:50:01Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 07 complete (Phase 32 complete)
 progress:
   total_phases: 22
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 72
-  completed_plans: 71
-  percent: 58
+  completed_plans: 72
+  percent: 59
 ---
 
 # State: polint
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 32
-Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
-Plan: 7 of 7
-Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
+Phase: 32 (summary-kernel-and-direct-summaries) — COMPLETE
+Plan: 7 of 7 (all complete)
+Last activity: 2026-05-21 -- Completed 32-07-PLAN.md (Phase 32 complete)
 
 ## Phase Progress
 
@@ -62,7 +62,7 @@ Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
 | 31 | Complete | 5/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, abstract-domain eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-01 |
-| 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
+| 32 | Complete | 7/7 plans complete; summary kernel contracts, store, builder, provider, cache identity, validation, debug, eval fixtures, and public-boundary proof done; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
 | 35 | Pending | Framework entrypoints and trust boundaries; requirement SAE-INT-05 |
@@ -286,6 +286,7 @@ Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
 - [Phase 32-summary-kernel-and-direct-summaries]: Summary event facts use a single summary_event family rather than per-domain event families.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary eval payload uses semicolon-delimited compact fragments: domain;status;precision;provenance;payload_digest_prefix.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary determinism comparison uses cold/warm/no-cache three-way equality matching the established direct-calls and abstract-domains patterns.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary public-boundary proof uses 21 specific internal markers (provider IDs, domain names, type names, fact families) rather than generic substring markers that would match test naming.
 
 ## Execution Metrics
 
@@ -350,12 +351,13 @@ Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
 | 32-summary-kernel-and-direct-summaries | 04 | 12 min | 2 | 10 |
 | 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
 | 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
+| 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-06-PLAN.md.
-- Stopped at: Completed 32-06-PLAN.md; ready for Plan 32-07.
+- Last activity: 2026-05-21 - Completed 32-07-PLAN.md (Phase 32 complete).
+- Stopped at: Completed Phase 32; ready for Phase 33.
 
 ### Quick Tasks Completed
 
@@ -384,4 +386,4 @@ Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
 
 ## Next Action
 
-Phase 32 Plan 07 is next: public boundary proof for direct summaries.
+Phase 32 is complete. Phase 33 (demand queries and summary SCC cache) is next.
