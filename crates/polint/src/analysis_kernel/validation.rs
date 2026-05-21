@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::analysis::calls::validate::validate_calls;
 use crate::analysis::cfg::validate::validate_cfg;
+use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
@@ -43,6 +44,7 @@ pub(crate) fn validate_fact_metadata(
     validate_semantic_mir(db, &ids, &mut diagnostics);
     validate_cfg(db, &mut diagnostics);
     validate_calls(db, &mut diagnostics);
+    validate_abstract_domains(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 

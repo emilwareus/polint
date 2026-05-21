@@ -8,3 +8,4 @@ pub(crate) mod solver;
 pub(crate) mod state;
 pub(crate) mod store;
 pub(crate) mod transfer;
+pub(crate) mod validate;

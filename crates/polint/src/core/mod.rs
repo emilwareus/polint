@@ -1041,18 +1041,10 @@ impl AnalysisDb {
         &self.abstract_domain_observations
     }
 
-    #[expect(
-        dead_code,
-        reason = "Task 1 publishes event rows before Task 2 provider/debug paths consume them."
-    )]
     pub(crate) fn abstract_domain_events(&self) -> &[DomainEventFact] {
         &self.abstract_domain_events
     }
 
-    #[expect(
-        dead_code,
-        reason = "Task 1 builds store indexes before Task 2 provider/debug paths consume them."
-    )]
     pub(crate) fn abstract_domain_store(&self) -> Option<&DomainStore> {
         self.abstract_domain_store.as_ref()
     }

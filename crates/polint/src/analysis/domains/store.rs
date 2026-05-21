@@ -350,7 +350,7 @@ fn reachability_fact_value(
 
 fn nilness_fact_value(domain: &NilnessDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
     match domain {
-        NilnessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        NilnessDomain::Bottom => top_value(TopReason::UnknownValue),
         NilnessDomain::Nil => label("nil", DomainPrecision::ExactLocal),
         NilnessDomain::NonNil => label("non_nil", DomainPrecision::ExactLocal),
         NilnessDomain::MaybeNil => label("maybe_nil", DomainPrecision::Conservative),
@@ -362,7 +362,7 @@ fn truthiness_fact_value(
     domain: &TruthinessDomain,
 ) -> (DomainStatus, DomainPrecision, DomainValue) {
     match domain {
-        TruthinessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        TruthinessDomain::Bottom => top_value(TopReason::UnknownValue),
         TruthinessDomain::Truthy => label("truthy", DomainPrecision::ExactLocal),
         TruthinessDomain::Falsy => label("falsy", DomainPrecision::ExactLocal),
         TruthinessDomain::Maybe => label("maybe", DomainPrecision::Conservative),
@@ -372,7 +372,7 @@ fn truthiness_fact_value(
 
 fn constant_fact_value(domain: &ConstantDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
     match domain {
-        ConstantDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        ConstantDomain::Bottom => top_value(TopReason::UnknownValue),
         ConstantDomain::Values(_) => digest_value(domain.stable_digest_parts()),
         ConstantDomain::Top(reason) => top_value(*reason),
     }
@@ -380,7 +380,7 @@ fn constant_fact_value(domain: &ConstantDomain) -> (DomainStatus, DomainPrecisio
 
 fn string_fact_value(domain: &StringDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
     match domain {
-        StringDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        StringDomain::Bottom => top_value(TopReason::UnknownValue),
         StringDomain::Values(_) => digest_value(domain.stable_digest_parts()),
         StringDomain::Top(reason) => top_value(*reason),
     }
@@ -390,7 +390,7 @@ fn initializedness_fact_value(
     domain: &InitializednessDomain,
 ) -> (DomainStatus, DomainPrecision, DomainValue) {
     match domain {
-        InitializednessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        InitializednessDomain::Bottom => top_value(TopReason::UnknownValue),
         InitializednessDomain::Initialized => label("initialized", DomainPrecision::ExactLocal),
         InitializednessDomain::Uninitialized => label("uninitialized", DomainPrecision::ExactLocal),
         InitializednessDomain::MaybeUninitialized => {

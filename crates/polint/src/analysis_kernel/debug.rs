@@ -7,6 +7,9 @@ use crate::analysis::calls::facts::{
     CallTargetStatus, UnresolvedCallReason,
 };
 use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
+use crate::analysis::domains::facts::{
+    DomainLocation, DomainPrecision, DomainSlot, DomainStatus, DomainValue,
+};
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
 };
@@ -30,6 +33,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         mir: mir_report(db),
         cfg: cfg_report(db),
         calls: calls_report(db),
+        abstract_domains: abstract_domains_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -44,6 +48,7 @@ struct MetadataDebugReport<'a> {
     mir: SemanticMirDebugReport,
     cfg: CfgDebugReport,
     calls: CallDebugReport,
+    abstract_domains: AbstractDomainDebugReport,
 }
 
 #[derive(Serialize)]
@@ -169,6 +174,60 @@ struct CallDebugReport {
     unresolved: Vec<UnresolvedCallDebugRow>,
     index_counts: BTreeMap<&'static str, usize>,
     counts: CallDebugCounts,
+}
+
+#[derive(Serialize)]
+struct AbstractDomainDebugReport {
+    observations: Vec<AbstractDomainObservationDebugRow>,
+    events: Vec<AbstractDomainEventDebugRow>,
+    counts: AbstractDomainDebugCounts,
+    index_counts: BTreeMap<&'static str, usize>,
+}
+
+#[derive(Default, Serialize)]
+struct AbstractDomainDebugCounts {
+    by_slot: BTreeMap<String, usize>,
+    by_status: BTreeMap<String, usize>,
+    by_precision: BTreeMap<String, usize>,
+    by_reason: BTreeMap<String, usize>,
+    by_provider: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct AbstractDomainMetadata {
+    family: &'static str,
+    stable_key: String,
+    producer_id: &'static str,
+    layer_id: &'static str,
+    status: String,
+    precision: String,
+    path: Option<String>,
+    span: Option<DebugSpan>,
+}
+
+#[derive(Serialize)]
+struct AbstractDomainObservationDebugRow {
+    #[serde(flatten)]
+    metadata: AbstractDomainMetadata,
+    body_stable_key: Option<String>,
+    block_stable_key: Option<String>,
+    operation_stable_key: Option<String>,
+    place_stable_key: Option<String>,
+    slot: String,
+    location: String,
+    value: String,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AbstractDomainEventDebugRow {
+    #[serde(flatten)]
+    metadata: AbstractDomainMetadata,
+    body_stable_key: Option<String>,
+    block_stable_key: Option<String>,
+    operation_stable_key: Option<String>,
+    slot: Option<String>,
+    reason: String,
 }
 
 #[derive(Default, Serialize)]
@@ -736,6 +795,258 @@ fn calls_report(db: &AnalysisDb) -> CallDebugReport {
         index_counts: call_index_counts(db),
         counts: call_counts(db),
     }
+}
+
+fn abstract_domains_report(db: &AnalysisDb) -> AbstractDomainDebugReport {
+    AbstractDomainDebugReport {
+        observations: abstract_domain_observation_rows(db),
+        events: abstract_domain_event_rows(db),
+        counts: abstract_domain_counts(db),
+        index_counts: abstract_domain_index_counts(db),
+    }
+}
+
+fn abstract_domain_observation_rows(db: &AnalysisDb) -> Vec<AbstractDomainObservationDebugRow> {
+    let mut rows = db
+        .abstract_domain_observations()
+        .iter()
+        .filter_map(|row| {
+            abstract_domain_metadata_row(
+                db,
+                FactFamily::DomainObservation,
+                row.id.0,
+                row.stable_key.as_str(),
+                domain_status_label(row.status),
+                domain_precision_label(row.precision),
+                domain_file(db, row.body),
+                domain_span(db, row.operation),
+            )
+            .map(|metadata| AbstractDomainObservationDebugRow {
+                metadata,
+                body_stable_key: stable_key_for(db, FactFamily::MirBody, row.body.0),
+                block_stable_key: row.block.and_then(|block| {
+                    stable_key_for(db, FactFamily::BasicBlock, block.0)
+                }),
+                operation_stable_key: row.operation.and_then(|operation| {
+                    stable_key_for(db, FactFamily::MirOperation, operation.0)
+                }),
+                place_stable_key: row
+                    .place
+                    .and_then(|place| stable_key_for(db, FactFamily::Place, place.0)),
+                slot: domain_slot_label(row.slot).to_string(),
+                location: domain_location_label(row.location).to_string(),
+                value: domain_value_fragment(&row.value),
+                reason: domain_value_reason(&row.value).map(str::to_string),
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        abstract_domain_metadata_order(&left.metadata)
+            .cmp(&abstract_domain_metadata_order(&right.metadata))
+    });
+    rows
+}
+
+fn abstract_domain_event_rows(db: &AnalysisDb) -> Vec<AbstractDomainEventDebugRow> {
+    let mut rows = db
+        .abstract_domain_events()
+        .iter()
+        .filter_map(|row| {
+            abstract_domain_metadata_row(
+                db,
+                FactFamily::DomainEvent,
+                row.id.0,
+                row.stable_key.as_str(),
+                domain_status_label(row.status),
+                domain_precision_label(row.precision),
+                domain_file(db, row.body),
+                domain_span(db, row.operation),
+            )
+            .map(|metadata| AbstractDomainEventDebugRow {
+                metadata,
+                body_stable_key: stable_key_for(db, FactFamily::MirBody, row.body.0),
+                block_stable_key: row.block.and_then(|block| {
+                    stable_key_for(db, FactFamily::BasicBlock, block.0)
+                }),
+                operation_stable_key: row.operation.and_then(|operation| {
+                    stable_key_for(db, FactFamily::MirOperation, operation.0)
+                }),
+                slot: row.slot.map(domain_slot_label).map(str::to_string),
+                reason: row.reason.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        abstract_domain_metadata_order(&left.metadata)
+            .cmp(&abstract_domain_metadata_order(&right.metadata))
+    });
+    rows
+}
+
+fn abstract_domain_metadata_row(
+    db: &AnalysisDb,
+    family: FactFamily,
+    run_id: u64,
+    stable_key: &str,
+    status: &'static str,
+    precision: &'static str,
+    file: Option<FileId>,
+    span: Option<DebugSpan>,
+) -> Option<AbstractDomainMetadata> {
+    let meta = db.metadata_for(FactRef::new(family, run_id))?;
+    Some(AbstractDomainMetadata {
+        family: family.label(),
+        stable_key: stable_key.to_string(),
+        producer_id: meta.producer_id,
+        layer_id: meta.layer_id,
+        status: status.to_string(),
+        precision: precision.to_string(),
+        path: relative_path(db, file).map(str::to_string),
+        span,
+    })
+}
+
+fn abstract_domain_metadata_order(row: &AbstractDomainMetadata) -> (&str, u32, &str) {
+    (
+        row.path.as_deref().unwrap_or(""),
+        span_start(row.span),
+        row.stable_key.as_str(),
+    )
+}
+
+fn abstract_domain_counts(db: &AnalysisDb) -> AbstractDomainDebugCounts {
+    let mut counts = AbstractDomainDebugCounts::default();
+    for row in db.abstract_domain_observations() {
+        increment(&mut counts.by_slot, domain_slot_label(row.slot));
+        increment(&mut counts.by_status, domain_status_label(row.status));
+        increment(&mut counts.by_precision, domain_precision_label(row.precision));
+        if let Some(reason) = domain_value_reason(&row.value) {
+            increment(&mut counts.by_reason, reason);
+        }
+        if let Some(metadata) =
+            db.metadata_for(FactRef::new(FactFamily::DomainObservation, row.id.0))
+        {
+            increment(&mut counts.by_provider, metadata.producer_id);
+        }
+    }
+    for row in db.abstract_domain_events() {
+        if let Some(slot) = row.slot {
+            increment(&mut counts.by_slot, domain_slot_label(slot));
+        }
+        increment(&mut counts.by_status, domain_status_label(row.status));
+        increment(&mut counts.by_precision, domain_precision_label(row.precision));
+        increment(&mut counts.by_reason, row.reason.as_str());
+        if let Some(metadata) = db.metadata_for(FactRef::new(FactFamily::DomainEvent, row.id.0)) {
+            increment(&mut counts.by_provider, metadata.producer_id);
+        }
+    }
+    counts
+}
+
+fn abstract_domain_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    let Some(store) = db.abstract_domain_store() else {
+        return counts;
+    };
+    let bodies = db
+        .abstract_domain_observations()
+        .iter()
+        .map(|row| row.body)
+        .chain(db.abstract_domain_events().iter().map(|row| row.body))
+        .collect::<BTreeSet<_>>();
+    let blocks = db
+        .abstract_domain_observations()
+        .iter()
+        .filter_map(|row| row.block)
+        .collect::<BTreeSet<_>>();
+    let operations = db
+        .abstract_domain_observations()
+        .iter()
+        .filter_map(|row| row.operation)
+        .collect::<BTreeSet<_>>();
+    let places = db
+        .abstract_domain_observations()
+        .iter()
+        .filter_map(|row| row.place)
+        .collect::<BTreeSet<_>>();
+    let slots = db
+        .abstract_domain_observations()
+        .iter()
+        .map(|row| row.slot)
+        .collect::<BTreeSet<_>>();
+    let statuses = db
+        .abstract_domain_observations()
+        .iter()
+        .map(|row| row.status)
+        .chain(db.abstract_domain_events().iter().map(|row| row.status))
+        .collect::<BTreeSet<_>>();
+
+    counts.insert(
+        "observations_by_body",
+        bodies
+            .iter()
+            .filter(|body| !store.observations_by_body(**body).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "observations_by_block",
+        blocks
+            .iter()
+            .filter(|block| !store.observations_by_block(**block).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "observations_by_operation",
+        operations
+            .iter()
+            .filter(|operation| !store.observations_by_operation(**operation).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "observations_by_place",
+        places
+            .iter()
+            .filter(|place| !store.observations_by_place(**place).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "observations_by_slot",
+        slots
+            .iter()
+            .filter(|slot| !store.observations_by_slot(**slot).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "observations_by_status",
+        statuses
+            .iter()
+            .filter(|status| !store.observations_by_status(**status).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "events_by_status",
+        statuses
+            .iter()
+            .filter(|status| !store.events_by_status(**status).is_empty())
+            .count(),
+    );
+    counts
+}
+
+fn domain_file(db: &AnalysisDb, body: crate::analysis::ids::MirBodyId) -> Option<FileId> {
+    db.mir_bodies()
+        .iter()
+        .find(|row| row.id == body)
+        .map(|row| row.file)
+}
+
+fn domain_span(db: &AnalysisDb, operation: Option<crate::analysis::ids::MirOpId>) -> Option<DebugSpan> {
+    operation.and_then(|operation| {
+        db.mir_operations()
+            .iter()
+            .find(|row| row.id == operation)
+            .map(|row| debug_span(&row.span))
+    })
 }
 
 fn call_site_rows(db: &AnalysisDb) -> Vec<CallSiteDebugRow> {
@@ -1587,6 +1898,64 @@ fn call_precision_label(precision: CallPrecision) -> &'static str {
         CallPrecision::Ambiguous => "Ambiguous",
         CallPrecision::Unknown => "Unknown",
         CallPrecision::Unsupported => "Unsupported",
+    }
+}
+
+fn domain_slot_label(slot: DomainSlot) -> &'static str {
+    match slot {
+        DomainSlot::Reachability => "reachability",
+        DomainSlot::Nilness => "nilness",
+        DomainSlot::Truthiness => "truthiness",
+        DomainSlot::Constants => "constants",
+        DomainSlot::Strings => "strings",
+        DomainSlot::Initializedness => "initializedness",
+    }
+}
+
+fn domain_location_label(location: DomainLocation) -> &'static str {
+    match location {
+        DomainLocation::FunctionEntry => "function_entry",
+        DomainLocation::BlockEntry => "block_entry",
+        DomainLocation::BeforeOperation => "before_operation",
+        DomainLocation::AfterOperation => "after_operation",
+        DomainLocation::BlockExit => "block_exit",
+    }
+}
+
+fn domain_status_label(status: DomainStatus) -> &'static str {
+    match status {
+        DomainStatus::Present => "present",
+        DomainStatus::Top => "top",
+        DomainStatus::Unknown => "unknown",
+        DomainStatus::Unsupported => "unsupported",
+        DomainStatus::SetupMissing => "setup_missing",
+        DomainStatus::BudgetExceeded => "budget_exceeded",
+    }
+}
+
+fn domain_precision_label(precision: DomainPrecision) -> &'static str {
+    match precision {
+        DomainPrecision::ExactLocal => "exact_local",
+        DomainPrecision::SetupAware => "setup_aware",
+        DomainPrecision::Conservative => "conservative",
+        DomainPrecision::Heuristic => "heuristic",
+        DomainPrecision::Unknown => "unknown",
+        DomainPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn domain_value_reason(value: &DomainValue) -> Option<&str> {
+    match value {
+        DomainValue::TopReason(reason) => Some(reason.as_str()),
+        DomainValue::Label(_) | DomainValue::DigestParts(_) => None,
+    }
+}
+
+fn domain_value_fragment(value: &DomainValue) -> String {
+    match value {
+        DomainValue::Label(value) => format!("label={value}"),
+        DomainValue::DigestParts(parts) => parts.join(";"),
+        DomainValue::TopReason(reason) => format!("top_reason={reason}"),
     }
 }
 
@@ -2552,7 +2921,7 @@ mod abstract_domains_debug_json {
         assert!(domains.get("counts").is_some());
         assert!(domains.get("index_counts").is_some());
 
-        let encoded = serde_json::to_string(&first).expect("debug JSON serializes");
+        let encoded = serde_json::to_string(domains).expect("domain debug JSON serializes");
         assert!(!encoded.contains("/Users/"));
         assert!(!encoded.contains("export function app"));
         assert!(!encoded.contains("MirOperationKind"));
