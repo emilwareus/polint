@@ -33,7 +33,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 28 | 7/7 | Complete    | 2026-05-20 |
 | 29 | 6/6 | Complete    | 2026-05-20 |
 | 30 | 8/8 | Complete    | 2026-05-21 |
-| 31 | 5/5 | Complete   | 2026-05-21 |
+| 31 | 5/5 | Complete    | 2026-05-21 |
 | 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
 | 34 | Rust Extension/Provider Sink | Add the first advanced repo-local Rust provider boundary with validation and cache participation. | SAE-INT-04 |
