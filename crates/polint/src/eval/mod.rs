@@ -445,9 +445,7 @@ fact = { family = "DomainEvent", stable_key = "domain-event:budget", mode = "par
         let expected = statuses
             .into_iter()
             .enumerate()
-            .map(|(index, status)| {
-                expected_domain_fact(format!("domain:{index}"), status)
-            })
+            .map(|(index, status)| expected_domain_fact(format!("domain:{index}"), status))
             .collect::<Vec<_>>();
         let observed = [
             ObservedStatus::Top,
@@ -458,9 +456,7 @@ fact = { family = "DomainEvent", stable_key = "domain-event:budget", mode = "par
         ]
         .into_iter()
         .enumerate()
-        .map(|(index, status)| {
-            observed_domain_fact(format!("domain:{index}:observed"), status)
-        })
+        .map(|(index, status)| observed_domain_fact(format!("domain:{index}:observed"), status))
         .collect::<Vec<_>>();
 
         let summaries = match_case(&expected, &observed, MatcherConfig::default());

@@ -37,6 +37,8 @@ pub(crate) const CFG_FACT_FAMILIES: &[&str] = &[
 
 pub(crate) const CALL_FACT_FAMILIES: &[&str] = &["CallSite", "CallTarget", "UnresolvedCall"];
 
+pub(crate) const ABSTRACT_DOMAIN_FACT_FAMILIES: &[&str] = &["DomainObservation", "DomainEvent"];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -71,6 +73,8 @@ pub(crate) enum FixtureArea {
     Cfg,
     #[serde(rename = "direct-calls")]
     DirectCalls,
+    #[serde(rename = "abstract-domains")]
+    AbstractDomains,
     Facts,
     Graphs,
     Paths,
@@ -251,6 +255,7 @@ pub(crate) enum ObservedStatus {
     Present,
     Resolved,
     Partial,
+    Top,
     Unknown,
     Unresolved,
     Ambiguous,
@@ -263,6 +268,7 @@ pub(crate) enum ObservedStatus {
     Generated,
     Undeclared,
     OutsideWorkspace,
+    BudgetExceeded,
     Rejected,
     Accepted,
 }
