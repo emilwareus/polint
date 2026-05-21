@@ -10,7 +10,7 @@ use super::core::{
 };
 use super::lattice::TopReason;
 use super::state::ProductState;
-use crate::analysis::calls::facts::{CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason};
+use crate::analysis::calls::facts::{UnresolvedCallFact, UnresolvedCallReason};
 use crate::analysis::ids::{CallSiteId, MirPredicateId, PlaceId, UnsupportedId};
 use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
@@ -82,7 +82,9 @@ impl<'a> TransferCx<'a> {
         site: CallSiteId,
         reason: UnresolvedCallReason,
     ) -> TransferCx<'static> {
-        use crate::analysis::calls::facts::{CallAlgorithm, CallPrecision, CallProvenance};
+        use crate::analysis::calls::facts::{
+            CallAlgorithm, CallPrecision, CallProvenance, CallTargetStatus,
+        };
         use crate::core::FunctionId;
 
         let row = Box::leak(Box::new(UnresolvedCallFact {
@@ -211,17 +213,39 @@ impl EdgeTransfer {
 }
 
 fn assign_value(state: &mut ProductState, place: PlaceId, value: &MirValue) {
+    match value {
+        MirValue::Literal { value } => {
+            clear_place_facts(state, place);
+            mark_initialized(state, place);
+            apply_literal(state, place, value);
+        }
+        MirValue::Place(source) => {
+            if *source != place {
+                clear_place_facts(state, place);
+                copy_place(state, place, *source);
+            }
+            mark_initialized(state, place);
+        }
+        MirValue::Temporary(_) | MirValue::CallReturn(_) | MirValue::Unknown { .. } => {
+            clear_place_facts(state, place);
+            state.mark_place_top(place, TopReason::UnknownValue);
+        }
+    }
+}
+
+fn mark_initialized(state: &mut ProductState, place: PlaceId) {
     state
         .core
         .initializedness
         .insert(place, InitializednessDomain::Initialized);
-    match value {
-        MirValue::Literal { value } => apply_literal(state, place, value),
-        MirValue::Place(source) => copy_place(state, place, *source),
-        MirValue::Temporary(_) | MirValue::CallReturn(_) | MirValue::Unknown { .. } => {
-            state.mark_place_top(place, TopReason::UnknownValue);
-        }
-    }
+}
+
+fn clear_place_facts(state: &mut ProductState, place: PlaceId) {
+    state.core.nilness.remove(&place);
+    state.core.truthiness.remove(&place);
+    state.core.constants.remove(&place);
+    state.core.strings.remove(&place);
+    state.core.initializedness.remove(&place);
 }
 
 fn apply_literal(state: &mut ProductState, place: PlaceId, label: &str) {
@@ -405,6 +429,51 @@ mod tests {
             state.core.initializedness[&place],
             InitializednessDomain::Initialized
         );
+    }
+
+    #[test]
+    fn literal_overwrite_clears_stale_derived_string_slot() {
+        let place = PlaceId(1);
+        let operation = operation(MirOperationKind::Assign {
+            place,
+            value: MirValue::Literal {
+                value: "42".to_string(),
+            },
+            mode: AssignMode::Overwrite,
+        });
+        let mut state = ProductState::entry();
+        state
+            .core
+            .strings
+            .insert(place, StringDomain::from_literal("stale"));
+
+        OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
+
+        assert!(!state.core.strings.contains_key(&place));
+    }
+
+    #[test]
+    fn copy_overwrite_clears_target_slots_missing_from_source() {
+        let target = PlaceId(1);
+        let source = PlaceId(2);
+        let operation = operation(MirOperationKind::Assign {
+            place: target,
+            value: MirValue::Place(source),
+            mode: AssignMode::Overwrite,
+        });
+        let mut state = ProductState::entry();
+        state.core.constants.insert(
+            source,
+            ConstantDomain::from_literal(ConstantLiteral::Bool(false)),
+        );
+        state
+            .core
+            .strings
+            .insert(target, StringDomain::from_literal("stale"));
+
+        OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
+
+        assert!(!state.core.strings.contains_key(&target));
     }
 
     #[test]
