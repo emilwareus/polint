@@ -427,16 +427,6 @@ fn unsupported_control_flow_fact(
             FactFamily::UnsupportedControlFlow,
             &[
                 ("language", language_label(row.language).to_string()),
-                (
-                    "body",
-                    row.body
-                        .map_or_else(|| "none".to_string(), |body| body.0.to_string()),
-                ),
-                (
-                    "operation",
-                    row.operation
-                        .map_or_else(|| "none".to_string(), |operation| operation.0.to_string()),
-                ),
                 ("construct", row.construct.clone()),
                 (
                     "span",
@@ -816,5 +806,21 @@ mod tests {
         assert!(edge_kinds.contains(&CfgEdgeKind::OptionalChain));
         assert!(edge_kinds.contains(&CfgEdgeKind::Unknown));
         assert!(unsupported.contains("dynamic import"));
+    }
+
+    #[test]
+    fn ts_unsupported_control_flow_key_uses_source_stable_identity() {
+        let mut first = unsupported(1, Some(MirOpId(1)), "throw");
+        let mut second = unsupported(2, Some(MirOpId(99)), "throw");
+        first.body = Some(MirBodyId(7));
+        second.body = Some(MirBodyId(42));
+        second.span = first.span.clone();
+        first.stable_key = "ts:unsupported:stable-source".to_string();
+        second.stable_key = first.stable_key.clone();
+
+        let first_fact = unsupported_control_flow_fact(0, &first, &BTreeMap::new());
+        let second_fact = unsupported_control_flow_fact(0, &second, &BTreeMap::new());
+
+        assert_eq!(first_fact.stable_key, second_fact.stable_key);
     }
 }
