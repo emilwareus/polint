@@ -9,6 +9,10 @@ use crate::analysis::cfg::facts::{
     UnsupportedControlFlowFact,
 };
 use crate::analysis::cfg::store::CfgOutput;
+use crate::analysis::domains::facts::{
+    DomainEventFact, DomainObservationFact, DomainPrecision, DomainStatus,
+};
+use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
@@ -51,6 +55,7 @@ const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
 pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
+pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -633,6 +638,9 @@ pub struct AnalysisDb {
     call_targets: Vec<CallTargetFact>,
     unresolved_calls: Vec<UnresolvedCallFact>,
     call_store: Option<CallStore>,
+    abstract_domain_observations: Vec<DomainObservationFact>,
+    abstract_domain_events: Vec<DomainEventFact>,
+    abstract_domain_store: Option<DomainStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -955,6 +963,14 @@ impl AnalysisDb {
         Ok(())
     }
 
+    pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
+        let store = DomainStore::from_output(output);
+        self.abstract_domain_observations = store.observations().to_vec();
+        self.abstract_domain_events = store.events().to_vec();
+        self.abstract_domain_store = Some(store);
+        self.refresh_abstract_domain_metadata();
+    }
+
     fn populate_call_owner_symbols(&self, output: &mut CallOutput) {
         if output.sites.iter().all(|site| site.owner_symbol.is_some()) {
             return;
@@ -1019,6 +1035,26 @@ impl AnalysisDb {
 
     pub(crate) fn call_store(&self) -> Option<&CallStore> {
         self.call_store.as_ref()
+    }
+
+    pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
+        &self.abstract_domain_observations
+    }
+
+    #[expect(
+        dead_code,
+        reason = "Task 1 publishes event rows before Task 2 provider/debug paths consume them."
+    )]
+    pub(crate) fn abstract_domain_events(&self) -> &[DomainEventFact] {
+        &self.abstract_domain_events
+    }
+
+    #[expect(
+        dead_code,
+        reason = "Task 1 builds store indexes before Task 2 provider/debug paths consume them."
+    )]
+    pub(crate) fn abstract_domain_store(&self) -> Option<&DomainStore> {
+        self.abstract_domain_store.as_ref()
     }
 
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
@@ -1106,6 +1142,29 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in unresolved_metadata {
             self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
+        }
+    }
+
+    fn refresh_abstract_domain_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::DomainObservation);
+        self.fact_meta.remove_family(FactFamily::DomainEvent);
+
+        let observation_metadata = self
+            .abstract_domain_observations
+            .iter()
+            .map(|fact| (fact.id.0, self.domain_observation_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in observation_metadata {
+            self.record_fact_meta(FactFamily::DomainObservation, run_id, metadata);
+        }
+
+        let event_metadata = self
+            .abstract_domain_events
+            .iter()
+            .map(|fact| (fact.id.0, self.domain_event_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in event_metadata {
+            self.record_fact_meta(FactFamily::DomainEvent, run_id, metadata);
         }
     }
 
@@ -3069,6 +3128,88 @@ impl AnalysisDb {
         )
     }
 
+    fn domain_observation_metadata(&self, fact: &DomainObservationFact) -> FactMeta {
+        let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DomainObservation,
+            POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                ("slot", fact.slot.as_str().to_string()),
+                ("location", fact.location.as_str().to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                (
+                    "block",
+                    fact.block
+                        .map(|block| block.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("value", fact.value.stable_parts().join("\n")),
+            ]),
+        )
+    }
+
+    fn domain_event_metadata(&self, fact: &DomainEventFact) -> FactMeta {
+        let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DomainEvent,
+            POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                (
+                    "slot",
+                    fact.slot
+                        .map(|slot| slot.as_str().to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                ("reason", fact.reason.clone()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                (
+                    "block",
+                    fact.block
+                        .map(|block| block.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
     fn cfg_function_metadata(&self, fact: &CfgFunctionFact) -> FactMeta {
         let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -3694,6 +3835,38 @@ fn call_status_metadata(
         | CallTargetStatus::SetupMissing
         | CallTargetStatus::BudgetExceeded
         | CallTargetStatus::Rejected => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn domain_status_metadata(
+    status: DomainStatus,
+    precision: DomainPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        DomainStatus::Present => match precision {
+            DomainPrecision::ExactLocal => FactPrecision::SetupAware,
+            DomainPrecision::SetupAware => FactPrecision::SetupAware,
+            DomainPrecision::Conservative | DomainPrecision::Heuristic => FactPrecision::Heuristic,
+            DomainPrecision::Unknown => FactPrecision::Unresolved,
+            DomainPrecision::Unsupported => FactPrecision::Unsupported,
+        },
+        DomainStatus::Top => FactPrecision::Ambiguous,
+        DomainStatus::Unknown | DomainStatus::BudgetExceeded => FactPrecision::Unresolved,
+        DomainStatus::Unsupported => FactPrecision::Unsupported,
+        DomainStatus::SetupMissing => FactPrecision::SetupMissing,
+    };
+    let confidence = match status {
+        DomainStatus::Present => match precision {
+            DomainPrecision::ExactLocal | DomainPrecision::SetupAware => FactConfidence::High,
+            DomainPrecision::Conservative | DomainPrecision::Heuristic => FactConfidence::Medium,
+            DomainPrecision::Unknown | DomainPrecision::Unsupported => FactConfidence::Low,
+        },
+        DomainStatus::Top => FactConfidence::Medium,
+        DomainStatus::Unknown
+        | DomainStatus::Unsupported
+        | DomainStatus::SetupMissing
+        | DomainStatus::BudgetExceeded => FactConfidence::Low,
     };
     (fact_precision, confidence)
 }
