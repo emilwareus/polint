@@ -3,7 +3,7 @@
     reason = "Phase 31 introduces private product state before later solver/provider plans consume it."
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::core::{
     ConstantDomain, ConstantLiteral, InitializednessDomain, NilnessDomain, ReachabilityDomain,
@@ -80,6 +80,45 @@ impl ProductState {
             &incoming.core.initializedness,
         );
         changed
+    }
+
+    pub(crate) fn leq(&self, other: &Self) -> bool {
+        self.core.reachability.leq(&other.core.reachability)
+            && place_map_leq(&self.core.nilness, &other.core.nilness)
+            && place_map_leq(&self.core.truthiness, &other.core.truthiness)
+            && place_map_leq(&self.core.constants, &other.core.constants)
+            && place_map_leq(&self.core.strings, &other.core.strings)
+            && place_map_leq(&self.core.initializedness, &other.core.initializedness)
+    }
+
+    pub(crate) fn mark_reachability_top(&mut self, reason: TopReason) {
+        self.core.reachability = ReachabilityDomain::top(reason);
+    }
+
+    pub(crate) fn mark_place_top(&mut self, place: PlaceId, reason: TopReason) {
+        self.core.nilness.insert(place, NilnessDomain::top(reason));
+        self.core
+            .truthiness
+            .insert(place, TruthinessDomain::top(reason));
+        self.core
+            .constants
+            .insert(place, ConstantDomain::top(reason));
+        self.core.strings.insert(place, StringDomain::top(reason));
+        self.core
+            .initializedness
+            .insert(place, InitializednessDomain::top(reason));
+    }
+
+    pub(crate) fn observed_places(&self) -> BTreeSet<PlaceId> {
+        self.core
+            .nilness
+            .keys()
+            .chain(self.core.truthiness.keys())
+            .chain(self.core.constants.keys())
+            .chain(self.core.strings.keys())
+            .chain(self.core.initializedness.keys())
+            .copied()
+            .collect()
     }
 
     pub(crate) fn widen(&self, next: &Self, site: WidenSite, fuel: WidenFuel) -> Self {
@@ -204,6 +243,16 @@ where
         changed |= join_single(target, *place, incoming_value);
     }
     changed
+}
+
+fn place_map_leq<D>(left: &BTreeMap<PlaceId, D>, right: &BTreeMap<PlaceId, D>) -> bool
+where
+    D: AbstractDomain,
+{
+    left.iter().all(|(place, left_value)| {
+        let right_value = right.get(place).cloned().unwrap_or_else(D::bottom);
+        left_value.leq(&right_value)
+    })
 }
 
 fn join_single<D>(target: &mut BTreeMap<PlaceId, D>, place: PlaceId, incoming: &D) -> Changed
