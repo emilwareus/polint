@@ -49,6 +49,7 @@ pub(crate) enum LayerKind {
     SemanticMir,
     Cfg,
     Calls,
+    AbstractDomains,
     Metrics,
     Extension,
 }
@@ -591,6 +592,76 @@ impl LayerKey {
             lifecycle_digest,
             config_digest,
             Digest::absent(DigestKind::ToolInvocation, "calls_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Abstract-domain identity must keep MIR, CFG, calls, lifecycle, policy, and future model inputs explicit."
+    )]
+    pub(crate) fn abstract_domains_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        semantic_mir_output_digest: Digest,
+        cfg_output_digest: Digest,
+        calls_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        module_topology_output_digest: Digest,
+        abstract_domains_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.abstract_domains",
+            "abstract-domain layer keys require the abstract domains provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "abstract_domains_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "abstract_domains_parameters",
+            vec![abstract_domains_parameter_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(abstract_domains_parameter_digest);
+        input_digests.extend(source_function_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(5 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+        dependency_layer_digests.push(dependency_layer_digest(semantic_mir_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(cfg_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(calls_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
+
+        Self::new(
+            LayerKind::AbstractDomains,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "abstract_domains_toolchain"),
             input_digests,
             dependency_layer_digests,
             vec![

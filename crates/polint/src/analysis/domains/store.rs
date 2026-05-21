@@ -5,9 +5,20 @@
 
 use std::collections::BTreeMap;
 
-use super::facts::{DomainEventFact, DomainObservationFact, DomainSlot, DomainStatus};
+use super::core::{
+    ConstantDomain, InitializednessDomain, NilnessDomain, ReachabilityDomain, StringDomain,
+    TruthinessDomain,
+};
+use super::facts::{
+    DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
+    DomainStatus, DomainValue,
+};
+use super::lattice::{AbstractDomain, TopReason};
+use super::results::{DomainResults, SolverStatus};
+use super::state::ProductState;
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DomainOutput {
@@ -18,6 +29,100 @@ pub(crate) struct DomainOutput {
 impl DomainOutput {
     pub(crate) fn empty() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn from_results(results: &DomainResults) -> Self {
+        let mut output = Self::empty();
+        for function in results.functions() {
+            push_state_observations(
+                &mut output.observations,
+                function.body,
+                None,
+                None,
+                DomainLocation::FunctionEntry,
+                &function.body_stable_key,
+                &function.entry_state,
+            );
+            if function.status == SolverStatus::BudgetExceeded {
+                output.events.push(DomainEventFact {
+                    id: DomainEventId(0),
+                    body: function.body,
+                    block: None,
+                    operation: None,
+                    slot: None,
+                    status: DomainStatus::BudgetExceeded,
+                    precision: DomainPrecision::Unknown,
+                    reason: "solver_budget_exceeded".to_string(),
+                    stable_key: stable_key_from_parts(
+                        FactFamily::DomainEvent,
+                        &[
+                            ("body", function.body_stable_key.clone()),
+                            ("reason", "solver_budget_exceeded".to_string()),
+                        ],
+                    ),
+                });
+            }
+        }
+        for block in results.blocks() {
+            push_state_observations(
+                &mut output.observations,
+                block.body,
+                Some(block.block),
+                None,
+                DomainLocation::BlockEntry,
+                &block.stable_key,
+                &block.entry,
+            );
+            push_state_observations(
+                &mut output.observations,
+                block.body,
+                Some(block.block),
+                None,
+                DomainLocation::BlockExit,
+                &block.stable_key,
+                &block.exit,
+            );
+        }
+        for operation in results.operations() {
+            push_state_observations(
+                &mut output.observations,
+                operation.body,
+                Some(operation.block),
+                Some(operation.operation),
+                DomainLocation::BeforeOperation,
+                &operation.stable_key,
+                &operation.before,
+            );
+            push_state_observations(
+                &mut output.observations,
+                operation.body,
+                Some(operation.block),
+                Some(operation.operation),
+                DomainLocation::AfterOperation,
+                &operation.stable_key,
+                &operation.after,
+            );
+        }
+        for event in results.unknown_top_events() {
+            output.events.push(DomainEventFact {
+                id: DomainEventId(0),
+                body: event.body,
+                block: event.block,
+                operation: event.operation,
+                slot: None,
+                status: status_for_top_reason(event.reason),
+                precision: precision_for_top_reason(event.reason),
+                reason: event.reason.as_str().to_string(),
+                stable_key: stable_key_from_parts(
+                    FactFamily::DomainEvent,
+                    &[
+                        ("source", event.stable_key.clone()),
+                        ("reason", event.reason.as_str().to_string()),
+                    ],
+                ),
+            });
+        }
+        output.normalized()
     }
 
     pub(crate) fn normalized(mut self) -> Self {
@@ -74,6 +179,274 @@ impl DomainOutput {
             fact.id = DomainEventId(index as u64);
         }
         self
+    }
+}
+
+fn push_state_observations(
+    rows: &mut Vec<DomainObservationFact>,
+    body: MirBodyId,
+    block: Option<BasicBlockId>,
+    operation: Option<MirOpId>,
+    location: DomainLocation,
+    source_stable_key: &str,
+    state: &ProductState,
+) {
+    let (status, precision, value) = reachability_fact_value(&state.core.reachability);
+    rows.push(observation(
+        body,
+        block,
+        operation,
+        None,
+        DomainSlot::Reachability,
+        location,
+        source_stable_key,
+        status,
+        precision,
+        value,
+    ));
+    for (place, value) in &state.core.nilness {
+        let (status, precision, value) = nilness_fact_value(value);
+        rows.push(observation(
+            body,
+            block,
+            operation,
+            Some(*place),
+            DomainSlot::Nilness,
+            location,
+            source_stable_key,
+            status,
+            precision,
+            value,
+        ));
+    }
+    for (place, value) in &state.core.truthiness {
+        let (status, precision, value) = truthiness_fact_value(value);
+        rows.push(observation(
+            body,
+            block,
+            operation,
+            Some(*place),
+            DomainSlot::Truthiness,
+            location,
+            source_stable_key,
+            status,
+            precision,
+            value,
+        ));
+    }
+    for (place, value) in &state.core.constants {
+        let (status, precision, value) = constant_fact_value(value);
+        rows.push(observation(
+            body,
+            block,
+            operation,
+            Some(*place),
+            DomainSlot::Constants,
+            location,
+            source_stable_key,
+            status,
+            precision,
+            value,
+        ));
+    }
+    for (place, value) in &state.core.strings {
+        let (status, precision, value) = string_fact_value(value);
+        rows.push(observation(
+            body,
+            block,
+            operation,
+            Some(*place),
+            DomainSlot::Strings,
+            location,
+            source_stable_key,
+            status,
+            precision,
+            value,
+        ));
+    }
+    for (place, value) in &state.core.initializedness {
+        let (status, precision, value) = initializedness_fact_value(value);
+        rows.push(observation(
+            body,
+            block,
+            operation,
+            Some(*place),
+            DomainSlot::Initializedness,
+            location,
+            source_stable_key,
+            status,
+            precision,
+            value,
+        ));
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Domain fact identity is a normalized tuple over location, slot, and optional place."
+)]
+fn observation(
+    body: MirBodyId,
+    block: Option<BasicBlockId>,
+    operation: Option<MirOpId>,
+    place: Option<PlaceId>,
+    slot: DomainSlot,
+    location: DomainLocation,
+    source_stable_key: &str,
+    status: DomainStatus,
+    precision: DomainPrecision,
+    value: DomainValue,
+) -> DomainObservationFact {
+    DomainObservationFact {
+        id: DomainObservationId(0),
+        body,
+        block,
+        operation,
+        place,
+        slot,
+        location,
+        value,
+        status,
+        precision,
+        stable_key: stable_key_from_parts(
+            FactFamily::DomainObservation,
+            &[
+                ("source", source_stable_key.to_string()),
+                ("slot", slot.as_str().to_string()),
+                ("location", location.as_str().to_string()),
+                (
+                    "block",
+                    block
+                        .map(|block| block.0.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
+                (
+                    "operation",
+                    operation
+                        .map(|operation| operation.0.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
+                (
+                    "place",
+                    place
+                        .map(|place| place.0.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
+            ],
+        ),
+    }
+}
+
+fn reachability_fact_value(
+    domain: &ReachabilityDomain,
+) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        ReachabilityDomain::Unreachable => label("unreachable", DomainPrecision::ExactLocal),
+        ReachabilityDomain::Reachable => label("reachable", DomainPrecision::ExactLocal),
+        ReachabilityDomain::Ambiguous => label("ambiguous", DomainPrecision::Conservative),
+        ReachabilityDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn nilness_fact_value(domain: &NilnessDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        NilnessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        NilnessDomain::Nil => label("nil", DomainPrecision::ExactLocal),
+        NilnessDomain::NonNil => label("non_nil", DomainPrecision::ExactLocal),
+        NilnessDomain::MaybeNil => label("maybe_nil", DomainPrecision::Conservative),
+        NilnessDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn truthiness_fact_value(
+    domain: &TruthinessDomain,
+) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        TruthinessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        TruthinessDomain::Truthy => label("truthy", DomainPrecision::ExactLocal),
+        TruthinessDomain::Falsy => label("falsy", DomainPrecision::ExactLocal),
+        TruthinessDomain::Maybe => label("maybe", DomainPrecision::Conservative),
+        TruthinessDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn constant_fact_value(domain: &ConstantDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        ConstantDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        ConstantDomain::Values(_) => digest_value(domain.stable_digest_parts()),
+        ConstantDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn string_fact_value(domain: &StringDomain) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        StringDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        StringDomain::Values(_) => digest_value(domain.stable_digest_parts()),
+        StringDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn initializedness_fact_value(
+    domain: &InitializednessDomain,
+) -> (DomainStatus, DomainPrecision, DomainValue) {
+    match domain {
+        InitializednessDomain::Bottom => label("bottom", DomainPrecision::Unknown),
+        InitializednessDomain::Initialized => label("initialized", DomainPrecision::ExactLocal),
+        InitializednessDomain::Uninitialized => label("uninitialized", DomainPrecision::ExactLocal),
+        InitializednessDomain::MaybeUninitialized => {
+            label("maybe_uninitialized", DomainPrecision::Conservative)
+        }
+        InitializednessDomain::Top(reason) => top_value(*reason),
+    }
+}
+
+fn label(value: &str, precision: DomainPrecision) -> (DomainStatus, DomainPrecision, DomainValue) {
+    let status = if precision == DomainPrecision::Unknown {
+        DomainStatus::Unknown
+    } else {
+        DomainStatus::Present
+    };
+    (status, precision, DomainValue::Label(value.to_string()))
+}
+
+fn digest_value(parts: Vec<String>) -> (DomainStatus, DomainPrecision, DomainValue) {
+    (
+        DomainStatus::Present,
+        DomainPrecision::ExactLocal,
+        DomainValue::DigestParts(parts),
+    )
+}
+
+fn top_value(reason: TopReason) -> (DomainStatus, DomainPrecision, DomainValue) {
+    (
+        status_for_top_reason(reason),
+        precision_for_top_reason(reason),
+        DomainValue::TopReason(reason.as_str().to_string()),
+    )
+}
+
+fn status_for_top_reason(reason: TopReason) -> DomainStatus {
+    match reason {
+        TopReason::UnknownValue | TopReason::DynamicWrite | TopReason::UnresolvedCall => {
+            DomainStatus::Unknown
+        }
+        TopReason::UnsupportedSemantic => DomainStatus::Unsupported,
+        TopReason::SetupMissing => DomainStatus::SetupMissing,
+        TopReason::BudgetExceeded => DomainStatus::BudgetExceeded,
+        TopReason::Widened | TopReason::ConflictingFacts => DomainStatus::Top,
+    }
+}
+
+fn precision_for_top_reason(reason: TopReason) -> DomainPrecision {
+    match reason {
+        TopReason::UnsupportedSemantic => DomainPrecision::Unsupported,
+        TopReason::SetupMissing => DomainPrecision::SetupAware,
+        TopReason::UnknownValue | TopReason::DynamicWrite | TopReason::UnresolvedCall => {
+            DomainPrecision::Unknown
+        }
+        TopReason::BudgetExceeded | TopReason::Widened | TopReason::ConflictingFacts => {
+            DomainPrecision::Conservative
+        }
     }
 }
 

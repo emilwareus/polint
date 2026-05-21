@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 adds the private local solver before provider plans invoke it from the kernel."
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::lattice::{Changed, TopReason};
@@ -44,12 +39,6 @@ pub(crate) struct SolverResult {
 #[derive(Clone, Debug)]
 pub(crate) struct LocalDomainSolver {
     policy: SolverPolicy,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BlockState {
-    pub(crate) entry: ProductState,
-    pub(crate) exit: ProductState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

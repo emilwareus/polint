@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 introduces private domain contracts before solver/provider integration consumes every hook."
-)]
-
 use std::collections::BTreeSet;
 use std::ops::{BitOr, BitOrAssign};
 

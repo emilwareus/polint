@@ -182,6 +182,11 @@ const CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const ABSTRACT_DOMAINS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "abstract-domain-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -381,6 +386,29 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.abstract_domains",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "unsupported_semantics",
+            "cfg_functions",
+            "basic_blocks",
+            "cfg_edges",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+        ],
+        outputs: &["domain_observations", "domain_events"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: ABSTRACT_DOMAINS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -427,6 +455,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
@@ -446,6 +475,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
@@ -492,6 +522,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
@@ -709,6 +740,26 @@ mod tests {
                         "cfg_edges",
                     ],
                     outputs: vec!["call_sites", "call_targets", "unresolved_calls"],
+                },
+                ProviderOrderRow {
+                    id: "polint.abstract_domains",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "unsupported_semantics",
+                        "cfg_functions",
+                        "basic_blocks",
+                        "cfg_edges",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                    ],
+                    outputs: vec!["domain_observations", "domain_events"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

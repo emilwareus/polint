@@ -251,23 +251,51 @@ impl AnalysisKernel {
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.calls"),
-            semantic_mir_dependency_output_digest,
-            cfg_dependency_output_digest,
-            symbol_dependency_output_digest,
-            module_topology_dependency_output_digest,
+            semantic_mir_dependency_output_digest.clone(),
+            cfg_dependency_output_digest.clone(),
+            symbol_dependency_output_digest.clone(),
+            module_topology_dependency_output_digest.clone(),
             vec![
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
             ],
         );
         let polint_calls_cache_stats = calls.cache_stats.clone();
-        let calls_output_digest = calls.output_digest;
+        let calls_output_digest = calls.output_digest.clone();
         diagnostics.extend(calls.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.calls",
             &db,
             polint_calls_cache_stats,
-            calls_output_digest,
+            calls_output_digest.clone(),
+        ));
+
+        let calls_dependency_output_digest = calls_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
+        });
+        let abstract_domains =
+            crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.abstract_domains"),
+                semantic_mir_dependency_output_digest,
+                cfg_dependency_output_digest,
+                calls_dependency_output_digest,
+                symbol_dependency_output_digest,
+                module_topology_dependency_output_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
+        let abstract_domains_output_digest = abstract_domains.output_digest;
+        diagnostics.extend(abstract_domains.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.abstract_domains",
+            &db,
+            polint_abstract_domains_cache_stats,
+            abstract_domains_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
