@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
 use crate::analysis::calls::store::CallOutput;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis_kernel::ProviderManifest;
@@ -68,6 +69,7 @@ fn calls_output_digest(
         format!("provider_id={}", manifest.id),
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
+        format!("parameters={}", calls_provider_parameter_digest()),
         format!("config={}", input_snapshot.config.digest),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
@@ -222,6 +224,12 @@ fn calls_output_digest_for_test(parts: &[&str]) -> Digest {
 #[cfg(test)]
 mod calls_provider {
     use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn calls_provider_accepts_empty_output_with_deterministic_digest() {
@@ -243,5 +251,118 @@ mod calls_provider {
         assert!(manifest.outputs.contains(&"call_sites"));
         assert!(manifest.outputs.contains(&"call_targets"));
         assert!(manifest.outputs.contains(&"unresolved_calls"));
+    }
+
+    #[test]
+    fn calls_output_digest_uses_stable_payloads_not_dense_ids() {
+        let output = call_output(1, "resolved");
+        let shifted_dense_ids = call_output(100, "resolved");
+        let changed_status = call_output(1, "unresolved");
+
+        assert_eq!(
+            digest_for_output(&output),
+            digest_for_output(&shifted_dense_ids)
+        );
+        assert_ne!(
+            digest_for_output(&output),
+            digest_for_output(&changed_status)
+        );
+    }
+
+    fn digest_for_output(output: &crate::analysis::calls::store::CallOutput) -> Digest {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let db = crate::core::AnalysisDb::new();
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls manifest");
+
+        super::calls_output_digest(
+            manifest,
+            &snapshot,
+            &Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "cfg", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]),
+            &[],
+            output,
+        )
+    }
+
+    fn call_output(id_offset: u64, status: &str) -> crate::analysis::calls::store::CallOutput {
+        use crate::analysis::calls::facts::{
+            CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+            CallSyntaxKind, CallTargetFact, CallTargetStatus, UnresolvedCallFact,
+            UnresolvedCallReason,
+        };
+        use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
+
+        let site = CallSiteFact {
+            id: CallSiteId(id_offset),
+            language: Language::TypeScript,
+            file: FileId(1),
+            caller: FunctionId(id_offset),
+            owner_symbol: Some(SymbolId(id_offset)),
+            body: MirBodyId(id_offset),
+            operation: MirOpId(id_offset),
+            span: Span::point(FileId(1), 10, 20),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: Some(ReferenceId(id_offset)),
+                name: "run".to_string(),
+            },
+            receiver: None,
+            arguments: vec![PlaceId(id_offset)],
+            result: Some(PlaceId(id_offset + 1)),
+            status: CallTargetStatus::Resolved,
+            precision: CallPrecision::Exact,
+            stable_key: "call-site:stable".to_string(),
+        };
+        let target_status = if status == "resolved" {
+            CallTargetStatus::Resolved
+        } else {
+            CallTargetStatus::Unresolved
+        };
+        let target = CallTargetFact {
+            id: CallTargetId(id_offset),
+            site: site.id,
+            caller: site.caller,
+            target_function: Some(FunctionId(id_offset + 10)),
+            target_symbol: Some(SymbolId(id_offset + 20)),
+            edge_kind: CallEdgeKind::Direct,
+            algorithm: CallAlgorithm::DirectReference,
+            status: target_status,
+            reason: None,
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Exact,
+            stable_key: "call-target:stable".to_string(),
+        };
+        let unresolved = UnresolvedCallFact {
+            site: site.id,
+            caller: site.caller,
+            status: CallTargetStatus::Unresolved,
+            reason: UnresolvedCallReason::FunctionValue,
+            algorithm: CallAlgorithm::SyntaxOnly,
+            provenance: CallProvenance::MirShape,
+            precision: CallPrecision::Unknown,
+            stable_key: "unresolved-call:stable".to_string(),
+        };
+
+        crate::analysis::calls::store::CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: vec![unresolved],
+        }
+        .normalized()
     }
 }
