@@ -14,6 +14,218 @@ pub(crate) mod observed;
 pub(crate) mod report;
 
 #[cfg(test)]
+mod direct_call_rows {
+    use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
+    use crate::eval::metrics::compute_metrics;
+    use crate::eval::model::{
+        AssertionMode, ExpectedFact, ExpectedItem, FixtureArea, ObservedFact, ObservedItem,
+        ObservedStatus,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn eval_expected_facts_accept_call_families_and_direct_call_area() {
+        let families = crate::eval::model::CALL_FACT_FAMILIES.join(",");
+        assert!(families.contains("CallSite"));
+        assert!(families.contains("CallTarget"));
+        assert!(families.contains("UnresolvedCall"));
+
+        let manifest = r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "direct-call-row-model"
+area = "direct-calls"
+
+[repo]
+path = "repo"
+
+[[expected]]
+fact = { family = "CallSite", stable_key = "call-site:src/app.ts:handler", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "CallTarget", stable_key = "call-target:src/app.ts:handler", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dynamic", mode = "partial", producer_id = "polint.calls", precision = "unknown", status = "unresolved" }
+"#;
+
+        let parsed: crate::eval::fixtures::NativeFixtureManifest =
+            toml::from_str(manifest).expect("call expected facts should parse");
+
+        assert_eq!(parsed.area, FixtureArea::DirectCalls);
+        assert_eq!(parsed.expected.len(), 3);
+    }
+
+    #[test]
+    fn observed_call_debug_rows_normalize_to_fact_rows_with_compact_payloads() {
+        let debug = json!({
+            "calls": {
+                "sites": [
+                    call_site_row("call-site:resolved", "Resolved"),
+                    call_site_row("call-site:ambiguous", "Ambiguous"),
+                    call_site_row("call-site:unresolved", "Unresolved"),
+                    call_site_row("call-site:unsupported", "Unsupported"),
+                    call_site_row("call-site:setup-missing", "SetupMissing")
+                ],
+                "targets": [{
+                    "family": "CallTarget",
+                    "stable_key": "call-target:resolved",
+                    "producer_id": "polint.calls",
+                    "status": "Resolved",
+                    "precision": "SetupAware",
+                    "path": "src/app.ts",
+                    "span": {"start_line": 1, "start_col": 1, "end_line": 1, "end_col": 9},
+                    "site_stable_key": "call-site:resolved",
+                    "caller_stable_key": "function:handler",
+                    "target_function_stable_key": "function:target",
+                    "target_symbol_stable_key": "symbol:target",
+                    "edge_kind": "Direct",
+                    "algorithm": "DirectReference",
+                    "reason": null,
+                    "provenance": "NativeDirect"
+                }],
+                "unresolved": [{
+                    "family": "UnresolvedCall",
+                    "stable_key": "call-unresolved:setup",
+                    "producer_id": "polint.calls",
+                    "status": "SetupMissing",
+                    "precision": "Unsupported",
+                    "path": "src/app.ts",
+                    "span": {"start_line": 2, "start_col": 1, "end_line": 2, "end_col": 12},
+                    "site_stable_key": "call-site:setup-missing",
+                    "caller_stable_key": "function:handler",
+                    "algorithm": "Unsupported",
+                    "reason": "SetupMissing",
+                    "provenance": "MirShape"
+                }]
+            }
+        });
+
+        let observed = crate::eval::observed::call_facts_for_test(&debug);
+        let call_statuses = observed
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Fact(fact) if fact.family == "CallSite" => fact.status,
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            call_statuses,
+            [
+                ObservedStatus::Ambiguous,
+                ObservedStatus::Resolved,
+                ObservedStatus::SetupMissing,
+                ObservedStatus::Unresolved,
+                ObservedStatus::Unsupported,
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "CallTarget"
+                    && fact.producer_id.as_deref() == Some("polint.calls")
+                    && fact.precision.as_deref() == Some("setup_aware")
+                    && fact.status == Some(ObservedStatus::Resolved)
+                    && fact.payload.as_deref().is_some_and(|payload| {
+                        payload.contains("path=src/app.ts")
+                            && payload.contains("span=1:1-1:9")
+                            && payload.contains("algorithm=DirectReference")
+                            && payload.contains("target_symbol=symbol:target")
+                    })
+            }
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn call_unresolved_unsupported_and_setup_missing_statuses_count_as_unknown_metrics() {
+        let expected = [
+            expected_call_fact("CallSite", "call-site:unresolved", ObservedStatus::Unresolved),
+            expected_call_fact("CallSite", "call-site:unsupported", ObservedStatus::Unsupported),
+            expected_call_fact(
+                "UnresolvedCall",
+                "call-unresolved:setup",
+                ObservedStatus::SetupMissing,
+            ),
+        ];
+        let observed = [
+            observed_call_fact("CallSite", "call-site:unresolved", ObservedStatus::Unresolved),
+            observed_call_fact("CallSite", "call-site:unsupported", ObservedStatus::Unsupported),
+            observed_call_fact(
+                "UnresolvedCall",
+                "call-unresolved:setup",
+                ObservedStatus::SetupMissing,
+            ),
+        ];
+
+        let summaries = match_case(&expected, &observed, MatcherConfig::default());
+        let metrics = compute_metrics(&summaries);
+
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.outcome)
+                .collect::<Vec<_>>(),
+            vec![
+                MatchOutcome::Unknown,
+                MatchOutcome::Unknown,
+                MatchOutcome::Unknown,
+            ]
+        );
+        assert_eq!(metrics.unknown_count, 3);
+    }
+
+    fn call_site_row(stable_key: &str, status: &str) -> serde_json::Value {
+        json!({
+            "family": "CallSite",
+            "stable_key": stable_key,
+            "producer_id": "polint.calls",
+            "status": status,
+            "precision": "SetupAware",
+            "path": "src/app.ts",
+            "span": {"start_line": 1, "start_col": 1, "end_line": 1, "end_col": 9},
+            "language": "TypeScript",
+            "kind": "Function",
+            "callee": "identifier:target"
+        })
+    }
+
+    fn expected_call_fact(
+        family: &str,
+        stable_key: &str,
+        status: ObservedStatus,
+    ) -> ExpectedItem {
+        ExpectedItem::Fact(ExpectedFact {
+            family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.calls".to_string()),
+            precision: None,
+            status: Some(status),
+            false_positive_trap: false,
+        })
+    }
+
+    fn observed_call_fact(
+        family: &str,
+        stable_key: &str,
+        status: ObservedStatus,
+    ) -> ObservedItem {
+        ObservedItem::Fact(ObservedFact {
+            family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.calls".to_string()),
+            provenance: Some("kernel.metadata_debug_json.calls".to_string()),
+            precision: None,
+            status: Some(status),
+            payload: None,
+        })
+    }
+}
+
+#[cfg(test)]
 mod semantic_rows {
     use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
     use crate::eval::model::{
