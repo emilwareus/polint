@@ -136,7 +136,12 @@ mod tests {
         }
     }
 
-    fn event_fact(id: u64, callable_key: &str, function: u64, stable_key: &str) -> SummaryEventFact {
+    fn event_fact(
+        id: u64,
+        callable_key: &str,
+        function: u64,
+        stable_key: &str,
+    ) -> SummaryEventFact {
         SummaryEventFact {
             id: SummaryEventId(id),
             callable_stable_key: callable_key.to_string(),
@@ -288,7 +293,11 @@ mod tests {
         // by callable
         let a_summaries = store.summaries_by_callable("func::a");
         assert_eq!(a_summaries.len(), 2);
-        assert!(a_summaries.iter().all(|f| f.callable_stable_key == "func::a"));
+        assert!(
+            a_summaries
+                .iter()
+                .all(|f| f.callable_stable_key == "func::a")
+        );
 
         let b_summaries = store.summaries_by_callable("func::b");
         assert_eq!(b_summaries.len(), 1);
@@ -316,5 +325,129 @@ mod tests {
 
         let func99 = store.summaries_by_function(FunctionId(99));
         assert!(func99.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // AnalysisDb integration tests (summary_fact_storage)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn summary_fact_storage_replace_removes_stale_rows_from_previous_run() {
+        use crate::core::AnalysisDb;
+
+        let mut db = AnalysisDb::new();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary_fact(
+                1,
+                "func::first",
+                1,
+                SummaryDomainKind::ControlEffects,
+                "summary:first",
+            )],
+            events: vec![event_fact(1, "func::first", 1, "event:first")],
+        });
+        assert_eq!(db.summary_facts().len(), 1);
+        assert_eq!(db.summary_events().len(), 1);
+
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary_fact(
+                2,
+                "func::second",
+                2,
+                SummaryDomainKind::MemoryEffects,
+                "summary:second",
+            )],
+            events: Vec::new(),
+        });
+        assert_eq!(db.summary_facts().len(), 1);
+        assert_eq!(db.summary_facts()[0].stable_key, "summary:second");
+        assert!(db.summary_events().is_empty());
+    }
+
+    #[test]
+    fn summary_fact_storage_records_metadata_provider_and_family_labels() {
+        use crate::analysis_kernel::{FactFamily, FactRef};
+        use crate::core::AnalysisDb;
+
+        let mut db = AnalysisDb::new();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![
+                summary_fact(
+                    1,
+                    "func::a",
+                    1,
+                    SummaryDomainKind::ControlEffects,
+                    "summary:control",
+                ),
+                summary_fact(
+                    2,
+                    "func::a",
+                    1,
+                    SummaryDomainKind::CallEffects,
+                    "summary:call",
+                ),
+                summary_fact(
+                    3,
+                    "func::a",
+                    1,
+                    SummaryDomainKind::MemoryEffects,
+                    "summary:memory",
+                ),
+                summary_fact(
+                    4,
+                    "func::a",
+                    1,
+                    SummaryDomainKind::DataFlowTito,
+                    "summary:tito",
+                ),
+            ],
+            events: vec![event_fact(1, "func::a", 1, "event:a")],
+        });
+
+        // After normalization, stable_key order is: call(0), control(1), memory(2), tito(3)
+        // Verify each fact family has metadata with correct producer
+        let facts = db.summary_facts();
+        for fact in facts {
+            let family = match fact.domain {
+                SummaryDomainKind::ControlEffects => FactFamily::SummaryControl,
+                SummaryDomainKind::CallEffects => FactFamily::SummaryCall,
+                SummaryDomainKind::MemoryEffects => FactFamily::SummaryMemory,
+                SummaryDomainKind::DataFlowTito => FactFamily::SummaryTito,
+            };
+            let meta = db.fact_meta().get(FactRef::new(family, fact.id.0));
+            assert!(
+                meta.is_some(),
+                "metadata missing for {:?} id={}",
+                family,
+                fact.id.0
+            );
+            assert_eq!(meta.unwrap().producer_id, "polint.direct_summaries");
+        }
+
+        // Verify all four summary families have at least one metadata row
+        let mut families_found = std::collections::BTreeSet::new();
+        for fact in facts {
+            families_found.insert(fact.domain);
+        }
+        assert!(families_found.contains(&SummaryDomainKind::ControlEffects));
+        assert!(families_found.contains(&SummaryDomainKind::CallEffects));
+        assert!(families_found.contains(&SummaryDomainKind::MemoryEffects));
+        assert!(families_found.contains(&SummaryDomainKind::DataFlowTito));
+
+        // Check event family metadata exists
+        let event_meta = db
+            .fact_meta()
+            .get(FactRef::new(FactFamily::SummaryEvent, 0));
+        assert!(event_meta.is_some());
+        assert_eq!(event_meta.unwrap().producer_id, "polint.direct_summaries");
+    }
+
+    #[test]
+    fn summary_fact_storage_accessors_return_empty_before_replace() {
+        let db = crate::core::AnalysisDb::new();
+
+        assert!(db.summary_facts().is_empty());
+        assert!(db.summary_events().is_empty());
+        assert!(db.summary_store().is_none());
     }
 }

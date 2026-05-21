@@ -55,6 +55,11 @@ pub(crate) enum FactFamily {
     UnresolvedCall,
     DomainObservation,
     DomainEvent,
+    SummaryControl,
+    SummaryCall,
+    SummaryMemory,
+    SummaryTito,
+    SummaryEvent,
     #[expect(
         dead_code,
         reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
@@ -122,6 +127,11 @@ impl FactFamily {
             Self::UnresolvedCall => "UnresolvedCall",
             Self::DomainObservation => "DomainObservation",
             Self::DomainEvent => "DomainEvent",
+            Self::SummaryControl => "SummaryControl",
+            Self::SummaryCall => "SummaryCall",
+            Self::SummaryMemory => "SummaryMemory",
+            Self::SummaryTito => "SummaryTito",
+            Self::SummaryEvent => "SummaryEvent",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",
