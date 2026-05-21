@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T18:56:37Z"
-last_activity: 2026-05-21 -- Phase 32 Plan 03 complete
+last_updated: "2026-05-21T19:11:28Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 04 complete
 progress:
   total_phases: 22
   completed_phases: 12
   total_plans: 72
-  completed_plans: 68
+  completed_plans: 69
   percent: 56
 ---
 
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 32
 Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
-Plan: 4 of 7
-Last activity: 2026-05-21 -- Completed 32-03-PLAN.md
+Plan: 5 of 7
+Last activity: 2026-05-21 -- Completed 32-04-PLAN.md
 
 ## Phase Progress
 
@@ -276,6 +276,9 @@ Last activity: 2026-05-21 -- Completed 32-03-PLAN.md
 - [Phase 32-summary-kernel-and-direct-summaries]: Implement all four domain builders in a single DirectSummaryBuilder::build pass for deterministic output.
 - [Phase 32-summary-kernel-and-direct-summaries]: TITO uses simple copy-chain tracing without field-level access paths per D-07/D-10.
 - [Phase 32-summary-kernel-and-direct-summaries]: Memory effects treat all PlaceRoot::Parameter variants uniformly as Param(index) since the place model has no separate Receiver root.
+- [Phase 32-summary-kernel-and-direct-summaries]: Output digest includes abstract_domains_output_digest as upstream input for cache invalidation when domain results change.
+- [Phase 32-summary-kernel-and-direct-summaries]: Provider parameter digest includes all four summary domain IDs and versions for cache identity.
+- [Phase 32-summary-kernel-and-direct-summaries]: LayerKind::DirectSummaries and direct_summaries_layer_key include absent extension/model/toolchain slots per D-14.
 
 ## Execution Metrics
 
@@ -337,12 +340,13 @@ Last activity: 2026-05-21 -- Completed 32-03-PLAN.md
 | 32-summary-kernel-and-direct-summaries | 01 | 8 min | 2 | 6 |
 | 32-summary-kernel-and-direct-summaries | 02 | 5 min | 2 | 4 |
 | 32-summary-kernel-and-direct-summaries | 03 | 6 min | 2 | 2 |
+| 32-summary-kernel-and-direct-summaries | 04 | 12 min | 2 | 10 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-03-PLAN.md.
-- Stopped at: Completed 32-03-PLAN.md; ready for Plan 32-04.
+- Last activity: 2026-05-21 - Completed 32-04-PLAN.md.
+- Stopped at: Completed 32-04-PLAN.md; ready for Plan 32-05.
 
 ### Quick Tasks Completed
 
@@ -371,4 +375,4 @@ Last activity: 2026-05-21 -- Completed 32-03-PLAN.md
 
 ## Next Action
 
-Phase 32 Plan 04 is next: summary provider, validation, debug, and eval integration.
+Phase 32 Plan 05 is next: summary validation, debug JSON, and eval integration.
