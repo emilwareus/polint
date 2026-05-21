@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T05:18:40.256Z"
-last_activity: 2026-05-21 -- Fixed CFG PR review findings for PR #34
+last_updated: "2026-05-21T05:32:30Z"
+last_activity: 2026-05-21 -- Fixed CFG stored reachability for synthetic exits
 progress:
   total_phases: 22
   completed_phases: 10
@@ -44,7 +44,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready for Phase 30
 Phase: 30 (Direct Call Facts) — PENDING
 Plan: Planning/execution not started
-Last activity: 2026-05-21 -- Fixed CFG PR review findings for PR #34
+Last activity: 2026-05-21 -- Fixed CFG stored reachability for synthetic exits
 
 ## Phase Progress
 
@@ -279,13 +279,14 @@ Last activity: 2026-05-21 -- Fixed CFG PR review findings for PR #34
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-21 - Completed quick task 260521-a5k: Fix CFG PR review findings.
-- Stopped at: Phase 29 PR #34 review findings fixed; ready for Phase 30 direct call facts.
+- Last activity: 2026-05-21 - Completed quick task 260521-af1: Fix CFG stored reachability for synthetic exits.
+- Stopped at: Phase 29 PR #34 follow-up reachability fix complete; ready for Phase 30 direct call facts.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260521-af1 | Fix CFG stored reachability for synthetic exits | 2026-05-21 | implemented | [260521-af1-fix-cfg-stored-reachability-for-syntheti](./quick/260521-af1-fix-cfg-stored-reachability-for-syntheti/) |
 | 260521-a5k | Fix CFG PR review findings | 2026-05-21 | implemented | [260521-a5k-fix-cfg-pr-review-findings](./quick/260521-a5k-fix-cfg-pr-review-findings/) |
 | 260520-jho | Speed up CI with Rust caching and lighter PR platform checks, then measure Actions runtime | 2026-05-20 | implemented | [260520-jho-speed-up-ci-with-rust-caching-and-lighte](./quick/260520-jho-speed-up-ci-with-rust-caching-and-lighte/) |
 | 260520-ii6 | Merge latest main security fixes into PR 33 branch and rerun all local checks | 2026-05-20 | implemented | [260520-ii6-merge-latest-main-security-fixes-into-pr](./quick/260520-ii6-merge-latest-main-security-fixes-into-pr/) |

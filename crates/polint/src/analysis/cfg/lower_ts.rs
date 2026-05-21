@@ -758,6 +758,18 @@ mod tests {
                 .iter()
                 .any(|edge| edge.kind == CfgEdgeKind::Throw)
         );
+        assert!(
+            output
+                .blocks
+                .iter()
+                .any(|block| block.kind == BasicBlockKind::ExitExceptional && block.reachable)
+        );
+        assert!(
+            output
+                .blocks
+                .iter()
+                .any(|block| block.kind == BasicBlockKind::ExitNormal && !block.reachable)
+        );
         assert!(output.edges.iter().all(|edge| {
             !unreachable_blocks.contains(&edge.to_block)
                 || unreachable_blocks.contains(&edge.from_block)

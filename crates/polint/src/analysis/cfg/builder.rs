@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::analysis::cfg::facts::{
     BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
     CfgNodeKind, CfgPrecision, CfgStatus, CfgView,
@@ -329,8 +331,70 @@ impl CfgBuilder {
         self.next_synthetic_node_ordinal = 0;
     }
 
-    pub(crate) fn finish(self) -> CfgOutput {
+    pub(crate) fn finish(mut self) -> CfgOutput {
+        self.refresh_reachability();
         self.output.normalized()
+    }
+
+    fn refresh_reachability(&mut self) {
+        let functions = self
+            .output
+            .functions
+            .iter()
+            .map(|function| function.id)
+            .collect::<Vec<_>>();
+        for function in functions {
+            let reachable = self.reachable_blocks(function);
+            for block in self
+                .output
+                .blocks
+                .iter_mut()
+                .filter(|block| block.cfg_function == function)
+            {
+                block.reachable = reachable.contains(&block.id);
+            }
+        }
+    }
+
+    fn reachable_blocks(&self, function: CfgFunctionId) -> BTreeSet<BasicBlockId> {
+        let Some(entry) = self
+            .output
+            .blocks
+            .iter()
+            .find(|block| block.cfg_function == function && block.kind == BasicBlockKind::Entry)
+            .map(|block| block.id)
+        else {
+            return BTreeSet::new();
+        };
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![entry];
+        while let Some(block) = stack.pop() {
+            if !seen.insert(block) {
+                continue;
+            }
+            let mut successors = self.normal_successors(function, block);
+            successors.sort_by(|left, right| right.cmp(left));
+            stack.extend(successors);
+        }
+        seen
+    }
+
+    fn normal_successors(&self, function: CfgFunctionId, block: BasicBlockId) -> Vec<BasicBlockId> {
+        let mut successors = self
+            .output
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.cfg_function == function
+                    && edge.view == CfgView::NormalControl
+                    && edge.from_block == block
+                    && edge.to_block != block
+            })
+            .map(|edge| edge.to_block)
+            .collect::<Vec<_>>();
+        successors.sort();
+        successors.dedup();
+        successors
     }
 
     fn add_node_edge(
@@ -570,6 +634,40 @@ mod tests {
                 .any(|node| node.id == function_fact.normal_exit_node)
         );
         assert!(function_fact.exceptional_exit_node.is_some());
+    }
+
+    #[test]
+    fn builder_recomputes_reachability_before_finish() {
+        let mut builder = CfgBuilder::new();
+        builder.start_function(&body(), true);
+        let entry = builder.current_block();
+        let normal_exit = builder.normal_exit_block();
+        let exceptional_exit = builder
+            .exceptional_exit_block()
+            .expect("exceptional exit block");
+        builder.add_edge(entry, normal_exit, CfgEdgeKind::Normal);
+        builder.finish_function();
+        let output = builder.finish();
+
+        let entry_block = output
+            .blocks
+            .iter()
+            .find(|block| block.id == entry)
+            .expect("entry block");
+        let normal_exit_block = output
+            .blocks
+            .iter()
+            .find(|block| block.id == normal_exit)
+            .expect("normal exit block");
+        let exceptional_exit_block = output
+            .blocks
+            .iter()
+            .find(|block| block.id == exceptional_exit)
+            .expect("exceptional exit block");
+
+        assert!(entry_block.reachable);
+        assert!(normal_exit_block.reachable);
+        assert!(!exceptional_exit_block.reachable);
     }
 
     #[test]

@@ -779,5 +779,17 @@ mod tests {
         assert!(unsupported.contains("panic"));
         assert!(unsupported.contains("goto"));
         assert!(unsupported.contains("fallthrough"));
+        assert!(
+            output
+                .blocks
+                .iter()
+                .any(|block| block.kind == BasicBlockKind::ExitExceptional && block.reachable)
+        );
+        assert!(
+            output
+                .blocks
+                .iter()
+                .any(|block| block.kind == BasicBlockKind::ExitNormal && !block.reachable)
+        );
     }
 }
