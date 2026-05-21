@@ -1,3 +1,9 @@
+use crate::analysis::cfg::facts::{
+    BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, CfgPrecision, CfgStatus,
+    ControlDependenceFact, DominatorFact, PostDominatorFact, ReachabilityFact,
+    UnsupportedControlFlowFact,
+};
+use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis::error::AnalysisError;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
@@ -37,6 +43,7 @@ const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
+pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -606,6 +613,15 @@ pub struct AnalysisDb {
     string_literals: Vec<StringLiteralFact>,
     jsx_attributes: Vec<JsxAttributeFact>,
     semantic: Option<SemanticStore>,
+    cfg_functions: Vec<CfgFunctionFact>,
+    cfg_nodes: Vec<CfgNodeFact>,
+    cfg_blocks: Vec<BasicBlockFact>,
+    cfg_edges: Vec<CfgEdgeFact>,
+    cfg_reachability: Vec<ReachabilityFact>,
+    cfg_dominators: Vec<DominatorFact>,
+    cfg_postdominators: Vec<PostDominatorFact>,
+    cfg_control_dependence: Vec<ControlDependenceFact>,
+    unsupported_control_flow: Vec<UnsupportedControlFlowFact>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -897,6 +913,116 @@ impl AnalysisDb {
         self.semantic = Some(SemanticStore::from_output(output)?);
         self.refresh_semantic_mir_metadata();
         Ok(())
+    }
+
+    pub(crate) fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
+        let output = output.normalized();
+        self.cfg_functions = output.functions;
+        self.cfg_nodes = output.nodes;
+        self.cfg_blocks = output.blocks;
+        self.cfg_edges = output.edges;
+        self.cfg_reachability = output.reachability;
+        self.cfg_dominators = output.dominators;
+        self.cfg_postdominators = output.postdominators;
+        self.cfg_control_dependence = output.control_dependence;
+        self.unsupported_control_flow = output.unsupported;
+        self.refresh_cfg_metadata();
+        Ok(())
+    }
+
+    fn refresh_cfg_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::CfgFunction);
+        self.fact_meta.remove_family(FactFamily::CfgNode);
+        self.fact_meta.remove_family(FactFamily::BasicBlock);
+        self.fact_meta.remove_family(FactFamily::CfgEdge);
+        self.fact_meta.remove_family(FactFamily::CfgReachability);
+        self.fact_meta.remove_family(FactFamily::CfgDominator);
+        self.fact_meta.remove_family(FactFamily::CfgPostDominator);
+        self.fact_meta
+            .remove_family(FactFamily::CfgControlDependence);
+        self.fact_meta
+            .remove_family(FactFamily::UnsupportedControlFlow);
+
+        let function_metadata = self
+            .cfg_functions
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_function_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in function_metadata {
+            self.record_fact_meta(FactFamily::CfgFunction, run_id, metadata);
+        }
+
+        let node_metadata = self
+            .cfg_nodes
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_node_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::CfgNode, run_id, metadata);
+        }
+
+        let block_metadata = self
+            .cfg_blocks
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_block_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in block_metadata {
+            self.record_fact_meta(FactFamily::BasicBlock, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .cfg_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::CfgEdge, run_id, metadata);
+        }
+
+        let reachability_metadata = self
+            .cfg_reachability
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_reachability_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in reachability_metadata {
+            self.record_fact_meta(FactFamily::CfgReachability, run_id, metadata);
+        }
+
+        let dominator_metadata = self
+            .cfg_dominators
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_dominator_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in dominator_metadata {
+            self.record_fact_meta(FactFamily::CfgDominator, run_id, metadata);
+        }
+
+        let postdominator_metadata = self
+            .cfg_postdominators
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_postdominator_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in postdominator_metadata {
+            self.record_fact_meta(FactFamily::CfgPostDominator, run_id, metadata);
+        }
+
+        let dependence_metadata = self
+            .cfg_control_dependence
+            .iter()
+            .map(|fact| (fact.id.0, self.cfg_control_dependence_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in dependence_metadata {
+            self.record_fact_meta(FactFamily::CfgControlDependence, run_id, metadata);
+        }
+
+        let unsupported_metadata = self
+            .unsupported_control_flow
+            .iter()
+            .map(|fact| (fact.id.0, self.unsupported_control_flow_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unsupported_metadata {
+            self.record_fact_meta(FactFamily::UnsupportedControlFlow, run_id, metadata);
+        }
     }
 
     fn refresh_semantic_mir_metadata(&mut self) {
@@ -1770,6 +1896,42 @@ impl AnalysisDb {
             .map_or(&[], SemanticStore::unsupported_semantics)
     }
 
+    pub(crate) fn cfg_functions(&self) -> &[CfgFunctionFact] {
+        &self.cfg_functions
+    }
+
+    pub(crate) fn cfg_nodes(&self) -> &[CfgNodeFact] {
+        &self.cfg_nodes
+    }
+
+    pub(crate) fn cfg_blocks(&self) -> &[BasicBlockFact] {
+        &self.cfg_blocks
+    }
+
+    pub(crate) fn cfg_edges(&self) -> &[CfgEdgeFact] {
+        &self.cfg_edges
+    }
+
+    pub(crate) fn cfg_reachability(&self) -> &[ReachabilityFact] {
+        &self.cfg_reachability
+    }
+
+    pub(crate) fn cfg_dominators(&self) -> &[DominatorFact] {
+        &self.cfg_dominators
+    }
+
+    pub(crate) fn cfg_postdominators(&self) -> &[PostDominatorFact] {
+        &self.cfg_postdominators
+    }
+
+    pub(crate) fn cfg_control_dependence(&self) -> &[ControlDependenceFact] {
+        &self.cfg_control_dependence
+    }
+
+    pub(crate) fn unsupported_control_flow(&self) -> &[UnsupportedControlFlowFact] {
+        &self.unsupported_control_flow
+    }
+
     pub fn symbols(&self) -> &[SymbolFact] {
         &self.symbols
     }
@@ -2591,6 +2753,193 @@ impl AnalysisDb {
         )
     }
 
+    fn cfg_function_metadata(&self, fact: &CfgFunctionFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgFunction,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                ("language", language_label(fact.language).to_string()),
+                ("path", self.path_for(fact.file)),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+        )
+    }
+
+    fn cfg_node_metadata(&self, fact: &CfgNodeFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgNode,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("kind", cfg_node_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("operation_ordinal", fact.operation_ordinal.to_string()),
+                ("span", option_span_metadata_value(fact.span.as_ref())),
+            ]),
+        )
+    }
+
+    fn cfg_block_metadata(&self, fact: &BasicBlockFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::BasicBlock,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("kind", basic_block_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("reachable", fact.reachable.to_string()),
+                ("reverse_postorder", fact.reverse_postorder.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_edge_metadata(&self, fact: &CfgEdgeFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgEdge,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("kind", cfg_edge_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("from_block", fact.from_block.0.to_string()),
+                ("to_block", fact.to_block.0.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_reachability_metadata(&self, fact: &ReachabilityFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgReachability,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("block", fact.block.0.to_string()),
+                ("reachable", fact.reachable.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_dominator_metadata(&self, fact: &DominatorFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgDominator,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("dominator", fact.dominator.0.to_string()),
+                ("dominated", fact.dominated.0.to_string()),
+                ("immediate", fact.immediate.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_postdominator_metadata(&self, fact: &PostDominatorFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgPostDominator,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("postdominator", fact.postdominator.0.to_string()),
+                ("postdominated", fact.postdominated.0.to_string()),
+                ("immediate", fact.immediate.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_control_dependence_metadata(&self, fact: &ControlDependenceFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgControlDependence,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("edge", fact.controlling_edge.0.to_string()),
+                (
+                    "edge_kind",
+                    cfg_edge_kind_label(fact.controlling_edge_kind).to_string(),
+                ),
+                ("controlled_block", fact.controlled_block.0.to_string()),
+            ]),
+        )
+    }
+
+    fn unsupported_control_flow_metadata(&self, fact: &UnsupportedControlFlowFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::UnsupportedControlFlow,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("path", self.path_for(fact.file)),
+                ("span", span_metadata_value(&fact.span)),
+                ("construct", fact.construct.clone()),
+                ("source_evidence", fact.source_evidence.clone()),
+            ]),
+        )
+    }
+
     fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
         self.metadata_for(FactRef::new(family, run_id))
             .map(|metadata| metadata.stable_key.clone())
@@ -2977,6 +3326,140 @@ fn place_status_metadata(status: PlaceStatus) -> (FactPrecision, FactConfidence)
         PlaceStatus::Partial => (FactPrecision::Heuristic, FactConfidence::Medium),
         PlaceStatus::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
         PlaceStatus::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
+fn cfg_status_metadata(
+    status: CfgStatus,
+    precision: CfgPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match (status, precision) {
+        (CfgStatus::Resolved, CfgPrecision::ExactSyntax) => FactPrecision::Syntax,
+        (CfgStatus::Resolved, CfgPrecision::ExactLowered | CfgPrecision::SetupAware) => {
+            FactPrecision::SetupAware
+        }
+        (_, CfgPrecision::Conservative | CfgPrecision::Heuristic) => FactPrecision::Heuristic,
+        (CfgStatus::Partial, _) => FactPrecision::Heuristic,
+        (CfgStatus::Unknown, _) | (_, CfgPrecision::Unknown) => FactPrecision::Unresolved,
+        (CfgStatus::Unsupported, _) | (_, CfgPrecision::Unsupported) => FactPrecision::Unsupported,
+    };
+    let confidence = match status {
+        CfgStatus::Resolved => FactConfidence::High,
+        CfgStatus::Partial => FactConfidence::Medium,
+        CfgStatus::Unknown | CfgStatus::Unsupported => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn cfg_status_label(status: CfgStatus) -> &'static str {
+    match status {
+        CfgStatus::Resolved => "resolved",
+        CfgStatus::Partial => "partial",
+        CfgStatus::Unknown => "unknown",
+        CfgStatus::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_precision_label(precision: CfgPrecision) -> &'static str {
+    match precision {
+        CfgPrecision::ExactSyntax => "exact_syntax",
+        CfgPrecision::ExactLowered => "exact_lowered",
+        CfgPrecision::SetupAware => "setup_aware",
+        CfgPrecision::Conservative => "conservative",
+        CfgPrecision::Heuristic => "heuristic",
+        CfgPrecision::Unknown => "unknown",
+        CfgPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_view_label(view: crate::analysis::cfg::facts::CfgView) -> &'static str {
+    match view {
+        crate::analysis::cfg::facts::CfgView::NormalControl => "normal_control",
+        crate::analysis::cfg::facts::CfgView::AbruptAware => "abrupt_aware",
+        crate::analysis::cfg::facts::CfgView::ExceptionConservative => "exception_conservative",
+    }
+}
+
+fn cfg_node_kind_label(kind: crate::analysis::cfg::facts::CfgNodeKind) -> &'static str {
+    use crate::analysis::cfg::facts::CfgNodeKind;
+
+    match kind {
+        CfgNodeKind::Entry => "entry",
+        CfgNodeKind::ExitNormal => "exit_normal",
+        CfgNodeKind::ExitExceptional => "exit_exceptional",
+        CfgNodeKind::Operation => "operation",
+        CfgNodeKind::Condition => "condition",
+        CfgNodeKind::CallSite => "call_site",
+        CfgNodeKind::Return => "return",
+        CfgNodeKind::Throw => "throw",
+        CfgNodeKind::Panic => "panic",
+        CfgNodeKind::Break => "break",
+        CfgNodeKind::Continue => "continue",
+        CfgNodeKind::Goto => "goto",
+        CfgNodeKind::Yield => "yield",
+        CfgNodeKind::Await => "await",
+        CfgNodeKind::Defer => "defer",
+        CfgNodeKind::RunDefers => "run_defers",
+        CfgNodeKind::FinallyEnter => "finally_enter",
+        CfgNodeKind::FinallyExit => "finally_exit",
+        CfgNodeKind::Synthetic => "synthetic",
+        CfgNodeKind::Unsupported => "unsupported",
+    }
+}
+
+fn basic_block_kind_label(kind: crate::analysis::cfg::facts::BasicBlockKind) -> &'static str {
+    use crate::analysis::cfg::facts::BasicBlockKind;
+
+    match kind {
+        BasicBlockKind::Entry => "entry",
+        BasicBlockKind::ExitNormal => "exit_normal",
+        BasicBlockKind::ExitExceptional => "exit_exceptional",
+        BasicBlockKind::StraightLine => "straight_line",
+        BasicBlockKind::Branch => "branch",
+        BasicBlockKind::LoopHeader => "loop_header",
+        BasicBlockKind::LoopBody => "loop_body",
+        BasicBlockKind::Join => "join",
+        BasicBlockKind::Cleanup => "cleanup",
+        BasicBlockKind::Unreachable => "unreachable",
+        BasicBlockKind::Synthetic => "synthetic",
+    }
+}
+
+fn cfg_edge_kind_label(kind: crate::analysis::cfg::facts::CfgEdgeKind) -> &'static str {
+    use crate::analysis::cfg::facts::CfgEdgeKind;
+
+    match kind {
+        CfgEdgeKind::Normal => "normal",
+        CfgEdgeKind::True => "true",
+        CfgEdgeKind::False => "false",
+        CfgEdgeKind::SwitchCase => "switch_case",
+        CfgEdgeKind::DefaultCase => "default_case",
+        CfgEdgeKind::LoopEnter => "loop_enter",
+        CfgEdgeKind::LoopBack => "loop_back",
+        CfgEdgeKind::LoopExit => "loop_exit",
+        CfgEdgeKind::Break => "break",
+        CfgEdgeKind::Continue => "continue",
+        CfgEdgeKind::Goto => "goto",
+        CfgEdgeKind::Return => "return",
+        CfgEdgeKind::Throw => "throw",
+        CfgEdgeKind::ImplicitThrow => "implicit_throw",
+        CfgEdgeKind::Panic => "panic",
+        CfgEdgeKind::Recover => "recover",
+        CfgEdgeKind::Finally => "finally",
+        CfgEdgeKind::Cleanup => "cleanup",
+        CfgEdgeKind::Defer => "defer",
+        CfgEdgeKind::ShortCircuit => "short_circuit",
+        CfgEdgeKind::OptionalChain => "optional_chain",
+        CfgEdgeKind::Nullish => "nullish",
+        CfgEdgeKind::YieldSuspend => "yield_suspend",
+        CfgEdgeKind::YieldResume => "yield_resume",
+        CfgEdgeKind::AwaitSuspend => "await_suspend",
+        CfgEdgeKind::AwaitResume => "await_resume",
+        CfgEdgeKind::Spawn => "spawn",
+        CfgEdgeKind::Unreachable => "unreachable",
+        CfgEdgeKind::Unknown => "unknown",
+        CfgEdgeKind::Synthetic => "synthetic",
+        CfgEdgeKind::Extension => "extension",
     }
 }
 

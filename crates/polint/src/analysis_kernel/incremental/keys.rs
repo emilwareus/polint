@@ -47,6 +47,7 @@ pub(crate) enum LayerKind {
     SymbolGraph,
     ModuleTopology,
     SemanticMir,
+    Cfg,
     Metrics,
     Extension,
 }
@@ -454,6 +455,73 @@ impl LayerKey {
             lifecycle_digest,
             config_digest,
             Digest::absent(DigestKind::ToolInvocation, "semantic_mir_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "CFG layer identity must keep semantic MIR, syntax, lifecycle, view, and provider inputs explicit."
+    )]
+    pub(crate) fn cfg_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        semantic_mir_output_digest: Digest,
+        cfg_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.cfg",
+            "CFG layer keys require the CFG provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "cfg_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let view_digest = Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "cfg_graph_views",
+            &["normal_control_view", "abrupt_aware_view"],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "cfg_parameters",
+            vec![cfg_parameter_digest, view_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(view_digest);
+        input_digests.extend(source_function_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(1 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.push(dependency_layer_digest(semantic_mir_output_digest));
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+
+        Self::new(
+            LayerKind::Cfg,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "cfg_toolchain"),
             input_digests,
             dependency_layer_digests,
             vec![
@@ -2489,5 +2557,210 @@ mod symbol_graph_semantic_layer_key {
                     &["base"]
                 )))
         );
+    }
+}
+
+#[cfg(test)]
+mod cfg_layer_key {
+    use super::*;
+    use crate::analysis::cfg::cache_key::cfg_provider_parameter_digest;
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.cfg")
+            .expect("CFG provider manifest exists")
+    }
+
+    fn key(
+        source_suffix: &str,
+        config_suffix: &str,
+        go_suffix: &str,
+        ts_suffix: &str,
+        syntax_suffix: &str,
+        semantic_suffix: &str,
+        parameter_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::cfg_layer_key(
+            manifest(),
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", source_suffix],
+            )],
+            Digest::from_parts(DigestKind::Config, "config", &[config_suffix]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &[go_suffix]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &[ts_suffix]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &[syntax_suffix],
+            )],
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "semantic_mir",
+                &[semantic_suffix],
+            ),
+            parameter_digest,
+        )
+    }
+
+    #[test]
+    fn cfg_provider_parameters_include_views_outputs_and_schema() {
+        assert_eq!(
+            cfg_provider_parameter_digest(),
+            Digest::from_parts(
+                DigestKind::ProviderParameters,
+                "cfg_provider_parameters",
+                &[
+                    "cfg-facts-1",
+                    "cfg_functions",
+                    "cfg_nodes",
+                    "basic_blocks",
+                    "cfg_edges",
+                    "cfg_reachability",
+                    "cfg_dominators",
+                    "cfg_postdominators",
+                    "cfg_control_dependence",
+                    "unsupported_control_flow",
+                    "normal_control_view",
+                    "abrupt_aware_view",
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn cfg_layer_key_changes_for_every_cfg_input_family() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            cfg_provider_parameter_digest(),
+        );
+
+        assert_ne!(
+            base,
+            key(
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                cfg_provider_parameter_digest()
+            )
+        );
+        assert_ne!(
+            base,
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "cfg_provider_parameters",
+                    &["normal_control_view"]
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn cfg_layer_key_tracks_absent_extension_model_toolchain_and_graph_views() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            cfg_provider_parameter_digest(),
+        );
+
+        assert_eq!(base.layer_kind, LayerKind::Cfg);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ModelFile,
+            "model_digest_absent"
+        )));
+        assert_eq!(
+            base.toolchain_digest,
+            Digest::absent(DigestKind::ToolInvocation, "cfg_toolchain")
+        );
+        assert!(base.input_digests.contains(&Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "cfg_graph_views",
+            &["normal_control_view", "abrupt_aware_view"]
+        )));
     }
 }

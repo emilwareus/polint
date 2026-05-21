@@ -23,6 +23,18 @@ pub(crate) const TOPOLOGY_FACT_FAMILIES: &[&str] = &[
 pub(crate) const SEMANTIC_MIR_FACT_FAMILIES: &[&str] =
     &["MirBody", "MirOperation", "Place", "UnsupportedSemantic"];
 
+pub(crate) const CFG_FACT_FAMILIES: &[&str] = &[
+    "CfgFunction",
+    "CfgNode",
+    "BasicBlock",
+    "CfgEdge",
+    "CfgReachability",
+    "CfgDominator",
+    "CfgPostDominator",
+    "CfgControlDependence",
+    "UnsupportedControlFlow",
+];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -54,6 +66,7 @@ pub(crate) enum FixtureArea {
     ModuleTopology,
     #[serde(rename = "semantic-mir")]
     SemanticMir,
+    Cfg,
     Facts,
     Graphs,
     Paths,

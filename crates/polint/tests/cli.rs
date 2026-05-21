@@ -1312,6 +1312,78 @@ fn assert_semantic_mir_public_rule_source(source: &str) {
     assert_semantic_mir_public_output_is_private(source);
 }
 
+#[test]
+fn cfg_public_no_leak() {
+    assert_cfg_public_surfaces_are_private();
+    assert_cfg_cli_help_is_private();
+}
+
+fn assert_cfg_public_surfaces_are_private() {
+    let root = repo_root();
+    let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
+    let public_lib_rs = lib_rs
+        .split("pub(crate) mod analysis;")
+        .next()
+        .unwrap_or(&lib_rs);
+    let mut public_surface = public_lib_rs.to_string();
+    for path in [
+        root.join("README.md"),
+        root.join("docs/facts"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&public_surface_text(&path));
+    }
+
+    for marker in CFG_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public README/docs/facts/CLI/SDK/runner/crate-root source must not expose CFG marker `{marker}`"
+        );
+    }
+}
+
+fn assert_cfg_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in CFG_INTERNAL_PUBLIC_MARKERS {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose CFG marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
+const CFG_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint.cfg",
+    "cfg-facts-1",
+    "CfgFunction",
+    "CfgNode",
+    "BasicBlock",
+    "CfgEdge",
+    "CfgReachability",
+    "CfgDominator",
+    "CfgPostDominator",
+    "CfgControlDependence",
+    "UnsupportedControlFlow",
+    "analysis::cfg",
+    "Cfg<'_>",
+];
+
 fn write_semantic_mir_public_rule_repo(root: &Path) {
     assert_semantic_mir_public_rule_source(SEMANTIC_MIR_PUBLIC_RULE_SOURCE);
     let polint_path = repo_root()
@@ -6026,6 +6098,36 @@ files = ["**/*.tsx"]
 
 mod capability_planning {
     use super::*;
+
+    #[test]
+    fn cfg_capability_remains_unsupported() {
+        let temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected CFG capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported capability `cfg`")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "rule",
+            "local/needs-cfg"
+        ));
+    }
 
     #[test]
     fn check_reports_unsupported_reserved_capability() {

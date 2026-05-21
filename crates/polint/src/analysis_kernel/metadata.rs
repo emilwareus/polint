@@ -41,6 +41,15 @@ pub(crate) enum FactFamily {
     Place,
     MirBody,
     MirOperation,
+    CfgFunction,
+    CfgNode,
+    BasicBlock,
+    CfgEdge,
+    CfgReachability,
+    CfgDominator,
+    CfgPostDominator,
+    CfgControlDependence,
+    UnsupportedControlFlow,
     #[expect(
         dead_code,
         reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
@@ -94,6 +103,15 @@ impl FactFamily {
             Self::Place => "Place",
             Self::MirBody => "MirBody",
             Self::MirOperation => "MirOperation",
+            Self::CfgFunction => "CfgFunction",
+            Self::CfgNode => "CfgNode",
+            Self::BasicBlock => "BasicBlock",
+            Self::CfgEdge => "CfgEdge",
+            Self::CfgReachability => "CfgReachability",
+            Self::CfgDominator => "CfgDominator",
+            Self::CfgPostDominator => "CfgPostDominator",
+            Self::CfgControlDependence => "CfgControlDependence",
+            Self::UnsupportedControlFlow => "UnsupportedControlFlow",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",
@@ -297,7 +315,7 @@ pub(crate) fn resolution_metadata(
     }
 
     match precision {
-        ResolutionPrecision::ExactFile => (FactPrecision::Exact, FactConfidence::High),
+        ResolutionPrecision::ExactFile => (FactPrecision::SetupAware, FactConfidence::High),
         ResolutionPrecision::Package | ResolutionPrecision::ExternalPackage => {
             (FactPrecision::SetupAware, FactConfidence::High)
         }
@@ -322,7 +340,7 @@ pub(crate) fn resolution_status_metadata(
 
 pub(crate) fn symbol_metadata(precision: SymbolPrecision) -> (FactPrecision, FactConfidence) {
     match precision {
-        SymbolPrecision::ExactSemantic => (FactPrecision::Exact, FactConfidence::High),
+        SymbolPrecision::ExactSemantic => (FactPrecision::SetupAware, FactConfidence::High),
         SymbolPrecision::ExactLocal => (FactPrecision::Syntax, FactConfidence::High),
         SymbolPrecision::ModuleLinked => (FactPrecision::SetupAware, FactConfidence::High),
         SymbolPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),

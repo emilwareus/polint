@@ -3146,7 +3146,7 @@ mod tests {
 
         assert_eq!(resolved.producer_id, "polint.module_graph");
         assert_eq!(resolved.layer_id, "polint.module_graph");
-        assert_eq!(resolved.precision, FactPrecision::Exact);
+        assert_eq!(resolved.precision, FactPrecision::SetupAware);
         assert_eq!(resolved.confidence, FactConfidence::High);
         assert_eq!(resolved.validation, ValidationStatus::NativeTrusted);
         assert!(resolved.stable_key.contains(&import_key));

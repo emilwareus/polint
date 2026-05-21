@@ -6,6 +6,7 @@ use crate::analysis_kernel::{
 use crate::analysis::mir::body::MirStatus;
 use crate::analysis::mir::op::{AssignMode, ConservativeAction, MirOperationKind};
 use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus};
+use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
 use crate::core::{
     AnalysisDb, FileId, Language, ReferenceFact, Span, SymbolPrecision, SymbolResolutionStatus,
 };
@@ -21,6 +22,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         references: reference_rows(db),
         semantic: semantic_report(db),
         mir: mir_report(db),
+        cfg: cfg_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -33,6 +35,7 @@ struct MetadataDebugReport<'a> {
     references: Vec<ReferenceDebugRow<'a>>,
     semantic: SemanticDebugReport,
     mir: SemanticMirDebugReport,
+    cfg: CfgDebugReport,
 }
 
 #[derive(Serialize)]
@@ -136,6 +139,35 @@ struct SemanticMirDebugReport {
     operations: Vec<SemanticMirDebugRow>,
     places: Vec<SemanticMirDebugRow>,
     unsupported: Vec<SemanticMirDebugRow>,
+}
+
+#[derive(Serialize)]
+struct CfgDebugReport {
+    functions: Vec<CfgDebugRow>,
+    nodes: Vec<CfgDebugRow>,
+    blocks: Vec<CfgDebugRow>,
+    edges: Vec<CfgDebugRow>,
+    reachability: Vec<CfgDebugRow>,
+    dominators: Vec<CfgDebugRow>,
+    postdominators: Vec<CfgDebugRow>,
+    control_dependence: Vec<CfgDebugRow>,
+    unsupported: Vec<CfgDebugRow>,
+}
+
+#[derive(Serialize)]
+struct CfgDebugRow {
+    family: &'static str,
+    run_id: u64,
+    stable_key: String,
+    producer_id: &'static str,
+    layer_id: &'static str,
+    status: &'static str,
+    precision: &'static str,
+    path: Option<String>,
+    span: Option<DebugSpan>,
+    function: Option<u64>,
+    view: Option<&'static str>,
+    payload: String,
 }
 
 #[derive(Serialize)]
@@ -609,6 +641,232 @@ fn mir_unsupported_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
     rows
 }
 
+fn cfg_report(db: &AnalysisDb) -> CfgDebugReport {
+    CfgDebugReport {
+        functions: cfg_function_rows(db),
+        nodes: cfg_node_rows(db),
+        blocks: cfg_block_rows(db),
+        edges: cfg_edge_rows(db),
+        reachability: cfg_reachability_rows(db),
+        dominators: cfg_dominator_rows(db),
+        postdominators: cfg_postdominator_rows(db),
+        control_dependence: cfg_control_dependence_rows(db),
+        unsupported: cfg_unsupported_rows(db),
+    }
+}
+
+fn cfg_function_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db
+        .cfg_functions()
+        .iter()
+        .filter_map(|row| {
+            cfg_metadata_row(db, FactFamily::CfgFunction, row.id.0).map(|metadata| CfgDebugRow {
+                family: FactFamily::CfgFunction.label(),
+                run_id: row.id.0,
+                stable_key: row.stable_key.clone(),
+                producer_id: metadata.producer_id,
+                layer_id: metadata.layer_id,
+                status: cfg_status_label(row.status),
+                precision: cfg_precision_label(row.precision),
+                path: relative_path(db, Some(row.file)).map(str::to_string),
+                span: Some(debug_span(&row.span)),
+                function: Some(row.function.0),
+                view: None,
+                payload: format!("entry={};normal_exit={}", row.entry_node.0, row.normal_exit_node.0),
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_node_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db
+        .cfg_nodes()
+        .iter()
+        .filter_map(|row| {
+            cfg_metadata_row(db, FactFamily::CfgNode, row.id.0).map(|metadata| CfgDebugRow {
+                family: FactFamily::CfgNode.label(),
+                run_id: row.id.0,
+                stable_key: row.stable_key.clone(),
+                producer_id: metadata.producer_id,
+                layer_id: metadata.layer_id,
+                status: cfg_status_label(row.status),
+                precision: cfg_precision_label(row.precision),
+                path: None,
+                span: row.span.as_ref().map(debug_span),
+                function: Some(row.cfg_function.0),
+                view: None,
+                payload: format!("kind={:?};block={};operation={:?}", row.kind, row.block.0, row.operation),
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_block_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db
+        .cfg_blocks()
+        .iter()
+        .filter_map(|row| {
+            cfg_metadata_row(db, FactFamily::BasicBlock, row.id.0).map(|metadata| CfgDebugRow {
+                family: FactFamily::BasicBlock.label(),
+                run_id: row.id.0,
+                stable_key: row.stable_key.clone(),
+                producer_id: metadata.producer_id,
+                layer_id: metadata.layer_id,
+                status: cfg_status_label(row.status),
+                precision: cfg_precision_label(row.precision),
+                path: None,
+                span: None,
+                function: Some(row.cfg_function.0),
+                view: None,
+                payload: format!("kind={:?};reachable={};rpo={}", row.kind, row.reachable, row.reverse_postorder),
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_edge_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db
+        .cfg_edges()
+        .iter()
+        .filter_map(|row| {
+            cfg_metadata_row(db, FactFamily::CfgEdge, row.id.0).map(|metadata| CfgDebugRow {
+                family: FactFamily::CfgEdge.label(),
+                run_id: row.id.0,
+                stable_key: row.stable_key.clone(),
+                producer_id: metadata.producer_id,
+                layer_id: metadata.layer_id,
+                status: cfg_status_label(row.status),
+                precision: cfg_precision_label(row.precision),
+                path: None,
+                span: None,
+                function: Some(row.cfg_function.0),
+                view: Some(cfg_view_label(row.view)),
+                payload: format!(
+                    "kind={};from_block={};to_block={};from_node={};to_node={}",
+                    cfg_edge_kind_label(row.kind), row.from_block.0, row.to_block.0, row.from.0, row.to.0
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_reachability_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db.cfg_reachability().iter().filter_map(|row| {
+        cfg_metadata_row(db, FactFamily::CfgReachability, row.id.0).map(|metadata| CfgDebugRow {
+            family: FactFamily::CfgReachability.label(),
+            run_id: row.id.0,
+            stable_key: row.stable_key.clone(),
+            producer_id: metadata.producer_id,
+            layer_id: metadata.layer_id,
+            status: cfg_status_label(row.status),
+            precision: cfg_precision_label(row.precision),
+            path: None,
+            span: None,
+            function: Some(row.cfg_function.0),
+            view: Some(cfg_view_label(row.view)),
+            payload: format!("block={};reachable={}", row.block.0, row.reachable),
+        })
+    }).collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_dominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db.cfg_dominators().iter().filter_map(|row| {
+        cfg_metadata_row(db, FactFamily::CfgDominator, row.id.0).map(|metadata| CfgDebugRow {
+            family: FactFamily::CfgDominator.label(),
+            run_id: row.id.0,
+            stable_key: row.stable_key.clone(),
+            producer_id: metadata.producer_id,
+            layer_id: metadata.layer_id,
+            status: cfg_status_label(row.status),
+            precision: cfg_precision_label(row.precision),
+            path: None,
+            span: None,
+            function: Some(row.cfg_function.0),
+            view: Some(cfg_view_label(row.view)),
+            payload: format!("dominator={};dominated={};immediate={}", row.dominator.0, row.dominated.0, row.immediate),
+        })
+    }).collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_postdominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db.cfg_postdominators().iter().filter_map(|row| {
+        cfg_metadata_row(db, FactFamily::CfgPostDominator, row.id.0).map(|metadata| CfgDebugRow {
+            family: FactFamily::CfgPostDominator.label(),
+            run_id: row.id.0,
+            stable_key: row.stable_key.clone(),
+            producer_id: metadata.producer_id,
+            layer_id: metadata.layer_id,
+            status: cfg_status_label(row.status),
+            precision: cfg_precision_label(row.precision),
+            path: None,
+            span: None,
+            function: Some(row.cfg_function.0),
+            view: Some(cfg_view_label(row.view)),
+            payload: format!("postdominator={};postdominated={};immediate={}", row.postdominator.0, row.postdominated.0, row.immediate),
+        })
+    }).collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_control_dependence_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db.cfg_control_dependence().iter().filter_map(|row| {
+        cfg_metadata_row(db, FactFamily::CfgControlDependence, row.id.0).map(|metadata| CfgDebugRow {
+            family: FactFamily::CfgControlDependence.label(),
+            run_id: row.id.0,
+            stable_key: row.stable_key.clone(),
+            producer_id: metadata.producer_id,
+            layer_id: metadata.layer_id,
+            status: cfg_status_label(row.status),
+            precision: cfg_precision_label(row.precision),
+            path: None,
+            span: None,
+            function: Some(row.cfg_function.0),
+            view: Some(cfg_view_label(row.view)),
+            payload: format!("controlling_edge={};edge_kind={};controlled_block={}", row.controlling_edge.0, cfg_edge_kind_label(row.controlling_edge_kind), row.controlled_block.0),
+        })
+    }).collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_unsupported_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
+    let mut rows = db.unsupported_control_flow().iter().filter_map(|row| {
+        cfg_metadata_row(db, FactFamily::UnsupportedControlFlow, row.id.0).map(|metadata| CfgDebugRow {
+            family: FactFamily::UnsupportedControlFlow.label(),
+            run_id: row.id.0,
+            stable_key: row.stable_key.clone(),
+            producer_id: metadata.producer_id,
+            layer_id: metadata.layer_id,
+            status: cfg_status_label(row.status),
+            precision: cfg_precision_label(row.precision),
+            path: relative_path(db, Some(row.file)).map(str::to_string),
+            span: Some(debug_span(&row.span)),
+            function: row.cfg_function.map(|function| function.0),
+            view: None,
+            payload: format!("construct={};action={:?}", row.construct, row.conservative_action),
+        })
+    }).collect::<Vec<_>>();
+    sort_cfg_rows(&mut rows);
+    rows
+}
+
+fn cfg_metadata_row(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<&FactMeta> {
+    db.metadata_for(FactRef::new(family, run_id))
+}
+
 fn mir_metadata_row(
     db: &AnalysisDb,
     family: FactFamily,
@@ -697,6 +955,27 @@ fn sort_mir_rows(rows: &mut [SemanticMirDebugRow]) {
             .cmp(&(
                 right.path.as_deref().unwrap_or(""),
                 span_start(right.span),
+                right.stable_key.as_str(),
+                right.run_id,
+            ))
+    });
+}
+
+fn sort_cfg_rows(rows: &mut [CfgDebugRow]) {
+    rows.sort_by(|left, right| {
+        (
+            left.path.as_deref().unwrap_or(""),
+            span_start(left.span),
+            left.function,
+            left.view.unwrap_or(""),
+            left.stable_key.as_str(),
+            left.run_id,
+        )
+            .cmp(&(
+                right.path.as_deref().unwrap_or(""),
+                span_start(right.span),
+                right.function,
+                right.view.unwrap_or(""),
                 right.stable_key.as_str(),
                 right.run_id,
             ))
@@ -846,6 +1125,71 @@ fn place_status_label(status: PlaceStatus) -> &'static str {
     }
 }
 
+fn cfg_status_label(status: CfgStatus) -> &'static str {
+    match status {
+        CfgStatus::Resolved => "resolved",
+        CfgStatus::Partial => "partial",
+        CfgStatus::Unknown => "unknown",
+        CfgStatus::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_precision_label(precision: CfgPrecision) -> &'static str {
+    match precision {
+        CfgPrecision::ExactSyntax => "exact_syntax",
+        CfgPrecision::ExactLowered => "exact_lowered",
+        CfgPrecision::SetupAware => "setup_aware",
+        CfgPrecision::Conservative => "conservative",
+        CfgPrecision::Heuristic => "heuristic",
+        CfgPrecision::Unknown => "unknown",
+        CfgPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn cfg_view_label(view: CfgView) -> &'static str {
+    match view {
+        CfgView::NormalControl => "normal_control",
+        CfgView::AbruptAware => "abrupt_aware",
+        CfgView::ExceptionConservative => "exception_conservative",
+    }
+}
+
+fn cfg_edge_kind_label(kind: CfgEdgeKind) -> &'static str {
+    match kind {
+        CfgEdgeKind::Normal => "normal",
+        CfgEdgeKind::True => "true",
+        CfgEdgeKind::False => "false",
+        CfgEdgeKind::SwitchCase => "switch_case",
+        CfgEdgeKind::DefaultCase => "default_case",
+        CfgEdgeKind::LoopEnter => "loop_enter",
+        CfgEdgeKind::LoopBack => "loop_back",
+        CfgEdgeKind::LoopExit => "loop_exit",
+        CfgEdgeKind::Break => "break",
+        CfgEdgeKind::Continue => "continue",
+        CfgEdgeKind::Goto => "goto",
+        CfgEdgeKind::Return => "return",
+        CfgEdgeKind::Throw => "throw",
+        CfgEdgeKind::ImplicitThrow => "implicit_throw",
+        CfgEdgeKind::Panic => "panic",
+        CfgEdgeKind::Recover => "recover",
+        CfgEdgeKind::Finally => "finally",
+        CfgEdgeKind::Cleanup => "cleanup",
+        CfgEdgeKind::Defer => "defer",
+        CfgEdgeKind::ShortCircuit => "short_circuit",
+        CfgEdgeKind::OptionalChain => "optional_chain",
+        CfgEdgeKind::Nullish => "nullish",
+        CfgEdgeKind::YieldSuspend => "yield_suspend",
+        CfgEdgeKind::YieldResume => "yield_resume",
+        CfgEdgeKind::AwaitSuspend => "await_suspend",
+        CfgEdgeKind::AwaitResume => "await_resume",
+        CfgEdgeKind::Spawn => "spawn",
+        CfgEdgeKind::Unreachable => "unreachable",
+        CfgEdgeKind::Unknown => "unknown",
+        CfgEdgeKind::Synthetic => "synthetic",
+        CfgEdgeKind::Extension => "extension",
+    }
+}
+
 fn operation_kind_label(kind: &MirOperationKind) -> &'static str {
     match kind {
         MirOperationKind::StorageLive { .. } => "storage_live",
@@ -944,6 +1288,161 @@ fn symbol_namespace_label(namespace: crate::core::SymbolNamespace) -> &'static s
         crate::core::SymbolNamespace::Package => "package",
         crate::core::SymbolNamespace::Module => "module",
         crate::core::SymbolNamespace::Unknown => "unknown",
+    }
+}
+
+mod cfg_debug_json {
+    use super::super::AnalysisKernel;
+    use crate::analysis::cfg::facts::{
+        BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
+        CfgNodeKind, CfgPrecision, CfgStatus, CfgView, ControlDependenceFact,
+    };
+    use crate::analysis::cfg::ids::{
+        BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId, ControlDependenceId,
+    };
+    use crate::analysis::cfg::store::CfgOutput;
+    use crate::analysis::ids::MirBodyId;
+    use crate::core::{AnalysisDb, FileId, FunctionId, Language, Span};
+    use std::path::PathBuf;
+
+    #[test]
+    fn cfg_debug_json_contains_deterministic_cfg_arrays() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() { return 1; }\n".to_string(),
+        );
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![CfgFunctionFact {
+                id: CfgFunctionId(0),
+                body: MirBodyId(0),
+                function: FunctionId(0),
+                language: Language::TypeScript,
+                file,
+                span: span(file),
+                entry_node: CfgNodeId(0),
+                normal_exit_node: CfgNodeId(1),
+                exceptional_exit_node: None,
+                stable_key: "cfg:function:app".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            nodes: vec![
+                node(0, CfgNodeKind::Entry, "cfg:node:entry"),
+                node(1, CfgNodeKind::ExitNormal, "cfg:node:exit"),
+            ],
+            blocks: vec![
+                block(0, BasicBlockKind::Entry, CfgNodeId(0), "cfg:block:entry"),
+                block(1, BasicBlockKind::ExitNormal, CfgNodeId(1), "cfg:block:exit"),
+            ],
+            edges: vec![CfgEdgeFact {
+                id: CfgEdgeId(0),
+                cfg_function: CfgFunctionId(0),
+                view: CfgView::NormalControl,
+                from: CfgNodeId(0),
+                to: CfgNodeId(1),
+                from_block: BasicBlockId(0),
+                to_block: BasicBlockId(1),
+                kind: CfgEdgeKind::Normal,
+                label: None,
+                stable_key: "cfg:edge:entry-exit".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            control_dependence: vec![ControlDependenceFact {
+                id: ControlDependenceId(0),
+                cfg_function: CfgFunctionId(0),
+                view: CfgView::NormalControl,
+                controlling_edge: CfgEdgeId(0),
+                controlling_edge_kind: CfgEdgeKind::Normal,
+                controlled_block: BasicBlockId(1),
+                stable_key: "cfg:dependence:entry-exit".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            ..CfgOutput::empty()
+        })
+        .expect("cfg rows should store");
+
+        let report = AnalysisKernel::metadata_debug_json_for_test(&db);
+        let cfg = report["cfg"]
+            .as_object()
+            .unwrap_or_else(|| panic!("missing cfg debug object: {report:#?}"));
+
+        for dotted_key in [
+            "cfg.functions",
+            "cfg.nodes",
+            "cfg.blocks",
+            "cfg.edges",
+            "cfg.reachability",
+            "cfg.dominators",
+            "cfg.postdominators",
+            "cfg.control_dependence",
+            "cfg.unsupported",
+        ] {
+            let key = dotted_key
+                .strip_prefix("cfg.")
+                .expect("test keys use cfg prefix");
+            assert!(
+                cfg.get(key).and_then(serde_json::Value::as_array).is_some(),
+                "cfg debug object missing `{dotted_key}` array: {cfg:#?}"
+            );
+        }
+        assert_eq!(
+            cfg["edges"][0]["payload"].as_str(),
+            Some("kind=normal;from_block=0;to_block=1;from_node=0;to_node=1")
+        );
+        assert!(!report.to_string().contains(env!("CARGO_MANIFEST_DIR")));
+    }
+
+    fn node(id: u64, kind: CfgNodeKind, stable_key: &str) -> CfgNodeFact {
+        CfgNodeFact {
+            id: CfgNodeId(id),
+            cfg_function: CfgFunctionId(0),
+            body: MirBodyId(0),
+            operation: None,
+            block: BasicBlockId(id),
+            kind,
+            span: Some(span(FileId(0))),
+            generated: true,
+            operation_ordinal: id as u32,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn block(
+        id: u64,
+        kind: BasicBlockKind,
+        node: CfgNodeId,
+        stable_key: &str,
+    ) -> BasicBlockFact {
+        BasicBlockFact {
+            id: BasicBlockId(id),
+            cfg_function: CfgFunctionId(0),
+            kind,
+            first_node: Some(node),
+            last_node: Some(node),
+            reachable: true,
+            reverse_postorder: id as u32,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 10,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 11,
+        }
     }
 }
 

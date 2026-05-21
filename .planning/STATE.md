@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: planning
-last_updated: "2026-05-20T12:02:00.645Z"
-last_activity: 2026-05-20
+status: executing
+last_updated: "2026-05-21T06:04:08Z"
+last_activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
 progress:
   total_phases: 22
-  completed_phases: 9
-  total_plans: 46
-  completed_plans: 46
+  completed_phases: 10
+  total_plans: 52
+  completed_plans: 52
   percent: 100
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 29 — Local CFG and Control Dependence
+**Current focus:** Phase 30 — Direct Call Facts
 
 ## Current Status
 
@@ -34,16 +34,17 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 - v1.2 roadmap is defined in `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
+- Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
 - Each v1.2 research PR maps to one GSD phase, in order, from Phase 20 through Phase 41.
 - New broad research is not needed by default. Use the relevant research documents referenced by each phase; do additional research only for a concrete implementation gap.
 
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to plan
-Phase: 29
-Plan: Not started
-Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
+Status: Ready for Phase 30
+Phase: 30 (Direct Call Facts) — PENDING
+Plan: Planning/execution not started
+Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
 
 ## Phase Progress
 
@@ -58,7 +59,7 @@ Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, adde
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
-| 29 | Pending | Local CFG and control dependence; requirement SAE-SEM-04 |
+| 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
@@ -208,6 +209,25 @@ Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, adde
 - [Phase 28-private-semantic-mir-and-place-identity]: Keep semantic MIR/place internals out of public check JSON, inspect JSON, polint test JSON, CLI help, SDK, runner, crate-root public exports, README, and docs.
 - [Phase 28-private-semantic-mir-and-place-identity]: Use an external temp-repo rule that requests only supported public fact views to prove existing rule-author workflows remain compatible.
 - [Phase 28-private-semantic-mir-and-place-identity]: Offset private MIR/place/unsupported IDs per language output before merge so validation does not cross-wire Go and TS/JS run-local IDs.
+- [Phase 29-local-cfg-and-control-dependence]: Keep CFG contracts crate-private with no SDK, runner, CLI, or docs promotion.
+- [Phase 29-local-cfg-and-control-dependence]: Use run-local dense IDs only as handles; persistent CFG identity is carried by stable keys.
+- [Phase 29-local-cfg-and-control-dependence]: Preserve duplicate CFG rows during normalization so later validation can report conflicts deterministically.
+- [Phase 29-local-cfg-and-control-dependence]: Drive language CFG lowering through one shared builder rather than duplicating graph construction per language.
+- [Phase 29-local-cfg-and-control-dependence]: Derive reachability, dominators, postdominators, and control dependence from selected graph views instead of storing language-authored derived rows.
+- [Phase 29-local-cfg-and-control-dependence]: Use a synthetic unified exit for postdominance and preserve controlling edge evidence on control-dependence facts.
+- [Phase 29-local-cfg-and-control-dependence]: Run polint.cfg after polint.semantic_mir and before polint.metrics.
+- [Phase 29-local-cfg-and-control-dependence]: Accept an empty CFG provider output until language lowering plans populate real graph rows.
+- [Phase 29-local-cfg-and-control-dependence]: Keep CFG validation and debug output crate-private/test-facing with no SDK, runner, CLI, or public JSON surface.
+- [Phase 29-local-cfg-and-control-dependence]: Lower Go CFG from private semantic MIR rows and keep raw tree-sitter AST objects out of CFG facts.
+- [Phase 29-local-cfg-and-control-dependence]: Keep language CFG lowerers responsible for base nodes/edges only; shared provider code derives reachability, dominance, postdominance, and control dependence.
+- [Phase 29-local-cfg-and-control-dependence]: Represent Go spawn, defer, panic, select, goto, fallthrough, and unsupported semantics with typed CFG edges or unsupported control-flow rows instead of exact claims.
+- [Phase 29-local-cfg-and-control-dependence]: Lower TS/JS CFG from private semantic MIR rows and keep Oxc AST/span objects out of CFG facts.
+- [Phase 29-local-cfg-and-control-dependence]: Merge language base CFG outputs with deterministic run-local ID offsets before deriving shared CFG analyses.
+- [Phase 29-local-cfg-and-control-dependence]: Represent TS/JS dynamic, async, cleanup, optional/nullish, throw, and unsupported semantics with typed CFG edges or unsupported control-flow rows instead of exact scheduler/runtime claims.
+- [Phase 29-local-cfg-and-control-dependence]: Keep CFG eval support crate-private and test-facing, sourced only from metadata_debug_json_for_test.
+- [Phase 29-local-cfg-and-control-dependence]: Use the existing TOML eval fixture manifest format instead of adding JSON fixture files.
+- [Phase 29-local-cfg-and-control-dependence]: CFG stable keys must use MIR/body stable identity, not run-local CFG IDs, to avoid cross-language and cross-function collisions.
+- [Phase 29-local-cfg-and-control-dependence]: Keep reserved public cfg capability unsupported until a later intentional promotion phase.
 
 ## Execution Metrics
 
@@ -249,17 +269,26 @@ Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, adde
 | 28-private-semantic-mir-and-place-identity | 05 | 26 min | 3 | 12 |
 | 28-private-semantic-mir-and-place-identity | 06 | 12 min | 2 | 13 |
 | 28-private-semantic-mir-and-place-identity | 07 | 11 min | 1 | 6 |
+| 29-local-cfg-and-control-dependence | 01 | 18 min | 3 | 7 |
+| 29-local-cfg-and-control-dependence | 02 | 24 min | 3 | 4 |
+| 29-local-cfg-and-control-dependence | 03 | 34 min | 3 | 12 |
+| 29-local-cfg-and-control-dependence | 04 | 28 min | 2 | 4 |
+| 29-local-cfg-and-control-dependence | 05 | 31 min | 2 | 3 |
+| 29-local-cfg-and-control-dependence | 06 | 68 min | 3 | 19 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, added Rust caching, and prepared PR #33 runtime measurement.
-- Stopped at: Phase 29 (Local CFG and Control Dependence) is ready for discussion/planning.
+- Last activity: 2026-05-21 - Completed quick task 260521-b38: Fix CFG digest payload and stable unsupported control-flow keys.
+- Stopped at: Phase 29 PR #34 follow-up digest/stable-key fix complete; ready for Phase 30 direct call facts.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260521-b38 | Fix CFG digest payload and stable unsupported control-flow keys | 2026-05-21 | implemented | [260521-b38-fix-cfg-digest-payload-and-stable-unsupp](./quick/260521-b38-fix-cfg-digest-payload-and-stable-unsupp/) |
+| 260521-af1 | Fix CFG stored reachability for synthetic exits | 2026-05-21 | implemented | [260521-af1-fix-cfg-stored-reachability-for-syntheti](./quick/260521-af1-fix-cfg-stored-reachability-for-syntheti/) |
+| 260521-a5k | Fix CFG PR review findings | 2026-05-21 | implemented | [260521-a5k-fix-cfg-pr-review-findings](./quick/260521-a5k-fix-cfg-pr-review-findings/) |
 | 260520-jho | Speed up CI with Rust caching and lighter PR platform checks, then measure Actions runtime | 2026-05-20 | implemented | [260520-jho-speed-up-ci-with-rust-caching-and-lighte](./quick/260520-jho-speed-up-ci-with-rust-caching-and-lighte/) |
 | 260520-ii6 | Merge latest main security fixes into PR 33 branch and rerun all local checks | 2026-05-20 | implemented | [260520-ii6-merge-latest-main-security-fixes-into-pr](./quick/260520-ii6-merge-latest-main-security-fixes-into-pr/) |
 | 260520-iba | Resolve PR 33 merge conflict against latest main and re-review merge readiness | 2026-05-20 | implemented | [260520-iba-resolve-pr-33-merge-conflict-against-lat](./quick/260520-iba-resolve-pr-33-merge-conflict-against-lat/) |
@@ -278,4 +307,4 @@ Last activity: 2026-05-20 - Completed quick task 260520-jho: split CI jobs, adde
 
 ## Next Action
 
-Phase 29 is ready for discussion/planning.
+Phase 30 is next: plan and execute direct call facts.
