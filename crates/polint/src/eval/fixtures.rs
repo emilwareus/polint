@@ -572,6 +572,121 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_abstract_domains_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    observed.extend(abstract_domain_observed_with_policy(
+        temp.path(),
+        &plan,
+        crate::analysis::domains::solver::SolverPolicy::for_test(
+            crate::analysis::domains::solver::SolverBudget {
+                max_iterations: 10_000,
+                widening_fuel: 0,
+            },
+        ),
+    )?);
+    observed.extend(abstract_domain_observed_with_policy(
+        temp.path(),
+        &plan,
+        crate::analysis::domains::solver::SolverPolicy::for_test(
+            crate::analysis::domains::solver::SolverBudget {
+                max_iterations: 0,
+                widening_fuel: 8,
+            },
+        ),
+    )?);
+    if deterministic {
+        observed.push(abstract_domains_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+fn abstract_domain_observed_with_policy(
+    repo_root: &Path,
+    plan: &crate::analysis_plan::AnalysisPlan,
+    policy: crate::analysis::domains::solver::SolverPolicy,
+) -> anyhow::Result<Vec<crate::eval::model::ObservedItem>> {
+    let loaded = crate::config::load_config(repo_root)?;
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let rule_digest = crate::cache::keys::rule_hash(&[], None, &std::collections::BTreeMap::new());
+    let cache = crate::cache::Cache::default_for_repo(repo_root, false);
+    let output =
+        crate::analysis_kernel::AnalysisKernel::run(crate::analysis_kernel::KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: &config_digest,
+            rule_digest: &rule_digest,
+            plan,
+            parallel: true,
+        })?;
+    let solver = crate::analysis::domains::solver::LocalDomainSolver::new(policy);
+    let result = solver.solve(crate::analysis::domains::solver::SolverInput::from(
+        &output.db,
+    ));
+    let mut db = output.db.clone();
+    db.replace_abstract_domain_facts(crate::analysis::domains::store::DomainOutput::from_results(
+        result.results(),
+    ));
+    let debug = crate::analysis_kernel::AnalysisKernel::metadata_debug_json_for_test(&db);
+    Ok(crate::eval::observed::abstract_domain_facts_for_test(
+        &debug,
+    ))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -651,6 +766,19 @@ fn direct_calls_determinism_observed_invariant() -> crate::eval::model::Observed
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("direct_calls.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn abstract_domains_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "abstract_domains.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("abstract_domains.current_behavior".to_string()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -1608,6 +1736,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "direct-calls-core"
         {
             run_direct_calls_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::AbstractDomains
+            && fixture.manifest.case_id == "abstract-domains-core"
+        {
+            run_abstract_domains_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -2367,18 +2499,46 @@ mod abstract_domains_core {
             .collect::<Vec<_>>();
 
         for required in [
-            ("DomainObservation", "reachability", Some(ObservedStatus::Present)),
-            ("DomainObservation", "nilness", Some(ObservedStatus::Present)),
-            ("DomainObservation", "truthiness", Some(ObservedStatus::Present)),
-            ("DomainObservation", "constants", Some(ObservedStatus::Present)),
-            ("DomainObservation", "strings", Some(ObservedStatus::Present)),
+            (
+                "DomainObservation",
+                "reachability",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "nilness",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "truthiness",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "constants",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "strings",
+                Some(ObservedStatus::Unknown),
+            ),
             (
                 "DomainObservation",
                 "initializedness",
                 Some(ObservedStatus::Present),
             ),
-            ("DomainObservation", "top", Some(ObservedStatus::Top)),
-            ("DomainObservation", "unknown", Some(ObservedStatus::Unknown)),
+            (
+                "DomainObservation",
+                "reachability",
+                Some(ObservedStatus::Top),
+            ),
+            (
+                "DomainObservation",
+                "unknown",
+                Some(ObservedStatus::Unknown),
+            ),
             (
                 "DomainObservation",
                 "unsupported",
@@ -2391,12 +2551,14 @@ mod abstract_domains_core {
             ),
         ] {
             assert!(
-                expected_facts.iter().any(|(family, key, status, _, producer)| {
-                    *family == required.0
-                        && key.contains(required.1)
-                        && *status == required.2
-                        && *producer == Some("polint.abstract_domains")
-                }),
+                expected_facts
+                    .iter()
+                    .any(|(family, key, status, _, producer)| {
+                        *family == required.0
+                            && key.contains(required.1)
+                            && *status == required.2
+                            && *producer == Some("polint.abstract_domains")
+                    }),
                 "abstract-domain fixture missing expected {required:?}: {expected_facts:#?}"
             );
         }
@@ -2412,8 +2574,11 @@ mod abstract_domains_core {
                 "abstract_domains.current_determinism",
                 "cold_warm_no_cache_equal",
             ),
-            ("abstract_domains.counts.by_slot.Reachability.nonzero", "true"),
-            ("abstract_domains.counts.by_status.Present.nonzero", "true"),
+            (
+                "abstract_domains.counts.by_slot.reachability.nonzero",
+                "true",
+            ),
+            ("abstract_domains.counts.by_status.present.nonzero", "true"),
             (
                 "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
                 "true",
@@ -2426,7 +2591,10 @@ mod abstract_domains_core {
                 "abstract_domains.index_counts.observations_by_slot.nonzero",
                 "true",
             ),
-            ("abstract_domains.index_counts.events_by_status.nonzero", "true"),
+            (
+                "abstract_domains.index_counts.events_by_status.nonzero",
+                "true",
+            ),
         ] {
             assert!(
                 case.observed.iter().any(|item| match item {
