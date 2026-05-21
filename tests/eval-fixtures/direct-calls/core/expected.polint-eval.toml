@@ -21,7 +21,7 @@ fact = { family = "CallTarget", stable_key = "DirectReference", mode = "partial"
 fact = { family = "CallTarget", stable_key = "ImportBinding", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
 
 [[expected]]
-fact = { family = "CallTarget", stable_key = "StaticMember", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
+fact = { family = "CallTarget", stable_key = "DirectMember", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
 
 [[expected]]
 fact = { family = "CallTarget", stable_key = "Constructor", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
@@ -78,7 +78,7 @@ invariant = { name = "direct_calls.counts.by_algorithm.ImportBinding.nonzero", v
 invariant = { name = "direct_calls.counts.by_algorithm.ConstructorBinding.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
-invariant = { name = "direct_calls.counts.by_algorithm.StaticMember.nonzero", value = "true", mode = "exact" }
+invariant = { name = "direct_calls.counts.by_algorithm.DirectMember.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
 invariant = { name = "direct_calls.counts.by_status.Resolved.nonzero", value = "true", mode = "exact" }

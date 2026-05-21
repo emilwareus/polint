@@ -2107,7 +2107,7 @@ mod direct_calls_core {
         "direct_calls.counts.by_algorithm.DirectReference.nonzero",
         "direct_calls.counts.by_algorithm.ImportBinding.nonzero",
         "direct_calls.counts.by_algorithm.ConstructorBinding.nonzero",
-        "direct_calls.counts.by_algorithm.StaticMember.nonzero",
+        "direct_calls.counts.by_algorithm.DirectMember.nonzero",
         "direct_calls.counts.by_status.Resolved.nonzero",
         "direct_calls.counts.by_status.Unresolved.nonzero",
         "direct_calls.counts.by_status.Unsupported.nonzero",
@@ -2181,7 +2181,7 @@ mod direct_calls_core {
                 Some(ObservedStatus::Resolved),
             ),
             ("CallTarget", "Constructor", Some(ObservedStatus::Resolved)),
-            ("CallTarget", "StaticMember", Some(ObservedStatus::Resolved)),
+            ("CallTarget", "DirectMember", Some(ObservedStatus::Resolved)),
             (
                 "UnresolvedCall",
                 "FunctionValue",
