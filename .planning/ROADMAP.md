@@ -229,6 +229,15 @@ Plans:
 **Goal:** Add direct call-site, target, unresolved-call, direct/static resolution, call indexes, and debug snapshots.
 **Requirements:** SAE-SEM-05
 **Research:** `research/call-graphs/FINAL-REPORT.md`, `research/call-graphs/RECOMMENDED_IMPLEMENTATION.md`, `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`
+**Plans:** 6 plans
+
+Plans:
+- [ ] 30-01-PLAN.md — Private call fact contracts, storage, indexes, and metadata
+- [ ] 30-02-PLAN.md — Calls provider, cache identity, validation, and debug snapshots
+- [ ] 30-03-PLAN.md — MIR-derived call sites and unresolved-call evidence
+- [ ] 30-04-PLAN.md — Direct/binding/static target resolution with honest unresolved statuses
+- [ ] 30-05-PLAN.md — Direct-call eval observation and native fixtures
+- [ ] 30-06-PLAN.md — Public no-leak and unsupported call graph capability proof
 
 **Success criteria:**
 1. Fixtures cover direct functions, methods, constructors, member calls, function values as unresolved/unknown, unsupported dynamic calls, and precise statuses.
