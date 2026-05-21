@@ -278,11 +278,11 @@ impl AnalysisKernel {
                 &mut db,
                 &input_snapshot,
                 Self::provider_manifest("polint.abstract_domains"),
-                semantic_mir_dependency_output_digest,
-                cfg_dependency_output_digest,
-                calls_dependency_output_digest,
-                symbol_dependency_output_digest,
-                module_topology_dependency_output_digest,
+                semantic_mir_dependency_output_digest.clone(),
+                cfg_dependency_output_digest.clone(),
+                calls_dependency_output_digest.clone(),
+                symbol_dependency_output_digest.clone(),
+                module_topology_dependency_output_digest.clone(),
                 vec![
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
@@ -295,7 +295,40 @@ impl AnalysisKernel {
             "polint.abstract_domains",
             &db,
             polint_abstract_domains_cache_stats,
-            abstract_domains_output_digest,
+            abstract_domains_output_digest.clone(),
+        ));
+
+        let abstract_domains_dependency_output_digest = abstract_domains_output_digest
+            .unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.abstract_domains",
+                )
+            });
+        let direct_summaries =
+            crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.direct_summaries"),
+                semantic_mir_dependency_output_digest,
+                cfg_dependency_output_digest,
+                calls_dependency_output_digest,
+                abstract_domains_dependency_output_digest,
+                symbol_dependency_output_digest,
+                module_topology_dependency_output_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
+        let _direct_summaries_output_digest = direct_summaries.output_digest;
+        diagnostics.extend(direct_summaries.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.direct_summaries",
+            &db,
+            polint_direct_summaries_cache_stats,
+            _direct_summaries_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -709,6 +742,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );
@@ -1183,6 +1217,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );

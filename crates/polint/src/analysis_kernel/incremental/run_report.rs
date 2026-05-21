@@ -150,6 +150,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );
