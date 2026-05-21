@@ -55,10 +55,12 @@ The milestone should preserve public API discipline. New internals stay private 
 **Plans:** 2/2 plans complete
 
 Plans:
+
 - [x] 20-01-PLAN.md - Private kernel facade and runner/CLI delegation
 - [x] 20-02-PLAN.md - Internal provider manifests and deterministic provider-order inspection
 
 **Success criteria:**
+
 1. Existing tests pass with current behavior preserved.
 2. Runner orchestration delegates through the private kernel facade.
 3. Existing source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics providers have internal manifests.
@@ -72,12 +74,14 @@ Plans:
 **Plans:** 4/4 plans complete
 
 Plans:
+
 - [x] 21-01-PLAN.md - Metadata vocabulary and source/syntax sidecar attachment
 - [x] 21-02-PLAN.md - Derived provider metadata coverage and missing-metadata detection
 - [x] 21-03-PLAN.md - Stable-key merge validation and kernel diagnostics
 - [x] 21-04-PLAN.md - Internal provenance debug JSON and compatibility proof
 
 **Success criteria:**
+
 1. Kernel-produced existing facts have internal metadata.
 2. Duplicate or conflicting stable keys fail deterministically.
 3. Debug JSON can show provenance for files, imports, symbols, and references.
@@ -91,6 +95,7 @@ Plans:
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [x] 22-01-PLAN.md - Internal evaluation model and deterministic report hashing
 - [x] 22-02-PLAN.md - Generic matchers and unified metrics
 - [x] 22-03-PLAN.md - Native fixture runner and real kernel observation
@@ -99,6 +104,7 @@ Plans:
 - [x] 22-06-PLAN.md - Required fixture coverage and public-boundary proof
 
 **Success criteria:**
+
 1. Native fixtures can assert facts, graph edges, paths, diagnostics, invariants, and runtime budgets.
 2. Expected/observed output is deterministic.
 3. Output hashes exclude timestamps and machine-local paths.
@@ -112,6 +118,7 @@ Plans:
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [x] 23-01-PLAN.md — Internal digest, cache-key, cache-stat, and provider-output vocabulary
 - [x] 23-02-PLAN.md — Deterministic input snapshots for source, config, lifecycle, rule, model, extension, provider, and tool inputs
 - [x] 23-03-PLAN.md — Current Go/TS file-fact cache stats instrumentation without layer-cache reuse
@@ -119,6 +126,7 @@ Plans:
 - [x] 23-05-PLAN.md — Native eval fixture coverage and public-boundary proof
 
 **Success criteria:**
+
 1. `InputSnapshot`, `Digest`, `LayerKey`, `QueryKey`, `SummaryKey`, and `DiagnosticKey` exist internally.
 2. Cache stats and provider output metadata are recorded.
 3. Snapshot tests cover file text, config, Go lifecycle, TS/JS lifecycle, rule digests, model digests, and official tool invocation digests where present.
@@ -130,6 +138,7 @@ Plans:
 **Research:** `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`, `research/semantic-index/RECOMMENDED_IMPLEMENTATION.md`
 
 **Success criteria:**
+
 1. Syntax cache is not invalidated by unrelated rule edits.
 2. Module and symbol layers invalidate on import, lifecycle, and config changes.
 3. Cache stats report hits and misses deterministically.
@@ -142,6 +151,7 @@ Plans:
 **Research:** `research/agent-rule-authoring/FINAL-REPORT.md`, `research/agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`, `research/agent-rule-authoring/VALIDATION.md`
 
 **Success criteria:**
+
 1. Generated `RuleManifest` includes derived fact views, capabilities, and options.
 2. `polint inspect rule --format json` has stable JSON coverage.
 3. `polint test` can run temp-repo fixtures and assert JSON diagnostics.
@@ -155,6 +165,7 @@ Plans:
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [x] 26-01-PLAN.md — Internal semantic fact contracts, AnalysisDb storage, metadata families, and provider manifest outputs
 - [x] 26-02-PLAN.md — TS/JS scopes, imports/exports, aliases, resolution rows, unknowns, and stable exports
 - [x] 26-03-PLAN.md — Go sidecar semantic output, normalized Go semantic rows, and setup-missing handling
@@ -163,6 +174,7 @@ Plans:
 - [x] 26-06-PLAN.md — Semantic eval fixtures, public no-leak proof, and bounded symbol/reference docs updates
 
 **Success criteria:**
+
 1. Fixtures cover resolved, ambiguous, unresolved, generated, alias, import/export, and cross-file references.
 2. Unknowns are visible and precision-labeled.
 3. Go and TS/JS providers own language-specific extraction behind normalized facts.
@@ -176,6 +188,7 @@ Plans:
 **Plans:** 7/7 plans complete
 
 Plans:
+
 - [x] 27-01-PLAN.md — Internal topology contracts, AnalysisDb storage, metadata families, and provider output labels
 - [x] 27-02-PLAN.md — Go module-root, package, source-set, requirement, and lock-evidence topology
 - [x] 27-03-PLAN.md — TS/JS package, workspace, source-set, declared dependency, and lockfile topology
@@ -185,6 +198,7 @@ Plans:
 - [x] 27-07-PLAN.md — Public no-leak proof, SDK compatibility, and docs alignment
 
 **Success criteria:**
+
 1. Go monorepo module-root inference works.
 2. TS/JS package and workspace facts are deterministic.
 3. Import-to-package facts distinguish source, test, generated, vendor, and external where known.
@@ -198,6 +212,7 @@ Plans:
 **Plans:** 7/7 plans complete
 
 Plans:
+
 - [x] 28-01-PLAN.md — Private analysis, MIR, and place contracts
 - [x] 28-02-PLAN.md — Semantic MIR storage and metadata
 - [x] 28-03-PLAN.md — Go semantic MIR lowering
@@ -207,6 +222,7 @@ Plans:
 - [x] 28-07-PLAN.md — Public no-leak and compatibility proof
 
 **Success criteria:**
+
 1. MIR snapshots are deterministic.
 2. Parser AST references do not escape lowering.
 3. Places cover locals, parameters, globals, temporaries, fields/properties, indexes, call returns, and unknown roots.
@@ -219,6 +235,7 @@ Plans:
 **Research:** `research/cfg-control-flow/FINAL-REPORT.md`, `research/cfg-control-flow/RECOMMENDED_IMPLEMENTATION.md`, `research/cfg-control-flow/VALIDATION.md`
 
 **Success criteria:**
+
 1. Fixtures cover branches, loops, returns, short-circuiting, panics/throws, cleanup behavior where supported, unreachable code, and unsupported constructs.
 2. CFG output is deterministic across runs.
 3. Control-dependence facts do not require rule authors to traverse raw ASTs.
@@ -232,6 +249,7 @@ Plans:
 **Plans:** 8/8 plans complete
 
 Plans:
+
 - [x] 30-01-PLAN.md — Private call fact contracts, storage, indexes, and metadata
 - [x] 30-02-PLAN.md — Calls provider, cache identity, and provider-order fixture wiring
 - [x] 30-03-PLAN.md — Calls validation, debug snapshots, and D-10 index coverage
@@ -242,6 +260,7 @@ Plans:
 - [x] 30-08-PLAN.md — Public no-leak and unsupported call graph capability proof
 
 **Success criteria:**
+
 1. Fixtures cover direct functions, methods, constructors, member calls, function values as unresolved/unknown, unsupported dynamic calls, and precise statuses.
 2. Direct call facts consume semantic references where available.
 3. Public `CallGraph<'_>` remains unsupported until promotion gates justify it.
@@ -255,6 +274,7 @@ Plans:
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [x] 31-01-PLAN.md — Private domain contracts, P0 slots, product state, and law tests
 - [x] 31-02-PLAN.md — Deterministic local solver, MIR/CFG/call transfers, and result cursor
 - [x] 31-03-PLAN.md — Domain facts, store, metadata, provider wiring, and cache identity
@@ -262,6 +282,7 @@ Plans:
 - [x] 31-05-PLAN.md — Internal eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
+
 1. Domain-law tests cover partial order, join, and widening behavior.
 2. Transfer monotonicity tests exist.
 3. Fixtures expose top, unknown, and budget states honestly.
@@ -275,15 +296,30 @@ Plans:
 **Plans:** 7 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 32-01-PLAN.md — Private summary contracts, SummaryDomain trait, four core domain types, fact vocabulary, and ID newtypes
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 32-02-PLAN.md — SummaryStore with normalization, indexes, AnalysisDb storage, and FactFamily extensions
 - [ ] 32-03-PLAN.md — DirectSummaryBuilder lifting control/call/memory/TITO from domain results and MIR
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 32-04-PLAN.md — Summary provider, cache identity, manifest, and kernel run-sequence wiring
 - [ ] 32-05-PLAN.md — Summary validation, debug snapshots, and provider-order proof
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 32-06-PLAN.md — Direct-summary eval observation and native mixed Go/TS fixture
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 32-07-PLAN.md — Public no-leak boundary proof and full verification
 
 **Success criteria:**
+
 1. Direct summary snapshots are deterministic.
 2. Summary status, precision, and provenance are present.
 3. Missing callees produce unknown/havoc summaries rather than silent certainty.
@@ -296,6 +332,7 @@ Plans:
 **Research:** `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/effects-summaries/RECOMMENDED_IMPLEMENTATION.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`
 
 **Success criteria:**
+
 1. Body edits, public API edits, summary SCC edits, rule option edits, model edits, and extension code edits invalidate the correct layers.
 2. Stale extension output is quarantined.
 3. Expensive providers are not forced into eager whole-repo execution by default.
@@ -308,6 +345,7 @@ Plans:
 **Research:** `research/agent-extension-surface/FINAL-REPORT.md`, `research/agent-extension-surface/RECOMMENDED_IMPLEMENTATION.md`, `research/agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`
 
 **Success criteria:**
+
 1. Invalid extension facts are rejected before merge.
 2. Extension digests affect cache keys.
 3. Extension facts carry provenance and precision ceilings.
@@ -320,6 +358,7 @@ Plans:
 **Research:** `research/framework-entrypoints/FINAL-REPORT.md`, `research/framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`, `research/framework-entrypoints/VALIDATION.md`
 
 **Success criteria:**
+
 1. Fixtures cover HTTP, CLI/env/stdin, jobs/queues where modeled, test entrypoints, unresolved framework dispatch, and extension-improved discovery.
 2. Go and TS/JS have default recognizers for the scoped first tier.
 3. Extension overlays can add or refine framework facts with validation.
@@ -332,6 +371,7 @@ Plans:
 **Research:** `research/type-alias-points-to/FINAL-REPORT.md`, `research/type-alias-points-to/RECOMMENDED_IMPLEMENTATION.md`, `research/type-alias-points-to/VALIDATION.md`
 
 **Success criteria:**
+
 1. Fixtures cover receiver narrowing, function values, object/property allocations, field sensitivity limits, unresolved aliases, and official-tool input digests where used.
 2. Alias status can distinguish `NoAlias`, `MayAlias`, `MustAlias`, `PartialAlias`, and `Unknown`.
 3. Official tooling outputs are normalized into polint-owned facts.
@@ -344,6 +384,7 @@ Plans:
 **Research:** `research/call-graphs/FINAL-REPORT.md`, `research/call-graphs/RECOMMENDED_IMPLEMENTATION.md`, `research/call-graphs/VALIDATION.md`
 
 **Success criteria:**
+
 1. Native fixtures and eval suites measure direct versus refined edges.
 2. Precision and status are attached to every edge.
 3. Dynamic dispatch and framework edges retain provenance.
@@ -356,6 +397,7 @@ Plans:
 **Research:** `research/data-flow/FINAL-REPORT.md`, `research/data-flow/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`
 
 **Success criteria:**
+
 1. Fixtures cover local flow, parameter/return flow, sanitizer/barrier behavior, missing summaries, extension-added flows, false-positive traps, and deterministic budget handling.
 2. Source, sink, sanitizer, and barrier model facts have provenance.
 3. Unknown/havoc facts are visible.
@@ -368,6 +410,7 @@ Plans:
 **Research:** `research/program-slicing-evidence/FINAL-REPORT.md`, `research/program-slicing-evidence/RECOMMENDED_IMPLEMENTATION.md`, `research/program-slicing-evidence/VALIDATION.md`
 
 **Success criteria:**
+
 1. Fixtures cover local dependence, interprocedural direct-call evidence, summary expansion, extension evidence, uncertainty markers, deterministic ranking, and compact path limits.
 2. Diagnostic evidence includes provenance and uncertainty.
 3. JSON/SARIF evidence rendering is deterministic.
@@ -380,6 +423,7 @@ Plans:
 **Research:** `research/evaluation-harness/FINAL-REPORT.md`, `research/evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/VALIDATION.md`, `research/call-graphs/VALIDATION.md`
 
 **Success criteria:**
+
 1. Reports show TP, FP, FN, precision, recall, F-score, unknown counts, graph/path metrics, runtime, memory, cache reuse, extension overhead, and accepted/rejected extension facts.
 2. Native fixtures remain the first promotion gate before external suites.
 3. External adapters are added in the order justified by the harness research.
@@ -392,6 +436,7 @@ Plans:
 **Research:** `research/agent-rule-authoring/FINAL-REPORT.md`, `research/agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`, `research/ROADMAP.md`
 
 **Success criteria:**
+
 1. Temp-repo rule tests consume public SDK views only.
 2. Docs explain limits, precision tiers, and heuristic behavior.
 3. Accepted public commands have stable JSON contracts.
