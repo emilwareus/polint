@@ -101,13 +101,11 @@ fn site_for_unsupported<'site>(
         .operation
         .and_then(|operation| sites_by_operation.get(&operation).copied())
         .or_else(|| {
-            sites
-                .iter()
-                .find(|site| {
-                    site.file == unsupported.file
-                        && site.language == unsupported.language
-                        && spans_overlap_or_touch(&site.span, &unsupported.span)
-                })
+            sites.iter().find(|site| {
+                site.file == unsupported.file
+                    && site.language == unsupported.language
+                    && spans_overlap_or_touch(&site.span, &unsupported.span)
+            })
         })
         .or_else(|| {
             sites

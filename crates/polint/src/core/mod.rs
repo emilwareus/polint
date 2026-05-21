@@ -941,7 +941,11 @@ impl AnalysisDb {
         Ok(())
     }
 
-    pub(crate) fn replace_call_facts(&mut self, output: CallOutput) -> Result<(), AnalysisError> {
+    pub(crate) fn replace_call_facts(
+        &mut self,
+        mut output: CallOutput,
+    ) -> Result<(), AnalysisError> {
+        self.populate_call_owner_symbols(&mut output);
         let store = CallStore::from_output(output)?;
         self.call_sites = store.sites().to_vec();
         self.call_targets = store.targets().to_vec();
@@ -949,6 +953,56 @@ impl AnalysisDb {
         self.call_store = Some(store);
         self.refresh_call_metadata();
         Ok(())
+    }
+
+    fn populate_call_owner_symbols(&self, output: &mut CallOutput) {
+        if output.sites.iter().all(|site| site.owner_symbol.is_some()) {
+            return;
+        }
+
+        let function_symbols = self
+            .functions
+            .iter()
+            .filter_map(|function| {
+                let symbol = self
+                    .symbols
+                    .iter()
+                    .find(|symbol| {
+                        symbol.file == Some(function.file)
+                            && symbol.name == function.name
+                            && symbol.primary_span.as_ref().is_some_and(|span| {
+                                span == &function.span || Self::span_is_within(span, &function.span)
+                            })
+                    })
+                    .map(|symbol| symbol.id)
+                    .or_else(|| {
+                        self.definitions
+                            .iter()
+                            .find(|definition| {
+                                definition.file == Some(function.file)
+                                    && definition.name == function.name
+                                    && definition.primary_span.as_ref().is_some_and(|span| {
+                                        span == &function.span
+                                            || Self::span_is_within(span, &function.span)
+                                    })
+                            })
+                            .map(|definition| definition.symbol)
+                    });
+                symbol.map(|symbol| (function.id, symbol))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for site in &mut output.sites {
+            if site.owner_symbol.is_none() {
+                site.owner_symbol = function_symbols.get(&site.caller).copied();
+            }
+        }
+    }
+
+    fn span_is_within(inner: &Span, outer: &Span) -> bool {
+        inner.file == outer.file
+            && inner.start_byte >= outer.start_byte
+            && inner.end_byte <= outer.end_byte
     }
 
     pub(crate) fn call_sites(&self) -> &[CallSiteFact] {

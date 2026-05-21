@@ -809,7 +809,59 @@ fn call_facts(debug_json: &Value) -> Vec<ObservedItem> {
             }
         }
     }
+    facts.extend(call_count_invariants(calls));
+    facts.extend(call_index_count_invariants(calls));
     facts
+}
+
+#[cfg(test)]
+fn call_count_invariants(calls: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(counts) = calls.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut invariants = Vec::new();
+    for group in [
+        "by_language",
+        "by_call_kind",
+        "by_algorithm",
+        "by_status",
+        "by_unresolved_reason",
+        "by_provider",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("direct_calls.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.calls.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn call_index_count_invariants(calls: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(index_counts) = calls.get("index_counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    index_counts
+        .iter()
+        .filter(|(_, count)| count.as_u64().is_some_and(|count| count > 0))
+        .map(|(index, _)| {
+            observed_invariant(
+                format!("direct_calls.index_counts.{index}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.calls.index_counts",
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

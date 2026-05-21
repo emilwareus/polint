@@ -2169,26 +2169,64 @@ mod direct_calls_core {
         for required in [
             ("CallSite", "directFunction", Some(ObservedStatus::Resolved)),
             ("CallSite", "handler", Some(ObservedStatus::Resolved)),
-            ("CallTarget", "DirectReference", Some(ObservedStatus::Resolved)),
-            ("CallTarget", "ImportBinding", Some(ObservedStatus::Resolved)),
+            (
+                "CallTarget",
+                "DirectReference",
+                Some(ObservedStatus::Resolved),
+            ),
+            (
+                "CallTarget",
+                "ImportBinding",
+                Some(ObservedStatus::Resolved),
+            ),
             ("CallTarget", "Constructor", Some(ObservedStatus::Resolved)),
             ("CallTarget", "StaticMember", Some(ObservedStatus::Resolved)),
-            ("UnresolvedCall", "FunctionValue", Some(ObservedStatus::Unresolved)),
-            ("UnresolvedCall", "DynamicProperty", Some(ObservedStatus::Unresolved)),
-            ("UnresolvedCall", "Reflection", Some(ObservedStatus::Unsupported)),
-            ("UnresolvedCall", "GoroutineBoundary", Some(ObservedStatus::Unsupported)),
+            (
+                "UnresolvedCall",
+                "FunctionValue",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "DynamicProperty",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "Reflection",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "UnresolvedCall",
+                "GoroutineBoundary",
+                Some(ObservedStatus::Unsupported),
+            ),
             ("UnresolvedCall", "Eval", Some(ObservedStatus::Unresolved)),
-            ("UnresolvedCall", "DynamicImport", Some(ObservedStatus::Unresolved)),
-            ("UnresolvedCall", "CallApplyBind", Some(ObservedStatus::Unresolved)),
-            ("UnresolvedCall", "SetupMissing", Some(ObservedStatus::SetupMissing)),
+            (
+                "UnresolvedCall",
+                "DynamicImport",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "CallApplyBind",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "SetupMissing",
+                Some(ObservedStatus::SetupMissing),
+            ),
         ] {
             assert!(
-                expected_facts.iter().any(|(family, key, status, _, producer)| {
-                    *family == required.0
-                        && key.contains(required.1)
-                        && *status == required.2
-                        && *producer == Some("polint.calls")
-                }),
+                expected_facts
+                    .iter()
+                    .any(|(family, key, status, _, producer)| {
+                        *family == required.0
+                            && key.contains(required.1)
+                            && *status == required.2
+                            && *producer == Some("polint.calls")
+                    }),
                 "direct-call fixture missing expected {required:?}: {expected_facts:#?}"
             );
         }
