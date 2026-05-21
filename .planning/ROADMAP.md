@@ -32,7 +32,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 27 | 7/7 | Complete    | 2026-05-19 |
 | 28 | 7/7 | Complete    | 2026-05-20 |
 | 29 | 6/6 | Complete    | 2026-05-20 |
-| 30 | 2/8 | In Progress|  |
+| 30 | 3/8 | In Progress|  |
 | 31 | P0 Abstract-Domain Kernel | Add deterministic lattice/transfer infrastructure and first local domains. | SAE-INT-01 |
 | 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
@@ -229,12 +229,12 @@ Plans:
 **Goal:** Add direct call-site, target, unresolved-call, direct/static resolution, call indexes, and debug snapshots.
 **Requirements:** SAE-SEM-05
 **Research:** `research/call-graphs/FINAL-REPORT.md`, `research/call-graphs/RECOMMENDED_IMPLEMENTATION.md`, `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`
-**Plans:** 2/8 plans executed
+**Plans:** 3/8 plans executed
 
 Plans:
 - [x] 30-01-PLAN.md — Private call fact contracts, storage, indexes, and metadata
 - [x] 30-02-PLAN.md — Calls provider, cache identity, and provider-order fixture wiring
-- [ ] 30-03-PLAN.md — Calls validation, debug snapshots, and D-10 index coverage
+- [x] 30-03-PLAN.md — Calls validation, debug snapshots, and D-10 index coverage
 - [ ] 30-04-PLAN.md — MIR-derived call sites and unresolved-call evidence
 - [ ] 30-05-PLAN.md — Direct/binding/static target resolution with honest unresolved statuses
 - [ ] 30-06-PLAN.md — Direct-call eval observation and status accounting
