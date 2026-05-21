@@ -409,4 +409,32 @@ mod tests {
 
         assert_eq!(results.stable_digest_parts(), results.stable_digest_parts());
     }
+
+    #[test]
+    fn function_and_unknown_top_event_iterators_are_stable_key_ordered() {
+        let mut results =
+            DomainResults::for_test(MirBodyId(1), BasicBlockId(2), MirOpId(3), PlaceId(4));
+        results.record_top_event(
+            MirBodyId(1),
+            Some(BasicBlockId(2)),
+            Some(MirOpId(3)),
+            TopReason::UnknownValue,
+            "event:unknown".to_string(),
+        );
+
+        assert_eq!(
+            results
+                .functions()
+                .map(|function| function.body_stable_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["stable_key:test-body"]
+        );
+        assert_eq!(
+            results
+                .unknown_top_events()
+                .map(|event| event.stable_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["event:unknown"]
+        );
+    }
 }
