@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T11:21:55.829Z"
-last_activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solver and transfers
+last_updated: "2026-05-21T11:41:49.885Z"
+last_activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider wiring, and cache identity
 progress:
   total_phases: 22
   completed_phases: 11
   total_plans: 65
-  completed_plans: 62
-  percent: 95
+  completed_plans: 63
+  percent: 97
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 31 (p0-abstract-domain-kernel) — EXECUTING
-Plan: 3 of 5
-Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solver and transfers
+Plan: 4 of 5
+Last activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider wiring, and cache identity
 
 ## Phase Progress
 
@@ -61,7 +61,7 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solv
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
-| 31 | In Progress | 2/5 plans complete; private domain contracts, deterministic local solver, MIR/CFG/call transfers, and result cursor done |
+| 31 | In Progress | 3/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider wiring, and cache identity done |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
@@ -258,6 +258,9 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solv
 - [Phase 31-p0-abstract-domain-kernel]: Keep solver, transfer, and result cursor APIs crate-private under analysis::domains with no SDK, runner, CLI, README, or docs/facts promotion.
 - [Phase 31-p0-abstract-domain-kernel]: Materialize result identity and iteration through stable keys while using run-local IDs only for cursor lookup within a run.
 - [Phase 31-p0-abstract-domain-kernel]: Treat calls, unsupported operations, dynamic writes, widening, and iteration budgets as explicit top/unknown events or states rather than silent certainty.
+- [Phase 31-p0-abstract-domain-kernel]: Keep domain facts, provider, store, and cache identity crate-private with no SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Normalize domain facts into observation rows and event rows with explicit status and precision labels, including top, unknown, setup, and budget cases.
+- [Phase 31-p0-abstract-domain-kernel]: Make abstract-domain cache identity include provider policy, MIR, CFG, calls, symbol graph, module topology, syntax, lifecycle/config, and absent extension/model/toolchain slots.
 
 ## Execution Metrics
 
@@ -313,12 +316,13 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solv
 | 30-direct-call-facts | 08 | 10 min | 3 | 2 |
 | 31-p0-abstract-domain-kernel | 01 | 8 min | 3 | 5 |
 | 31-p0-abstract-domain-kernel | 02 | 14 min | 3 | 5 |
+| 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 02 deterministic local solver and transfers.
-- Stopped at: Completed 31-p0-abstract-domain-kernel-02-PLAN.md; ready for Plan 31-03.
+- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 03 domain facts, provider wiring, and cache identity.
+- Stopped at: Completed 31-p0-abstract-domain-kernel-03-PLAN.md; ready for Plan 31-04.
 
 ### Quick Tasks Completed
 
@@ -345,4 +349,4 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solv
 
 ## Next Action
 
-Phase 31 Plan 03 is next: domain facts, store, metadata, provider wiring, and cache identity.
+Phase 31 Plan 04 is next: validation, debug, eval observation, and fixture proof for abstract-domain rows.
