@@ -677,9 +677,13 @@ fn abstract_domain_observed_with_policy(
         &output.db,
     ));
     let mut db = output.db.clone();
-    db.replace_abstract_domain_facts(crate::analysis::domains::store::DomainOutput::from_results(
-        result.results(),
-    ));
+    let valid_places = db.mir_places().iter().map(|place| place.id).collect();
+    db.replace_abstract_domain_facts(
+        crate::analysis::domains::store::DomainOutput::from_results_with_valid_places(
+            result.results(),
+            &valid_places,
+        ),
+    );
     let debug = crate::analysis_kernel::AnalysisKernel::metadata_debug_json_for_test(&db);
     Ok(crate::eval::observed::abstract_domain_facts_for_test(
         &debug,

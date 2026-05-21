@@ -28,7 +28,8 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
 ) -> AbstractDomainsProviderOutput {
     let solver = LocalDomainSolver::new(SolverPolicy::deterministic());
     let result = solver.solve(SolverInput::from(&*db));
-    let output = DomainOutput::from_results(result.results());
+    let valid_places = db.mir_places().iter().map(|place| place.id).collect();
+    let output = DomainOutput::from_results_with_valid_places(result.results(), &valid_places);
     let output_digest = abstract_domains_output_digest(
         manifest,
         input_snapshot,
