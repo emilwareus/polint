@@ -54,4 +54,85 @@ fact = { family = "UnresolvedCall", stable_key = "SetupMissing", mode = "partial
 invariant = { name = "direct_calls.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
 
 [[expected]]
+invariant = { name = "direct_calls.counts.by_language.Go.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_language.TypeScript.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_call_kind.Function.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_call_kind.Member.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_call_kind.Constructor.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_algorithm.DirectReference.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_algorithm.ImportBinding.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_algorithm.StaticMember.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_status.Resolved.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_status.Unresolved.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_status.Unsupported.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_status.SetupMissing.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.FunctionValue.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.DynamicProperty.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.Reflection.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.GoroutineBoundary.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.Eval.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.DynamicImport.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.CallApplyBind.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_unresolved_reason.SetupMissing.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.counts.by_provider.polint.calls.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.outgoing_by_function.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.outgoing_by_symbol.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.incoming_by_symbol.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.incoming_by_function.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.unresolved_by_reason.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_calls.index_counts.unresolved_by_status.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
 runtime_budget = { name = "direct-calls-core", max_runtime_ms = 120000, mode = "exact" }

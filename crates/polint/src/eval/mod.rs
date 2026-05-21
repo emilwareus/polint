@@ -139,6 +139,74 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
     }
 
     #[test]
+    fn observed_call_debug_rows_emit_count_and_index_invariants() {
+        let debug = json!({
+            "calls": {
+                "counts": {
+                    "by_language": {"Go": 2, "TypeScript": 3},
+                    "by_call_kind": {"Function": 3, "Member": 1, "Constructor": 1},
+                    "by_algorithm": {
+                        "DirectReference": 2,
+                        "ImportBinding": 1,
+                        "StaticMember": 1
+                    },
+                    "by_status": {
+                        "Resolved": 4,
+                        "Unresolved": 3,
+                        "Unsupported": 2,
+                        "SetupMissing": 1
+                    },
+                    "by_unresolved_reason": {
+                        "FunctionValue": 1,
+                        "DynamicProperty": 1,
+                        "Reflection": 1,
+                        "GoroutineBoundary": 1,
+                        "Eval": 1,
+                        "DynamicImport": 1,
+                        "CallApplyBind": 1,
+                        "SetupMissing": 1
+                    },
+                    "by_provider": {"polint.calls": 10}
+                },
+                "index_counts": {
+                    "outgoing_by_function": 2,
+                    "outgoing_by_symbol": 2,
+                    "incoming_by_symbol": 2,
+                    "incoming_by_function": 2,
+                    "unresolved_by_reason": 4,
+                    "unresolved_by_status": 3
+                }
+            }
+        });
+
+        let observed = crate::eval::observed::call_facts_for_test(&debug);
+        for required in [
+            "direct_calls.counts.by_language.Go.nonzero",
+            "direct_calls.counts.by_call_kind.Function.nonzero",
+            "direct_calls.counts.by_algorithm.DirectReference.nonzero",
+            "direct_calls.counts.by_status.Resolved.nonzero",
+            "direct_calls.counts.by_unresolved_reason.Reflection.nonzero",
+            "direct_calls.counts.by_provider.polint.calls.nonzero",
+            "direct_calls.index_counts.outgoing_by_function.nonzero",
+            "direct_calls.index_counts.outgoing_by_symbol.nonzero",
+            "direct_calls.index_counts.incoming_by_symbol.nonzero",
+            "direct_calls.index_counts.incoming_by_function.nonzero",
+            "direct_calls.index_counts.unresolved_by_reason.nonzero",
+            "direct_calls.index_counts.unresolved_by_status.nonzero",
+        ] {
+            assert!(
+                observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == required && invariant.value == "true"
+                    }
+                    _ => false,
+                }),
+                "missing observed call invariant {required}: {observed:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn call_unresolved_unsupported_and_setup_missing_statuses_count_as_unknown_metrics() {
         let expected = [
             expected_call_fact(

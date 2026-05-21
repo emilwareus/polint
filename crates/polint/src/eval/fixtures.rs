@@ -2098,6 +2098,39 @@ mod direct_calls_core {
         repo_root().join("tests/eval-fixtures/direct-calls/core")
     }
 
+    const REQUIRED_COUNT_INVARIANTS: &[&str] = &[
+        "direct_calls.counts.by_language.Go.nonzero",
+        "direct_calls.counts.by_language.TypeScript.nonzero",
+        "direct_calls.counts.by_call_kind.Function.nonzero",
+        "direct_calls.counts.by_call_kind.Member.nonzero",
+        "direct_calls.counts.by_call_kind.Constructor.nonzero",
+        "direct_calls.counts.by_algorithm.DirectReference.nonzero",
+        "direct_calls.counts.by_algorithm.ImportBinding.nonzero",
+        "direct_calls.counts.by_algorithm.StaticMember.nonzero",
+        "direct_calls.counts.by_status.Resolved.nonzero",
+        "direct_calls.counts.by_status.Unresolved.nonzero",
+        "direct_calls.counts.by_status.Unsupported.nonzero",
+        "direct_calls.counts.by_status.SetupMissing.nonzero",
+        "direct_calls.counts.by_unresolved_reason.FunctionValue.nonzero",
+        "direct_calls.counts.by_unresolved_reason.DynamicProperty.nonzero",
+        "direct_calls.counts.by_unresolved_reason.Reflection.nonzero",
+        "direct_calls.counts.by_unresolved_reason.GoroutineBoundary.nonzero",
+        "direct_calls.counts.by_unresolved_reason.Eval.nonzero",
+        "direct_calls.counts.by_unresolved_reason.DynamicImport.nonzero",
+        "direct_calls.counts.by_unresolved_reason.CallApplyBind.nonzero",
+        "direct_calls.counts.by_unresolved_reason.SetupMissing.nonzero",
+        "direct_calls.counts.by_provider.polint.calls.nonzero",
+    ];
+
+    const REQUIRED_INDEX_INVARIANTS: &[&str] = &[
+        "direct_calls.index_counts.outgoing_by_function.nonzero",
+        "direct_calls.index_counts.outgoing_by_symbol.nonzero",
+        "direct_calls.index_counts.incoming_by_symbol.nonzero",
+        "direct_calls.index_counts.incoming_by_function.nonzero",
+        "direct_calls.index_counts.unresolved_by_reason.nonzero",
+        "direct_calls.index_counts.unresolved_by_status.nonzero",
+    ];
+
     #[test]
     fn eval_direct_calls_core_fixture_passes() {
         let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
@@ -2165,6 +2198,30 @@ mod direct_calls_core {
     }
 
     #[test]
+    fn eval_direct_calls_core_manifest_covers_counts_and_indexes() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_invariants = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Invariant(invariant) => Some(invariant.name.as_str()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for required in REQUIRED_COUNT_INVARIANTS
+            .iter()
+            .chain(REQUIRED_INDEX_INVARIANTS)
+        {
+            assert!(
+                expected_invariants.contains(required),
+                "direct-call fixture manifest missing invariant {required}"
+            );
+        }
+    }
+
+    #[test]
     fn eval_direct_calls_core_observes_required_families_and_determinism() {
         let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
@@ -2186,5 +2243,27 @@ mod direct_calls_core {
             }
             _ => false,
         }));
+    }
+
+    #[test]
+    fn eval_direct_calls_core_observes_counts_and_indexes() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+
+        for required in REQUIRED_COUNT_INVARIANTS
+            .iter()
+            .chain(REQUIRED_INDEX_INVARIANTS)
+        {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == *required && invariant.value == "true"
+                    }
+                    _ => false,
+                }),
+                "direct-call fixture should observe invariant {required}: {:#?}",
+                case.observed
+            );
+        }
     }
 }
