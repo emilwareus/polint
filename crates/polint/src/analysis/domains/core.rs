@@ -125,6 +125,7 @@ impl AbstractDomain for ReachabilityDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Unreachable, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Reachable, Self::Ambiguous) => true,
@@ -135,6 +136,7 @@ impl AbstractDomain for ReachabilityDomain {
     fn join(&self, other: &Self) -> Self {
         match (self, other) {
             (left, right) if left == right => *left,
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             _ => join_chain(
                 *self,
@@ -178,6 +180,7 @@ impl AbstractDomain for NilnessDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Bottom, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Nil | Self::NonNil, Self::MaybeNil) => true,
@@ -190,6 +193,7 @@ impl AbstractDomain for NilnessDomain {
             (left, right) if left == right => *left,
             (Self::Nil, Self::Nil) => Self::Nil,
             (Self::NonNil, Self::NonNil) => Self::NonNil,
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => *value,
             (Self::Nil, Self::NonNil) | (Self::NonNil, Self::Nil) => Self::MaybeNil,
@@ -231,6 +235,7 @@ impl AbstractDomain for TruthinessDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Bottom, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Truthy | Self::Falsy, Self::Maybe) => true,
@@ -243,6 +248,7 @@ impl AbstractDomain for TruthinessDomain {
             (left, right) if left == right => *left,
             (Self::Truthy, Self::Truthy) => Self::Truthy,
             (Self::Falsy, Self::Falsy) => Self::Falsy,
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => *value,
             (Self::Truthy, Self::Falsy) | (Self::Falsy, Self::Truthy) => Self::Maybe,
@@ -284,6 +290,7 @@ impl AbstractDomain for ConstantDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Bottom, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Values(left), Self::Values(right)) => left.is_subset(right),
@@ -294,6 +301,7 @@ impl AbstractDomain for ConstantDomain {
     fn join(&self, other: &Self) -> Self {
         match (self, other) {
             (left, right) if left == right => left.clone(),
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => value.clone(),
             (Self::Values(left), Self::Values(right)) => capped_constant_union(left, right),
@@ -343,6 +351,7 @@ impl AbstractDomain for StringDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Bottom, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Values(left), Self::Values(right)) => left.is_subset(right),
@@ -353,6 +362,7 @@ impl AbstractDomain for StringDomain {
     fn join(&self, other: &Self) -> Self {
         match (self, other) {
             (left, right) if left == right => left.clone(),
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => value.clone(),
             (Self::Values(left), Self::Values(right)) => capped_string_union(left, right),
@@ -402,6 +412,7 @@ impl AbstractDomain for InitializednessDomain {
     fn leq(&self, other: &Self) -> bool {
         match (self, other) {
             (left, right) if left == right => true,
+            (Self::Top(left), Self::Top(right)) => top_reason_leq(*left, *right),
             (Self::Bottom, _) => true,
             (_, Self::Top(_)) if !self.is_top() => true,
             (Self::Initialized | Self::Uninitialized, Self::MaybeUninitialized) => true,
@@ -414,6 +425,7 @@ impl AbstractDomain for InitializednessDomain {
             (left, right) if left == right => *left,
             (Self::Initialized, Self::Initialized) => Self::Initialized,
             (Self::Uninitialized, Self::Uninitialized) => Self::Uninitialized,
+            (Self::Top(left), Self::Top(right)) => Self::Top(join_top_reasons(*left, *right)),
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => *value,
             (Self::Initialized, Self::Uninitialized) | (Self::Uninitialized, Self::Initialized) => {
@@ -519,6 +531,18 @@ fn top_digest_part(domain: &str, reason: TopReason) -> String {
     format!("{domain}=top:{}", reason.as_str())
 }
 
+fn join_top_reasons(left: TopReason, right: TopReason) -> TopReason {
+    if left == right {
+        left
+    } else {
+        TopReason::ConflictingFacts
+    }
+}
+
+fn top_reason_leq(left: TopReason, right: TopReason) -> bool {
+    left == right || right == TopReason::ConflictingFacts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +608,17 @@ mod tests {
         assert!(!TruthinessDomain::Truthy.leq(&TruthinessDomain::Falsy));
         assert!(TruthinessDomain::Truthy.leq(&TruthinessDomain::Maybe));
         assert!(TruthinessDomain::Falsy.leq(&TruthinessDomain::Maybe));
+    }
+
+    #[test]
+    fn top_reason_joins_are_commutative_and_upper_bounds() {
+        let setup_missing = NilnessDomain::top(TopReason::SetupMissing);
+        let unsupported = NilnessDomain::top(TopReason::UnsupportedSemantic);
+        let joined = NilnessDomain::top(TopReason::ConflictingFacts);
+
+        assert_eq!(setup_missing.join(&unsupported), joined);
+        assert_eq!(unsupported.join(&setup_missing), joined);
+        assert!(setup_missing.leq(&joined));
+        assert!(unsupported.leq(&joined));
     }
 }
