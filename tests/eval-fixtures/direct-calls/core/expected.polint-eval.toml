@@ -75,6 +75,9 @@ invariant = { name = "direct_calls.counts.by_algorithm.DirectReference.nonzero",
 invariant = { name = "direct_calls.counts.by_algorithm.ImportBinding.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
+invariant = { name = "direct_calls.counts.by_algorithm.ConstructorBinding.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
 invariant = { name = "direct_calls.counts.by_algorithm.StaticMember.nonzero", value = "true", mode = "exact" }
 
 [[expected]]

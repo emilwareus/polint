@@ -43,6 +43,8 @@ pub(crate) fn resolve_direct_call_targets(
 
         let algorithm = if index.is_import_binding(site, reference) {
             CallAlgorithm::ImportBinding
+        } else if matches!(site.kind, CallSyntaxKind::Constructor | CallSyntaxKind::New) {
+            CallAlgorithm::ConstructorBinding
         } else if matches!(
             site.kind,
             CallSyntaxKind::StaticMember | CallSyntaxKind::Member
@@ -384,6 +386,38 @@ mod tests {
         assert_eq!(targets[0].target_symbol, Some(target_symbol));
     }
 
+    #[test]
+    fn constructor_call_uses_constructor_binding_algorithm() {
+        let mut fixture = Fixture::new(Language::TypeScript, "src/caller.ts");
+        let target_function = fixture.add_function("Formatter", 40);
+        let target_symbol =
+            fixture.add_symbol_with_kind("Formatter", target_function, 40, SymbolKind::Class);
+        let reference = fixture.add_reference(
+            "Formatter",
+            target_symbol,
+            7,
+            SymbolPrecision::ExactSemantic,
+        );
+        fixture.store_symbols();
+
+        let site = fixture.site(
+            5,
+            CallSyntaxKind::New,
+            CallCallee::Constructor {
+                reference: Some(reference),
+                name: Some("Formatter".to_string()),
+            },
+            7,
+        );
+        let targets = resolve_direct_call_targets(&fixture.db, &[site]);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].algorithm, CallAlgorithm::ConstructorBinding);
+        assert_eq!(targets[0].edge_kind, CallEdgeKind::Constructor);
+        assert_eq!(targets[0].target_symbol, Some(target_symbol));
+        assert_eq!(targets[0].target_function, Some(target_function));
+    }
+
     struct Fixture {
         db: AnalysisDb,
         file: FileId,
@@ -422,13 +456,23 @@ mod tests {
         }
 
         fn add_symbol(&mut self, name: &str, function: FunctionId, line: u32) -> SymbolId {
+            self.add_symbol_with_kind(name, function, line, SymbolKind::Function)
+        }
+
+        fn add_symbol_with_kind(
+            &mut self,
+            name: &str,
+            function: FunctionId,
+            line: u32,
+            kind: SymbolKind,
+        ) -> SymbolId {
             let id = SymbolId(self.symbols.len() as u64);
             self.symbols.push(SymbolFact {
                 id,
                 language: Language::TypeScript,
                 name: name.to_string(),
                 qualified_name: name.to_string(),
-                kind: SymbolKind::Function,
+                kind,
                 namespace: SymbolNamespace::Value,
                 file: Some(self.file),
                 package: None,
