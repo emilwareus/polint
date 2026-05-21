@@ -7,11 +7,11 @@ use crate::analysis::calls::extract::extract_call_sites;
 use crate::analysis::calls::store::CallOutput;
 use crate::analysis::calls::unresolved::derive_unresolved_calls;
 use crate::analysis::ids::CallSiteId;
-use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::core::AnalysisDb;
+use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest};
+use crate::core::{AnalysisDb, FunctionFact, FunctionId, SymbolFact, SymbolId};
 use crate::diagnostics::{Diagnostic, TextRange};
 
 #[derive(Debug, Clone, Default)]
@@ -55,6 +55,7 @@ pub(crate) fn derive_calls_with_cache_stats(
     }
     .normalized();
     let output_digest = calls_output_digest(
+        db,
         manifest,
         input_snapshot,
         &semantic_mir_output_digest,
@@ -82,6 +83,7 @@ pub(crate) fn derive_calls_with_cache_stats(
 }
 
 fn calls_output_digest(
+    db: &AnalysisDb,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     semantic_mir_output_digest: &Digest,
@@ -123,6 +125,8 @@ fn calls_output_digest(
     );
 
     let site_keys = call_site_key_map(output);
+    let function_keys = function_key_map(db);
+    let symbol_keys = symbol_key_map(db);
     parts.extend(output.sites.iter().map(|site| {
         format!(
             "call_site={} language={:?} span={} kind={:?} status={:?} precision={:?} callee={}",
@@ -146,8 +150,8 @@ fn calls_output_digest(
             target.reason.map(|reason| format!("{reason:?}")).unwrap_or_else(|| "none".to_string()),
             target.provenance,
             target.precision,
-            presence_label(target.target_function.is_some()),
-            presence_label(target.target_symbol.is_some()),
+            stable_function_key(&function_keys, target.target_function),
+            stable_symbol_key(&symbol_keys, target.target_symbol),
         )
     }));
     parts.extend(output.unresolved.iter().map(|unresolved| {
@@ -188,10 +192,66 @@ fn call_site_key_map(output: &CallOutput) -> BTreeMap<CallSiteId, String> {
         .collect()
 }
 
+fn function_key_map(db: &AnalysisDb) -> BTreeMap<FunctionId, String> {
+    db.functions()
+        .iter()
+        .map(|function| (function.id, function_key(db, function)))
+        .collect()
+}
+
+fn function_key(db: &AnalysisDb, function: &FunctionFact) -> String {
+    db.metadata_for(FactRef::new(FactFamily::Function, function.id.0))
+        .map(|metadata| metadata.stable_key.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "{}:{}:{}",
+                db.path_for(function.file),
+                function.name,
+                span_part(&function.span)
+            )
+        })
+}
+
+fn symbol_key_map(db: &AnalysisDb) -> BTreeMap<SymbolId, String> {
+    db.symbols()
+        .iter()
+        .map(|symbol| (symbol.id, symbol_key(db, symbol)))
+        .collect()
+}
+
+fn symbol_key(db: &AnalysisDb, symbol: &SymbolFact) -> String {
+    db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.id.0))
+        .map(|metadata| metadata.stable_key.clone())
+        .unwrap_or_else(|| symbol.stable_key.clone())
+}
+
 fn stable_site_key(keys: &BTreeMap<CallSiteId, String>, site: CallSiteId) -> String {
     keys.get(&site)
         .cloned()
         .unwrap_or_else(|| "<missing-site>".to_string())
+}
+
+fn stable_function_key(
+    keys: &BTreeMap<FunctionId, String>,
+    function: Option<FunctionId>,
+) -> String {
+    function
+        .map(|function| {
+            keys.get(&function)
+                .cloned()
+                .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
+        })
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn stable_symbol_key(keys: &BTreeMap<SymbolId, String>, symbol: Option<SymbolId>) -> String {
+    symbol
+        .map(|symbol| {
+            keys.get(&symbol)
+                .cloned()
+                .unwrap_or_else(|| format!("<missing-symbol:{}>", symbol.0))
+        })
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn span_part(span: &crate::core::Span) -> String {
@@ -229,10 +289,6 @@ fn callee_part(callee: &crate::analysis::calls::facts::CallCallee) -> String {
     }
 }
 
-fn presence_label(present: bool) -> &'static str {
-    if present { "present" } else { "absent" }
-}
-
 fn provider_error_diagnostic(message: String) -> Diagnostic {
     Diagnostic::error(
         "polint/internal",
@@ -264,7 +320,8 @@ mod calls_provider {
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
-        AnalysisDb, FileId, FunctionFact, FunctionId, Language, ReferenceId, Span, SymbolId,
+        AnalysisDb, FileId, FunctionFact, FunctionId, Language, ReferenceId, Span, SymbolFact,
+        SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
     };
 
     #[test]
@@ -309,6 +366,14 @@ mod calls_provider {
             digest_for_output(&output),
             digest_for_output(&changed_algorithm)
         );
+        assert_ne!(
+            digest_for_output(&output),
+            digest_for_output_with_target_keys(&output, "alternate_target", "symbol:target")
+        );
+        assert_ne!(
+            digest_for_output(&output),
+            digest_for_output_with_target_keys(&output, "target", "symbol:alternate")
+        );
     }
 
     #[test]
@@ -342,10 +407,18 @@ mod calls_provider {
     }
 
     fn digest_for_output(output: &crate::analysis::calls::store::CallOutput) -> Digest {
+        digest_for_output_with_target_keys(output, "target", "symbol:target")
+    }
+
+    fn digest_for_output_with_target_keys(
+        output: &crate::analysis::calls::store::CallOutput,
+        target_function_name: &str,
+        target_symbol_key: &str,
+    ) -> Digest {
+        let db = db_for_output(output, target_function_name, target_symbol_key);
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let db = crate::core::AnalysisDb::new();
         let snapshot = InputSnapshot::from_run_inputs(
             &loaded,
             &db,
@@ -360,6 +433,7 @@ mod calls_provider {
             .expect("calls manifest");
 
         super::calls_output_digest(
+            &db,
             manifest,
             &snapshot,
             &Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]),
@@ -369,6 +443,76 @@ mod calls_provider {
             &[],
             output,
         )
+    }
+
+    fn db_for_output(
+        output: &crate::analysis::calls::store::CallOutput,
+        target_function_name: &str,
+        target_symbol_key: &str,
+    ) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from("ignored.ts"),
+            "ignored.ts".to_string(),
+            "export const ignored = true;\n".to_string(),
+        );
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function target() {}\n".to_string(),
+        );
+
+        let max_function_id = output
+            .targets
+            .iter()
+            .filter_map(|target| target.target_function)
+            .map(|function| function.0)
+            .max();
+        if let Some(max_function_id) = max_function_id {
+            for id in 0..=max_function_id {
+                let name = output
+                    .targets
+                    .iter()
+                    .any(|target| target.target_function == Some(FunctionId(id)))
+                    .then_some(target_function_name)
+                    .unwrap_or("placeholder");
+                db.push_function(FunctionFact {
+                    id: FunctionId(999),
+                    file,
+                    name: name.to_string(),
+                    span: span(file, 20, 30),
+                    language: Language::TypeScript,
+                    is_test: false,
+                    is_exported: true,
+                    cyclomatic_complexity: 1,
+                    calls: Vec::new(),
+                });
+            }
+        }
+
+        let symbols = output
+            .targets
+            .iter()
+            .filter_map(|target| target.target_symbol)
+            .map(|symbol| SymbolFact {
+                id: symbol,
+                language: Language::TypeScript,
+                name: "target".to_string(),
+                qualified_name: "target".to_string(),
+                kind: SymbolKind::Function,
+                namespace: SymbolNamespace::Value,
+                file: Some(file),
+                package: None,
+                module: None,
+                owner: None,
+                primary_span: Some(span(file, 20, 30)),
+                is_exported: true,
+                stable_key: target_symbol_key.to_string(),
+                precision: SymbolPrecision::ExactSemantic,
+            })
+            .collect();
+        db.replace_symbol_graph_facts(symbols, Vec::new(), Vec::new());
+        db
     }
 
     fn derive_for_test(db: &mut AnalysisDb) -> super::CallsProviderOutput {
