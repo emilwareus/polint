@@ -697,6 +697,14 @@ mod calls {
                     stable_key: "call-target:contradictory".to_string(),
                     ..target(1, CallSiteId(0), "call-target:ok")
                 },
+                CallTargetFact {
+                    id: CallTargetId(2),
+                    status: CallTargetStatus::Unresolved,
+                    target_function: None,
+                    target_symbol: None,
+                    stable_key: "call-target:missing-reason".to_string(),
+                    ..target(2, CallSiteId(0), "call-target:ok")
+                },
             ],
             unresolved: vec![UnresolvedCallFact {
                 site: CallSiteId(0),

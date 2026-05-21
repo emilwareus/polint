@@ -1,7 +1,342 @@
-use crate::core::AnalysisDb;
-use crate::diagnostics::Diagnostic;
+use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn validate_calls(_db: &AnalysisDb, _diagnostics: &mut Vec<Diagnostic>) {}
+use crate::analysis::calls::facts::CallTargetStatus;
+use crate::analysis_kernel::{FactFamily, FactPrecision};
+use crate::core::AnalysisDb;
+use crate::diagnostics::{Diagnostic, TextRange};
+
+pub(crate) fn validate_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let files = db.files().iter().map(|row| row.id).collect::<BTreeSet<_>>();
+    let functions = db
+        .functions()
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let symbols = db
+        .symbols()
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let bodies = db
+        .mir_bodies()
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let operations = db
+        .mir_operations()
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let places = db
+        .mir_places()
+        .iter()
+        .map(|row| row.id)
+        .collect::<BTreeSet<_>>();
+    let sites = db
+        .call_sites()
+        .iter()
+        .map(|row| (row.id, row))
+        .collect::<BTreeMap<_, _>>();
+
+    check_duplicate_stable_keys(
+        diagnostics,
+        "CallSite",
+        db.call_sites().iter().map(|row| row.stable_key.as_str()),
+    );
+    check_duplicate_stable_keys(
+        diagnostics,
+        "CallTarget",
+        db.call_targets().iter().map(|row| row.stable_key.as_str()),
+    );
+    check_duplicate_stable_keys(
+        diagnostics,
+        "UnresolvedCall",
+        db.unresolved_calls()
+            .iter()
+            .map(|row| row.stable_key.as_str()),
+    );
+
+    for site in db.call_sites() {
+        check_ref(
+            diagnostics,
+            &files,
+            site.file,
+            "CallSite",
+            &site.stable_key,
+            "file",
+            "dangling call file reference",
+        );
+        check_ref(
+            diagnostics,
+            &functions,
+            site.caller,
+            "CallSite",
+            &site.stable_key,
+            "caller",
+            "dangling call caller function reference",
+        );
+        check_ref(
+            diagnostics,
+            &bodies,
+            site.body,
+            "CallSite",
+            &site.stable_key,
+            "body",
+            "dangling call MIR body reference",
+        );
+        check_ref(
+            diagnostics,
+            &operations,
+            site.operation,
+            "CallSite",
+            &site.stable_key,
+            "operation",
+            "dangling call MIR operation reference",
+        );
+        if let Some(owner_symbol) = site.owner_symbol {
+            check_ref(
+                diagnostics,
+                &symbols,
+                owner_symbol,
+                "CallSite",
+                &site.stable_key,
+                "owner_symbol",
+                "dangling call owner symbol reference",
+            );
+        }
+        if let Some(receiver) = site.receiver {
+            check_ref(
+                diagnostics,
+                &places,
+                receiver,
+                "CallSite",
+                &site.stable_key,
+                "receiver",
+                "dangling call receiver place reference",
+            );
+        }
+        for argument in &site.arguments {
+            check_ref(
+                diagnostics,
+                &places,
+                *argument,
+                "CallSite",
+                &site.stable_key,
+                "arguments",
+                "dangling call argument place reference",
+            );
+        }
+        if let Some(result) = site.result {
+            check_ref(
+                diagnostics,
+                &places,
+                result,
+                "CallSite",
+                &site.stable_key,
+                "result",
+                "dangling call result place reference",
+            );
+        }
+        if site.span.start_byte > site.span.end_byte {
+            push_call_diagnostic(
+                diagnostics,
+                "CallSite",
+                &site.stable_key,
+                "span",
+                "invalid span byte range",
+            );
+        }
+    }
+
+    for target in db.call_targets() {
+        if !sites.contains_key(&target.site) {
+            push_call_diagnostic(
+                diagnostics,
+                "CallTarget",
+                &target.stable_key,
+                "site",
+                "target without matching call site",
+            );
+        }
+        check_ref(
+            diagnostics,
+            &functions,
+            target.caller,
+            "CallTarget",
+            &target.stable_key,
+            "caller",
+            "dangling call target caller function reference",
+        );
+        if let Some(target_function) = target.target_function {
+            check_ref(
+                diagnostics,
+                &functions,
+                target_function,
+                "CallTarget",
+                &target.stable_key,
+                "target_function",
+                "dangling call target function reference",
+            );
+        }
+        if let Some(target_symbol) = target.target_symbol {
+            check_ref(
+                diagnostics,
+                &symbols,
+                target_symbol,
+                "CallTarget",
+                &target.stable_key,
+                "target_symbol",
+                "dangling call target symbol reference",
+            );
+        }
+        if target.status == CallTargetStatus::Resolved && target.reason.is_some() {
+            push_call_diagnostic(
+                diagnostics,
+                "CallTarget",
+                &target.stable_key,
+                "status",
+                "contradictory resolved target status with unresolved reason",
+            );
+        }
+        if target.status == CallTargetStatus::Resolved
+            && target.target_function.is_none()
+            && target.target_symbol.is_none()
+        {
+            push_call_diagnostic(
+                diagnostics,
+                "CallTarget",
+                &target.stable_key,
+                "target",
+                "resolved call target requires a function or symbol",
+            );
+        }
+        if unresolved_status(target.status) && target.reason.is_none() {
+            push_call_diagnostic(
+                diagnostics,
+                "CallTarget",
+                &target.stable_key,
+                "reason",
+                "missing unresolved reason",
+            );
+        }
+    }
+
+    for unresolved in db.unresolved_calls() {
+        if !sites.contains_key(&unresolved.site) {
+            push_call_diagnostic(
+                diagnostics,
+                "UnresolvedCall",
+                &unresolved.stable_key,
+                "site",
+                "unresolved row without matching call site",
+            );
+        }
+        check_ref(
+            diagnostics,
+            &functions,
+            unresolved.caller,
+            "UnresolvedCall",
+            &unresolved.stable_key,
+            "caller",
+            "dangling unresolved caller function reference",
+        );
+        if !unresolved_status(unresolved.status) {
+            push_call_diagnostic(
+                diagnostics,
+                "UnresolvedCall",
+                &unresolved.stable_key,
+                "status",
+                "contradictory unresolved row with resolved status",
+            );
+        }
+    }
+
+    for family in [
+        FactFamily::CallSite,
+        FactFamily::CallTarget,
+        FactFamily::UnresolvedCall,
+    ] {
+        for (reference, metadata) in db.fact_meta().rows() {
+            if reference.family != family || metadata.producer_id != "polint.calls" {
+                continue;
+            }
+            if metadata.precision == FactPrecision::Exact {
+                push_call_diagnostic(
+                    diagnostics,
+                    family.label(),
+                    &metadata.stable_key,
+                    "precision",
+                    "precision ceiling exceeded: polint.calls rows are SetupAware, not Exact",
+                );
+            }
+        }
+    }
+}
+
+fn check_duplicate_stable_keys<'a>(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: &'static str,
+    keys: impl Iterator<Item = &'a str>,
+) {
+    let mut seen = BTreeSet::new();
+    for key in keys {
+        if !seen.insert(key) {
+            push_call_diagnostic(
+                diagnostics,
+                family,
+                key,
+                "stable_key",
+                "duplicate stable key",
+            );
+        }
+    }
+}
+
+fn check_ref<T: Ord + Copy>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid: &BTreeSet<T>,
+    value: T,
+    family: &'static str,
+    stable_key: &str,
+    field: &'static str,
+    reason: &'static str,
+) {
+    if !valid.contains(&value) {
+        push_call_diagnostic(diagnostics, family, stable_key, field, reason);
+    }
+}
+
+fn unresolved_status(status: CallTargetStatus) -> bool {
+    matches!(
+        status,
+        CallTargetStatus::Unresolved
+            | CallTargetStatus::Unsupported
+            | CallTargetStatus::SetupMissing
+            | CallTargetStatus::BudgetExceeded
+            | CallTargetStatus::Rejected
+    )
+}
+
+fn push_call_diagnostic(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: &'static str,
+    stable_key: &str,
+    field: &'static str,
+    reason: &'static str,
+) {
+    diagnostics.push(
+        Diagnostic::error(
+            "polint/internal",
+            "<workspace>",
+            TextRange::point(1, 1),
+            format!("Calls validation failed for {family} stable key."),
+        )
+        .with_evidence("family", family)
+        .with_evidence("stable_key", stable_key.to_string())
+        .with_evidence("field", field)
+        .with_evidence("reason", reason),
+    );
+}
 
 #[cfg(test)]
 mod tests {
@@ -63,6 +398,14 @@ mod tests {
                     target_symbol: None,
                     stable_key: "call-target:contradictory".to_string(),
                     ..target(1, CallSiteId(0), "call-target:ok")
+                },
+                CallTargetFact {
+                    id: CallTargetId(2),
+                    status: CallTargetStatus::Unresolved,
+                    target_function: None,
+                    target_symbol: None,
+                    stable_key: "call-target:missing-reason".to_string(),
+                    ..target(2, CallSiteId(0), "call-target:ok")
                 },
             ],
             unresolved: vec![UnresolvedCallFact {
