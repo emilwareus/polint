@@ -2277,6 +2277,119 @@ mod direct_calls_core {
         "direct_calls.index_counts.unresolved_by_status.nonzero",
     ];
 
+    #[derive(Clone, Copy, Debug)]
+    struct DirectCallFeature {
+        marker: &'static str,
+        family: &'static str,
+        stable_key_fragment: &'static str,
+        status: ObservedStatus,
+    }
+
+    const SUPPORTED_DIRECT_CALL_FEATURES: &[DirectCallFeature] = &[
+        DirectCallFeature {
+            marker: "direct-calls/go/direct-function",
+            family: "CallTarget",
+            stable_key_fragment: "DirectReference",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/method-call",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/function-value",
+            family: "UnresolvedCall",
+            stable_key_fragment: "FunctionValue",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/goroutine-boundary",
+            family: "UnresolvedCall",
+            stable_key_fragment: "GoroutineBoundary",
+            status: ObservedStatus::Unsupported,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/reflection",
+            family: "UnresolvedCall",
+            stable_key_fragment: "Reflection",
+            status: ObservedStatus::Unsupported,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/setup-missing-interface",
+            family: "UnresolvedCall",
+            stable_key_fragment: "SetupMissing",
+            status: ObservedStatus::SetupMissing,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/local-function",
+            family: "CallTarget",
+            stable_key_fragment: "DirectReference",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/import-binding",
+            family: "CallTarget",
+            stable_key_fragment: "ImportBinding",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/static-member",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/constructor-as-function",
+            family: "CallTarget",
+            stable_key_fragment: "Constructor",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/constructor",
+            family: "CallTarget",
+            stable_key_fragment: "Constructor",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/instance-member",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/function-value",
+            family: "UnresolvedCall",
+            stable_key_fragment: "FunctionValue",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/dynamic-property",
+            family: "UnresolvedCall",
+            stable_key_fragment: "DynamicProperty",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/call-apply-bind",
+            family: "UnresolvedCall",
+            stable_key_fragment: "CallApplyBind",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/eval",
+            family: "UnresolvedCall",
+            stable_key_fragment: "Eval",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/dynamic-import",
+            family: "UnresolvedCall",
+            stable_key_fragment: "DynamicImport",
+            status: ObservedStatus::Unresolved,
+        },
+    ];
+
     #[test]
     fn eval_direct_calls_core_fixture_passes() {
         let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
@@ -2382,6 +2495,38 @@ mod direct_calls_core {
     }
 
     #[test]
+    fn eval_direct_calls_core_source_documents_supported_language_features() {
+        let markers = fixture_feature_markers(&["service.go", "web/src/app.ts"]);
+        let expected = SUPPORTED_DIRECT_CALL_FEATURES
+            .iter()
+            .map(|feature| feature.marker.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(markers, expected);
+    }
+
+    #[test]
+    fn eval_direct_calls_core_observes_supported_language_feature_contract() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+
+        for feature in SUPPORTED_DIRECT_CALL_FEATURES {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => {
+                        fact.family == feature.family
+                            && fact.stable_key.contains(feature.stable_key_fragment)
+                            && fact.status == Some(feature.status)
+                    }
+                    _ => false,
+                }),
+                "direct-call feature {feature:?} was not observed: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    #[test]
     fn eval_direct_calls_core_manifest_covers_counts_and_indexes() {
         let fixture = load_native_fixture(&fixture_dir()).unwrap();
         let expected_invariants = fixture
@@ -2450,6 +2595,22 @@ mod direct_calls_core {
             );
         }
     }
+
+    fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {
+        let mut markers = std::collections::BTreeSet::new();
+        for path in paths {
+            let source = std::fs::read_to_string(fixture_dir().join("repo").join(path))
+                .expect("fixture source should be readable");
+            for marker in source.lines().filter_map(feature_marker) {
+                markers.insert(marker);
+            }
+        }
+        markers
+    }
+
+    fn feature_marker(line: &str) -> Option<String> {
+        Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
+    }
 }
 
 #[cfg(test)]
@@ -2472,6 +2633,120 @@ mod abstract_domains_core {
     fn fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/abstract-domains/core")
     }
+
+    const REQUIRED_DOMAIN_COUNT_INVARIANTS: &[&str] = &[
+        "abstract_domains.counts.by_slot.reachability.nonzero",
+        "abstract_domains.counts.by_slot.nilness.nonzero",
+        "abstract_domains.counts.by_slot.truthiness.nonzero",
+        "abstract_domains.counts.by_slot.constants.nonzero",
+        "abstract_domains.counts.by_slot.strings.nonzero",
+        "abstract_domains.counts.by_slot.initializedness.nonzero",
+        "abstract_domains.counts.by_status.present.nonzero",
+        "abstract_domains.counts.by_status.top.nonzero",
+        "abstract_domains.counts.by_status.unknown.nonzero",
+        "abstract_domains.counts.by_status.unsupported.nonzero",
+        "abstract_domains.counts.by_status.budget_exceeded.nonzero",
+        "abstract_domains.counts.by_precision.exact_local.nonzero",
+        "abstract_domains.counts.by_precision.conservative.nonzero",
+        "abstract_domains.counts.by_precision.unknown.nonzero",
+        "abstract_domains.counts.by_precision.unsupported.nonzero",
+        "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
+    ];
+
+    const REQUIRED_DOMAIN_INDEX_INVARIANTS: &[&str] = &[
+        "abstract_domains.index_counts.observations_by_body.nonzero",
+        "abstract_domains.index_counts.observations_by_slot.nonzero",
+        "abstract_domains.index_counts.events_by_status.nonzero",
+    ];
+
+    #[derive(Clone, Copy, Debug)]
+    struct AbstractDomainFeature {
+        marker: &'static str,
+        stable_key_fragment: &'static str,
+        status: ObservedStatus,
+        precision: &'static str,
+    }
+
+    const SUPPORTED_ABSTRACT_DOMAIN_FEATURES: &[AbstractDomainFeature] = &[
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/initialized-locals",
+            stable_key_fragment: "initializedness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/string-constant",
+            stable_key_fragment: "constants",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/nil-branch",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/boolean-branch",
+            stable_key_fragment: "truthiness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/loop-widening",
+            stable_key_fragment: "reachability",
+            status: ObservedStatus::Top,
+            precision: "conservative",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/unknown-call-havoc",
+            stable_key_fragment: "unknown",
+            status: ObservedStatus::Unknown,
+            precision: "unknown",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/maybe-uninitialized-local",
+            stable_key_fragment: "initializedness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/string-constant",
+            stable_key_fragment: "constants",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/nullish-branch",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/boolean-branch",
+            stable_key_fragment: "truthiness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/loop-widening",
+            stable_key_fragment: "reachability",
+            status: ObservedStatus::Top,
+            precision: "conservative",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/dynamic-write-havoc",
+            stable_key_fragment: "unsupported",
+            status: ObservedStatus::Unsupported,
+            precision: "unsupported",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/nullish-coalescing",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+    ];
 
     #[test]
     fn eval_abstract_domains_core_fixture_passes() {
@@ -2573,37 +2848,54 @@ mod abstract_domains_core {
     }
 
     #[test]
+    fn eval_abstract_domains_core_source_documents_supported_language_features() {
+        let markers = fixture_feature_markers(&["domain.go", "web/src/domain.ts"]);
+        let expected = SUPPORTED_ABSTRACT_DOMAIN_FEATURES
+            .iter()
+            .map(|feature| feature.marker.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(markers, expected);
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_observes_supported_language_feature_contract() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+
+        for feature in SUPPORTED_ABSTRACT_DOMAIN_FEATURES {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => {
+                        fact.family == "DomainObservation"
+                            && fact.stable_key.contains(feature.stable_key_fragment)
+                            && fact.status == Some(feature.status)
+                            && fact.precision.as_deref() == Some(feature.precision)
+                    }
+                    _ => false,
+                }),
+                "abstract-domain feature {feature:?} was not observed: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    #[test]
     fn eval_abstract_domains_core_observes_determinism_and_indexes() {
         let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("abstract-domains core case");
 
-        for required in [
-            (
-                "abstract_domains.current_determinism",
-                "cold_warm_no_cache_equal",
-            ),
-            (
-                "abstract_domains.counts.by_slot.reachability.nonzero",
-                "true",
-            ),
-            ("abstract_domains.counts.by_status.present.nonzero", "true"),
-            (
-                "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
-                "true",
-            ),
-            (
-                "abstract_domains.index_counts.observations_by_body.nonzero",
-                "true",
-            ),
-            (
-                "abstract_domains.index_counts.observations_by_slot.nonzero",
-                "true",
-            ),
-            (
-                "abstract_domains.index_counts.events_by_status.nonzero",
-                "true",
-            ),
-        ] {
+        for required in [(
+            "abstract_domains.current_determinism",
+            "cold_warm_no_cache_equal",
+        )]
+        .into_iter()
+        .chain(
+            REQUIRED_DOMAIN_COUNT_INVARIANTS
+                .iter()
+                .chain(REQUIRED_DOMAIN_INDEX_INVARIANTS)
+                .map(|name| (*name, "true")),
+        ) {
             assert!(
                 case.observed.iter().any(|item| match item {
                     ObservedItem::Invariant(invariant) => {
@@ -2615,5 +2907,21 @@ mod abstract_domains_core {
                 case.observed
             );
         }
+    }
+
+    fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {
+        let mut markers = std::collections::BTreeSet::new();
+        for path in paths {
+            let source = std::fs::read_to_string(fixture_dir().join("repo").join(path))
+                .expect("fixture source should be readable");
+            for marker in source.lines().filter_map(feature_marker) {
+                markers.insert(marker);
+            }
+        }
+        markers
+    }
+
+    fn feature_marker(line: &str) -> Option<String> {
+        Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
     }
 }
