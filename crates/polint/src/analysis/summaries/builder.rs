@@ -1122,4 +1122,294 @@ mod tests {
             "digest should record unresolved count"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Task 2 tests: memory effects and TITO
+    // -----------------------------------------------------------------------
+
+    fn db_with_param_and_local_ops() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        // Function with param[0] read and local written
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::Go,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:mem".to_string(),
+                span: span(),
+                stable_key: "body:mem".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![
+                PlaceFact {
+                    id: PlaceId(0),
+                    language: Language::Go,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("arg0".to_string()),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:param0".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+                PlaceFact {
+                    id: PlaceId(1),
+                    language: Language::Go,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "tmp".to_string(),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:local-tmp".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+            ],
+            operations: vec![
+                // Read param[0]
+                MirOperation {
+                    id: MirOpId(0),
+                    body: MirBodyId(0),
+                    ordinal: 1,
+                    span: span(),
+                    kind: MirOperationKind::Read { place: PlaceId(0) },
+                    stable_key: "op:read-param0".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                // Write local tmp from param[0]
+                MirOperation {
+                    id: MirOpId(1),
+                    body: MirBodyId(0),
+                    ordinal: 2,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                        mode: AssignMode::Overwrite,
+                    },
+                    stable_key: "op:assign-tmp".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(2),
+                    body: MirBodyId(0),
+                    ordinal: 3,
+                    span: span(),
+                    kind: MirOperationKind::Return { value: None },
+                    stable_key: "op:return".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+        db
+    }
+
+    #[test]
+    fn memory_effects_tracks_receiver_and_param_access() {
+        let db = db_with_param_and_local_ops();
+        let output = DirectSummaryBuilder::build(&db);
+
+        let mem_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::MemoryEffects)
+            .expect("memory effects summary");
+
+        // param[0] is read (by Read op) and read again (as source of Assign)
+        assert!(
+            mem_summary.payload_digest.contains("param[0]:Read"),
+            "memory digest should record param[0] read access, got: {}",
+            mem_summary.payload_digest
+        );
+        // local tmp is written (by Assign)
+        assert!(
+            mem_summary.payload_digest.contains("local:"),
+            "memory digest should record local access, got: {}",
+            mem_summary.payload_digest
+        );
+        // return is written (Return op writes to return)
+        assert!(
+            mem_summary.payload_digest.contains("return:"),
+            "memory digest should record return access, got: {}",
+            mem_summary.payload_digest
+        );
+    }
+
+    #[test]
+    fn tito_detects_param_returned_directly() {
+        let mut db = AnalysisDb::new();
+        // Function that returns param[0] directly: `return arg0`
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:tito".to_string(),
+                span: span(),
+                stable_key: "body:tito".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language: Language::TypeScript,
+                file: Some(FileId(1)),
+                function: Some(FunctionId(1)),
+                root: PlaceRoot::Parameter {
+                    function: FunctionId(1),
+                    index: 0,
+                    name: Some("arg0".to_string()),
+                },
+                projections: Vec::new(),
+                stable_key: "place:param0".to_string(),
+                status: PlaceStatus::Resolved,
+            }],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 1,
+                span: span(),
+                kind: MirOperationKind::Return {
+                    value: Some(MirValue::Place(PlaceId(0))),
+                },
+                stable_key: "op:return-param".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+
+        let output = DirectSummaryBuilder::build(&db);
+
+        let tito_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::DataFlowTito)
+            .expect("TITO summary");
+
+        // Should detect Param(0) -> Return Value flow
+        assert!(
+            tito_summary.payload_digest.contains("edge:"),
+            "TITO digest should contain flow edge, got: {}",
+            tito_summary.payload_digest
+        );
+        assert!(
+            tito_summary.payload_digest.contains("Param(0)"),
+            "TITO digest should reference Param(0), got: {}",
+            tito_summary.payload_digest
+        );
+        assert!(
+            tito_summary.payload_digest.contains("Return"),
+            "TITO digest should reference Return, got: {}",
+            tito_summary.payload_digest
+        );
+        assert!(
+            tito_summary.payload_digest.contains("source_return:true"),
+            "TITO should mark has_source_return, got: {}",
+            tito_summary.payload_digest
+        );
+    }
+
+    #[test]
+    fn unresolved_calls_produce_may_have_external_effects() {
+        let mut db = AnalysisDb::new();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::Go,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:ext".to_string(),
+                span: span(),
+                stable_key: "body:ext".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 1,
+                span: span(),
+                kind: MirOperationKind::Return { value: None },
+                stable_key: "op:return".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+
+        // Add unresolved call facts
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                id: CallSiteId(1),
+                language: Language::Go,
+                file: FileId(1),
+                caller: FunctionId(1),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: span(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Unknown {
+                    reason: UnresolvedCallReason::DynamicProperty,
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Unresolved,
+                precision: CallPrecision::Unknown,
+                stable_key: "call-site:unknown".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: vec![UnresolvedCallFact {
+                site: CallSiteId(1),
+                caller: FunctionId(1),
+                status: CallTargetStatus::Unresolved,
+                reason: UnresolvedCallReason::DynamicProperty,
+                algorithm: CallAlgorithm::SyntaxOnly,
+                provenance: CallProvenanceFact::MirShape,
+                precision: CallPrecision::Unknown,
+                stable_key: "unresolved:dyn".to_string(),
+            }],
+        });
+
+        let output = DirectSummaryBuilder::build(&db);
+
+        let mem_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::MemoryEffects)
+            .expect("memory effects summary");
+
+        // Unresolved calls should set may_have_external_effects = true
+        assert!(
+            mem_summary.payload_digest.contains("external:true"),
+            "memory digest should mark external effects when unresolved calls exist, got: {}",
+            mem_summary.payload_digest
+        );
+
+        // Should also have a memory event for may_have_external_effects
+        let mem_events: Vec<_> = output
+            .events
+            .iter()
+            .filter(|e| e.domain == SummaryDomainKind::MemoryEffects)
+            .collect();
+        assert!(
+            !mem_events.is_empty(),
+            "should have memory effect event for unresolved calls"
+        );
+    }
 }
