@@ -66,6 +66,12 @@ fn reason_for_site(site: &CallSiteFact) -> Option<UnresolvedCallReason> {
     match &site.callee {
         CallCallee::FunctionValue { .. } => Some(UnresolvedCallReason::FunctionValue),
         CallCallee::Unknown { reason } => Some(normalize_unknown_reason(*reason)),
+        CallCallee::Identifier {
+            reference: None, ..
+        }
+        | CallCallee::Constructor {
+            reference: None, ..
+        } => Some(UnresolvedCallReason::MissingSemanticReference),
         CallCallee::Index { .. } => Some(UnresolvedCallReason::DynamicProperty),
         CallCallee::Member { .. } if matches!(site.kind, CallSyntaxKind::Member) => {
             Some(UnresolvedCallReason::DynamicProperty)
