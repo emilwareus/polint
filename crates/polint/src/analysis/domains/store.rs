@@ -336,6 +336,8 @@ fn observation(
     precision: DomainPrecision,
     value: DomainValue,
 ) -> DomainObservationFact {
+    let (status, precision, value) =
+        normalize_observation_value_for_location(operation, status, precision, value);
     DomainObservationFact {
         id: DomainObservationId(0),
         body,
@@ -374,6 +376,23 @@ fn observation(
             ],
         ),
     }
+}
+
+fn normalize_observation_value_for_location(
+    operation: Option<MirOpId>,
+    status: DomainStatus,
+    precision: DomainPrecision,
+    value: DomainValue,
+) -> (DomainStatus, DomainPrecision, DomainValue) {
+    if operation.is_none()
+        && matches!(
+            value,
+            DomainValue::TopReason(ref reason) if reason == TopReason::UnresolvedCall.as_str()
+        )
+    {
+        return top_value(TopReason::UnknownValue);
+    }
+    (status, precision, value)
 }
 
 fn reachability_fact_value(
