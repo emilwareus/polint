@@ -499,6 +499,308 @@ fact = { family = "DomainEvent", stable_key = "domain-event:budget", mode = "par
 }
 
 #[cfg(test)]
+mod direct_summary {
+    use crate::eval::model::{
+        DIRECT_SUMMARY_FACT_FAMILIES, AssertionMode, ExpectedFact, ExpectedItem, FixtureArea,
+        ObservedFact, ObservedItem, ObservedStatus,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn direct_summary_fixture_area_parses_from_toml() {
+        let manifest = r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "direct-summaries-core"
+area = "direct-summaries"
+
+[repo]
+path = "repo"
+
+[[expected]]
+fact = { family = "summary_control", stable_key = "summary:control:panics", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+[[expected]]
+fact = { family = "summary_call", stable_key = "summary:call:unresolved", mode = "partial", producer_id = "polint.direct_summaries", precision = "unknown_top", status = "unknown" }
+
+[[expected]]
+fact = { family = "summary_memory", stable_key = "summary:memory:write", mode = "partial", producer_id = "polint.direct_summaries", precision = "setup_aware", status = "present" }
+
+[[expected]]
+fact = { family = "summary_tito", stable_key = "summary:tito:param-return", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+[[expected]]
+fact = { family = "summary_event", stable_key = "summary:event:unknown", mode = "partial", producer_id = "polint.direct_summaries", precision = "unknown_top", status = "unknown" }
+"#;
+
+        let parsed: crate::eval::fixtures::NativeFixtureManifest =
+            toml::from_str(manifest).expect("direct-summaries manifest should parse");
+
+        assert_eq!(parsed.area, FixtureArea::DirectSummaries);
+        assert_eq!(parsed.expected.len(), 5);
+    }
+
+    #[test]
+    fn direct_summary_fact_families_are_recognized() {
+        assert_eq!(
+            DIRECT_SUMMARY_FACT_FAMILIES,
+            [
+                "summary_control",
+                "summary_call",
+                "summary_memory",
+                "summary_tito",
+                "summary_event",
+            ]
+        );
+
+        for family in DIRECT_SUMMARY_FACT_FAMILIES {
+            assert!(!family.is_empty(), "fact family must be non-empty");
+        }
+    }
+
+    #[test]
+    fn observed_direct_summary_debug_rows_normalize_to_fact_rows_with_compact_payloads() {
+        let debug = json!({
+            "summaries": {
+                "summaries": [
+                    {
+                        "callable_stable_key": "func:main",
+                        "domain": "control_effects",
+                        "status": "present",
+                        "precision": "local",
+                        "provenance": "native_local",
+                        "payload_digest": "abc12345deadbeef",
+                        "stable_key": "summary:control_effects:func:main"
+                    },
+                    {
+                        "callable_stable_key": "func:dynamic",
+                        "domain": "call_effects",
+                        "status": "unknown",
+                        "precision": "unknown_top",
+                        "provenance": "native_local",
+                        "payload_digest": "ffffffff00000000",
+                        "stable_key": "summary:call_effects:func:dynamic"
+                    },
+                    {
+                        "callable_stable_key": "func:mutate",
+                        "domain": "memory_effects",
+                        "status": "present",
+                        "precision": "setup_aware",
+                        "provenance": "native_local",
+                        "payload_digest": "deadbeef12345678",
+                        "stable_key": "summary:memory_effects:func:mutate"
+                    },
+                    {
+                        "callable_stable_key": "func:identity",
+                        "domain": "data_flow_tito",
+                        "status": "present",
+                        "precision": "local",
+                        "provenance": "lifted_from_domain",
+                        "payload_digest": "1234567890abcdef",
+                        "stable_key": "summary:data_flow_tito:func:identity"
+                    }
+                ],
+                "events": [
+                    {
+                        "callable_stable_key": "func:dynamic",
+                        "domain": "call_effects",
+                        "event_kind": "unresolved_callee",
+                        "reason": "dynamic_dispatch",
+                        "status": "unknown",
+                        "precision": "unknown_top",
+                        "stable_key": "summary_event:call_effects:func:dynamic:0"
+                    }
+                ],
+                "counts": {
+                    "total": 4,
+                    "present": 3,
+                    "unknown": 1,
+                    "unsupported": 0,
+                    "setup_missing": 0,
+                    "budget_exceeded": 0,
+                    "events": 1
+                },
+                "domain_counts": {
+                    "control_effects": 1,
+                    "call_effects": 1,
+                    "memory_effects": 1,
+                    "data_flow_tito": 1
+                }
+            }
+        });
+
+        let observed = crate::eval::observed::direct_summary_facts_for_test(&debug);
+
+        // Check that we get facts for all four summary domains
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "summary_control"
+                    && fact.producer_id.as_deref() == Some("polint.direct_summaries")
+                    && fact.precision.as_deref() == Some("local")
+                    && fact.status == Some(ObservedStatus::Present)
+                    && fact.payload.as_deref().is_some_and(|p| {
+                        p.contains("domain=control_effects")
+                            && p.contains("status=present")
+                            && p.contains("precision=local")
+                            && p.contains("provenance=native_local")
+                            && p.contains("payload_digest_prefix=abc12345")
+                    })
+            }
+            _ => false,
+        }));
+
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "summary_call"
+                    && fact.status == Some(ObservedStatus::Unknown)
+                    && fact.precision.as_deref() == Some("unknown_top")
+            }
+            _ => false,
+        }));
+
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "summary_memory"
+                    && fact.status == Some(ObservedStatus::Present)
+            }
+            _ => false,
+        }));
+
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "summary_tito"
+                    && fact.status == Some(ObservedStatus::Present)
+                    && fact.payload.as_deref().is_some_and(|p| {
+                        p.contains("provenance=lifted_from_domain")
+                    })
+            }
+            _ => false,
+        }));
+
+        // Check event rows
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "summary_event"
+                    && fact.status == Some(ObservedStatus::Unknown)
+                    && fact.payload.as_deref().is_some_and(|p| {
+                        p.contains("event_kind=unresolved_callee")
+                            && p.contains("reason=dynamic_dispatch")
+                    })
+            }
+            _ => false,
+        }));
+
+        // Check count invariants
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Invariant(inv) => {
+                inv.name == "direct_summaries.counts.total" && inv.value == "4"
+            }
+            _ => false,
+        }));
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Invariant(inv) => {
+                inv.name == "direct_summaries.counts.present" && inv.value == "3"
+            }
+            _ => false,
+        }));
+
+        // Check domain count invariants
+        for domain in ["control_effects", "call_effects", "memory_effects", "data_flow_tito"] {
+            assert!(
+                observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(inv) => {
+                        inv.name == format!("direct_summaries.domain_counts.{domain}.nonzero")
+                            && inv.value == "true"
+                    }
+                    _ => false,
+                }),
+                "missing domain count invariant for {domain}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_summary_unknown_and_budget_statuses_count_as_unknown_metrics() {
+        use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
+        use crate::eval::metrics::compute_metrics;
+
+        let expected = [
+            ExpectedItem::Fact(ExpectedFact {
+                family: "summary_control".to_string(),
+                stable_key: "unknown".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                precision: None,
+                status: Some(ObservedStatus::Unknown),
+                false_positive_trap: false,
+            }),
+            ExpectedItem::Fact(ExpectedFact {
+                family: "summary_call".to_string(),
+                stable_key: "unsupported".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                precision: None,
+                status: Some(ObservedStatus::Unsupported),
+                false_positive_trap: false,
+            }),
+            ExpectedItem::Fact(ExpectedFact {
+                family: "summary_memory".to_string(),
+                stable_key: "setup".to_string(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                precision: None,
+                status: Some(ObservedStatus::SetupMissing),
+                false_positive_trap: false,
+            }),
+        ];
+
+        let observed = [
+            ObservedItem::Fact(ObservedFact {
+                family: "summary_control".to_string(),
+                stable_key: "summary:control:unknown:observed".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                provenance: Some("kernel.metadata_debug_json.summaries".to_string()),
+                precision: Some("unknown_top".to_string()),
+                status: Some(ObservedStatus::Unknown),
+                payload: None,
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "summary_call".to_string(),
+                stable_key: "summary:call:unsupported:observed".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                provenance: Some("kernel.metadata_debug_json.summaries".to_string()),
+                precision: Some("unknown_top".to_string()),
+                status: Some(ObservedStatus::Unsupported),
+                payload: None,
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "summary_memory".to_string(),
+                stable_key: "summary:memory:setup:observed".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.direct_summaries".to_string()),
+                provenance: Some("kernel.metadata_debug_json.summaries".to_string()),
+                precision: Some("unknown_top".to_string()),
+                status: Some(ObservedStatus::SetupMissing),
+                payload: None,
+            }),
+        ];
+
+        let summaries = match_case(&expected, &observed, MatcherConfig::default());
+        let metrics = compute_metrics(&summaries);
+
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|s| s.outcome)
+                .collect::<Vec<_>>(),
+            vec![MatchOutcome::Unknown, MatchOutcome::Unknown, MatchOutcome::Unknown]
+        );
+        assert_eq!(metrics.unknown_count, 3);
+    }
+}
+
+#[cfg(test)]
 mod semantic_rows {
     use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
     use crate::eval::model::{

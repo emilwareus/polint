@@ -39,6 +39,14 @@ pub(crate) const CALL_FACT_FAMILIES: &[&str] = &["CallSite", "CallTarget", "Unre
 
 pub(crate) const ABSTRACT_DOMAIN_FACT_FAMILIES: &[&str] = &["DomainObservation", "DomainEvent"];
 
+pub(crate) const DIRECT_SUMMARY_FACT_FAMILIES: &[&str] = &[
+    "summary_control",
+    "summary_call",
+    "summary_memory",
+    "summary_tito",
+    "summary_event",
+];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -75,6 +83,8 @@ pub(crate) enum FixtureArea {
     DirectCalls,
     #[serde(rename = "abstract-domains")]
     AbstractDomains,
+    #[serde(rename = "direct-summaries")]
+    DirectSummaries,
     Facts,
     Graphs,
     Paths,

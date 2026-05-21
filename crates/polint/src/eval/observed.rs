@@ -475,6 +475,11 @@ pub(crate) fn abstract_domain_facts_for_test(debug_json: &Value) -> Vec<Observed
 }
 
 #[cfg(test)]
+pub(crate) fn direct_summary_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    direct_summary_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
     topology_facts(db)
 }
@@ -687,6 +692,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(cfg_facts(debug_json));
     facts.extend(call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
+    facts.extend(direct_summary_facts(debug_json));
     facts
 }
 
@@ -1102,6 +1108,159 @@ fn abstract_domain_index_count_invariants(
                 format!("abstract_domains.index_counts.{index}.nonzero"),
                 "true",
                 "kernel.metadata_debug_json.abstract_domains.index_counts",
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn direct_summary_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(summaries) = debug_json.get("summaries").and_then(Value::as_object) else {
+        return facts;
+    };
+
+    if let Some(rows) = summaries.get("summaries").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = direct_summary_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    if let Some(rows) = summaries.get("events").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = direct_summary_event_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts.extend(direct_summary_count_invariants(summaries));
+    facts.extend(direct_summary_domain_count_invariants(summaries));
+    facts
+}
+
+#[cfg(test)]
+fn direct_summary_fact(row: &Value) -> Option<ObservedFact> {
+    let domain = row.get("domain")?.as_str()?;
+    let family = direct_summary_domain_to_family(domain)?;
+    let status_str = row.get("status")?.as_str()?;
+    let precision_str = row.get("precision")?.as_str()?;
+    let provenance_str = row.get("provenance").and_then(Value::as_str).unwrap_or("");
+    let payload_digest = row
+        .get("payload_digest")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let payload_prefix = if payload_digest.len() > 8 {
+        &payload_digest[..8]
+    } else {
+        payload_digest
+    };
+
+    Some(ObservedFact {
+        family: family.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.direct_summaries".to_string()),
+        provenance: Some("kernel.metadata_debug_json.summaries".to_string()),
+        precision: Some(direct_summary_precision_label(precision_str).to_string()),
+        status: Some(direct_summary_status_from_label(status_str)),
+        payload: Some(format!(
+            "domain={domain};status={status_str};precision={precision_str};provenance={provenance_str};payload_digest_prefix={payload_prefix}"
+        )),
+    })
+}
+
+#[cfg(test)]
+fn direct_summary_event_fact(row: &Value) -> Option<ObservedFact> {
+    let domain = row.get("domain")?.as_str()?;
+    let status_str = row.get("status")?.as_str()?;
+    let precision_str = row.get("precision")?.as_str()?;
+    let event_kind = row.get("event_kind").and_then(Value::as_str).unwrap_or("");
+    let reason = row.get("reason").and_then(Value::as_str).unwrap_or("");
+
+    Some(ObservedFact {
+        family: "summary_event".to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.direct_summaries".to_string()),
+        provenance: Some("kernel.metadata_debug_json.summaries".to_string()),
+        precision: Some(direct_summary_precision_label(precision_str).to_string()),
+        status: Some(direct_summary_status_from_label(status_str)),
+        payload: Some(format!(
+            "domain={domain};event_kind={event_kind};reason={reason};status={status_str};precision={precision_str}"
+        )),
+    })
+}
+
+#[cfg(test)]
+fn direct_summary_domain_to_family(domain: &str) -> Option<&'static str> {
+    match domain {
+        "control_effects" => Some("summary_control"),
+        "call_effects" => Some("summary_call"),
+        "memory_effects" => Some("summary_memory"),
+        "data_flow_tito" => Some("summary_tito"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn direct_summary_status_from_label(label: &str) -> ObservedStatus {
+    match label {
+        "present" => ObservedStatus::Present,
+        "unknown" => ObservedStatus::Unknown,
+        "unsupported" => ObservedStatus::Unsupported,
+        "setup_missing" => ObservedStatus::SetupMissing,
+        "budget_exceeded" => ObservedStatus::BudgetExceeded,
+        _ => ObservedStatus::Present,
+    }
+}
+
+#[cfg(test)]
+fn direct_summary_precision_label(label: &str) -> &str {
+    match label {
+        "local" => "local",
+        "setup_aware" => "setup_aware",
+        "heuristic" => "heuristic",
+        "unknown_top" => "unknown_top",
+        _ => label,
+    }
+}
+
+#[cfg(test)]
+fn direct_summary_count_invariants(
+    summaries: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(counts) = summaries.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut invariants = Vec::new();
+    for field in ["total", "present", "unknown", "unsupported", "setup_missing", "budget_exceeded", "events"] {
+        if let Some(value) = counts.get(field).and_then(Value::as_u64) {
+            invariants.push(observed_invariant(
+                format!("direct_summaries.counts.{field}"),
+                value.to_string(),
+                "kernel.metadata_debug_json.summaries.counts",
+            ));
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn direct_summary_domain_count_invariants(
+    summaries: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(domain_counts) = summaries.get("domain_counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    domain_counts
+        .iter()
+        .filter(|(_, count)| count.as_u64().is_some_and(|count| count > 0))
+        .map(|(domain, count)| {
+            observed_invariant(
+                format!("direct_summaries.domain_counts.{domain}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.summaries.domain_counts",
             )
         })
         .collect()
