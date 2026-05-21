@@ -1172,7 +1172,12 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
                 ("provider_order.8", "polint.calls"),
-                ("provider_order.9", "polint.metrics"),
+                ("provider_order.9", "polint.abstract_domains"),
+                ("provider_order.10", "polint.metrics"),
+                (
+                    "provider_output.polint.abstract_domains.schema_version",
+                    "abstract-domain-facts-1:1",
+                ),
             ]
         );
     }

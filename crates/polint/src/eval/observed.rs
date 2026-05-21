@@ -1497,8 +1497,30 @@ path = "repo"
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
                 ("provider_order.8", "polint.calls"),
-                ("provider_order.9", "polint.metrics"),
+                ("provider_order.9", "polint.abstract_domains"),
+                ("provider_order.10", "polint.metrics"),
             ]
+        );
+    }
+
+    #[test]
+    fn eval_observed_kernel_records_abstract_domain_provider_output_schema() {
+        let (_temp, observed) = observed_for("export function answer() { return 42; }\n", None);
+        let invariants = observed
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            invariants
+                .get("provider_output.polint.abstract_domains.schema_version")
+                .copied(),
+            Some("abstract-domain-facts-1:1")
         );
     }
 
