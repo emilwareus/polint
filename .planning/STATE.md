@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: ready_to_discuss
-last_updated: "2026-05-21T13:27:10.535Z"
+status: phase_31_shipped_pr_35
+last_updated: "2026-05-21T13:35:40.808Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to discuss next phase
+Status: Phase 31 shipped - PR #35; ready to discuss next phase
 Phase: 32
 Plan: Not started
 Last activity: 2026-05-21
