@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T18:40:28Z"
-last_activity: 2026-05-21 -- Phase 32 Plan 01 complete
+last_updated: "2026-05-21T18:48:33Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 02 complete
 progress:
   total_phases: 22
   completed_phases: 12
   total_plans: 72
-  completed_plans: 66
+  completed_plans: 67
   percent: 55
 ---
 
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 32
 Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
-Plan: 2 of 7
-Last activity: 2026-05-21 -- Completed 32-01-PLAN.md
+Plan: 3 of 7
+Last activity: 2026-05-21 -- Completed 32-02-PLAN.md
 
 ## Phase Progress
 
@@ -269,6 +269,10 @@ Last activity: 2026-05-21 -- Completed 32-01-PLAN.md
 - [Phase 32-summary-kernel-and-direct-summaries]: Use max instead of saturating_add for CallEffects unresolved_count join to preserve lattice idempotence.
 - [Phase 32-summary-kernel-and-direct-summaries]: Re-declare Changed enum locally in summaries::domain rather than importing from domains::lattice to keep module boundaries clean.
 - [Phase 32-summary-kernel-and-direct-summaries]: Place AccessKind::join impl in core.rs since it is specific to summary domain join behavior.
+- [Phase 32-summary-kernel-and-direct-summaries]: SummaryOutput normalized() sorts by (stable_key, id) then reassigns IDs sequentially, matching CallOutput pattern.
+- [Phase 32-summary-kernel-and-direct-summaries]: Each SummaryDomainKind maps to a separate FactFamily variant for independent metadata tracking and removal.
+- [Phase 32-summary-kernel-and-direct-summaries]: SummaryPrecision::Local and SetupAware both map to FactPrecision::SetupAware since summary facts are never Exact.
+- [Phase 32-summary-kernel-and-direct-summaries]: Use polint.direct_summaries as the producer_id and layer_id for all summary metadata.
 
 ## Execution Metrics
 
@@ -328,12 +332,13 @@ Last activity: 2026-05-21 -- Completed 32-01-PLAN.md
 | 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
 | 31-p0-abstract-domain-kernel | 05 | 43 min | 3 | 19 |
 | 32-summary-kernel-and-direct-summaries | 01 | 8 min | 2 | 6 |
+| 32-summary-kernel-and-direct-summaries | 02 | 5 min | 2 | 4 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-01-PLAN.md.
-- Stopped at: Completed 32-01-PLAN.md; ready for Plan 32-02.
+- Last activity: 2026-05-21 - Completed 32-02-PLAN.md.
+- Stopped at: Completed 32-02-PLAN.md; ready for Plan 32-03.
 
 ### Quick Tasks Completed
 
@@ -362,4 +367,4 @@ Last activity: 2026-05-21 -- Completed 32-01-PLAN.md
 
 ## Next Action
 
-Phase 32 Plan 02 is next: summary store, builder, and provider wiring.
+Phase 32 Plan 03 is next: summary builder and direct summary computation.

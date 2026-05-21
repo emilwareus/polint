@@ -302,7 +302,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 32-02-PLAN.md — SummaryStore with normalization, indexes, AnalysisDb storage, and FactFamily extensions
+- [x] 32-02-PLAN.md — SummaryStore with normalization, indexes, AnalysisDb storage, and FactFamily extensions
 - [ ] 32-03-PLAN.md — DirectSummaryBuilder lifting control/call/memory/TITO from domain results and MIR
 
 **Wave 3** *(blocked on Wave 2 completion)*
