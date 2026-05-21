@@ -2764,3 +2764,247 @@ mod cfg_layer_key {
         )));
     }
 }
+
+#[cfg(test)]
+mod calls_layer_key {
+    use super::*;
+    use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls provider manifest exists")
+    }
+
+    fn key(
+        source_suffix: &str,
+        config_suffix: &str,
+        go_suffix: &str,
+        ts_suffix: &str,
+        syntax_suffix: &str,
+        semantic_suffix: &str,
+        cfg_suffix: &str,
+        symbol_suffix: &str,
+        topology_suffix: &str,
+        parameter_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::calls_layer_key(
+            manifest(),
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", source_suffix],
+            )],
+            Digest::from_parts(DigestKind::Config, "config", &[config_suffix]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &[go_suffix]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &[ts_suffix]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &[syntax_suffix],
+            )],
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "semantic_mir",
+                &[semantic_suffix],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "cfg", &[cfg_suffix]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &[symbol_suffix]),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_topology",
+                &[topology_suffix],
+            ),
+            parameter_digest,
+        )
+    }
+
+    #[test]
+    fn calls_layer_key_changes_for_every_calls_input_family() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            calls_provider_parameter_digest(),
+        );
+
+        let cases = [
+            key(
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "calls_provider_parameters",
+                    &["direct_binding=disabled"],
+                ),
+            ),
+        ];
+
+        for changed in cases {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn calls_layer_key_tracks_absent_extension_model_toolchain() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            calls_provider_parameter_digest(),
+        );
+
+        assert_eq!(base.layer_kind, LayerKind::Calls);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ModelFile,
+            "model_digest_absent"
+        )));
+        assert_eq!(
+            base.toolchain_digest,
+            Digest::absent(DigestKind::ToolInvocation, "calls_toolchain")
+        );
+        assert_eq!(
+            base.lifecycle_digest,
+            Digest::from_unordered(
+                DigestKind::ProviderParameters,
+                "calls_lifecycle_inputs",
+                vec![
+                    Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &["base"]),
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &["base"]),
+                ],
+            )
+        );
+    }
+}
