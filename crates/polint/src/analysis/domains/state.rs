@@ -67,7 +67,10 @@ impl ProductState {
     }
 
     pub(crate) fn join_into(&mut self, incoming: &Self) -> Changed {
-        let mut changed = self.core.reachability.join_into(&incoming.core.reachability);
+        let mut changed = self
+            .core
+            .reachability
+            .join_into(&incoming.core.reachability);
         changed |= join_place_map(&mut self.core.nilness, &incoming.core.nilness);
         changed |= join_place_map(&mut self.core.truthiness, &incoming.core.truthiness);
         changed |= join_place_map(&mut self.core.constants, &incoming.core.constants);
@@ -81,11 +84,10 @@ impl ProductState {
 
     pub(crate) fn widen(&self, next: &Self, site: WidenSite, fuel: WidenFuel) -> Self {
         let mut widened = self.clone();
-        widened.core.reachability = self.core.reachability.widen(
-            &next.core.reachability,
-            site.clone(),
-            fuel,
-        );
+        widened.core.reachability =
+            self.core
+                .reachability
+                .widen(&next.core.reachability, site.clone(), fuel);
         widen_place_map(
             &mut widened.core.nilness,
             &self.core.nilness,
@@ -153,11 +155,7 @@ impl ProductState {
         push_map_parts("truthiness", &self.core.truthiness, &mut parts);
         push_map_parts("constants", &self.core.constants, &mut parts);
         push_map_parts("strings", &self.core.strings, &mut parts);
-        push_map_parts(
-            "initializedness",
-            &self.core.initializedness,
-            &mut parts,
-        );
+        push_map_parts("initializedness", &self.core.initializedness, &mut parts);
         parts.extend(self.extension_slots.stable_digest_parts());
         parts
     }
@@ -197,10 +195,7 @@ impl ExtensionDomainSlots {
     }
 }
 
-fn join_place_map<D>(
-    target: &mut BTreeMap<PlaceId, D>,
-    incoming: &BTreeMap<PlaceId, D>,
-) -> Changed
+fn join_place_map<D>(target: &mut BTreeMap<PlaceId, D>, incoming: &BTreeMap<PlaceId, D>) -> Changed
 where
     D: AbstractDomain,
 {
@@ -319,7 +314,8 @@ mod tests {
         let mut left = ProductState::entry();
         left.core.nilness.insert(place, NilnessDomain::Nil);
         left.core.truthiness.insert(place, TruthinessDomain::Truthy);
-        left.core.initializedness
+        left.core
+            .initializedness
             .insert(place, InitializednessDomain::Initialized);
 
         let mut right = ProductState::entry();
@@ -373,7 +369,10 @@ mod tests {
             .core
             .constants
             .insert(nullish, ConstantDomain::from_literal(ConstantLiteral::Null));
-        state.core.constants.insert(route, string_constant("/users/:id"));
+        state
+            .core
+            .constants
+            .insert(route, string_constant("/users/:id"));
 
         assert_eq!(state.reduce_value_only(4), Changed::Yes);
         assert_eq!(state.core.nilness[&nullish], NilnessDomain::Nil);

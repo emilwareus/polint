@@ -416,8 +416,9 @@ impl AbstractDomain for InitializednessDomain {
             (Self::Uninitialized, Self::Uninitialized) => Self::Uninitialized,
             (Self::Top(reason), _) | (_, Self::Top(reason)) => Self::Top(*reason),
             (Self::Bottom, value) | (value, Self::Bottom) => *value,
-            (Self::Initialized, Self::Uninitialized)
-            | (Self::Uninitialized, Self::Initialized) => Self::MaybeUninitialized,
+            (Self::Initialized, Self::Uninitialized) | (Self::Uninitialized, Self::Initialized) => {
+                Self::MaybeUninitialized
+            }
             (Self::MaybeUninitialized, _) | (_, Self::MaybeUninitialized) => {
                 Self::MaybeUninitialized
             }
