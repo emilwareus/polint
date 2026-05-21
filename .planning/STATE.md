@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T07:56:27.765Z"
-last_activity: 2026-05-21 -- Phase 30 execution started
+last_updated: "2026-05-21T08:08:20.514Z"
+last_activity: 2026-05-21
 progress:
   total_phases: 22
   completed_phases: 10
   total_plans: 60
-  completed_plans: 53
-  percent: 88
+  completed_plans: 54
+  percent: 90
 ---
 
 # State: polint
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 30
+Status: Ready to execute
 Phase: 30 (direct-call-facts) — EXECUTING
-Plan: 2 of 8
-Last activity: 2026-05-21 -- Completed Phase 30 Plan 01 direct call fact foundation
+Plan: 3 of 8
+Last activity: 2026-05-21
 
 ## Phase Progress
 
@@ -60,7 +60,7 @@ Last activity: 2026-05-21 -- Completed Phase 30 Plan 01 direct call fact foundat
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
-| 30 | In Progress | 1/8 plans complete; private call fact contracts, deterministic storage indexes, AnalysisDb storage/accessors, and metadata families done; requirement SAE-SEM-05 |
+| 30 | In Progress | 2/8 plans complete; private call fact contracts/storage plus provider slot, cache identity, and provider-order fixture wiring done; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
@@ -231,6 +231,9 @@ Last activity: 2026-05-21 -- Completed Phase 30 Plan 01 direct call fact foundat
 - [Phase 30-direct-call-facts]: Call facts remain crate-private under analysis::calls with no SDK, runner, CLI, or docs promotion.
 - [Phase 30-direct-call-facts]: CallStore validates target and unresolved site references before publishing indexes.
 - [Phase 30-direct-call-facts]: CALLS_PROVIDER_ID is polint.calls and call metadata uses compact status/kind/algorithm/reason/stable-key payload fragments.
+- [Phase 30-direct-call-facts]: polint.calls remains crate-private and manifest-owned, with no SDK, runner, CLI, or public call graph promotion.
+- [Phase 30-direct-call-facts]: The calls provider runs after polint.cfg and before polint.metrics so direct calls can consume CFG/MIR context before metrics remain unchanged.
+- [Phase 30-direct-call-facts]: Calls cache identity includes semantic MIR, CFG, symbol graph, module topology, syntax, lifecycle, config, parameters, and absent extension/model/toolchain slots.
 
 ## Execution Metrics
 
@@ -278,12 +281,13 @@ Last activity: 2026-05-21 -- Completed Phase 30 Plan 01 direct call fact foundat
 | 29-local-cfg-and-control-dependence | 04 | 28 min | 2 | 4 |
 | 29-local-cfg-and-control-dependence | 05 | 31 min | 2 | 3 |
 | 29-local-cfg-and-control-dependence | 06 | 68 min | 3 | 19 |
+| 30-direct-call-facts | 02 | 8 min | 2 | 9 |
 
 ## Session
 
 - Last session: 2026-05-20
-- Last activity: 2026-05-21 - Completed quick task 260521-b38: Fix CFG digest payload and stable unsupported control-flow keys.
-- Stopped at: Phase 29 PR #34 follow-up digest/stable-key fix complete; ready for Phase 30 direct call facts.
+- Last activity: 2026-05-21 - Completed Phase 30 Plan 02 calls provider slot and cache identity.
+- Stopped at: Completed 30-direct-call-facts-02-PLAN.md; ready for Phase 30 Plan 03.
 
 ### Quick Tasks Completed
 
