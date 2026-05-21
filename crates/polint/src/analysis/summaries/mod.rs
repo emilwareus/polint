@@ -9,3 +9,4 @@
 pub(crate) mod core;
 pub(crate) mod domain;
 pub(crate) mod facts;
+pub(crate) mod store;
