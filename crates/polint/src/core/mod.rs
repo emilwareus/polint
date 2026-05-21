@@ -4176,7 +4176,9 @@ pub(crate) fn line_col(source: &str, byte_offset: usize) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
+use crate::analysis::ids::{
+    CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId, UnsupportedId,
+};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{
         AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
@@ -4440,6 +4442,224 @@ mod tests {
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
             stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn test_call_site(
+        id: u64,
+        file: FileId,
+        caller: FunctionId,
+        stable_key: &str,
+    ) -> crate::analysis::calls::facts::CallSiteFact {
+        use crate::analysis::calls::facts::{
+            CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
+        };
+
+        CallSiteFact {
+            id: CallSiteId(id),
+            language: Language::TypeScript,
+            file,
+            caller,
+            owner_symbol: Some(SymbolId(caller.0 + 100)),
+            body: MirBodyId(id),
+            operation: MirOpId(id),
+            span: test_span(file, 1),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: None,
+                name: stable_key.to_string(),
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Resolved,
+            precision: CallPrecision::Exact,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn test_call_target(
+        id: u64,
+        site: CallSiteId,
+        caller: FunctionId,
+        stable_key: &str,
+    ) -> crate::analysis::calls::facts::CallTargetFact {
+        use crate::analysis::calls::facts::{
+            CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact,
+            CallTargetStatus,
+        };
+
+        CallTargetFact {
+            id: CallTargetId(id),
+            site,
+            caller,
+            target_function: Some(FunctionId(id + 10)),
+            target_symbol: Some(SymbolId(id + 20)),
+            edge_kind: CallEdgeKind::Direct,
+            algorithm: CallAlgorithm::DirectReference,
+            status: CallTargetStatus::Resolved,
+            reason: None,
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Exact,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn test_unresolved_call(
+        site: CallSiteId,
+        caller: FunctionId,
+        stable_key: &str,
+    ) -> crate::analysis::calls::facts::UnresolvedCallFact {
+        use crate::analysis::calls::facts::{
+            CallAlgorithm, CallPrecision, CallProvenance, CallTargetStatus, UnresolvedCallFact,
+            UnresolvedCallReason,
+        };
+
+        UnresolvedCallFact {
+            site,
+            caller,
+            status: CallTargetStatus::Unresolved,
+            reason: UnresolvedCallReason::FunctionValue,
+            algorithm: CallAlgorithm::SyntaxOnly,
+            provenance: CallProvenance::MirShape,
+            precision: CallPrecision::Unknown,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    mod call_fact_storage {
+        use super::*;
+        use crate::analysis::calls::store::CallOutput;
+
+        #[test]
+        fn replace_call_facts_removes_stale_rows_from_previous_run() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { first(); second(); }\n".to_string(),
+            );
+            let first = CallOutput {
+                sites: vec![test_call_site(1, file, FunctionId(1), "call-site:first")],
+                targets: vec![test_call_target(
+                    1,
+                    CallSiteId(1),
+                    FunctionId(1),
+                    "call-target:first",
+                )],
+                unresolved: vec![test_unresolved_call(
+                    CallSiteId(1),
+                    FunctionId(1),
+                    "unresolved:first",
+                )],
+            };
+            let second = CallOutput {
+                sites: vec![test_call_site(2, file, FunctionId(2), "call-site:second")],
+                targets: Vec::new(),
+                unresolved: Vec::new(),
+            };
+
+            db.replace_call_facts(first).expect("first call replace");
+            db.replace_call_facts(second).expect("second call replace");
+
+            assert_eq!(db.call_sites()[0].stable_key, "call-site:second");
+            assert!(db.call_targets().is_empty());
+            assert!(db.unresolved_calls().is_empty());
+        }
+    }
+
+    mod call_fact_metadata {
+        use super::*;
+        use crate::analysis::calls::facts::{CallPrecision, CallTargetStatus};
+        use crate::analysis::calls::store::CallOutput;
+
+        #[test]
+        fn replace_call_facts_records_metadata_provider_and_family_labels() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { run(); }\n".to_string(),
+            );
+
+            db.replace_call_facts(CallOutput {
+                sites: vec![test_call_site(1, file, FunctionId(1), "call-site:metadata")],
+                targets: vec![test_call_target(
+                    1,
+                    CallSiteId(1),
+                    FunctionId(1),
+                    "call-target:metadata",
+                )],
+                unresolved: vec![test_unresolved_call(
+                    CallSiteId(1),
+                    FunctionId(1),
+                    "unresolved:metadata",
+                )],
+            })
+            .expect("call replace");
+
+            for family in [
+                FactFamily::CallSite,
+                FactFamily::CallTarget,
+                FactFamily::UnresolvedCall,
+            ] {
+                let metadata = db
+                    .metadata_for(FactRef::new(family, 0))
+                    .expect("call metadata exists");
+                assert_eq!(metadata.producer_id, "polint.calls");
+                assert_eq!(metadata.layer_id, "polint.calls");
+                assert_eq!(metadata.validation, ValidationStatus::NativeTrusted);
+                assert!(matches!(
+                    family.label(),
+                    "CallSite" | "CallTarget" | "UnresolvedCall"
+                ));
+            }
+        }
+
+        #[test]
+        fn call_metadata_maps_unknown_statuses_to_non_exact_precision() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "function app() { target[key](); }\n".to_string(),
+            );
+            let mut site = test_call_site(1, file, FunctionId(1), "call-site:unsupported");
+            site.status = CallTargetStatus::Unsupported;
+            site.precision = CallPrecision::Unsupported;
+            let mut target = test_call_target(
+                1,
+                CallSiteId(1),
+                FunctionId(1),
+                "call-target:setup-missing",
+            );
+            target.status = CallTargetStatus::SetupMissing;
+            target.precision = CallPrecision::Unknown;
+            let unresolved =
+                test_unresolved_call(CallSiteId(1), FunctionId(1), "unresolved:unknown");
+
+            db.replace_call_facts(CallOutput {
+                sites: vec![site],
+                targets: vec![target],
+                unresolved: vec![unresolved],
+            })
+            .expect("call replace");
+
+            assert_ne!(
+                db.metadata_for(FactRef::new(FactFamily::CallSite, 0))
+                    .map(|metadata| metadata.precision),
+                Some(FactPrecision::Exact)
+            );
+            assert_ne!(
+                db.metadata_for(FactRef::new(FactFamily::CallTarget, 0))
+                    .map(|metadata| metadata.precision),
+                Some(FactPrecision::Exact)
+            );
+            assert_ne!(
+                db.metadata_for(FactRef::new(FactFamily::UnresolvedCall, 0))
+                    .map(|metadata| metadata.precision),
+                Some(FactPrecision::Exact)
+            );
         }
     }
 
