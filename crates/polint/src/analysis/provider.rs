@@ -117,7 +117,13 @@ fn offset_operation_kind_refs(
             *place = offset_place_id(*place, place_offset);
             offset_value_ref(value, place_offset);
         }
-        MirOperationKind::Branch { .. } => {}
+        MirOperationKind::Branch {
+            predicate_place, ..
+        } => {
+            if let Some(place) = predicate_place {
+                *place = offset_place_id(*place, place_offset);
+            }
+        }
         MirOperationKind::Call {
             callee,
             arguments,
@@ -370,11 +376,79 @@ fn provider_error_diagnostic(reason: String) -> Diagnostic {
 
 #[cfg(test)]
 mod semantic_mir_provider {
+    use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{MirOperation, MirOperationKind};
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_kernel::{AnalysisKernel, KernelInput};
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::config::load_config;
+    use crate::core::{FileId, FunctionId, Language, Span};
+
+    fn span() -> Span {
+        Span {
+            file: FileId(1),
+            start_byte: 1,
+            end_byte: 2,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
+    }
+
+    fn body(id: u64, function: u64, stable_key: &str) -> MirBody {
+        MirBody {
+            id: MirBodyId(id),
+            language: Language::Go,
+            file: FileId(1),
+            function: FunctionId(function),
+            package: None,
+            module: None,
+            owner_stable_key: stable_key.to_string(),
+            span: span(),
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn local_place(id: u64, function: u64, stable_key: &str) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::Go,
+            file: Some(FileId(1)),
+            function: Some(FunctionId(function)),
+            root: PlaceRoot::Local {
+                function: FunctionId(function),
+                name: stable_key.to_string(),
+            },
+            projections: Vec::new(),
+            stable_key: stable_key.to_string(),
+            status: PlaceStatus::Resolved,
+        }
+    }
+
+    fn branch_operation(
+        id: u64,
+        body: u64,
+        predicate_place: PlaceId,
+        stable_key: &str,
+    ) -> MirOperation {
+        MirOperation {
+            id: MirOpId(id),
+            body: MirBodyId(body),
+            ordinal: 1,
+            span: span(),
+            kind: MirOperationKind::Branch {
+                predicate: MirPredicateId(1),
+                predicate_place: Some(predicate_place),
+            },
+            stable_key: stable_key.to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
 
     #[test]
     fn derivation_stores_non_empty_mixed_language_mir() {
@@ -467,5 +541,36 @@ mod semantic_mir_provider {
         );
 
         assert_ne!(first.output_digest, second.output_digest);
+    }
+
+    #[test]
+    fn merge_language_outputs_offsets_branch_predicate_place_references() {
+        let first = MirOutput {
+            bodies: vec![body(0, 1, "body:first")],
+            places: vec![local_place(0, 1, "place:first")],
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        };
+        let second = MirOutput {
+            bodies: vec![body(0, 2, "body:second")],
+            places: vec![local_place(0, 2, "place:second")],
+            operations: vec![branch_operation(0, 0, PlaceId(0), "op:second:branch")],
+            unsupported: Vec::new(),
+        };
+
+        let output = super::merge_language_outputs([first, second]);
+        let branch = output
+            .operations
+            .iter()
+            .find(|operation| operation.stable_key == "op:second:branch")
+            .expect("merged branch operation");
+
+        assert!(matches!(
+            branch.kind,
+            MirOperationKind::Branch {
+                predicate_place: Some(PlaceId(1)),
+                ..
+            }
+        ));
     }
 }
