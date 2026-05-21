@@ -75,11 +75,10 @@ mod abstract_domains {
         ValidationStatus,
     };
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
-    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     #[test]
-    fn abstract_domain_validation_reports_malformed_rows_with_required_evidence() {
+    fn abstract_domain_validation_reports_malformed_rows_with_generic_public_diagnostics() {
         let mut db = base_db();
         db.replace_abstract_domain_facts(DomainOutput {
             observations: vec![
@@ -125,11 +124,9 @@ mod abstract_domains {
             "expected abstract-domain validation diagnostics: {diagnostics:#?}"
         );
         assert!(domain.iter().all(|diagnostic| {
-            let labels = evidence_labels(diagnostic);
-            labels.contains("family")
-                && labels.contains("stable_key")
-                && labels.contains("field")
-                && labels.contains("reason")
+            diagnostic.rule_id == "polint/internal"
+                && diagnostic.message == "Internal analysis validation failed."
+                && diagnostic.evidence.is_empty()
         }));
     }
 
@@ -322,19 +319,7 @@ mod abstract_domains {
     ) -> Vec<&crate::diagnostics::Diagnostic> {
         diagnostics
             .iter()
-            .filter(|diagnostic| {
-                diagnostic
-                    .message
-                    .starts_with("Abstract-domain validation failed")
-            })
-            .collect()
-    }
-
-    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
-        diagnostic
-            .evidence
-            .iter()
-            .map(|evidence| evidence.label.as_str())
+            .filter(|diagnostic| diagnostic.message == "Internal analysis validation failed.")
             .collect()
     }
 }

@@ -487,16 +487,17 @@ fn push_domain_diagnostic(
     field: &'static str,
     reason: &'static str,
 ) {
-    diagnostics.push(
-        Diagnostic::error(
-            "polint/internal",
-            "<workspace>",
-            TextRange::point(1, 1),
-            format!("Abstract-domain validation failed for {family} stable key."),
-        )
-        .with_evidence("family", family)
-        .with_evidence("stable_key", stable_key.to_string())
-        .with_evidence("field", field)
-        .with_evidence("reason", reason),
+    tracing::debug!(
+        family,
+        stable_key,
+        field,
+        reason,
+        "abstract domain validation failed"
     );
+    diagnostics.push(Diagnostic::error(
+        "polint/internal",
+        "<workspace>",
+        TextRange::point(1, 1),
+        "Internal analysis validation failed.",
+    ));
 }
