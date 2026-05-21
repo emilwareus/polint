@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T10:54:05.651Z"
-last_activity: 2026-05-21 -- Phase 31 execution started
+last_updated: "2026-05-21T11:04:54.698Z"
+last_activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 progress:
   total_phases: 22
   completed_phases: 11
   total_plans: 65
-  completed_plans: 60
-  percent: 92
+  completed_plans: 61
+  percent: 94
 ---
 
 # State: polint
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Executing Phase 31
+Status: Ready to execute
 Phase: 31 (p0-abstract-domain-kernel) — EXECUTING
-Plan: 1 of 5
-Last activity: 2026-05-21 -- Phase 31 execution started
+Plan: 2 of 5
+Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 
 ## Phase Progress
 
@@ -61,7 +61,7 @@ Last activity: 2026-05-21 -- Phase 31 execution started
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
-| 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
+| 31 | In Progress | 1/5 plans complete; private domain contracts, P0 slots, product state, and law tests done |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
@@ -252,6 +252,9 @@ Last activity: 2026-05-21 -- Phase 31 execution started
 - [Phase 30-direct-call-facts]: Plan 30-08 kept direct-call internals private and test-facing; no SDK, runner, CLI, README, or docs/facts call surface was promoted.
 - [Phase 30-direct-call-facts]: Plan 30-08 kept CallGraph as an inert reserved SDK view whose call_graph capability remains unsupported.
 - [Phase 30-direct-call-facts]: Plan 30-08 recorded the verification-only regression task as an empty test commit to preserve the per-task commit contract.
+- [Phase 31-p0-abstract-domain-kernel]: Keep abstract-domain contracts and P0 slots crate-private under analysis::domains with no public SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Represent top and unknown causes as private TopReason labels that participate in stable digest parts.
+- [Phase 31-p0-abstract-domain-kernel]: Use BTreeMap and BTreeSet ordering for deterministic product state and literal-set digest behavior.
 
 ## Execution Metrics
 
@@ -305,12 +308,13 @@ Last activity: 2026-05-21 -- Phase 31 execution started
 | 30-direct-call-facts | 05 | 14 min | 3 | 9 |
 | 30-direct-call-facts | 06 | 5min | 1 | 3 |
 | 30-direct-call-facts | 08 | 10 min | 3 | 2 |
+| 31-p0-abstract-domain-kernel | 01 | 8 min | 3 | 5 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed and verified Phase 30 Direct Call Facts; roadmap advanced to Phase 31.
-- Stopped at: Phase 30 complete, ready to discuss Phase 31.
+- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 01 private domain contracts.
+- Stopped at: Completed 31-p0-abstract-domain-kernel-01-PLAN.md; ready for Plan 31-02.
 
 ### Quick Tasks Completed
 
@@ -337,4 +341,4 @@ Last activity: 2026-05-21 -- Phase 31 execution started
 
 ## Next Action
 
-Phase 31 is next: discuss P0 Abstract-Domain Kernel.
+Phase 31 Plan 02 is next: deterministic local solver, MIR/CFG/call transfers, and result cursor.
