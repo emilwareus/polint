@@ -708,6 +708,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
@@ -1181,6 +1182,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
