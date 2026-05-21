@@ -308,7 +308,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 32-04-PLAN.md — Summary provider, cache identity, manifest, and kernel run-sequence wiring
-- [ ] 32-05-PLAN.md — Summary validation, debug snapshots, and provider-order proof
+- [x] 32-05-PLAN.md — Summary validation, debug snapshots, and provider-order proof
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

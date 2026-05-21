@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T19:11:28Z"
-last_activity: 2026-05-21 -- Phase 32 Plan 04 complete
+last_updated: "2026-05-21T19:23:17Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 05 complete
 progress:
   total_phases: 22
   completed_phases: 12
   total_plans: 72
-  completed_plans: 69
-  percent: 56
+  completed_plans: 70
+  percent: 57
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 32
 Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
-Plan: 5 of 7
-Last activity: 2026-05-21 -- Completed 32-04-PLAN.md
+Plan: 6 of 7
+Last activity: 2026-05-21 -- Completed 32-05-PLAN.md
 
 ## Phase Progress
 
@@ -279,6 +279,9 @@ Last activity: 2026-05-21 -- Completed 32-04-PLAN.md
 - [Phase 32-summary-kernel-and-direct-summaries]: Output digest includes abstract_domains_output_digest as upstream input for cache invalidation when domain results change.
 - [Phase 32-summary-kernel-and-direct-summaries]: Provider parameter digest includes all four summary domain IDs and versions for cache identity.
 - [Phase 32-summary-kernel-and-direct-summaries]: LayerKind::DirectSummaries and direct_summaries_layer_key include absent extension/model/toolchain slots per D-14.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary validation runs after validate_abstract_domains in the kernel validation sequence.
+- [Phase 32-summary-kernel-and-direct-summaries]: Precision ceiling check rejects FactPrecision::Exact from polint.direct_summaries metadata rows.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary debug rows use as_str labels for domain, status, precision, and provenance instead of dense IDs.
 
 ## Execution Metrics
 
@@ -341,12 +344,13 @@ Last activity: 2026-05-21 -- Completed 32-04-PLAN.md
 | 32-summary-kernel-and-direct-summaries | 02 | 5 min | 2 | 4 |
 | 32-summary-kernel-and-direct-summaries | 03 | 6 min | 2 | 2 |
 | 32-summary-kernel-and-direct-summaries | 04 | 12 min | 2 | 10 |
+| 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-04-PLAN.md.
-- Stopped at: Completed 32-04-PLAN.md; ready for Plan 32-05.
+- Last activity: 2026-05-21 - Completed 32-05-PLAN.md.
+- Stopped at: Completed 32-05-PLAN.md; ready for Plan 32-06.
 
 ### Quick Tasks Completed
 
@@ -375,4 +379,4 @@ Last activity: 2026-05-21 -- Completed 32-04-PLAN.md
 
 ## Next Action
 
-Phase 32 Plan 05 is next: summary validation, debug JSON, and eval integration.
+Phase 32 Plan 06 is next: summary eval fixtures and public boundary proof.
