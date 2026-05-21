@@ -34,6 +34,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         cfg: cfg_report(db),
         calls: calls_report(db),
         abstract_domains: abstract_domains_report(db),
+        summaries: summaries_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -49,6 +50,7 @@ struct MetadataDebugReport<'a> {
     cfg: CfgDebugReport,
     calls: CallDebugReport,
     abstract_domains: AbstractDomainDebugReport,
+    summaries: SummaryDebugReport,
 }
 
 #[derive(Serialize)]
@@ -191,6 +193,47 @@ struct AbstractDomainDebugCounts {
     by_precision: BTreeMap<String, usize>,
     by_reason: BTreeMap<String, usize>,
     by_provider: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct SummaryDebugReport {
+    summaries: Vec<SummaryDebugRow>,
+    events: Vec<SummaryEventDebugRow>,
+    counts: SummaryCounts,
+    domain_counts: BTreeMap<String, u32>,
+}
+
+#[derive(Serialize)]
+struct SummaryDebugRow {
+    callable_stable_key: String,
+    domain: String,
+    status: String,
+    precision: String,
+    provenance: String,
+    payload_digest: String,
+    stable_key: String,
+}
+
+#[derive(Serialize)]
+struct SummaryEventDebugRow {
+    callable_stable_key: String,
+    domain: String,
+    event_kind: String,
+    reason: String,
+    status: String,
+    precision: String,
+    stable_key: String,
+}
+
+#[derive(Default, Serialize)]
+struct SummaryCounts {
+    total: u32,
+    present: u32,
+    unknown: u32,
+    unsupported: u32,
+    setup_missing: u32,
+    budget_exceeded: u32,
+    events: u32,
 }
 
 #[derive(Serialize)]
@@ -1032,6 +1075,79 @@ fn abstract_domain_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize
             .count(),
     );
     counts
+}
+
+fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
+    use crate::analysis::summaries::facts::{SummaryDomainKind, SummaryStatus};
+
+    let mut summaries: Vec<SummaryDebugRow> = db
+        .summary_facts()
+        .iter()
+        .map(|fact| SummaryDebugRow {
+            callable_stable_key: fact.callable_stable_key.clone(),
+            domain: fact.domain.as_str().to_string(),
+            status: fact.status.as_str().to_string(),
+            precision: fact.precision.as_str().to_string(),
+            provenance: fact.provenance.as_str().to_string(),
+            payload_digest: fact.payload_digest.clone(),
+            stable_key: fact.stable_key.clone(),
+        })
+        .collect();
+    summaries.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+
+    let mut events: Vec<SummaryEventDebugRow> = db
+        .summary_events()
+        .iter()
+        .map(|event| SummaryEventDebugRow {
+            callable_stable_key: event.callable_stable_key.clone(),
+            domain: event.domain.as_str().to_string(),
+            event_kind: event.event_kind.clone(),
+            reason: event.reason.clone(),
+            status: event.status.as_str().to_string(),
+            precision: event.precision.as_str().to_string(),
+            stable_key: event.stable_key.clone(),
+        })
+        .collect();
+    events.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+
+    let mut counts = SummaryCounts {
+        total: db.summary_facts().len() as u32,
+        events: db.summary_events().len() as u32,
+        ..SummaryCounts::default()
+    };
+    for fact in db.summary_facts() {
+        match fact.status {
+            SummaryStatus::Present => counts.present += 1,
+            SummaryStatus::Unknown => counts.unknown += 1,
+            SummaryStatus::Unsupported => counts.unsupported += 1,
+            SummaryStatus::SetupMissing => counts.setup_missing += 1,
+            SummaryStatus::BudgetExceeded => counts.budget_exceeded += 1,
+        }
+    }
+
+    let mut domain_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for kind in [
+        SummaryDomainKind::ControlEffects,
+        SummaryDomainKind::CallEffects,
+        SummaryDomainKind::MemoryEffects,
+        SummaryDomainKind::DataFlowTito,
+    ] {
+        let count = db
+            .summary_facts()
+            .iter()
+            .filter(|fact| fact.domain == kind)
+            .count() as u32;
+        if count > 0 {
+            domain_counts.insert(kind.as_str().to_string(), count);
+        }
+    }
+
+    SummaryDebugReport {
+        summaries,
+        events,
+        counts,
+        domain_counts,
+    }
 }
 
 fn domain_file(db: &AnalysisDb, body: crate::analysis::ids::MirBodyId) -> Option<FileId> {
@@ -2928,6 +3044,177 @@ mod abstract_domains_debug_json {
         assert!(!encoded.contains("export function app"));
         assert!(!encoded.contains("MirOperationKind"));
         assert!(!encoded.contains("\"run_id\""));
+    }
+
+    #[test]
+    fn summaries_debug_json_contains_summary_rows_counts_and_domain_counts() {
+        use crate::analysis::ids::{SummaryEventId, SummaryId};
+        use crate::analysis::summaries::facts::{
+            SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision,
+            SummaryProvenance, SummaryStatus,
+        };
+        use crate::analysis::summaries::store::SummaryOutput;
+
+        let mut db = base_db();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![
+                SummaryFact {
+                    id: SummaryId(0),
+                    callable_stable_key: "func::app".to_string(),
+                    function: FunctionId(0),
+                    domain: SummaryDomainKind::ControlEffects,
+                    status: SummaryStatus::Present,
+                    precision: SummaryPrecision::Local,
+                    provenance: SummaryProvenance::NativeLocal,
+                    payload_digest: "digest:control".to_string(),
+                    stable_key: "summary:control:app".to_string(),
+                },
+                SummaryFact {
+                    id: SummaryId(1),
+                    callable_stable_key: "func::app".to_string(),
+                    function: FunctionId(0),
+                    domain: SummaryDomainKind::MemoryEffects,
+                    status: SummaryStatus::Unknown,
+                    precision: SummaryPrecision::UnknownTop,
+                    provenance: SummaryProvenance::NativeLocal,
+                    payload_digest: "digest:memory".to_string(),
+                    stable_key: "summary:memory:app".to_string(),
+                },
+            ],
+            events: vec![SummaryEventFact {
+                id: SummaryEventId(0),
+                callable_stable_key: "func::app".to_string(),
+                function: FunctionId(0),
+                domain: SummaryDomainKind::CallEffects,
+                event_kind: "unresolved_callee".to_string(),
+                reason: "dynamic".to_string(),
+                status: SummaryStatus::Unknown,
+                precision: SummaryPrecision::UnknownTop,
+                stable_key: "summary_event:call:app:0".to_string(),
+            }],
+        });
+
+        let first = metadata_debug_json_for_test(&db);
+        let second = metadata_debug_json_for_test(&db);
+        assert_eq!(first, second, "summaries debug JSON must be deterministic");
+
+        let summaries = first
+            .get("summaries")
+            .expect("summaries debug section must exist");
+
+        // Rows
+        assert_eq!(
+            summaries["summaries"].as_array().map(Vec::len),
+            Some(2),
+            "expected 2 summary rows"
+        );
+        assert_eq!(
+            summaries["events"].as_array().map(Vec::len),
+            Some(1),
+            "expected 1 event row"
+        );
+
+        // Verify row content uses as_str labels
+        let first_row = &summaries["summaries"][0];
+        assert!(first_row.get("callable_stable_key").is_some());
+        assert!(first_row.get("domain").is_some());
+        assert!(first_row.get("status").is_some());
+        assert!(first_row.get("precision").is_some());
+        assert!(first_row.get("provenance").is_some());
+        assert!(first_row.get("payload_digest").is_some());
+        assert!(first_row.get("stable_key").is_some());
+
+        let first_event = &summaries["events"][0];
+        assert!(first_event.get("callable_stable_key").is_some());
+        assert!(first_event.get("domain").is_some());
+        assert!(first_event.get("event_kind").is_some());
+        assert!(first_event.get("reason").is_some());
+
+        // Counts
+        let counts = summaries.get("counts").expect("counts must exist");
+        assert_eq!(counts["total"], serde_json::json!(2));
+        assert_eq!(counts["present"], serde_json::json!(1));
+        assert_eq!(counts["unknown"], serde_json::json!(1));
+        assert_eq!(counts["events"], serde_json::json!(1));
+
+        // Domain counts
+        let domain_counts = summaries
+            .get("domain_counts")
+            .expect("domain_counts must exist");
+        assert_eq!(domain_counts["control_effects"], serde_json::json!(1));
+        assert_eq!(domain_counts["memory_effects"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn summaries_debug_json_omits_dense_ids_absolute_paths_and_timestamps() {
+        use crate::analysis::ids::{SummaryEventId, SummaryId};
+        use crate::analysis::summaries::facts::{
+            SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision,
+            SummaryProvenance, SummaryStatus,
+        };
+        use crate::analysis::summaries::store::SummaryOutput;
+
+        let mut db = base_db();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![SummaryFact {
+                id: SummaryId(0),
+                callable_stable_key: "func::app".to_string(),
+                function: FunctionId(0),
+                domain: SummaryDomainKind::ControlEffects,
+                status: SummaryStatus::Present,
+                precision: SummaryPrecision::Local,
+                provenance: SummaryProvenance::NativeLocal,
+                payload_digest: "digest:control".to_string(),
+                stable_key: "summary:control:app".to_string(),
+            }],
+            events: vec![SummaryEventFact {
+                id: SummaryEventId(0),
+                callable_stable_key: "func::app".to_string(),
+                function: FunctionId(0),
+                domain: SummaryDomainKind::CallEffects,
+                event_kind: "unresolved_callee".to_string(),
+                reason: "dynamic".to_string(),
+                status: SummaryStatus::Unknown,
+                precision: SummaryPrecision::UnknownTop,
+                stable_key: "summary_event:call:app:0".to_string(),
+            }],
+        });
+
+        let json = metadata_debug_json_for_test(&db);
+        let summaries = json
+            .get("summaries")
+            .expect("summaries section must exist");
+        let encoded = serde_json::to_string(summaries).expect("summary debug JSON serializes");
+
+        // Must not contain dense IDs
+        assert!(
+            !encoded.contains("\"id\""),
+            "summary debug rows must not contain dense IDs: {encoded}"
+        );
+
+        // Must not contain absolute paths
+        assert!(
+            !encoded.contains(env!("CARGO_MANIFEST_DIR")),
+            "summary debug rows must not contain absolute paths: {encoded}"
+        );
+
+        // Must not contain timestamp patterns (ISO 8601-like date strings)
+        let has_timestamp = encoded
+            .as_bytes()
+            .windows(20)
+            .any(|window| {
+                window.len() >= 11
+                    && window[4] == b'-'
+                    && window[7] == b'-'
+                    && window[10] == b'T'
+                    && window[..4].iter().all(|b| b.is_ascii_digit())
+                    && window[5..7].iter().all(|b| b.is_ascii_digit())
+                    && window[8..10].iter().all(|b| b.is_ascii_digit())
+            });
+        assert!(
+            !has_timestamp,
+            "summary debug rows must not contain timestamps: {encoded}"
+        );
     }
 
     fn base_db() -> AnalysisDb {

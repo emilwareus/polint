@@ -69,9 +69,7 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         FactFamily::SummaryEvent,
     ] {
         for (reference, metadata) in db.fact_meta().rows() {
-            if reference.family != family
-                || metadata.producer_id != "polint.direct_summaries"
-            {
+            if reference.family != family || metadata.producer_id != "polint.direct_summaries" {
                 continue;
             }
             if metadata.precision == FactPrecision::Exact {
@@ -441,9 +439,7 @@ mod tests {
         validate_summaries(&db, &mut diagnostics);
 
         assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.rule_id == "polint/internal"),
+            diagnostics.iter().any(|d| d.rule_id == "polint/internal"),
             "expected duplicate stable key diagnostic: {diagnostics:#?}"
         );
     }
@@ -481,9 +477,7 @@ mod tests {
         validate_summaries(&db, &mut diagnostics);
 
         assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.rule_id == "polint/internal"),
+            diagnostics.iter().any(|d| d.rule_id == "polint/internal"),
             "expected precision ceiling diagnostic: {diagnostics:#?}"
         );
     }
@@ -522,12 +516,7 @@ mod tests {
                     "summary:tito:main",
                 ),
             ],
-            events: vec![event_fact(
-                0,
-                "func::main",
-                0,
-                "event:main:0",
-            )],
+            events: vec![event_fact(0, "func::main", 0, "event:main:0")],
         });
 
         let mut diagnostics = Vec::new();
