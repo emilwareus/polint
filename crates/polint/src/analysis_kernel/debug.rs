@@ -1616,6 +1616,7 @@ fn call_edge_kind_label(kind: CallEdgeKind) -> &'static str {
         CallEdgeKind::Direct => "Direct",
         CallEdgeKind::Constructor => "Constructor",
         CallEdgeKind::StaticMember => "StaticMember",
+        CallEdgeKind::MethodDirect => "MethodDirect",
         CallEdgeKind::Method => "Method",
         CallEdgeKind::FunctionValue => "FunctionValue",
         CallEdgeKind::Synthetic => "Synthetic",
@@ -1671,6 +1672,7 @@ fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
 
 fn call_provenance_label(provenance: CallProvenance) -> &'static str {
     match provenance {
+        CallProvenance::NativeDirect => "NativeDirect",
         CallProvenance::Native => "Native",
         CallProvenance::SemanticReference => "SemanticReference",
         CallProvenance::ImportBinding => "ImportBinding",

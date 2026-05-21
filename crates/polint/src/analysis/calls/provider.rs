@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+use crate::analysis::calls::direct::resolve_direct_call_targets;
 use crate::analysis::calls::extract::extract_call_sites;
 use crate::analysis::calls::store::CallOutput;
 use crate::analysis::calls::unresolved::derive_unresolved_calls;
@@ -29,11 +31,26 @@ pub(crate) fn derive_calls_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> CallsProviderOutput {
-    let sites = extract_call_sites(db);
-    let unresolved = derive_unresolved_calls(db, &sites);
+    let mut sites = extract_call_sites(db);
+    let targets = resolve_direct_call_targets(db, &sites);
+    let resolved_sites = targets
+        .iter()
+        .filter(|target| target.status == crate::analysis::calls::facts::CallTargetStatus::Resolved)
+        .map(|target| target.site)
+        .collect::<BTreeSet<_>>();
+    for site in &mut sites {
+        if resolved_sites.contains(&site.id) {
+            site.status = crate::analysis::calls::facts::CallTargetStatus::Resolved;
+            site.precision = crate::analysis::calls::facts::CallPrecision::SetupAware;
+        }
+    }
+    let unresolved = derive_unresolved_calls(db, &sites)
+        .into_iter()
+        .filter(|row| !resolved_sites.contains(&row.site))
+        .collect();
     let output = CallOutput {
         sites,
-        targets: Vec::new(),
+        targets,
         unresolved,
     }
     .normalized();

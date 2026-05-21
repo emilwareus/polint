@@ -104,6 +104,7 @@ pub(crate) enum CallEdgeKind {
     Direct,
     Constructor,
     StaticMember,
+    MethodDirect,
     Method,
     FunctionValue,
     Synthetic,
@@ -178,6 +179,7 @@ pub(crate) enum CallPrecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum CallProvenance {
+    NativeDirect,
     Native,
     SemanticReference,
     ImportBinding,

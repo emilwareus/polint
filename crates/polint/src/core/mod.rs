@@ -3694,6 +3694,7 @@ fn call_edge_kind_label(kind: CallEdgeKind) -> &'static str {
         CallEdgeKind::Direct => "direct",
         CallEdgeKind::Constructor => "constructor",
         CallEdgeKind::StaticMember => "static_member",
+        CallEdgeKind::MethodDirect => "method_direct",
         CallEdgeKind::Method => "method",
         CallEdgeKind::FunctionValue => "function_value",
         CallEdgeKind::Synthetic => "synthetic",
