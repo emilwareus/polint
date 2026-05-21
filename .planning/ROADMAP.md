@@ -298,7 +298,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 32-01-PLAN.md — Private summary contracts, SummaryDomain trait, four core domain types, fact vocabulary, and ID newtypes
+- [x] 32-01-PLAN.md — Private summary contracts, SummaryDomain trait, four core domain types, fact vocabulary, and ID newtypes
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

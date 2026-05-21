@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T18:30:32.165Z"
-last_activity: 2026-05-21 -- Phase 32 planning complete
+last_updated: "2026-05-21T18:40:28Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 01 complete
 progress:
   total_phases: 22
   completed_phases: 12
   total_plans: 72
-  completed_plans: 65
+  completed_plans: 66
   percent: 55
 ---
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 32
-Plan: Not started
-Last activity: 2026-05-21 -- Phase 32 planning complete
+Status: Executing Phase 32
+Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
+Plan: 2 of 7
+Last activity: 2026-05-21 -- Completed 32-01-PLAN.md
 
 ## Phase Progress
 
@@ -266,6 +266,9 @@ Last activity: 2026-05-21 -- Phase 32 planning complete
 - [Phase 31-p0-abstract-domain-kernel]: Abstract-domain facts remain internal eval/debug evidence, not SDK or CLI contract.
 - [Phase 31-p0-abstract-domain-kernel]: Deterministic top and budget fixture rows use private test-only solver policies rather than changing production solver defaults.
 - [Phase 31-p0-abstract-domain-kernel]: Transient domain place IDs are retained in stable keys but not exposed as invalid indexed references.
+- [Phase 32-summary-kernel-and-direct-summaries]: Use max instead of saturating_add for CallEffects unresolved_count join to preserve lattice idempotence.
+- [Phase 32-summary-kernel-and-direct-summaries]: Re-declare Changed enum locally in summaries::domain rather than importing from domains::lattice to keep module boundaries clean.
+- [Phase 32-summary-kernel-and-direct-summaries]: Place AccessKind::join impl in core.rs since it is specific to summary domain join behavior.
 
 ## Execution Metrics
 
@@ -324,12 +327,13 @@ Last activity: 2026-05-21 -- Phase 32 planning complete
 | 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
 | 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
 | 31-p0-abstract-domain-kernel | 05 | 43 min | 3 | 19 |
+| 32-summary-kernel-and-direct-summaries | 01 | 8 min | 2 | 6 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 31-p0-abstract-domain-kernel-05-PLAN.md.
-- Stopped at: Completed 31-p0-abstract-domain-kernel-04-PLAN.md; ready for Plan 31-05.
+- Last activity: 2026-05-21 - Completed 32-01-PLAN.md.
+- Stopped at: Completed 32-01-PLAN.md; ready for Plan 32-02.
 
 ### Quick Tasks Completed
 
@@ -358,4 +362,4 @@ Last activity: 2026-05-21 -- Phase 32 planning complete
 
 ## Next Action
 
-Phase 31 Plan 04 is next: validation, debug, eval observation, and fixture proof for abstract-domain rows.
+Phase 32 Plan 02 is next: summary store, builder, and provider wiring.
