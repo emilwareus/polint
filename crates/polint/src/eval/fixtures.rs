@@ -2311,3 +2311,133 @@ mod direct_calls_core {
         }
     }
 }
+
+#[cfg(test)]
+mod abstract_domains_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/abstract-domains/core")
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_fixture_passes() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "abstract-domains-core");
+        assert_eq!(case.area, FixtureArea::AbstractDomains);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_manifest_covers_p0_slots_and_uncertainty() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                    fact.producer_id.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            ("DomainObservation", "reachability", Some(ObservedStatus::Present)),
+            ("DomainObservation", "nilness", Some(ObservedStatus::Present)),
+            ("DomainObservation", "truthiness", Some(ObservedStatus::Present)),
+            ("DomainObservation", "constants", Some(ObservedStatus::Present)),
+            ("DomainObservation", "strings", Some(ObservedStatus::Present)),
+            (
+                "DomainObservation",
+                "initializedness",
+                Some(ObservedStatus::Present),
+            ),
+            ("DomainObservation", "top", Some(ObservedStatus::Top)),
+            ("DomainObservation", "unknown", Some(ObservedStatus::Unknown)),
+            (
+                "DomainObservation",
+                "unsupported",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "DomainEvent",
+                "budget",
+                Some(ObservedStatus::BudgetExceeded),
+            ),
+        ] {
+            assert!(
+                expected_facts.iter().any(|(family, key, status, _, producer)| {
+                    *family == required.0
+                        && key.contains(required.1)
+                        && *status == required.2
+                        && *producer == Some("polint.abstract_domains")
+                }),
+                "abstract-domain fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_observes_determinism_and_indexes() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+
+        for required in [
+            (
+                "abstract_domains.current_determinism",
+                "cold_warm_no_cache_equal",
+            ),
+            ("abstract_domains.counts.by_slot.Reachability.nonzero", "true"),
+            ("abstract_domains.counts.by_status.Present.nonzero", "true"),
+            (
+                "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
+                "true",
+            ),
+            (
+                "abstract_domains.index_counts.observations_by_body.nonzero",
+                "true",
+            ),
+            (
+                "abstract_domains.index_counts.observations_by_slot.nonzero",
+                "true",
+            ),
+            ("abstract_domains.index_counts.events_by_status.nonzero", "true"),
+        ] {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == required.0 && invariant.value == required.1
+                    }
+                    _ => false,
+                }),
+                "abstract-domain fixture should observe invariant {required:?}: {:#?}",
+                case.observed
+            );
+        }
+    }
+}
