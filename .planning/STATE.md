@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T11:04:54.698Z"
-last_activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
+last_updated: "2026-05-21T11:21:55.829Z"
+last_activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solver and transfers
 progress:
   total_phases: 22
   completed_phases: 11
   total_plans: 65
-  completed_plans: 61
-  percent: 94
+  completed_plans: 62
+  percent: 95
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 31 (p0-abstract-domain-kernel) — EXECUTING
-Plan: 2 of 5
-Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
+Plan: 3 of 5
+Last activity: 2026-05-21 -- Completed Phase 31 Plan 02 deterministic local solver and transfers
 
 ## Phase Progress
 
@@ -61,7 +61,7 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
-| 31 | In Progress | 1/5 plans complete; private domain contracts, P0 slots, product state, and law tests done |
+| 31 | In Progress | 2/5 plans complete; private domain contracts, deterministic local solver, MIR/CFG/call transfers, and result cursor done |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
@@ -255,6 +255,9 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 - [Phase 31-p0-abstract-domain-kernel]: Keep abstract-domain contracts and P0 slots crate-private under analysis::domains with no public SDK, runner, CLI, README, or docs/facts promotion.
 - [Phase 31-p0-abstract-domain-kernel]: Represent top and unknown causes as private TopReason labels that participate in stable digest parts.
 - [Phase 31-p0-abstract-domain-kernel]: Use BTreeMap and BTreeSet ordering for deterministic product state and literal-set digest behavior.
+- [Phase 31-p0-abstract-domain-kernel]: Keep solver, transfer, and result cursor APIs crate-private under analysis::domains with no SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Materialize result identity and iteration through stable keys while using run-local IDs only for cursor lookup within a run.
+- [Phase 31-p0-abstract-domain-kernel]: Treat calls, unsupported operations, dynamic writes, widening, and iteration budgets as explicit top/unknown events or states rather than silent certainty.
 
 ## Execution Metrics
 
@@ -309,12 +312,13 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 | 30-direct-call-facts | 06 | 5min | 1 | 3 |
 | 30-direct-call-facts | 08 | 10 min | 3 | 2 |
 | 31-p0-abstract-domain-kernel | 01 | 8 min | 3 | 5 |
+| 31-p0-abstract-domain-kernel | 02 | 14 min | 3 | 5 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 01 private domain contracts.
-- Stopped at: Completed 31-p0-abstract-domain-kernel-01-PLAN.md; ready for Plan 31-02.
+- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 02 deterministic local solver and transfers.
+- Stopped at: Completed 31-p0-abstract-domain-kernel-02-PLAN.md; ready for Plan 31-03.
 
 ### Quick Tasks Completed
 
@@ -341,4 +345,4 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 01 private domain contracts
 
 ## Next Action
 
-Phase 31 Plan 02 is next: deterministic local solver, MIR/CFG/call transfers, and result cursor.
+Phase 31 Plan 03 is next: domain facts, store, metadata, provider wiring, and cache identity.
