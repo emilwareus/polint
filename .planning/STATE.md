@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T08:45:50.628Z"
+last_updated: "2026-05-21T09:04:05.284Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
   completed_phases: 10
   total_plans: 60
-  completed_plans: 56
-  percent: 93
+  completed_plans: 57
+  percent: 95
 ---
 
 # State: polint
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 30 (direct-call-facts) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Last activity: 2026-05-21
 
 ## Phase Progress
@@ -240,6 +240,9 @@ Last activity: 2026-05-21
 - [Phase 30-direct-call-facts]: Call-site extraction consumes semantic MIR and place rows only; no parser AST or source reparsing dependency was added.
 - [Phase 30-direct-call-facts]: Direct targets remain empty in this plan; function-value, dynamic, unknown, setup-missing, and unsupported call evidence is published as unresolved rows.
 - [Phase 30-direct-call-facts]: Call output digest proof now covers provider-derived populated sites and unresolved rows, while direct target coverage remains in the later direct-target plan.
+- [Phase 30-direct-call-facts]: Direct targets are emitted only from precise resolved ReferenceFact evidence; dynamic/interface/function-token/framework/value-flow cases remain unresolved or unsupported.
+- [Phase 30-direct-call-facts]: Native direct target rows use NativeDirect provenance and SetupAware precision under the private polint.calls provider.
+- [Phase 30-direct-call-facts]: Provider-derived unresolved rows are filtered off call sites that have a resolved direct target, so precise evidence wins over dynamic-shape uncertainty.
 
 ## Execution Metrics
 
@@ -290,12 +293,13 @@ Last activity: 2026-05-21
 | 30-direct-call-facts | 02 | 8 min | 2 | 9 |
 | 30-direct-call-facts | 03 | 12 min | 2 | 4 |
 | 30-direct-call-facts | 04 | 17 min | 3 | 7 |
+| 30-direct-call-facts | 05 | 14 min | 3 | 9 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed Phase 30 Plan 04 MIR call sites and unresolved evidence.
-- Stopped at: Completed 30-04-PLAN.md; ready for Phase 30 Plan 05.
+- Last activity: 2026-05-21 - Completed Phase 30 Plan 05 direct target resolution.
+- Stopped at: Completed 30-05-PLAN.md; ready for Phase 30 Plan 06.
 
 ### Quick Tasks Completed
 
@@ -322,4 +326,4 @@ Last activity: 2026-05-21
 
 ## Next Action
 
-Phase 30 Plan 05 is next: direct target derivation over populated call sites.
+Phase 30 Plan 06 is next: direct-call eval observation and status accounting.
