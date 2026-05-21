@@ -292,6 +292,29 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
     ));
 
     for output in &run_report.provider_outputs {
+        if output.provider_id == "polint.abstract_domains" {
+            let prefix = "provider_output.polint.abstract_domains";
+            invariants.push(observed_invariant(
+                format!("{prefix}.present"),
+                "true",
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.schema_version"),
+                output.schema_version.as_str(),
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.validation"),
+                output.validation.as_str(),
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.dependency_inputs.count"),
+                output.dependency_inputs.len().to_string(),
+                "kernel.run_report.provider_outputs",
+            ));
+        }
         if !matches!(
             output.provider_id.as_str(),
             "polint.go.syntax" | "polint.ts.syntax"
@@ -1484,6 +1507,12 @@ path = "repo"
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let mut provider_order = provider_order;
+        provider_order.sort_by_key(|(name, _)| {
+            name.strip_prefix("provider_order.")
+                .and_then(|index| index.parse::<usize>().ok())
+                .expect("provider order invariant names use numeric suffixes")
+        });
 
         assert_eq!(
             provider_order,
