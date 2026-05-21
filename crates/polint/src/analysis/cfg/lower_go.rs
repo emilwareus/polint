@@ -150,6 +150,13 @@ impl<'db> GoCfgLowering<'db> {
                 }
             }
         }
+        if !terminated {
+            let current = self.builder.current_block();
+            let exit = self.builder.normal_exit_block();
+            if current != exit {
+                self.builder.add_edge(current, exit, CfgEdgeKind::Normal);
+            }
+        }
     }
 
     fn lower_branch(&mut self, operation: &MirOperation) {
@@ -671,6 +678,25 @@ mod tests {
         );
         assert!(output.reachability.is_empty());
         assert!(output.dominators.is_empty());
+    }
+
+    #[test]
+    fn go_cfg_connects_implicit_fallthrough_to_normal_exit() {
+        let db = db_with(vec![assign(1, 1)], Vec::new());
+        let output = lower_go_cfg(&db);
+        let exit = output
+            .blocks
+            .iter()
+            .find(|block| block.kind == BasicBlockKind::ExitNormal)
+            .expect("normal exit block")
+            .id;
+
+        assert!(
+            output
+                .edges
+                .iter()
+                .any(|edge| { edge.to_block == exit && edge.kind == CfgEdgeKind::Normal })
+        );
     }
 
     #[test]

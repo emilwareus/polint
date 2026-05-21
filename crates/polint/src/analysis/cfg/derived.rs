@@ -17,6 +17,7 @@ pub(crate) fn derive_reachability(output: &CfgOutput, view: CfgView) -> Vec<Reac
     let mut next_id = 1;
     for function in sorted_functions(output) {
         let graph = CfgGraph::new(output, function, view);
+        let function_key = function_stable_key(output, function);
         let reachable = reachable_blocks(&graph);
         for block in graph.blocks() {
             facts.push(ReachabilityFact {
@@ -28,7 +29,7 @@ pub(crate) fn derive_reachability(output: &CfgOutput, view: CfgView) -> Vec<Reac
                 stable_key: stable_key(
                     FactFamily::CfgReachability,
                     &[
-                        ("function", function.0.to_string()),
+                        ("function", function_key.clone()),
                         ("view", format!("{view:?}")),
                         ("block", block.stable_key.clone()),
                     ],
@@ -48,6 +49,8 @@ pub(crate) fn derive_dominators(output: &CfgOutput, view: CfgView) -> Vec<Domina
     let mut next_id = 1;
     for function in sorted_functions(output) {
         let graph = CfgGraph::new(output, function, view);
+        let function_key = function_stable_key(output, function);
+        let block_keys = block_key_map(&graph);
         let Some(entry) = graph.entry_block() else {
             continue;
         };
@@ -66,10 +69,10 @@ pub(crate) fn derive_dominators(output: &CfgOutput, view: CfgView) -> Vec<Domina
                     stable_key: stable_key(
                         FactFamily::CfgDominator,
                         &[
-                            ("function", function.0.to_string()),
+                            ("function", function_key.clone()),
                             ("view", format!("{view:?}")),
-                            ("dominator", dominator.0.to_string()),
-                            ("dominated", dominated.0.to_string()),
+                            ("dominator", stable_block_key(&block_keys, *dominator)),
+                            ("dominated", stable_block_key(&block_keys, *dominated)),
                         ],
                     ),
                     status: CfgStatus::Resolved,
@@ -88,6 +91,8 @@ pub(crate) fn derive_postdominators(output: &CfgOutput, view: CfgView) -> Vec<Po
     let mut next_id = 1;
     for function in sorted_functions(output) {
         let graph = CfgGraph::new(output, function, view);
+        let function_key = function_stable_key(output, function);
+        let block_keys = block_key_map(&graph);
         let blocks = graph
             .blocks()
             .into_iter()
@@ -129,10 +134,16 @@ pub(crate) fn derive_postdominators(output: &CfgOutput, view: CfgView) -> Vec<Po
                     stable_key: stable_key(
                         FactFamily::CfgPostDominator,
                         &[
-                            ("function", function.0.to_string()),
+                            ("function", function_key.clone()),
                             ("view", format!("{view:?}")),
-                            ("postdominator", postdominator.0.to_string()),
-                            ("postdominated", postdominated.0.to_string()),
+                            (
+                                "postdominator",
+                                stable_block_key(&block_keys, *postdominator),
+                            ),
+                            (
+                                "postdominated",
+                                stable_block_key(&block_keys, *postdominated),
+                            ),
                         ],
                     ),
                     status: CfgStatus::Resolved,
@@ -154,13 +165,10 @@ pub(crate) fn derive_control_dependence(
     let mut next_id = 1;
     for function in sorted_functions(output) {
         let graph = CfgGraph::new(output, function, view);
+        let function_key = function_stable_key(output, function);
         let postdominators = postdominator_relation(output, function, view);
         let immediate = immediate_relation(&postdominators);
-        let block_keys = graph
-            .blocks()
-            .into_iter()
-            .map(|block| (block.id, block.stable_key.clone()))
-            .collect::<BTreeMap<_, _>>();
+        let block_keys = block_key_map(&graph);
         let mut seen = BTreeSet::new();
 
         for edge in graph.edges() {
@@ -180,11 +188,12 @@ pub(crate) fn derive_control_dependence(
                 if seen.insert(key) {
                     facts.push(control_dependence_fact(
                         next_id,
+                        function_key.as_str(),
                         function,
                         view,
                         edge,
                         runner,
-                        block_keys.get(&runner).cloned().unwrap_or_default(),
+                        stable_block_key(&block_keys, runner),
                     ));
                     next_id += 1;
                 }
@@ -204,6 +213,7 @@ pub(crate) fn derive_control_dependence(
 
 fn control_dependence_fact(
     id: u64,
+    function_key: &str,
     function: CfgFunctionId,
     view: CfgView,
     edge: &CfgEdgeFact,
@@ -220,7 +230,7 @@ fn control_dependence_fact(
         stable_key: stable_key(
             FactFamily::CfgControlDependence,
             &[
-                ("function", function.0.to_string()),
+                ("function", function_key.to_string()),
                 ("view", format!("{view:?}")),
                 ("edge", edge.stable_key.clone()),
                 ("controlled_block", controlled_block_key),
@@ -242,6 +252,30 @@ fn sorted_functions(output: &CfgOutput) -> Vec<CfgFunctionId> {
         .into_iter()
         .map(|(_, function)| function)
         .collect()
+}
+
+fn function_stable_key(output: &CfgOutput, function: CfgFunctionId) -> String {
+    output
+        .functions
+        .iter()
+        .find(|row| row.id == function)
+        .map(|row| row.stable_key.clone())
+        .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
+}
+
+fn block_key_map(graph: &CfgGraph<'_>) -> BTreeMap<BasicBlockId, String> {
+    graph
+        .blocks()
+        .into_iter()
+        .map(|block| (block.id, block.stable_key.clone()))
+        .collect()
+}
+
+fn stable_block_key(block_keys: &BTreeMap<BasicBlockId, String>, block: BasicBlockId) -> String {
+    block_keys
+        .get(&block)
+        .cloned()
+        .unwrap_or_else(|| format!("<missing-block:{}>", block.0))
 }
 
 fn reachable_blocks(graph: &CfgGraph<'_>) -> BTreeSet<BasicBlockId> {
@@ -442,6 +476,7 @@ mod tests {
     use super::*;
     use crate::analysis::cfg::builder::CfgBuilder;
     use crate::analysis::cfg::facts::{BasicBlockKind, CfgEdgeKind, CfgNodeKind};
+    use crate::analysis::cfg::ids::{CfgEdgeId, CfgNodeId};
     use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
@@ -633,5 +668,93 @@ mod tests {
                 .iter()
                 .any(|fact| fact.controlling_edge_kind == CfgEdgeKind::True)
         );
+    }
+
+    #[test]
+    fn derived_stable_keys_do_not_depend_on_dense_ids() {
+        let output = if_else_graph();
+        let shifted = shift_dense_ids(output.clone());
+
+        assert_eq!(
+            stable_keys(derive_reachability(&output, CfgView::NormalControl)),
+            stable_keys(derive_reachability(&shifted, CfgView::NormalControl))
+        );
+        assert_eq!(
+            stable_keys(derive_dominators(&output, CfgView::NormalControl)),
+            stable_keys(derive_dominators(&shifted, CfgView::NormalControl))
+        );
+        assert_eq!(
+            stable_keys(derive_postdominators(&output, CfgView::NormalControl)),
+            stable_keys(derive_postdominators(&shifted, CfgView::NormalControl))
+        );
+        assert_eq!(
+            stable_keys(derive_control_dependence(&output, CfgView::NormalControl)),
+            stable_keys(derive_control_dependence(&shifted, CfgView::NormalControl))
+        );
+    }
+
+    trait StableKeyRow {
+        fn stable_key(&self) -> &str;
+    }
+
+    impl StableKeyRow for ReachabilityFact {
+        fn stable_key(&self) -> &str {
+            &self.stable_key
+        }
+    }
+
+    impl StableKeyRow for DominatorFact {
+        fn stable_key(&self) -> &str {
+            &self.stable_key
+        }
+    }
+
+    impl StableKeyRow for PostDominatorFact {
+        fn stable_key(&self) -> &str {
+            &self.stable_key
+        }
+    }
+
+    impl StableKeyRow for ControlDependenceFact {
+        fn stable_key(&self) -> &str {
+            &self.stable_key
+        }
+    }
+
+    fn stable_keys(rows: impl IntoIterator<Item = impl StableKeyRow>) -> Vec<String> {
+        rows.into_iter()
+            .map(|row| row.stable_key().to_string())
+            .collect()
+    }
+
+    fn shift_dense_ids(mut output: CfgOutput) -> CfgOutput {
+        for function in &mut output.functions {
+            function.id = CfgFunctionId(function.id.0 + 100);
+            function.entry_node = CfgNodeId(function.entry_node.0 + 1_000);
+            function.normal_exit_node = CfgNodeId(function.normal_exit_node.0 + 1_000);
+            function.exceptional_exit_node = function
+                .exceptional_exit_node
+                .map(|node| CfgNodeId(node.0 + 1_000));
+        }
+        for node in &mut output.nodes {
+            node.id = CfgNodeId(node.id.0 + 1_000);
+            node.cfg_function = CfgFunctionId(node.cfg_function.0 + 100);
+            node.block = BasicBlockId(node.block.0 + 2_000);
+        }
+        for block in &mut output.blocks {
+            block.id = BasicBlockId(block.id.0 + 2_000);
+            block.cfg_function = CfgFunctionId(block.cfg_function.0 + 100);
+            block.first_node = block.first_node.map(|node| CfgNodeId(node.0 + 1_000));
+            block.last_node = block.last_node.map(|node| CfgNodeId(node.0 + 1_000));
+        }
+        for edge in &mut output.edges {
+            edge.id = CfgEdgeId(edge.id.0 + 3_000);
+            edge.cfg_function = CfgFunctionId(edge.cfg_function.0 + 100);
+            edge.from = CfgNodeId(edge.from.0 + 1_000);
+            edge.to = CfgNodeId(edge.to.0 + 1_000);
+            edge.from_block = BasicBlockId(edge.from_block.0 + 2_000);
+            edge.to_block = BasicBlockId(edge.to_block.0 + 2_000);
+        }
+        output
     }
 }

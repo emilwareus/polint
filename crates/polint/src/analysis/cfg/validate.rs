@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::cfg::facts::{BasicBlockKind, CfgPrecision, CfgStatus};
+use crate::analysis::cfg::facts::{BasicBlockKind, CfgPrecision, CfgStatus, CfgView};
 use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
@@ -47,6 +47,8 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         "CfgEdge",
         db.cfg_edges().iter().map(|row| row.stable_key.as_str()),
     );
+
+    validate_function_graph_shapes(db, diagnostics);
 
     for function in db.cfg_functions() {
         if !nodes.contains_key(&function.entry_node) {
@@ -322,6 +324,108 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             );
         }
     }
+}
+
+fn validate_function_graph_shapes(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    for function in db.cfg_functions() {
+        let function_blocks = db
+            .cfg_blocks()
+            .iter()
+            .filter(|block| block.cfg_function == function.id)
+            .collect::<Vec<_>>();
+        let entry_blocks = function_blocks
+            .iter()
+            .filter(|block| block.kind == BasicBlockKind::Entry)
+            .count();
+        if entry_blocks != 1 {
+            push_cfg_diagnostic(
+                diagnostics,
+                "CfgFunction",
+                &function.stable_key,
+                "entry_block",
+                "expected exactly one entry block",
+            );
+        }
+
+        let selected_exits = function_blocks
+            .iter()
+            .filter(|block| {
+                matches!(
+                    block.kind,
+                    BasicBlockKind::ExitNormal | BasicBlockKind::ExitExceptional
+                ) || normal_successors(db, function.id, block.id).is_empty()
+            })
+            .count();
+        let has_unsupported_boundary = db
+            .unsupported_control_flow()
+            .iter()
+            .any(|row| row.cfg_function == Some(function.id));
+        if selected_exits == 0 && !has_unsupported_boundary {
+            push_cfg_diagnostic(
+                diagnostics,
+                "CfgFunction",
+                &function.stable_key,
+                "exit_block",
+                "expected at least one selected exit block or unsupported boundary",
+            );
+        }
+
+        let reachable = reachable_blocks(db, function.id);
+        for block in function_blocks {
+            if block.reachable != reachable.contains(&block.id) {
+                push_cfg_diagnostic(
+                    diagnostics,
+                    "BasicBlock",
+                    &block.stable_key,
+                    "reachable",
+                    "stored reachable flag disagrees with graph reachability",
+                );
+            }
+        }
+    }
+}
+
+fn reachable_blocks(db: &AnalysisDb, function: CfgFunctionId) -> BTreeSet<BasicBlockId> {
+    let Some(entry) = db
+        .cfg_blocks()
+        .iter()
+        .find(|block| block.cfg_function == function && block.kind == BasicBlockKind::Entry)
+        .map(|block| block.id)
+    else {
+        return BTreeSet::new();
+    };
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![entry];
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let mut successors = normal_successors(db, function, block);
+        successors.sort_by(|left, right| right.cmp(left));
+        stack.extend(successors);
+    }
+    seen
+}
+
+fn normal_successors(
+    db: &AnalysisDb,
+    function: CfgFunctionId,
+    block: BasicBlockId,
+) -> Vec<BasicBlockId> {
+    let mut successors = db
+        .cfg_edges()
+        .iter()
+        .filter(|edge| {
+            edge.cfg_function == function
+                && edge.view == CfgView::NormalControl
+                && edge.from_block == block
+                && edge.to_block != block
+        })
+        .map(|edge| edge.to_block)
+        .collect::<Vec<_>>();
+    successors.sort();
+    successors.dedup();
+    successors
 }
 
 fn check_duplicate_stable_keys<'a>(

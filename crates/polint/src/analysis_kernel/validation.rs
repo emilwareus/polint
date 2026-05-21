@@ -381,6 +381,80 @@ mod cfg {
     }
 
     #[test]
+    fn cfg_validation_rejects_missing_exit_and_bad_reachability() {
+        let mut db = base_db();
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![function(
+                "cfg:function:shape",
+                CfgFunctionId(0),
+                CfgNodeId(0),
+                CfgNodeId(1),
+            )],
+            nodes: vec![
+                node(
+                    CfgNodeId(0),
+                    BasicBlockId(0),
+                    CfgNodeKind::Entry,
+                    "cfg:node:entry",
+                ),
+                node(
+                    CfgNodeId(1),
+                    BasicBlockId(1),
+                    CfgNodeKind::Operation,
+                    "cfg:node:body",
+                ),
+            ],
+            blocks: vec![
+                block(
+                    BasicBlockId(0),
+                    BasicBlockKind::Entry,
+                    CfgNodeId(0),
+                    false,
+                    "cfg:block:entry",
+                ),
+                block(
+                    BasicBlockId(1),
+                    BasicBlockKind::StraightLine,
+                    CfgNodeId(1),
+                    true,
+                    "cfg:block:body",
+                ),
+            ],
+            edges: vec![
+                edge(
+                    "cfg:edge:entry-body",
+                    CfgEdgeId(0),
+                    BasicBlockId(0),
+                    BasicBlockId(1),
+                ),
+                edge(
+                    "cfg:edge:body-entry",
+                    CfgEdgeId(1),
+                    BasicBlockId(1),
+                    BasicBlockId(0),
+                ),
+            ],
+            ..CfgOutput::empty()
+        })
+        .expect("cfg rows should store for validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.starts_with("CFG validation failed")
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "reason" && evidence.value.contains("selected exit")
+                })
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.starts_with("CFG validation failed")
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "reason" && evidence.value.contains("graph reachability")
+                })
+        }));
+    }
+
+    #[test]
     fn cfg_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
         db.replace_cfg_facts(CfgOutput {
@@ -482,6 +556,49 @@ mod cfg {
             to_block,
             kind: CfgEdgeKind::Normal,
             label: None,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn node(
+        id: CfgNodeId,
+        block: BasicBlockId,
+        kind: CfgNodeKind,
+        stable_key: &str,
+    ) -> CfgNodeFact {
+        CfgNodeFact {
+            id,
+            cfg_function: CfgFunctionId(0),
+            body: MirBodyId(0),
+            operation: None,
+            block,
+            kind,
+            span: Some(span(FileId(0))),
+            generated: true,
+            operation_ordinal: 0,
+            stable_key: stable_key.to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn block(
+        id: BasicBlockId,
+        kind: BasicBlockKind,
+        node: CfgNodeId,
+        reachable: bool,
+        stable_key: &str,
+    ) -> BasicBlockFact {
+        BasicBlockFact {
+            id,
+            cfg_function: CfgFunctionId(0),
+            kind,
+            first_node: Some(node),
+            last_node: Some(node),
+            reachable,
+            reverse_postorder: id.0 as u32,
             stable_key: stable_key.to_string(),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
