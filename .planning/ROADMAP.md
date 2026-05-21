@@ -252,6 +252,13 @@ Plans:
 **Goal:** Add deterministic abstract-domain infrastructure and first local domains over MIR/CFG.
 **Requirements:** SAE-INT-01
 **Research:** `research/abstract-interpretation/FINAL-REPORT.md`, `research/abstract-interpretation/RECOMMENDED_IMPLEMENTATION.md`, `research/abstract-interpretation/VALIDATION.md`
+**Plans:** 4 plans
+
+Plans:
+- [ ] 31-01-PLAN.md — Private domain contracts, P0 slots, product state, and law tests
+- [ ] 31-02-PLAN.md — Deterministic local solver, MIR/CFG/call transfers, and result cursor
+- [ ] 31-03-PLAN.md — Domain provider, storage, metadata, cache identity, validation, and debug rows
+- [ ] 31-04-PLAN.md — Internal eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
 1. Domain-law tests cover partial order, join, and widening behavior.
