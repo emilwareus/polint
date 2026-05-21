@@ -45,11 +45,10 @@ pub(crate) fn resolve_direct_call_targets(
             CallAlgorithm::ImportBinding
         } else if matches!(site.kind, CallSyntaxKind::Constructor | CallSyntaxKind::New) {
             CallAlgorithm::ConstructorBinding
-        } else if matches!(
-            site.kind,
-            CallSyntaxKind::StaticMember | CallSyntaxKind::Member
-        ) {
+        } else if matches!(site.kind, CallSyntaxKind::StaticMember) {
             CallAlgorithm::StaticMember
+        } else if matches!(site.kind, CallSyntaxKind::Member) {
+            CallAlgorithm::DirectMember
         } else {
             CallAlgorithm::DirectReference
         };
@@ -414,6 +413,37 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].algorithm, CallAlgorithm::ConstructorBinding);
         assert_eq!(targets[0].edge_kind, CallEdgeKind::Constructor);
+        assert_eq!(targets[0].target_symbol, Some(target_symbol));
+        assert_eq!(targets[0].target_function, Some(target_function));
+    }
+
+    #[test]
+    fn instance_member_call_uses_direct_member_algorithm() {
+        let mut fixture = Fixture::new(Language::TypeScript, "src/caller.ts");
+        let target_function = fixture.add_function("Formatter.render", 50);
+        let target_symbol = fixture.add_symbol_with_kind(
+            "Formatter.render",
+            target_function,
+            50,
+            SymbolKind::Method,
+        );
+        fixture.add_reference("render", target_symbol, 8, SymbolPrecision::ExactSemantic);
+        fixture.store_symbols();
+
+        let site = fixture.site(
+            6,
+            CallSyntaxKind::Member,
+            CallCallee::Member {
+                base: crate::analysis::ids::PlaceId(8),
+                property: "render".to_string(),
+            },
+            8,
+        );
+        let targets = resolve_direct_call_targets(&fixture.db, &[site]);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].algorithm, CallAlgorithm::DirectMember);
+        assert_eq!(targets[0].edge_kind, CallEdgeKind::MethodDirect);
         assert_eq!(targets[0].target_symbol, Some(target_symbol));
         assert_eq!(targets[0].target_function, Some(target_function));
     }
