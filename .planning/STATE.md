@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T08:24:18.290Z"
+last_updated: "2026-05-21T08:45:50.628Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
   completed_phases: 10
   total_plans: 60
-  completed_plans: 55
-  percent: 92
+  completed_plans: 56
+  percent: 93
 ---
 
 # State: polint
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 30 (direct-call-facts) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Last activity: 2026-05-21
 
 ## Phase Progress
@@ -60,7 +60,7 @@ Last activity: 2026-05-21
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
-| 30 | In Progress | 3/8 plans complete; private call fact contracts/storage, provider slot/cache identity, validation, and test-only debug snapshots done; requirement SAE-SEM-05 |
+| 30 | In Progress | 4/8 plans complete; MIR-driven call-site extraction, unresolved-call evidence, populated provider output, validation, and test-only debug snapshots done; requirement SAE-SEM-05 |
 | 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
@@ -237,6 +237,9 @@ Last activity: 2026-05-21
 - [Phase 30-direct-call-facts]: Call validation remains crate-private under analysis::calls and is invoked from metadata validation after CFG validation.
 - [Phase 30-direct-call-facts]: Calls debug snapshots stay behind cfg(test) and expose relative paths, stable keys, spans, statuses, precision, compact payload labels, counts, and index evidence only.
 - [Phase 30-direct-call-facts]: Exact metadata precision from polint.calls is rejected because call facts are setup-aware/conservative internal rows, not public exact facts.
+- [Phase 30-direct-call-facts]: Call-site extraction consumes semantic MIR and place rows only; no parser AST or source reparsing dependency was added.
+- [Phase 30-direct-call-facts]: Direct targets remain empty in this plan; function-value, dynamic, unknown, setup-missing, and unsupported call evidence is published as unresolved rows.
+- [Phase 30-direct-call-facts]: Call output digest proof now covers provider-derived populated sites and unresolved rows, while direct target coverage remains in the later direct-target plan.
 
 ## Execution Metrics
 
@@ -286,12 +289,13 @@ Last activity: 2026-05-21
 | 29-local-cfg-and-control-dependence | 06 | 68 min | 3 | 19 |
 | 30-direct-call-facts | 02 | 8 min | 2 | 9 |
 | 30-direct-call-facts | 03 | 12 min | 2 | 4 |
+| 30-direct-call-facts | 04 | 17 min | 3 | 7 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed Phase 30 Plan 03 calls validation and debug snapshots.
-- Stopped at: Completed 30-03-PLAN.md; ready for Phase 30 Plan 04.
+- Last activity: 2026-05-21 - Completed Phase 30 Plan 04 MIR call sites and unresolved evidence.
+- Stopped at: Completed 30-04-PLAN.md; ready for Phase 30 Plan 05.
 
 ### Quick Tasks Completed
 
@@ -318,4 +322,4 @@ Last activity: 2026-05-21
 
 ## Next Action
 
-Phase 30 is next: plan and execute direct call facts.
+Phase 30 Plan 05 is next: direct target derivation over populated call sites.
