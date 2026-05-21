@@ -65,6 +65,9 @@ pub(crate) enum CallSyntaxKind {
     TaggedTemplate,
     GoRoutine,
     Deferred,
+    DynamicImport,
+    Require,
+    FunctionValue,
     Unknown,
 }
 

@@ -1604,6 +1604,9 @@ fn call_syntax_kind_label(kind: CallSyntaxKind) -> &'static str {
         CallSyntaxKind::TaggedTemplate => "TaggedTemplate",
         CallSyntaxKind::GoRoutine => "GoRoutine",
         CallSyntaxKind::Deferred => "Deferred",
+        CallSyntaxKind::DynamicImport => "DynamicImport",
+        CallSyntaxKind::Require => "Require",
+        CallSyntaxKind::FunctionValue => "FunctionValue",
         CallSyntaxKind::Unknown => "Unknown",
     }
 }

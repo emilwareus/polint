@@ -1,3 +1,348 @@
+use std::collections::BTreeMap;
+
+use crate::analysis::calls::facts::{
+    CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallReason,
+};
+use crate::analysis::ids::{MirBodyId, MirValueId, PlaceId};
+use crate::analysis::mir::body::MirBody;
+use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
+use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
+use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis_kernel::{FactFamily, FactRef};
+use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span, SymbolId};
+
+pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
+    let bodies = db
+        .mir_bodies()
+        .iter()
+        .map(|body| (body.id, body))
+        .collect::<BTreeMap<_, _>>();
+    let places = db
+        .mir_places()
+        .iter()
+        .map(|place| (place.id, place))
+        .collect::<BTreeMap<_, _>>();
+    let functions = db
+        .functions()
+        .iter()
+        .map(|function| (function.id, function))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut call_operations = db
+        .mir_operations()
+        .iter()
+        .filter_map(|operation| bodies.get(&operation.body).map(|body| (*body, operation)))
+        .filter(|(_, operation)| matches!(operation.kind, MirOperationKind::Call { .. }))
+        .collect::<Vec<_>>();
+    call_operations.sort_by(
+        |(left_body, left_operation), (right_body, right_operation)| {
+            (
+                left_body.stable_key.as_str(),
+                span_key(&left_operation.span),
+                left_operation.ordinal,
+                left_operation.stable_key.as_str(),
+                left_operation.id,
+            )
+                .cmp(&(
+                    right_body.stable_key.as_str(),
+                    span_key(&right_operation.span),
+                    right_operation.ordinal,
+                    right_operation.stable_key.as_str(),
+                    right_operation.id,
+                ))
+        },
+    );
+
+    let mut same_span_ordinals = BTreeMap::new();
+    let mut sites = Vec::with_capacity(call_operations.len());
+    for (body, operation) in call_operations {
+        let MirOperationKind::Call {
+            site,
+            callee,
+            arguments,
+            return_place,
+        } = &operation.kind
+        else {
+            continue;
+        };
+        let same_span = same_span_ordinal(&mut same_span_ordinals, body.id, &operation.span);
+        let (call_callee, receiver, kind, callee_shape) =
+            call_callee(callee, body.language, &places);
+        let operation_stable_key = if operation.stable_key.trim().is_empty() {
+            format!("same_span:{same_span:06}")
+        } else {
+            operation.stable_key.clone()
+        };
+
+        sites.push(CallSiteFact {
+            id: *site,
+            language: body.language,
+            file: body.file,
+            caller: body.function,
+            owner_symbol: owner_symbol(db, &functions, body.function),
+            body: body.id,
+            operation: operation.id,
+            span: operation.span.clone(),
+            kind,
+            callee: call_callee,
+            receiver,
+            arguments: arguments.clone(),
+            result: Some(*return_place),
+            status: CallTargetStatus::Unresolved,
+            precision: CallPrecision::Conservative,
+            stable_key: call_site_stable_key(
+                db,
+                body,
+                operation,
+                kind,
+                &callee_shape,
+                &operation_stable_key,
+            ),
+        });
+    }
+
+    sites.sort_by(|left, right| {
+        (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+    });
+    sites
+}
+
+fn same_span_ordinal(
+    ordinals: &mut BTreeMap<(MirBodyId, String), u32>,
+    body: MirBodyId,
+    span: &Span,
+) -> u32 {
+    let next = ordinals.entry((body, span_key(span))).or_insert(0);
+    let ordinal = *next;
+    *next += 1;
+    ordinal
+}
+
+fn call_callee(
+    value: &MirValue,
+    language: Language,
+    places: &BTreeMap<PlaceId, &PlaceFact>,
+) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {
+    match value {
+        MirValue::Place(place) => place_callee(*place, language, places.get(place).copied()),
+        MirValue::Temporary(value) => temporary_callee(*value),
+        MirValue::CallReturn(site) => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::FunctionValue,
+            },
+            None,
+            CallSyntaxKind::FunctionValue,
+            format!("call_return:{}", site.0),
+        ),
+        MirValue::Unknown { evidence } => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::Unknown,
+            },
+            None,
+            CallSyntaxKind::Unknown,
+            format!("unknown:{}", evidence.trim()),
+        ),
+        MirValue::Literal { value } => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::UnsupportedSyntax,
+            },
+            None,
+            CallSyntaxKind::Unknown,
+            format!("literal:{}", value.trim()),
+        ),
+    }
+}
+
+fn temporary_callee(value: MirValueId) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {
+    (
+        CallCallee::Unknown {
+            reason: UnresolvedCallReason::MissingSemanticReference,
+        },
+        None,
+        CallSyntaxKind::Unknown,
+        format!("temporary:{}", value.0),
+    )
+}
+
+fn place_callee(
+    place: PlaceId,
+    language: Language,
+    fact: Option<&PlaceFact>,
+) -> (CallCallee, Option<PlaceId>, CallSyntaxKind, String) {
+    let Some(fact) = fact else {
+        return (
+            CallCallee::FunctionValue { place },
+            Some(place),
+            CallSyntaxKind::FunctionValue,
+            "function_value".to_string(),
+        );
+    };
+
+    if let Some((callee, kind, shape)) = projection_callee(place, &fact.projections) {
+        return (callee, Some(place), kind, shape);
+    }
+
+    match &fact.root {
+        PlaceRoot::Global { name, .. } if is_constructor_name(language, name) => (
+            CallCallee::Constructor {
+                reference: None,
+                name: Some(name.clone()),
+            },
+            None,
+            CallSyntaxKind::Constructor,
+            format!("constructor:{name}"),
+        ),
+        PlaceRoot::Global { name, .. } => (
+            CallCallee::Identifier {
+                reference: None,
+                name: name.clone(),
+            },
+            None,
+            CallSyntaxKind::Function,
+            format!("identifier:{name}"),
+        ),
+        PlaceRoot::Unknown { evidence } => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::Unknown,
+            },
+            None,
+            CallSyntaxKind::Unknown,
+            format!("unknown:{}", evidence.trim()),
+        ),
+        PlaceRoot::Local { .. }
+        | PlaceRoot::Parameter { .. }
+        | PlaceRoot::Temporary { .. }
+        | PlaceRoot::CallReturn { .. } => (
+            CallCallee::FunctionValue { place },
+            Some(place),
+            CallSyntaxKind::FunctionValue,
+            "function_value".to_string(),
+        ),
+    }
+}
+
+fn projection_callee(
+    place: PlaceId,
+    projections: &[PlaceProjection],
+) -> Option<(CallCallee, CallSyntaxKind, String)> {
+    let projection = projections.last()?;
+    match projection {
+        PlaceProjection::Field(property) | PlaceProjection::Property(property) => Some((
+            CallCallee::Member {
+                base: place,
+                property: property.clone(),
+            },
+            CallSyntaxKind::Member,
+            format!("member:{property}"),
+        )),
+        PlaceProjection::IndexKnown(index) => Some((
+            CallCallee::Index {
+                base: place,
+                index: None,
+            },
+            CallSyntaxKind::Index,
+            format!("index_known:{index}"),
+        )),
+        PlaceProjection::IndexUnknown { evidence } => Some((
+            CallCallee::Index {
+                base: place,
+                index: None,
+            },
+            CallSyntaxKind::Index,
+            format!("index_unknown:{}", evidence.trim()),
+        )),
+        PlaceProjection::CallReturn(call) => Some((
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::FunctionValue,
+            },
+            CallSyntaxKind::FunctionValue,
+            format!("call_return:{}", call.0),
+        )),
+        PlaceProjection::Unknown { evidence } => Some((
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::Unknown,
+            },
+            CallSyntaxKind::Unknown,
+            format!("unknown_projection:{}", evidence.trim()),
+        )),
+        PlaceProjection::Deref | PlaceProjection::AwaitResult => None,
+    }
+}
+
+fn call_site_stable_key(
+    db: &AnalysisDb,
+    body: &MirBody,
+    operation: &MirOperation,
+    kind: CallSyntaxKind,
+    callee_shape: &str,
+    operation_stable_key: &str,
+) -> String {
+    semantic_stable_key(
+        FactFamily::CallSite,
+        &[
+            ("language", format!("{:?}", body.language)),
+            ("file_key", file_key(db, body.file)),
+            ("caller_key", caller_key(db, body.function)),
+            ("span", span_key(&operation.span)),
+            ("callee_shape", callee_shape.to_string()),
+            ("operation_key", operation_stable_key.to_string()),
+            ("call_kind", format!("{kind:?}")),
+        ],
+    )
+    .into_string()
+}
+
+fn owner_symbol(
+    db: &AnalysisDb,
+    functions: &BTreeMap<FunctionId, &FunctionFact>,
+    function: FunctionId,
+) -> Option<SymbolId> {
+    let function = functions.get(&function)?;
+    db.symbols()
+        .iter()
+        .find(|symbol| {
+            symbol.file == Some(function.file)
+                && symbol.name == function.name
+                && symbol.primary_span.as_ref() == Some(&function.span)
+        })
+        .map(|symbol| symbol.id)
+}
+
+fn file_key(db: &AnalysisDb, file: FileId) -> String {
+    db.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+        .map(|metadata| metadata.stable_key.clone())
+        .or_else(|| {
+            db.files()
+                .iter()
+                .find(|source_file| source_file.id == file)
+                .map(|source_file| source_file.relative_path.replace('\\', "/"))
+        })
+        .unwrap_or_else(|| format!("<missing-file:{}>", file.0))
+}
+
+fn caller_key(db: &AnalysisDb, function: FunctionId) -> String {
+    db.metadata_for(FactRef::new(FactFamily::Function, function.0))
+        .map(|metadata| metadata.stable_key.clone())
+        .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
+}
+
+fn span_key(span: &Span) -> String {
+    format!(
+        "{}:{}..{}:{}@{}..{}",
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col,
+        span.start_byte,
+        span.end_byte
+    )
+}
+
+fn is_constructor_name(language: Language, name: &str) -> bool {
+    matches!(language, Language::TypeScript | Language::JavaScript)
+        && name.chars().next().is_some_and(char::is_uppercase)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -158,8 +503,8 @@ mod tests {
         assert_eq!(site.language, Language::TypeScript);
         assert_eq!(site.file, file);
         assert_eq!(site.caller, function);
-        assert_eq!(site.body, MirBodyId(1));
-        assert_eq!(site.operation, MirOpId(1));
+        assert_eq!(site.body, MirBodyId(0));
+        assert_eq!(site.operation, MirOpId(0));
         assert_eq!(site.kind, CallSyntaxKind::Function);
         assert_eq!(
             site.callee,
@@ -168,8 +513,8 @@ mod tests {
                 name: "run".to_string()
             }
         );
-        assert_eq!(site.arguments, vec![PlaceId(2)]);
-        assert_eq!(site.result, Some(PlaceId(9)));
+        assert_eq!(site.arguments, vec![PlaceId(1)]);
+        assert_eq!(site.result, Some(PlaceId(2)));
         assert_eq!(site.status, CallTargetStatus::Unresolved);
         assert_eq!(site.precision, CallPrecision::Conservative);
     }
@@ -180,16 +525,27 @@ mod tests {
         let (file, function) = add_file_and_function(&mut db, "src/app.ts");
         db.replace_semantic_mir(MirOutput {
             bodies: vec![body(file, function, Language::TypeScript)],
-            places: vec![place(
-                1,
-                file,
-                function,
-                PlaceRoot::Local {
+            places: vec![
+                place(
+                    1,
+                    file,
                     function,
-                    name: "callback".to_string(),
-                },
-                Vec::new(),
-            )],
+                    PlaceRoot::Local {
+                        function,
+                        name: "callback".to_string(),
+                    },
+                    Vec::new(),
+                ),
+                place(
+                    9,
+                    file,
+                    function,
+                    PlaceRoot::CallReturn {
+                        call: CallSiteId(10),
+                    },
+                    Vec::new(),
+                ),
+            ],
             operations: vec![call_op(
                 1,
                 0,

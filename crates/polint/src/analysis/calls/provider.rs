@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+use crate::analysis::calls::extract::extract_call_sites;
 use crate::analysis::calls::store::CallOutput;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis_kernel::ProviderManifest;
@@ -27,7 +28,12 @@ pub(crate) fn derive_calls_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> CallsProviderOutput {
-    let output = CallOutput::empty().normalized();
+    let output = CallOutput {
+        sites: extract_call_sites(db),
+        targets: Vec::new(),
+        unresolved: Vec::new(),
+    }
+    .normalized();
     let output_digest = calls_output_digest(
         manifest,
         input_snapshot,
