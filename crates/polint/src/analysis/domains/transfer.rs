@@ -11,7 +11,7 @@ use super::core::{
 use super::lattice::TopReason;
 use super::state::ProductState;
 use crate::analysis::calls::facts::{UnresolvedCallFact, UnresolvedCallReason};
-use crate::analysis::ids::{CallSiteId, MirPredicateId, PlaceId, UnsupportedId};
+use crate::analysis::ids::{CallSiteId, PlaceId, UnsupportedId};
 use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
     UnsupportedSemanticFact,
@@ -183,11 +183,13 @@ impl OperationTransfer {
 impl EdgeTransfer {
     pub(crate) fn apply_branch_assumption(
         _cx: &TransferCx<'_>,
-        predicate: MirPredicateId,
+        predicate_place: Option<PlaceId>,
         sense: BranchSense,
         state: &mut ProductState,
     ) {
-        let place = PlaceId(predicate.0);
+        let Some(place) = predicate_place else {
+            return;
+        };
         match sense {
             BranchSense::True => {
                 state
@@ -376,7 +378,7 @@ mod tests {
     };
     use crate::analysis::domains::lattice::{AbstractDomain, TopReason};
     use crate::analysis::domains::state::ProductState;
-    use crate::analysis::ids::{CallSiteId, MirOpId, MirPredicateId, PlaceId, UnsupportedId};
+    use crate::analysis::ids::{CallSiteId, MirOpId, PlaceId, UnsupportedId};
     use crate::analysis::mir::body::MirStatus;
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::core::{FileId, Span};
@@ -487,12 +489,27 @@ mod tests {
 
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),
-            MirPredicateId(place.0),
+            Some(place),
             BranchSense::True,
             &mut state,
         );
 
         assert_eq!(state.core.truthiness[&place], TruthinessDomain::Truthy);
+    }
+
+    #[test]
+    fn branch_assumption_without_place_is_conservative() {
+        let unrelated = PlaceId(7);
+        let mut state = ProductState::entry();
+
+        EdgeTransfer::apply_branch_assumption(
+            &TransferCx::empty_for_test(),
+            None,
+            BranchSense::True,
+            &mut state,
+        );
+
+        assert!(!state.core.truthiness.contains_key(&unrelated));
     }
 
     #[test]

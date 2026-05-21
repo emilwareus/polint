@@ -833,6 +833,7 @@ impl<'source> FunctionLowering<'source> {
             node,
             OperationKindDraft::Branch {
                 predicate: MirPredicateId(self.ordinal_for(node) as u64),
+                predicate_place_key: None,
             },
             MirStatus::Partial,
         );
@@ -978,6 +979,7 @@ enum OperationKindDraft {
     },
     Branch {
         predicate: MirPredicateId,
+        predicate_place_key: Option<String>,
     },
     Call {
         site: CallSiteId,
@@ -1008,8 +1010,15 @@ impl OperationKindDraft {
             Self::Read { place_key } => Some(MirOperationKind::Read {
                 place: *place_ids.get(place_key)?,
             }),
-            Self::Branch { predicate } => Some(MirOperationKind::Branch {
+            Self::Branch {
+                predicate,
+                predicate_place_key,
+            } => Some(MirOperationKind::Branch {
                 predicate: *predicate,
+                predicate_place: predicate_place_key
+                    .as_ref()
+                    .and_then(|key| place_ids.get(key))
+                    .copied(),
             }),
             Self::Call {
                 site,

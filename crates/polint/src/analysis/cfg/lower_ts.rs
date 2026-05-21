@@ -557,6 +557,7 @@ mod tests {
             span: span(ordinal as usize, ordinal as usize + 1),
             kind: MirOperationKind::Branch {
                 predicate: MirPredicateId(u64::from(ordinal)),
+                predicate_place: None,
             },
             stable_key: evidence.to_string(),
             status: MirStatus::Partial,

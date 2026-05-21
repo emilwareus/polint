@@ -199,12 +199,12 @@ impl LocalDomainSolver {
 
             for edge in edges.iter().filter(|edge| edge.from_block == next.block) {
                 let mut candidate = state.clone();
-                if let Some((predicate, sense)) =
+                if let Some((predicate_place, sense)) =
                     branch_assumption(edge.kind, operations_by_block.get(&next.block))
                 {
                     EdgeTransfer::apply_branch_assumption(
                         &transfer_cx,
-                        predicate,
+                        predicate_place,
                         sense,
                         &mut candidate,
                     );
@@ -375,7 +375,7 @@ fn entry_block(blocks: &[&BasicBlockFact]) -> Option<BasicBlockId> {
 fn branch_assumption(
     edge: CfgEdgeKind,
     operations: Option<&Vec<&MirOperation>>,
-) -> Option<(crate::analysis::ids::MirPredicateId, BranchSense)> {
+) -> Option<(Option<crate::analysis::ids::PlaceId>, BranchSense)> {
     let sense = match edge {
         CfgEdgeKind::True => BranchSense::True,
         CfgEdgeKind::False => BranchSense::False,
@@ -383,8 +383,11 @@ fn branch_assumption(
     };
     operations.and_then(|operations| {
         operations.iter().rev().find_map(|operation| {
-            if let MirOperationKind::Branch { predicate } = operation.kind {
-                Some((predicate, sense))
+            if let MirOperationKind::Branch {
+                predicate_place, ..
+            } = operation.kind
+            {
+                Some((predicate_place, sense))
             } else {
                 None
             }

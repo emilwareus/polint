@@ -315,7 +315,10 @@ fn operation_kind_fragment(kind: &MirOperationKind) -> String {
             format!("write:{place:?}:{}", value_fragment(value))
         }
         MirOperationKind::Read { place } => format!("read:{place:?}"),
-        MirOperationKind::Branch { predicate } => format!("branch:{predicate:?}"),
+        MirOperationKind::Branch {
+            predicate,
+            predicate_place,
+        } => format!("branch:{predicate:?}:{predicate_place:?}"),
         MirOperationKind::Call {
             site,
             callee,

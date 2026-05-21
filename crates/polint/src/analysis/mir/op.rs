@@ -40,6 +40,7 @@ pub(crate) enum MirOperationKind {
     },
     Branch {
         predicate: MirPredicateId,
+        predicate_place: Option<PlaceId>,
     },
     Call {
         site: CallSiteId,
