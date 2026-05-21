@@ -538,3 +538,146 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod non_direct_cases {
+    use std::path::PathBuf;
+
+    use super::resolve_direct_call_targets;
+    use crate::analysis::calls::facts::{
+        CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
+        UnresolvedCallReason,
+    };
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+
+    #[test]
+    fn go_function_value_and_interface_shapes_do_not_emit_direct_targets() {
+        let (db, file, caller) = db_with_function(Language::Go, "flow.go");
+        let sites = vec![
+            site(
+                Language::Go,
+                file,
+                caller,
+                1,
+                CallCallee::FunctionValue { place: PlaceId(10) },
+                CallSyntaxKind::FunctionValue,
+            ),
+            site(
+                Language::Go,
+                file,
+                caller,
+                2,
+                CallCallee::Unknown {
+                    reason: UnresolvedCallReason::InterfaceDispatch,
+                },
+                CallSyntaxKind::Method,
+            ),
+        ];
+
+        assert!(resolve_direct_call_targets(&db, &sites).is_empty());
+    }
+
+    #[test]
+    fn ts_dynamic_member_without_precise_reference_does_not_emit_direct_target() {
+        let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
+        let sites = vec![
+            site(
+                Language::TypeScript,
+                file,
+                caller,
+                1,
+                CallCallee::Index {
+                    base: PlaceId(10),
+                    index: None,
+                },
+                CallSyntaxKind::Index,
+            ),
+            site(
+                Language::TypeScript,
+                file,
+                caller,
+                2,
+                CallCallee::Unknown {
+                    reason: UnresolvedCallReason::Eval,
+                },
+                CallSyntaxKind::Unknown,
+            ),
+            site(
+                Language::TypeScript,
+                file,
+                caller,
+                3,
+                CallCallee::Unknown {
+                    reason: UnresolvedCallReason::CallApplyBind,
+                },
+                CallSyntaxKind::Member,
+            ),
+        ];
+
+        assert!(resolve_direct_call_targets(&db, &sites).is_empty());
+    }
+
+    fn db_with_function(language: Language, path: &str) -> (AnalysisDb, FileId, FunctionId) {
+        let mut db = AnalysisDb::new();
+        let file = db.add_source_file(
+            PathBuf::from(path),
+            path.to_string(),
+            language,
+            "".into(),
+            "content".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(999),
+            file,
+            name: "caller".to_string(),
+            span: span(file, 1),
+            language,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        (db, file, function)
+    }
+
+    fn site(
+        language: Language,
+        file: FileId,
+        caller: FunctionId,
+        id: u64,
+        callee: CallCallee,
+        kind: CallSyntaxKind,
+    ) -> CallSiteFact {
+        CallSiteFact {
+            id: CallSiteId(id),
+            language,
+            file,
+            caller,
+            owner_symbol: None,
+            body: MirBodyId(0),
+            operation: MirOpId(id),
+            span: span(file, id as u32 + 1),
+            kind,
+            callee,
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Unresolved,
+            precision: CallPrecision::Conservative,
+            stable_key: format!("call-site:{id}"),
+        }
+    }
+
+    fn span(file: FileId, line: u32) -> Span {
+        Span {
+            file,
+            start_byte: line * 10,
+            end_byte: line * 10 + 5,
+            start_line: line,
+            start_col: 1,
+            end_line: line,
+            end_col: 6,
+        }
+    }
+}

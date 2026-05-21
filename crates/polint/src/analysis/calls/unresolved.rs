@@ -396,6 +396,56 @@ mod tests {
     }
 
     #[test]
+    fn derive_unresolved_calls_emits_missing_semantic_reference_for_unbound_direct_shapes() {
+        let (db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
+        let sites = vec![
+            site(
+                Language::TypeScript,
+                file,
+                caller,
+                30,
+                CallCallee::Identifier {
+                    reference: None,
+                    name: "missing".to_string(),
+                },
+                CallSyntaxKind::Function,
+            ),
+            site(
+                Language::TypeScript,
+                file,
+                caller,
+                40,
+                CallCallee::Constructor {
+                    reference: None,
+                    name: Some("Missing".to_string()),
+                },
+                CallSyntaxKind::Constructor,
+            ),
+        ];
+
+        let reasons = super::derive_unresolved_calls(&db, &sites)
+            .into_iter()
+            .map(|row| (row.site, row.reason, row.status))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            reasons,
+            vec![
+                (
+                    CallSiteId(30),
+                    UnresolvedCallReason::MissingSemanticReference,
+                    CallTargetStatus::Unresolved,
+                ),
+                (
+                    CallSiteId(40),
+                    UnresolvedCallReason::MissingSemanticReference,
+                    CallTargetStatus::Unresolved,
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn derive_unresolved_calls_preserves_specific_ts_unsupported_reasons() {
         let (mut db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
         replace_unsupported(
