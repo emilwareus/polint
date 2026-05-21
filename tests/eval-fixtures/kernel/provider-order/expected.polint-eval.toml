@@ -30,4 +30,7 @@ invariant = { name = "provider_order.6", value = "polint.semantic_mir", mode = "
 invariant = { name = "provider_order.7", value = "polint.cfg", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.8", value = "polint.metrics", mode = "exact" }
+invariant = { name = "provider_order.8", value = "polint.calls", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.9", value = "polint.metrics", mode = "exact" }

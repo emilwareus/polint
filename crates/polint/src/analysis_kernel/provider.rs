@@ -397,6 +397,7 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
                 "polint.metrics",
             ]
         );
@@ -415,6 +416,7 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
                 "polint.metrics",
             ]
         );
@@ -460,6 +462,7 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
                 "polint.metrics",
             ]
         );
@@ -658,6 +661,25 @@ mod tests {
                     ],
                 },
                 ProviderOrderRow {
+                    id: "polint.calls",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "resolved_imports",
+                        "import_to_package_edges",
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "cfg_functions",
+                        "cfg_edges",
+                    ],
+                    outputs: vec!["call_sites", "call_targets", "unresolved_calls"],
+                },
+                ProviderOrderRow {
                     id: "polint.metrics",
                     kind: "metrics_derived",
                     language_scope: "multi_language",
@@ -749,5 +771,37 @@ mod tests {
         assert!(manifest.outputs.contains(&"mir_operations"));
         assert!(manifest.outputs.contains(&"places"));
         assert!(manifest.outputs.contains(&"unsupported_semantics"));
+    }
+
+    #[test]
+    fn calls_manifest_declares_private_provider_contract() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls manifest should exist");
+
+        assert_eq!(manifest.primary_schema_label(), "calls-facts-1:1");
+        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
+        assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
+        for input in [
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "resolved_imports",
+            "import_to_package_edges",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "cfg_functions",
+            "cfg_edges",
+        ] {
+            assert!(manifest.inputs.contains(&input), "missing input {input}");
+        }
+        assert_eq!(
+            manifest.outputs,
+            &["call_sites", "call_targets", "unresolved_calls"]
+        );
     }
 }

@@ -1323,7 +1323,8 @@ path = "repo"
                 ("provider_order.5", "polint.module_topology"),
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
-                ("provider_order.8", "polint.metrics"),
+                ("provider_order.8", "polint.calls"),
+                ("provider_order.9", "polint.metrics"),
             ]
         );
     }

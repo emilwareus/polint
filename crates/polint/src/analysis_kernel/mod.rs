@@ -653,6 +653,7 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
                 "polint.metrics",
             ]
         );
@@ -913,6 +914,34 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_calls_row_carries_output_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let calls = provider_output(&output, "polint.calls");
+
+        assert_eq!(calls.schema_version, "calls-facts-1:1");
+        assert!(!calls.output_digest.value.is_empty());
+        assert_eq!(calls.cache_stats.recomputes, 1);
+    }
+
+    #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(temp.path().join("src")).expect("create src");
@@ -1097,6 +1126,7 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
                 "polint.metrics",
             ]
         );
