@@ -1,3 +1,347 @@
+#![expect(
+    dead_code,
+    reason = "Phase 31 adds private transfer hooks before later provider/debug plans consume every path."
+)]
+
+use std::collections::BTreeMap;
+
+use super::core::{
+    ConstantDomain, ConstantLiteral, InitializednessDomain, NilnessDomain, TruthinessDomain,
+};
+use super::lattice::TopReason;
+use super::state::ProductState;
+use crate::analysis::calls::facts::{CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason};
+use crate::analysis::ids::{CallSiteId, MirPredicateId, PlaceId, UnsupportedId};
+use crate::analysis::mir::op::{
+    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue,
+    UnsupportedSemanticFact,
+};
+use crate::core::AnalysisDb;
+
+#[derive(Clone, Debug)]
+pub(crate) struct TransferCx<'a> {
+    unresolved_calls: BTreeMap<CallSiteId, &'a UnresolvedCallFact>,
+    unsupported: BTreeMap<UnsupportedId, &'a UnsupportedSemanticFact>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OperationTransfer;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EdgeTransfer;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BranchSense {
+    True,
+    False,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransferReason {
+    LiteralAssignment,
+    PlaceCopy,
+    UnknownValue,
+    UnsupportedSemantic,
+    UnresolvedCall(UnresolvedCallReason),
+    DynamicWrite,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HavocTarget {
+    Place(PlaceId),
+    ReturnPlace(PlaceId),
+    Argument(PlaceId),
+}
+
+impl<'a> TransferCx<'a> {
+    pub(crate) fn from_db(db: &'a AnalysisDb) -> Self {
+        Self {
+            unresolved_calls: db
+                .unresolved_calls()
+                .iter()
+                .map(|row| (row.site, row))
+                .collect(),
+            unsupported: db
+                .unsupported_semantics()
+                .iter()
+                .map(|row| (row.id, row))
+                .collect(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self {
+            unresolved_calls: BTreeMap::new(),
+            unsupported: BTreeMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_unresolved_for_test(
+        site: CallSiteId,
+        reason: UnresolvedCallReason,
+    ) -> TransferCx<'static> {
+        use crate::analysis::calls::facts::{CallAlgorithm, CallPrecision, CallProvenance};
+        use crate::core::FunctionId;
+
+        let row = Box::leak(Box::new(UnresolvedCallFact {
+            site,
+            caller: FunctionId(1),
+            status: CallTargetStatus::Unresolved,
+            reason,
+            algorithm: CallAlgorithm::Unsupported,
+            provenance: CallProvenance::MirShape,
+            precision: CallPrecision::Unknown,
+            stable_key: "unresolved:test".to_string(),
+        }));
+        TransferCx {
+            unresolved_calls: BTreeMap::from([(site, &*row)]),
+            unsupported: BTreeMap::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_unsupported_for_test(
+        &mut self,
+        unsupported: UnsupportedId,
+        affected_places: Vec<PlaceId>,
+    ) {
+        use crate::analysis::mir::body::MirStatus;
+        use crate::analysis::mir::op::{UnsupportedDomain, UnsupportedPrecision};
+        use crate::core::{FileId, Language, Span};
+
+        let row = Box::leak(Box::new(UnsupportedSemanticFact {
+            id: unsupported,
+            body: None,
+            operation: None,
+            language: Language::Go,
+            file: FileId(1),
+            span: Span::point(FileId(1), 1, 1),
+            construct: "unsupported".to_string(),
+            source_evidence: "unsupported".to_string(),
+            affected_places,
+            affected_domains: vec![UnsupportedDomain::Domains],
+            conservative_action: ConservativeAction::HavocAffectedPlaces,
+            precision: UnsupportedPrecision::Unsupported,
+            status: MirStatus::Unsupported,
+            stable_key: "unsupported:test".to_string(),
+        }));
+        self.unsupported.insert(unsupported, &*row);
+    }
+}
+
+impl OperationTransfer {
+    pub(crate) fn apply(cx: &TransferCx<'_>, operation: &MirOperation, state: &mut ProductState) {
+        match &operation.kind {
+            MirOperationKind::StorageLive { place } => {
+                state
+                    .core
+                    .initializedness
+                    .insert(*place, InitializednessDomain::Uninitialized);
+            }
+            MirOperationKind::Bind { place, value } => assign_value(state, *place, value),
+            MirOperationKind::Assign { place, value, mode } => {
+                if dynamic_assign_mode(*mode) {
+                    havoc(state, HavocTarget::Place(*place), TopReason::DynamicWrite);
+                } else {
+                    assign_value(state, *place, value);
+                }
+            }
+            MirOperationKind::Read { place } => {
+                state
+                    .core
+                    .initializedness
+                    .entry(*place)
+                    .or_insert(InitializednessDomain::Initialized);
+            }
+            MirOperationKind::Write { place, .. } => {
+                havoc(state, HavocTarget::Place(*place), TopReason::DynamicWrite);
+            }
+            MirOperationKind::Branch { .. } => {}
+            MirOperationKind::Call {
+                site,
+                arguments,
+                return_place,
+                ..
+            } => apply_call(cx, *site, arguments, *return_place, state),
+            MirOperationKind::Return { value } => {
+                if let Some(MirValue::Unknown { .. }) = value {
+                    state.mark_reachability_top(TopReason::UnknownValue);
+                }
+            }
+            MirOperationKind::Unsupported { unsupported } => {
+                apply_unsupported(cx, *unsupported, state);
+            }
+        }
+        state.reduce_value_only(4);
+    }
+}
+
+impl EdgeTransfer {
+    pub(crate) fn apply_branch_assumption(
+        _cx: &TransferCx<'_>,
+        predicate: MirPredicateId,
+        sense: BranchSense,
+        state: &mut ProductState,
+    ) {
+        let place = PlaceId(predicate.0);
+        match sense {
+            BranchSense::True => {
+                state
+                    .core
+                    .truthiness
+                    .insert(place, TruthinessDomain::Truthy);
+                state.core.nilness.insert(place, NilnessDomain::NonNil);
+                state.core.constants.insert(
+                    place,
+                    ConstantDomain::from_literal(ConstantLiteral::Bool(true)),
+                );
+            }
+            BranchSense::False => {
+                state.core.truthiness.insert(place, TruthinessDomain::Falsy);
+                state.core.constants.insert(
+                    place,
+                    ConstantDomain::from_literal(ConstantLiteral::Bool(false)),
+                );
+            }
+        }
+        state.reduce_value_only(4);
+    }
+}
+
+fn assign_value(state: &mut ProductState, place: PlaceId, value: &MirValue) {
+    state
+        .core
+        .initializedness
+        .insert(place, InitializednessDomain::Initialized);
+    match value {
+        MirValue::Literal { value } => apply_literal(state, place, value),
+        MirValue::Place(source) => copy_place(state, place, *source),
+        MirValue::Temporary(_) | MirValue::CallReturn(_) | MirValue::Unknown { .. } => {
+            state.mark_place_top(place, TopReason::UnknownValue);
+        }
+    }
+}
+
+fn apply_literal(state: &mut ProductState, place: PlaceId, label: &str) {
+    let literal = literal_from_label(label);
+    state
+        .core
+        .constants
+        .insert(place, ConstantDomain::from_literal(literal));
+}
+
+fn literal_from_label(label: &str) -> ConstantLiteral {
+    match label {
+        "true" => ConstantLiteral::Bool(true),
+        "false" => ConstantLiteral::Bool(false),
+        "null" => ConstantLiteral::Null,
+        "undefined" => ConstantLiteral::Undefined,
+        "nil" => ConstantLiteral::Nil,
+        value if quoted(value) => ConstantLiteral::String(value[1..value.len() - 1].to_string()),
+        value if numeric_label(value) => ConstantLiteral::Number(value.to_string()),
+        value => ConstantLiteral::Unknown(value.to_string()),
+    }
+}
+
+fn quoted(value: &str) -> bool {
+    value.len() >= 2 && value.starts_with('"') && value.ends_with('"')
+}
+
+fn numeric_label(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'-'))
+}
+
+fn copy_place(state: &mut ProductState, target: PlaceId, source: PlaceId) {
+    if let Some(value) = state.core.nilness.get(&source).copied() {
+        state.core.nilness.insert(target, value);
+    }
+    if let Some(value) = state.core.truthiness.get(&source).copied() {
+        state.core.truthiness.insert(target, value);
+    }
+    if let Some(value) = state.core.constants.get(&source).cloned() {
+        state.core.constants.insert(target, value);
+    }
+    if let Some(value) = state.core.strings.get(&source).cloned() {
+        state.core.strings.insert(target, value);
+    }
+}
+
+fn dynamic_assign_mode(mode: AssignMode) -> bool {
+    matches!(
+        mode,
+        AssignMode::PartialWrite | AssignMode::ProjectionMutation | AssignMode::UnknownWrite
+    )
+}
+
+fn apply_call(
+    cx: &TransferCx<'_>,
+    site: CallSiteId,
+    arguments: &[PlaceId],
+    return_place: PlaceId,
+    state: &mut ProductState,
+) {
+    if let Some(unresolved) = cx.unresolved_calls.get(&site) {
+        let reason = top_reason_for_unresolved(*unresolved);
+        havoc(state, HavocTarget::ReturnPlace(return_place), reason);
+        for argument in arguments {
+            havoc(state, HavocTarget::Argument(*argument), reason);
+        }
+    } else {
+        state.mark_place_top(return_place, TopReason::UnknownValue);
+        for argument in arguments {
+            state
+                .core
+                .initializedness
+                .entry(*argument)
+                .or_insert(InitializednessDomain::Initialized);
+        }
+    }
+}
+
+fn top_reason_for_unresolved(unresolved: &UnresolvedCallFact) -> TopReason {
+    match unresolved.reason {
+        UnresolvedCallReason::SetupMissing => TopReason::SetupMissing,
+        UnresolvedCallReason::BudgetExceeded => TopReason::BudgetExceeded,
+        _ => TopReason::UnresolvedCall,
+    }
+}
+
+fn apply_unsupported(cx: &TransferCx<'_>, unsupported: UnsupportedId, state: &mut ProductState) {
+    let Some(row) = cx.unsupported.get(&unsupported) else {
+        state.mark_reachability_top(TopReason::UnsupportedSemantic);
+        return;
+    };
+    match row.conservative_action {
+        ConservativeAction::SkipOperation => {}
+        ConservativeAction::HavocAffectedPlaces => {
+            for place in &row.affected_places {
+                havoc(
+                    state,
+                    HavocTarget::Place(*place),
+                    TopReason::UnsupportedSemantic,
+                );
+            }
+        }
+        ConservativeAction::PreserveWithUnknownValue | ConservativeAction::StopLowering => {
+            state.mark_reachability_top(TopReason::UnsupportedSemantic);
+        }
+    }
+}
+
+fn havoc(state: &mut ProductState, target: HavocTarget, reason: TopReason) {
+    let place = match target {
+        HavocTarget::Place(place)
+        | HavocTarget::ReturnPlace(place)
+        | HavocTarget::Argument(place) => place,
+    };
+    state.mark_place_top(place, reason);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,7 +397,10 @@ mod tests {
         );
         assert_eq!(state.core.nilness[&place], NilnessDomain::NonNil);
         assert_eq!(state.core.truthiness[&place], TruthinessDomain::Truthy);
-        assert_eq!(state.core.strings[&place], StringDomain::from_literal("route"));
+        assert_eq!(
+            state.core.strings[&place],
+            StringDomain::from_literal("route")
+        );
         assert_eq!(
             state.core.initializedness[&place],
             InitializednessDomain::Initialized
@@ -64,10 +411,10 @@ mod tests {
     fn branch_assumption_refines_truthiness_and_constant_bools() {
         let place = PlaceId(7);
         let mut state = ProductState::entry();
-        state
-            .core
-            .constants
-            .insert(place, ConstantDomain::from_literal(ConstantLiteral::Bool(true)));
+        state.core.constants.insert(
+            place,
+            ConstantDomain::from_literal(ConstantLiteral::Bool(true)),
+        );
 
         EdgeTransfer::apply_branch_assumption(
             &TransferCx::empty_for_test(),

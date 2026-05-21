@@ -9,13 +9,14 @@ use super::lattice::{Changed, TopReason};
 use super::results::DomainResults;
 pub(crate) use super::results::SolverStatus;
 use super::state::ProductState;
+use super::transfer::{BranchSense, EdgeTransfer, OperationTransfer, TransferCx};
 use crate::analysis::cfg::facts::{
     BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgNodeFact, CfgView,
 };
 use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId};
 use crate::analysis::ids::{MirBodyId, MirOpId};
 use crate::analysis::mir::body::MirBody;
-use crate::analysis::mir::op::MirOperation;
+use crate::analysis::mir::op::{MirOperation, MirOperationKind};
 use crate::core::AnalysisDb;
 
 #[derive(Clone, Copy, Debug)]
@@ -137,6 +138,7 @@ impl LocalDomainSolver {
         let nodes = sorted_nodes(db, function);
         let edges = sorted_edges(db, function);
         let operations_by_block = operations_by_block(&nodes, operations_by_id);
+        let transfer_cx = TransferCx::from_db(db);
         let block_keys = blocks
             .iter()
             .map(|block| {
@@ -195,6 +197,7 @@ impl LocalDomainSolver {
                 .unwrap_or_else(ProductState::bottom);
             for operation in operations_by_block.get(&next.block).into_iter().flatten() {
                 let before = state.clone();
+                OperationTransfer::apply(&transfer_cx, operation, &mut state);
                 state.reduce_value_only(self.policy.reduction_rounds);
                 let after = state.clone();
                 operation_states.insert(
@@ -207,6 +210,16 @@ impl LocalDomainSolver {
 
             for edge in edges.iter().filter(|edge| edge.from_block == next.block) {
                 let mut candidate = state.clone();
+                if let Some((predicate, sense)) =
+                    branch_assumption(edge.kind, operations_by_block.get(&next.block))
+                {
+                    EdgeTransfer::apply_branch_assumption(
+                        &transfer_cx,
+                        predicate,
+                        sense,
+                        &mut candidate,
+                    );
+                }
                 if edge.kind == CfgEdgeKind::LoopBack {
                     if widening_fuel == 0 {
                         status = SolverStatus::Widened;
@@ -368,6 +381,26 @@ fn entry_block(blocks: &[&BasicBlockFact]) -> Option<BasicBlockId> {
         .find(|block| block.kind == BasicBlockKind::Entry)
         .or_else(|| blocks.first())
         .map(|block| block.id)
+}
+
+fn branch_assumption(
+    edge: CfgEdgeKind,
+    operations: Option<&Vec<&MirOperation>>,
+) -> Option<(crate::analysis::ids::MirPredicateId, BranchSense)> {
+    let sense = match edge {
+        CfgEdgeKind::True => BranchSense::True,
+        CfgEdgeKind::False => BranchSense::False,
+        _ => return None,
+    };
+    operations.and_then(|operations| {
+        operations.iter().rev().find_map(|operation| {
+            if let MirOperationKind::Branch { predicate } = operation.kind {
+                Some((predicate, sense))
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn mark_budget_exceeded(
