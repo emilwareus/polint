@@ -51,6 +51,293 @@ pub(crate) fn validate_fact_metadata(
 }
 
 #[cfg(test)]
+mod abstract_domains {
+    use super::validate_fact_metadata;
+    use crate::analysis::cfg::facts::{
+        BasicBlockFact, BasicBlockKind, CfgFunctionFact, CfgNodeFact, CfgNodeKind, CfgPrecision,
+        CfgStatus,
+    };
+    use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
+    use crate::analysis::cfg::store::CfgOutput;
+    use crate::analysis::domains::facts::{
+        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
+        DomainStatus, DomainValue,
+    };
+    use crate::analysis::domains::store::DomainOutput;
+    use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::analysis_kernel::{
+        AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
+        ValidationStatus,
+    };
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn abstract_domain_validation_reports_malformed_rows_with_required_evidence() {
+        let mut db = base_db();
+        db.replace_abstract_domain_facts(DomainOutput {
+            observations: vec![
+                observation(
+                    0,
+                    "domain:dup",
+                    DomainStatus::Present,
+                    DomainValue::Label("nil".to_string()),
+                ),
+                DomainObservationFact {
+                    id: DomainObservationId(1),
+                    body: MirBodyId(99),
+                    block: Some(BasicBlockId(99)),
+                    operation: Some(MirOpId(99)),
+                    place: Some(PlaceId(99)),
+                    stable_key: "domain:dup".to_string(),
+                    ..observation(
+                        1,
+                        "domain:bad",
+                        DomainStatus::Unknown,
+                        DomainValue::Label("missing-top-reason".to_string()),
+                    )
+                },
+            ],
+            events: vec![DomainEventFact {
+                id: DomainEventId(0),
+                body: MirBodyId(99),
+                block: Some(BasicBlockId(99)),
+                operation: Some(MirOpId(99)),
+                slot: Some(DomainSlot::Nilness),
+                status: DomainStatus::BudgetExceeded,
+                precision: DomainPrecision::Unknown,
+                reason: "unknown_value".to_string(),
+                stable_key: "domain:event:bad".to_string(),
+            }],
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let domain = domain_diagnostics(&diagnostics);
+
+        assert!(
+            domain.len() >= 7,
+            "expected abstract-domain validation diagnostics: {diagnostics:#?}"
+        );
+        assert!(domain.iter().all(|diagnostic| {
+            let labels = evidence_labels(diagnostic);
+            labels.contains("family")
+                && labels.contains("stable_key")
+                && labels.contains("field")
+                && labels.contains("reason")
+        }));
+    }
+
+    #[test]
+    fn abstract_domain_validation_rejects_exact_metadata_precision() {
+        let mut db = base_db();
+        db.replace_abstract_domain_facts(DomainOutput {
+            observations: vec![observation(
+                0,
+                "domain:exact-local-payload",
+                DomainStatus::Present,
+                DomainValue::Label("nil".to_string()),
+            )],
+            events: Vec::new(),
+        });
+        db.fact_meta_mut_for_test()
+            .remove_for_test(FactRef::new(FactFamily::DomainObservation, 0));
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::DomainObservation, 0),
+            FactMeta {
+                stable_key: "domain:exact-local-payload".to_string(),
+                producer_id: "polint.abstract_domains",
+                layer_id: "polint.abstract_domains",
+                precision: FactPrecision::Exact,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:exact-domain".to_string(),
+            },
+        );
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Fact metadata precision ceiling violated")
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "family" && evidence.value == "DomainObservation"
+                    })
+            }),
+            "expected abstract-domain precision ceiling diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    fn base_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() { let value = 1; return value; }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span(file),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file,
+                function: FunctionId(0),
+                package: None,
+                module: None,
+                owner_stable_key: "function:app".to_string(),
+                span: span(file),
+                stable_key: "body:app".to_string(),
+                status: MirStatus::Partial,
+            }],
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                function: Some(FunctionId(0)),
+                root: PlaceRoot::Local {
+                    function: FunctionId(0),
+                    name: "value".to_string(),
+                },
+                projections: Vec::new(),
+                stable_key: "place:value".to_string(),
+                status: PlaceStatus::Partial,
+            }],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(file),
+                kind: MirOperationKind::Assign {
+                    place: PlaceId(0),
+                    value: MirValue::Literal {
+                        value: "1".to_string(),
+                    },
+                    mode: AssignMode::DeclarationBinding,
+                },
+                stable_key: "op:assign".to_string(),
+                status: MirStatus::Partial,
+            }],
+            unsupported: Vec::new(),
+        })
+        .expect("semantic MIR rows should store");
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![CfgFunctionFact {
+                id: CfgFunctionId(0),
+                body: MirBodyId(0),
+                function: FunctionId(0),
+                language: Language::TypeScript,
+                file,
+                span: span(file),
+                entry_node: CfgNodeId(0),
+                normal_exit_node: CfgNodeId(0),
+                exceptional_exit_node: None,
+                stable_key: "cfg:function:app".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            nodes: vec![CfgNodeFact {
+                id: CfgNodeId(0),
+                cfg_function: CfgFunctionId(0),
+                body: MirBodyId(0),
+                operation: Some(MirOpId(0)),
+                block: BasicBlockId(0),
+                kind: CfgNodeKind::Operation,
+                span: Some(span(file)),
+                generated: false,
+                operation_ordinal: 0,
+                stable_key: "cfg:node:assign".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            blocks: vec![BasicBlockFact {
+                id: BasicBlockId(0),
+                cfg_function: CfgFunctionId(0),
+                kind: BasicBlockKind::StraightLine,
+                first_node: Some(CfgNodeId(0)),
+                last_node: Some(CfgNodeId(0)),
+                reachable: true,
+                reverse_postorder: 0,
+                stable_key: "cfg:block:app".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
+            ..CfgOutput::empty()
+        })
+        .expect("cfg rows should store");
+        db
+    }
+
+    fn observation(
+        id: u64,
+        stable_key: &str,
+        status: DomainStatus,
+        value: DomainValue,
+    ) -> DomainObservationFact {
+        DomainObservationFact {
+            id: DomainObservationId(id),
+            body: MirBodyId(0),
+            block: Some(BasicBlockId(0)),
+            operation: Some(MirOpId(0)),
+            place: Some(PlaceId(0)),
+            slot: DomainSlot::Nilness,
+            location: DomainLocation::AfterOperation,
+            value,
+            status,
+            precision: DomainPrecision::ExactLocal,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 10,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 11,
+        }
+    }
+
+    fn domain_diagnostics(
+        diagnostics: &[crate::diagnostics::Diagnostic],
+    ) -> Vec<&crate::diagnostics::Diagnostic> {
+        diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Abstract-domain validation failed")
+            })
+            .collect()
+    }
+
+    fn evidence_labels(diagnostic: &crate::diagnostics::Diagnostic) -> BTreeSet<&str> {
+        diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| evidence.label.as_str())
+            .collect()
+    }
+}
+
+#[cfg(test)]
 mod semantic_mir {
     use super::validate_fact_metadata;
     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId, UnsupportedId};

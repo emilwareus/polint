@@ -2477,6 +2477,166 @@ mod semantic_mir_debug_json {
     }
 }
 
+#[cfg(test)]
+mod abstract_domains_debug_json {
+    use super::metadata_debug_json_for_test;
+    use crate::analysis::cfg::ids::BasicBlockId;
+    use crate::analysis::domains::facts::{
+        DomainEventFact, DomainLocation, DomainObservationFact, DomainPrecision, DomainSlot,
+        DomainStatus, DomainValue,
+    };
+    use crate::analysis::domains::store::DomainOutput;
+    use crate::analysis::ids::{DomainEventId, DomainObservationId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    #[test]
+    fn abstract_domains_debug_json_exposes_compact_deterministic_rows() {
+        let mut db = base_db();
+        db.replace_abstract_domain_facts(DomainOutput {
+            observations: vec![DomainObservationFact {
+                id: DomainObservationId(0),
+                body: MirBodyId(0),
+                block: Some(BasicBlockId(0)),
+                operation: Some(MirOpId(0)),
+                place: Some(PlaceId(0)),
+                slot: DomainSlot::Nilness,
+                location: DomainLocation::AfterOperation,
+                value: DomainValue::TopReason("unknown_value".to_string()),
+                status: DomainStatus::Unknown,
+                precision: DomainPrecision::Unknown,
+                stable_key: "domain:observation:value".to_string(),
+            }],
+            events: vec![DomainEventFact {
+                id: DomainEventId(0),
+                body: MirBodyId(0),
+                block: Some(BasicBlockId(0)),
+                operation: Some(MirOpId(0)),
+                slot: Some(DomainSlot::Nilness),
+                status: DomainStatus::BudgetExceeded,
+                precision: DomainPrecision::Unknown,
+                reason: "budget_exceeded".to_string(),
+                stable_key: "domain:event:budget".to_string(),
+            }],
+        });
+
+        let first = metadata_debug_json_for_test(&db);
+        let second = metadata_debug_json_for_test(&db);
+
+        assert_eq!(first, second);
+        let domains = first
+            .get("abstract_domains")
+            .expect("abstract domain debug object");
+        assert_eq!(domains["observations"].as_array().map(Vec::len), Some(1));
+        assert_eq!(domains["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            domains["observations"][0]["path"],
+            Value::String("src/app.ts".to_string())
+        );
+        assert_eq!(
+            domains["observations"][0]["stable_key"],
+            Value::String("domain:observation:value".to_string())
+        );
+        assert_eq!(
+            domains["observations"][0]["slot"],
+            Value::String("nilness".to_string())
+        );
+        assert_eq!(
+            domains["observations"][0]["reason"],
+            Value::String("unknown_value".to_string())
+        );
+        assert!(domains.get("counts").is_some());
+        assert!(domains.get("index_counts").is_some());
+
+        let encoded = serde_json::to_string(&first).expect("debug JSON serializes");
+        assert!(!encoded.contains("/Users/"));
+        assert!(!encoded.contains("export function app"));
+        assert!(!encoded.contains("MirOperationKind"));
+        assert!(!encoded.contains("\"run_id\""));
+    }
+
+    fn base_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() { let value = 1; return value; }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span(file),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file,
+                function: FunctionId(0),
+                package: None,
+                module: None,
+                owner_stable_key: "function:app".to_string(),
+                span: span(file),
+                stable_key: "body:app".to_string(),
+                status: MirStatus::Partial,
+            }],
+            places: vec![PlaceFact {
+                id: PlaceId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                function: Some(FunctionId(0)),
+                root: PlaceRoot::Local {
+                    function: FunctionId(0),
+                    name: "value".to_string(),
+                },
+                projections: Vec::new(),
+                stable_key: "place:value".to_string(),
+                status: PlaceStatus::Partial,
+            }],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(file),
+                kind: MirOperationKind::Assign {
+                    place: PlaceId(0),
+                    value: MirValue::Literal {
+                        value: "1".to_string(),
+                    },
+                    mode: AssignMode::DeclarationBinding,
+                },
+                stable_key: "op:assign".to_string(),
+                status: MirStatus::Partial,
+            }],
+            unsupported: Vec::new(),
+        })
+        .expect("semantic MIR rows should store");
+        db
+    }
+
+    fn span(file: FileId) -> Span {
+        Span {
+            file,
+            start_byte: 0,
+            end_byte: 10,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 11,
+        }
+    }
+}
+
 mod tests {
     use super::super::{AnalysisKernel, KernelInput};
     use crate::analysis_plan::AnalysisPlan;
