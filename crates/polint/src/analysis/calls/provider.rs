@@ -232,13 +232,22 @@ fn calls_output_digest_for_test(parts: &[&str]) -> Digest {
 
 #[cfg(test)]
 mod calls_provider {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use tempfile::tempdir;
+
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
-    use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
-    use std::fs;
-    use tempfile::tempdir;
+    use crate::core::{
+        AnalysisDb, FileId, FunctionFact, FunctionId, Language, ReferenceId, Span, SymbolId,
+    };
 
     #[test]
     fn calls_provider_accepts_empty_output_with_deterministic_digest() {
@@ -278,6 +287,36 @@ mod calls_provider {
         );
     }
 
+    #[test]
+    fn calls_provider_populates_site_unresolved_indexes_and_repeats_digest() {
+        let mut first_db = mir_call_db();
+        let mut second_db = mir_call_db();
+        let first = derive_for_test(&mut first_db);
+        let second = derive_for_test(&mut second_db);
+
+        assert_eq!(first.output_digest, second.output_digest);
+        assert_eq!(first_db.call_sites().len(), 1);
+        assert_eq!(first_db.unresolved_calls().len(), 1);
+        assert_eq!(first_db.call_sites_by_caller(FunctionId(0)).len(), 1);
+        assert!(first_db.call_targets_by_site(CallSiteId(10)).is_empty());
+        assert_eq!(
+            first_db
+                .unresolved_calls_by_reason(
+                    crate::analysis::calls::facts::UnresolvedCallReason::FunctionValue
+                )
+                .len(),
+            1
+        );
+        assert_eq!(
+            first_db
+                .unresolved_calls_by_status(
+                    crate::analysis::calls::facts::CallTargetStatus::Unresolved
+                )
+                .len(),
+            1
+        );
+    }
+
     fn digest_for_output(output: &crate::analysis::calls::store::CallOutput) -> Digest {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
@@ -306,6 +345,113 @@ mod calls_provider {
             &[],
             output,
         )
+    }
+
+    fn derive_for_test(db: &mut AnalysisDb) -> super::CallsProviderOutput {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls manifest");
+
+        super::derive_calls_with_cache_stats(
+            db,
+            &snapshot,
+            manifest,
+            Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "cfg", &["a"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]),
+            Vec::new(),
+        )
+    }
+
+    fn mir_call_db() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app(callback) { callback(); }\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(999),
+            file,
+            name: "app".to_string(),
+            span: span(file, 1, 0),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file,
+                function,
+                package: None,
+                module: None,
+                owner_stable_key: "function:app".to_string(),
+                span: span(file, 1, 0),
+                stable_key: "mir-body:app".to_string(),
+                status: MirStatus::Partial,
+            }],
+            places: vec![
+                PlaceFact {
+                    id: PlaceId(1),
+                    language: Language::TypeScript,
+                    file: Some(file),
+                    function: Some(function),
+                    root: PlaceRoot::Local {
+                        function,
+                        name: "callback".to_string(),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:callback".to_string(),
+                    status: PlaceStatus::Partial,
+                },
+                PlaceFact {
+                    id: PlaceId(2),
+                    language: Language::TypeScript,
+                    file: Some(file),
+                    function: Some(function),
+                    root: PlaceRoot::CallReturn {
+                        call: CallSiteId(10),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:return".to_string(),
+                    status: PlaceStatus::Partial,
+                },
+            ],
+            operations: vec![MirOperation {
+                id: MirOpId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                span: span(file, 1, 31),
+                kind: MirOperationKind::Call {
+                    site: CallSiteId(10),
+                    callee: MirValue::Place(PlaceId(1)),
+                    arguments: Vec::new(),
+                    return_place: PlaceId(2),
+                },
+                stable_key: "mir-op:callback-call".to_string(),
+                status: MirStatus::Partial,
+            }],
+            unsupported: Vec::new(),
+        })
+        .expect("semantic MIR should store");
+        db
     }
 
     fn call_output(id_offset: u64, status: &str) -> crate::analysis::calls::store::CallOutput {
@@ -373,5 +519,17 @@ mod calls_provider {
             unresolved: vec![unresolved],
         }
         .normalized()
+    }
+
+    fn span(file: FileId, line: u32, start_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte: start_byte + 8,
+            start_line: line,
+            start_col: start_byte + 1,
+            end_line: line,
+            end_col: start_byte + 9,
+        }
     }
 }

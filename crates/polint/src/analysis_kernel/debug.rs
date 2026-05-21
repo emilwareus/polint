@@ -2039,6 +2039,41 @@ mod calls_debug_json {
     }
 
     #[test]
+    fn calls_debug_json_counts_call_site_only_and_unresolved_rows() {
+        let mut db = call_db();
+        let mut callback_site = site(0, "call-site:callback");
+        callback_site.kind = CallSyntaxKind::FunctionValue;
+        callback_site.callee = CallCallee::FunctionValue { place: crate::analysis::ids::PlaceId(1) };
+        callback_site.status = CallTargetStatus::Unresolved;
+        db.replace_call_facts(CallOutput {
+            sites: vec![callback_site],
+            targets: Vec::new(),
+            unresolved: vec![UnresolvedCallFact {
+                site: CallSiteId(0),
+                caller: FunctionId(0),
+                status: CallTargetStatus::Unresolved,
+                reason: UnresolvedCallReason::FunctionValue,
+                algorithm: CallAlgorithm::SyntaxOnly,
+                provenance: CallProvenance::MirShape,
+                precision: CallPrecision::Unknown,
+                stable_key: "call-unresolved:function-value".to_string(),
+            }],
+        })
+        .expect("call rows should store");
+
+        let report = AnalysisKernel::metadata_debug_json_for_test(&db);
+        let counts = &report["calls"]["counts"];
+
+        assert_eq!(counts["by_language"]["TypeScript"].as_u64(), Some(1));
+        assert_eq!(counts["by_call_kind"]["FunctionValue"].as_u64(), Some(1));
+        assert_eq!(counts["by_status"]["Unresolved"].as_u64(), Some(2));
+        assert_eq!(
+            counts["by_unresolved_reason"]["FunctionValue"].as_u64(),
+            Some(1)
+        );
+    }
+
+    #[test]
     fn calls_debug_json_omits_source_ast_absolute_paths_and_dense_identity() {
         let mut db = call_db();
         db.replace_call_facts(CallOutput {
