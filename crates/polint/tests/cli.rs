@@ -2575,6 +2575,73 @@ export const value = token;
     write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
 }
 
+fn write_call_graph_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/needs-call-graph",
+    description = "Needs call graph facts.",
+    severity = "warn"
+)]
+fn needs_call_graph(ctx: &mut RuleCtx<'_>, _call_graph: CallGraph<'_>) -> RuleResult {
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this should not run while call_graph is unsupported",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![needs_call_graph()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"export function component() {
+  return "ok";
+}
+"#,
+    );
+}
+
 fn write_symbol_capability_rule_repo(root: &Path) {
     let polint_path = repo_root()
         .join("crates/polint")
@@ -6453,6 +6520,52 @@ mod capability_planning {
             "rule",
             "local/needs-cfg"
         ));
+    }
+
+    #[test]
+    fn call_graph_capability_remains_unsupported() {
+        let temp = tempfile::tempdir().unwrap();
+        write_call_graph_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/needs-call-graph").is_empty(),
+            "rule requesting unsupported call_graph must not execute with fabricated facts: {json:#?}"
+        );
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected call_graph capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported capability `call_graph`")),
+            "{diagnostic:#?}"
+        );
+        assert!(
+            diagnostic["help"]
+                .as_str()
+                .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "rule",
+            "local/needs-call-graph"
+        ));
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "capability",
+            "call_graph"
+        ));
+        assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
     }
 
     #[test]
