@@ -455,6 +455,39 @@ mod tests {
     }
 
     #[test]
+    fn calls_validation_rejects_unresolved_target_identity_with_reason() {
+        let mut db = base_db();
+        db.replace_call_facts(CallOutput {
+            sites: vec![site(0, "call-site:ok")],
+            targets: vec![CallTargetFact {
+                status: CallTargetStatus::Unsupported,
+                reason: Some(UnresolvedCallReason::FrameworkDispatch),
+                target_function: Some(FunctionId(1)),
+                target_symbol: Some(SymbolId(1)),
+                stable_key: "call-target:unsupported-with-target".to_string(),
+                ..target(0, CallSiteId(0), "call-target:ok")
+            }],
+            unresolved: Vec::new(),
+        })
+        .expect("call rows should store for validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let calls = call_diagnostics(&diagnostics);
+
+        assert!(
+            calls.iter().any(|diagnostic| {
+                diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "reason"
+                        && evidence
+                            .value
+                            .contains("unresolved call target cannot carry target identity")
+                })
+            }),
+            "expected contradictory target identity diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn calls_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
         db.replace_call_facts(CallOutput {
