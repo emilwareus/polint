@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T11:41:49.885Z"
-last_activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider wiring, and cache identity
+last_updated: "2026-05-21T11:59:19.740Z"
+last_activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, and provider-order proof
 progress:
   total_phases: 22
   completed_phases: 11
   total_plans: 65
-  completed_plans: 63
-  percent: 97
+  completed_plans: 64
+  percent: 98
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 31 (p0-abstract-domain-kernel) — EXECUTING
-Plan: 4 of 5
-Last activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider wiring, and cache identity
+Plan: 5 of 5
+Last activity: 2026-05-21 -- Completed Phase 31 Plan 04 validation, debug JSON, and provider-order proof
 
 ## Phase Progress
 
@@ -61,7 +61,7 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider w
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
-| 31 | In Progress | 3/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider wiring, and cache identity done |
+| 31 | In Progress | 4/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, and provider-order proof done |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
@@ -261,6 +261,8 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider w
 - [Phase 31-p0-abstract-domain-kernel]: Keep domain facts, provider, store, and cache identity crate-private with no SDK, runner, CLI, README, or docs/facts promotion.
 - [Phase 31-p0-abstract-domain-kernel]: Normalize domain facts into observation rows and event rows with explicit status and precision labels, including top, unknown, setup, and budget cases.
 - [Phase 31-p0-abstract-domain-kernel]: Make abstract-domain cache identity include provider policy, MIR, CFG, calls, symbol graph, module topology, syntax, lifecycle/config, and absent extension/model/toolchain slots.
+- [Phase 31-p0-abstract-domain-kernel]: Represent domain bottom/no-info rows as explicit unknown top reasons before validation so malformed unknown rows fail closed.
+- [Phase 31-p0-abstract-domain-kernel]: Record compact eval provider-output schema evidence for polint.abstract_domains without exposing a public provider surface.
 
 ## Execution Metrics
 
@@ -317,12 +319,13 @@ Last activity: 2026-05-21 -- Completed Phase 31 Plan 03 domain facts, provider w
 | 31-p0-abstract-domain-kernel | 01 | 8 min | 3 | 5 |
 | 31-p0-abstract-domain-kernel | 02 | 14 min | 3 | 5 |
 | 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
+| 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 03 domain facts, provider wiring, and cache identity.
-- Stopped at: Completed 31-p0-abstract-domain-kernel-03-PLAN.md; ready for Plan 31-04.
+- Last activity: 2026-05-21 - Completed and verified Phase 31 Plan 04 validation, debug JSON, and provider-order proof.
+- Stopped at: Completed 31-p0-abstract-domain-kernel-04-PLAN.md; ready for Plan 31-05.
 
 ### Quick Tasks Completed
 

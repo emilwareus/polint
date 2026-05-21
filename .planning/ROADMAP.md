@@ -33,7 +33,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 28 | 7/7 | Complete    | 2026-05-20 |
 | 29 | 6/6 | Complete    | 2026-05-20 |
 | 30 | 8/8 | Complete    | 2026-05-21 |
-| 31 | 3/5 | In Progress|  |
+| 31 | 4/5 | In Progress|  |
 | 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
 | 34 | Rust Extension/Provider Sink | Add the first advanced repo-local Rust provider boundary with validation and cache participation. | SAE-INT-04 |
@@ -252,13 +252,13 @@ Plans:
 **Goal:** Add deterministic abstract-domain infrastructure and first local domains over MIR/CFG.
 **Requirements:** SAE-INT-01
 **Research:** `research/abstract-interpretation/FINAL-REPORT.md`, `research/abstract-interpretation/RECOMMENDED_IMPLEMENTATION.md`, `research/abstract-interpretation/VALIDATION.md`
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [x] 31-01-PLAN.md — Private domain contracts, P0 slots, product state, and law tests
 - [x] 31-02-PLAN.md — Deterministic local solver, MIR/CFG/call transfers, and result cursor
 - [x] 31-03-PLAN.md — Domain facts, store, metadata, provider wiring, and cache identity
-- [ ] 31-04-PLAN.md — Domain validation, debug rows, and provider-order proof
+- [x] 31-04-PLAN.md — Domain validation, debug rows, and provider-order proof
 - [ ] 31-05-PLAN.md — Internal eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
