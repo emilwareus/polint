@@ -1,8 +1,191 @@
+use serde::{Deserialize, Serialize};
+
+use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
+use crate::core::{FileId, FunctionId, Language, ReferenceId, Span, SymbolId};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CallSiteFact {
+    pub(crate) id: CallSiteId,
+    pub(crate) language: Language,
+    pub(crate) file: FileId,
+    pub(crate) caller: FunctionId,
+    pub(crate) owner_symbol: Option<SymbolId>,
+    pub(crate) body: MirBodyId,
+    pub(crate) operation: MirOpId,
+    pub(crate) span: Span,
+    pub(crate) kind: CallSyntaxKind,
+    pub(crate) callee: CallCallee,
+    pub(crate) receiver: Option<PlaceId>,
+    pub(crate) arguments: Vec<PlaceId>,
+    pub(crate) result: Option<PlaceId>,
+    pub(crate) status: CallTargetStatus,
+    pub(crate) precision: CallPrecision,
+    pub(crate) stable_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CallTargetFact {
+    pub(crate) id: CallTargetId,
+    pub(crate) site: CallSiteId,
+    pub(crate) caller: FunctionId,
+    pub(crate) target_function: Option<FunctionId>,
+    pub(crate) target_symbol: Option<SymbolId>,
+    pub(crate) edge_kind: CallEdgeKind,
+    pub(crate) algorithm: CallAlgorithm,
+    pub(crate) status: CallTargetStatus,
+    pub(crate) reason: Option<UnresolvedCallReason>,
+    pub(crate) provenance: CallProvenance,
+    pub(crate) precision: CallPrecision,
+    pub(crate) stable_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct UnresolvedCallFact {
+    pub(crate) site: CallSiteId,
+    pub(crate) caller: FunctionId,
+    pub(crate) status: CallTargetStatus,
+    pub(crate) reason: UnresolvedCallReason,
+    pub(crate) algorithm: CallAlgorithm,
+    pub(crate) provenance: CallProvenance,
+    pub(crate) precision: CallPrecision,
+    pub(crate) stable_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallSyntaxKind {
+    Function,
+    Method,
+    Constructor,
+    StaticMember,
+    Member,
+    Index,
+    Super,
+    Import,
+    New,
+    TaggedTemplate,
+    GoRoutine,
+    Deferred,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallCallee {
+    Identifier {
+        reference: Option<ReferenceId>,
+        name: String,
+    },
+    Member {
+        base: PlaceId,
+        property: String,
+    },
+    Index {
+        base: PlaceId,
+        index: Option<PlaceId>,
+    },
+    Super,
+    Import,
+    FunctionValue {
+        place: PlaceId,
+    },
+    Constructor {
+        reference: Option<ReferenceId>,
+        name: Option<String>,
+    },
+    Unknown {
+        reason: UnresolvedCallReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallEdgeKind {
+    Direct,
+    Constructor,
+    StaticMember,
+    Method,
+    FunctionValue,
+    Synthetic,
+    Spawn,
+    Deferred,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallAlgorithm {
+    SyntaxOnly,
+    DirectReference,
+    ImportBinding,
+    ConstructorBinding,
+    StaticMember,
+    DirectMember,
+    GoStatic,
+    GoCha,
+    GoRta,
+    GoVta,
+    FunctionTokenFlow,
+    TypeHierarchy,
+    PointsTo,
+    SummaryAssisted,
+    FrameworkModel,
+    RepoModel,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallTargetStatus {
+    Resolved,
+    Ambiguous,
+    Unresolved,
+    Unsupported,
+    SetupMissing,
+    BudgetExceeded,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum UnresolvedCallReason {
+    FunctionValue,
+    DynamicProperty,
+    InterfaceDispatch,
+    Eval,
+    CallApplyBind,
+    FrameworkDispatch,
+    Reflection,
+    DynamicImport,
+    ProxyOrAccessor,
+    MissingSemanticReference,
+    MissingImportResolution,
+    SetupMissing,
+    UnsupportedSyntax,
+    BudgetExceeded,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallPrecision {
+    Exact,
+    SetupAware,
+    Conservative,
+    Heuristic,
+    Ambiguous,
+    Unknown,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum CallProvenance {
+    Native,
+    SemanticReference,
+    ImportBinding,
+    MirShape,
+    Topology,
+    Extension,
+    Model,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
-    use crate::core::{FileId, FunctionId, Language, Span, SymbolId};
+    use crate::core::{FileId, FunctionId, Language, SymbolId};
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use std::fmt::Debug;

@@ -27,6 +27,9 @@ pub(crate) struct UnsupportedId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct CallSiteId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct CallTargetId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
