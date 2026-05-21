@@ -1399,6 +1399,91 @@ fn direct_calls_internals_stay_private() {
     assert_direct_calls_public_rule_source(&source);
 }
 
+#[test]
+fn abstract_domain_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_abstract_domains_public_rule_repo(temp.path());
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/abstract-domains-public-probe"),
+        "external abstract-domain public-boundary rule should run: {report:#?}"
+    );
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/abstract-domains-public-probe"
+    );
+    let fact_views = inspect["rules"][0]["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {inspect:#?}"));
+    for canonical_path in [
+        "polint::sdk::facts::ComplexityMetrics<'_>",
+        "polint::sdk::facts::FileMetrics<'_>",
+        "polint::sdk::facts::FunctionMetrics<'_>",
+        "polint::sdk::facts::ModuleGraphFacts<'_>",
+        "polint::sdk::facts::References<'_>",
+        "polint::sdk::facts::ResolvedImports<'_>",
+        "polint::sdk::facts::Symbols<'_>",
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["canonical_path"] == canonical_path),
+            "inspect JSON should include public fact view {canonical_path}: {inspect_json}"
+        );
+    }
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_abstract_domains_public_output_is_private(output);
+    }
+    assert_abstract_domains_public_surfaces_are_private();
+    assert_abstract_domains_cli_help_is_private();
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("ResolvedImports<'_>"));
+    assert!(source.contains("ModuleGraphFacts<'_>"));
+    assert!(source.contains("Symbols<'_>"));
+    assert!(source.contains("References<'_>"));
+    assert!(source.contains("FileMetrics<'_>"));
+    assert!(source.contains("FunctionMetrics<'_>"));
+    assert!(source.contains("ComplexityMetrics<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_abstract_domains_public_rule_source(&source);
+}
+
 fn assert_direct_calls_public_output_is_private(output: &str) {
     for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
         assert!(
