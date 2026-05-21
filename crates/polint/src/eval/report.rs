@@ -349,6 +349,7 @@ fn status_key(status: ObservedStatus) -> &'static str {
         ObservedStatus::Present => "present",
         ObservedStatus::Resolved => "resolved",
         ObservedStatus::Partial => "partial",
+        ObservedStatus::Top => "top",
         ObservedStatus::Unknown => "unknown",
         ObservedStatus::Unresolved => "unresolved",
         ObservedStatus::Ambiguous => "ambiguous",
@@ -361,6 +362,7 @@ fn status_key(status: ObservedStatus) -> &'static str {
         ObservedStatus::Generated => "generated",
         ObservedStatus::Undeclared => "undeclared",
         ObservedStatus::OutsideWorkspace => "outside_workspace",
+        ObservedStatus::BudgetExceeded => "budget_exceeded",
         ObservedStatus::Rejected => "rejected",
         ObservedStatus::Accepted => "accepted",
     }

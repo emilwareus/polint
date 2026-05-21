@@ -148,6 +148,8 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );

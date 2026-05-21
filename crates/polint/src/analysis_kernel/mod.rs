@@ -200,8 +200,8 @@ impl AnalysisKernel {
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.semantic_mir"),
-            module_topology_dependency_output_digest,
-            symbol_dependency_output_digest,
+            module_topology_dependency_output_digest.clone(),
+            symbol_dependency_output_digest.clone(),
             vec![
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
@@ -228,7 +228,7 @@ impl AnalysisKernel {
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.cfg"),
-            semantic_mir_dependency_output_digest,
+            semantic_mir_dependency_output_digest.clone(),
             vec![
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
@@ -241,7 +241,61 @@ impl AnalysisKernel {
             "polint.cfg",
             &db,
             polint_cfg_cache_stats,
-            cfg_output_digest,
+            cfg_output_digest.clone(),
+        ));
+
+        let cfg_dependency_output_digest = cfg_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.cfg")
+        });
+        let calls = crate::analysis::calls::provider::derive_calls_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.calls"),
+            semantic_mir_dependency_output_digest.clone(),
+            cfg_dependency_output_digest.clone(),
+            symbol_dependency_output_digest.clone(),
+            module_topology_dependency_output_digest.clone(),
+            vec![
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+            ],
+        );
+        let polint_calls_cache_stats = calls.cache_stats.clone();
+        let calls_output_digest = calls.output_digest.clone();
+        diagnostics.extend(calls.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.calls",
+            &db,
+            polint_calls_cache_stats,
+            calls_output_digest.clone(),
+        ));
+
+        let calls_dependency_output_digest = calls_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
+        });
+        let abstract_domains =
+            crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.abstract_domains"),
+                semantic_mir_dependency_output_digest,
+                cfg_dependency_output_digest,
+                calls_dependency_output_digest,
+                symbol_dependency_output_digest,
+                module_topology_dependency_output_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
+        let abstract_domains_output_digest = abstract_domains.output_digest;
+        diagnostics.extend(abstract_domains.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.abstract_domains",
+            &db,
+            polint_abstract_domains_cache_stats,
+            abstract_domains_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -653,6 +707,8 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );
@@ -913,6 +969,34 @@ mod tests {
     }
 
     #[test]
+    fn kernel_run_report_calls_row_carries_output_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+        let calls = provider_output(&output, "polint.calls");
+
+        assert_eq!(calls.schema_version, "calls-facts-1:1");
+        assert!(!calls.output_digest.value.is_empty());
+        assert_eq!(calls.cache_stats.recomputes, 1);
+    }
+
+    #[test]
     fn kernel_run_report_metrics_row_carries_layer_cache_stats() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(temp.path().join("src")).expect("create src");
@@ -1097,6 +1181,8 @@ mod tests {
                 "polint.module_topology",
                 "polint.semantic_mir",
                 "polint.cfg",
+                "polint.calls",
+                "polint.abstract_domains",
                 "polint.metrics",
             ]
         );

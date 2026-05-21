@@ -32,8 +32,8 @@ The milestone should preserve public API discipline. New internals stay private 
 | 27 | 7/7 | Complete    | 2026-05-19 |
 | 28 | 7/7 | Complete    | 2026-05-20 |
 | 29 | 6/6 | Complete    | 2026-05-20 |
-| 30 | Direct Call Facts | Add direct call-site, target, unresolved-call, and index facts while keeping public call graphs unsupported. | SAE-SEM-05 |
-| 31 | P0 Abstract-Domain Kernel | Add deterministic lattice/transfer infrastructure and first local domains. | SAE-INT-01 |
+| 30 | 8/8 | Complete    | 2026-05-21 |
+| 31 | 5/5 | Complete    | 2026-05-21 |
 | 32 | Summary Kernel and Direct Summaries | Add typed summary storage, direct summaries, effects, TITO, and summary metadata. | SAE-INT-02 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
 | 34 | Rust Extension/Provider Sink | Add the first advanced repo-local Rust provider boundary with validation and cache participation. | SAE-INT-04 |
@@ -229,6 +229,17 @@ Plans:
 **Goal:** Add direct call-site, target, unresolved-call, direct/static resolution, call indexes, and debug snapshots.
 **Requirements:** SAE-SEM-05
 **Research:** `research/call-graphs/FINAL-REPORT.md`, `research/call-graphs/RECOMMENDED_IMPLEMENTATION.md`, `research/call-graphs/implementation/BOOTSTRAP-INTEGRATION.md`
+**Plans:** 8/8 plans complete
+
+Plans:
+- [x] 30-01-PLAN.md — Private call fact contracts, storage, indexes, and metadata
+- [x] 30-02-PLAN.md — Calls provider, cache identity, and provider-order fixture wiring
+- [x] 30-03-PLAN.md — Calls validation, debug snapshots, and D-10 index coverage
+- [x] 30-04-PLAN.md — MIR-derived call sites and unresolved-call evidence
+- [x] 30-05-PLAN.md — Direct/binding/static target resolution with honest unresolved statuses
+- [x] 30-06-PLAN.md — Direct-call eval observation and status accounting
+- [x] 30-07-PLAN.md — Direct-call native fixtures and final eval coverage guards
+- [x] 30-08-PLAN.md — Public no-leak and unsupported call graph capability proof
 
 **Success criteria:**
 1. Fixtures cover direct functions, methods, constructors, member calls, function values as unresolved/unknown, unsupported dynamic calls, and precise statuses.
@@ -241,6 +252,14 @@ Plans:
 **Goal:** Add deterministic abstract-domain infrastructure and first local domains over MIR/CFG.
 **Requirements:** SAE-INT-01
 **Research:** `research/abstract-interpretation/FINAL-REPORT.md`, `research/abstract-interpretation/RECOMMENDED_IMPLEMENTATION.md`, `research/abstract-interpretation/VALIDATION.md`
+**Plans:** 5/5 plans complete
+
+Plans:
+- [x] 31-01-PLAN.md — Private domain contracts, P0 slots, product state, and law tests
+- [x] 31-02-PLAN.md — Deterministic local solver, MIR/CFG/call transfers, and result cursor
+- [x] 31-03-PLAN.md — Domain facts, store, metadata, provider wiring, and cache identity
+- [x] 31-04-PLAN.md — Domain validation, debug rows, and provider-order proof
+- [x] 31-05-PLAN.md — Internal eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
 1. Domain-law tests cover partial order, join, and widening behavior.

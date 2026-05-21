@@ -1040,6 +1040,37 @@ mod tests {
     }
 
     #[test]
+    fn reserved_capabilities_remain_unsupported() {
+        let accumulator = support_for("call_graph");
+
+        assert_eq!(accumulator.status, CapabilitySupportStatus::Unsupported);
+        assert_eq!(
+            accumulator.reason.as_deref(),
+            Some("Capability is reserved for a later phase.")
+        );
+        assert_eq!(
+            accumulator.docs_path.as_deref(),
+            Some("docs/roadmap/00_ROADMAP.md")
+        );
+
+        let plan = AnalysisPlan::from_capability_names_for_test(&["call_graph"]);
+        let capability = plan
+            .capabilities()
+            .iter()
+            .find(|capability| capability.capability == "call_graph")
+            .unwrap_or_else(|| panic!("expected call_graph capability row: {plan:#?}"));
+        assert_eq!(capability.status, CapabilitySupportStatus::Unsupported);
+        assert_eq!(
+            capability.reason.as_deref(),
+            Some("Capability is reserved for a later phase.")
+        );
+        assert_eq!(
+            capability.docs_path.as_deref(),
+            Some("docs/roadmap/00_ROADMAP.md")
+        );
+    }
+
+    #[test]
     fn analysis_plan_supports_derived_metric_capabilities() {
         let rules = vec![rule(
             "local/quality-score",

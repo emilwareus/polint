@@ -318,6 +318,7 @@ fn observed_unknown_outcome(observed: &ObservedItem) -> bool {
         Some(
             ObservedStatus::Unknown
                 | ObservedStatus::Partial
+                | ObservedStatus::Top
                 | ObservedStatus::Unresolved
                 | ObservedStatus::Ambiguous
                 | ObservedStatus::Dynamic
@@ -329,6 +330,7 @@ fn observed_unknown_outcome(observed: &ObservedItem) -> bool {
                 | ObservedStatus::Generated
                 | ObservedStatus::Undeclared
                 | ObservedStatus::OutsideWorkspace
+                | ObservedStatus::BudgetExceeded
         )
     )
 }

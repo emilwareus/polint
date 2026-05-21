@@ -48,6 +48,8 @@ pub(crate) enum LayerKind {
     ModuleTopology,
     SemanticMir,
     Cfg,
+    Calls,
+    AbstractDomains,
     Metrics,
     Extension,
 }
@@ -522,6 +524,144 @@ impl LayerKey {
             lifecycle_digest,
             config_digest,
             Digest::absent(DigestKind::ToolInvocation, "cfg_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Calls layer identity must keep direct-call source, lifecycle, upstream, and provider inputs explicit."
+    )]
+    pub(crate) fn calls_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        semantic_mir_output_digest: Digest,
+        cfg_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        module_topology_output_digest: Digest,
+        calls_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.calls",
+            "calls layer keys require the calls provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "calls_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "calls_parameters",
+            vec![calls_parameter_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(calls_parameter_digest);
+        input_digests.extend(source_function_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(4 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+        dependency_layer_digests.push(dependency_layer_digest(semantic_mir_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(cfg_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
+
+        Self::new(
+            LayerKind::Calls,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "calls_toolchain"),
+            input_digests,
+            dependency_layer_digests,
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Abstract-domain identity must keep MIR, CFG, calls, lifecycle, policy, and future model inputs explicit."
+    )]
+    pub(crate) fn abstract_domains_layer_key(
+        manifest: &ProviderManifest,
+        source_function_digests: Vec<Digest>,
+        config_digest: Digest,
+        go_lifecycle_digest: Digest,
+        ts_js_lifecycle_digest: Digest,
+        upstream_syntax_output_digests: Vec<Digest>,
+        semantic_mir_output_digest: Digest,
+        cfg_output_digest: Digest,
+        calls_output_digest: Digest,
+        symbol_graph_output_digest: Digest,
+        module_topology_output_digest: Digest,
+        abstract_domains_parameter_digest: Digest,
+    ) -> Self {
+        debug_assert_eq!(
+            manifest.id, "polint.abstract_domains",
+            "abstract-domain layer keys require the abstract domains provider manifest"
+        );
+
+        let lifecycle_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "abstract_domains_lifecycle_inputs",
+            vec![go_lifecycle_digest.clone(), ts_js_lifecycle_digest.clone()],
+        );
+        let parameter_digest = Digest::from_unordered(
+            DigestKind::ProviderParameters,
+            "abstract_domains_parameters",
+            vec![abstract_domains_parameter_digest.clone()],
+        );
+        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
+        input_digests.push(go_lifecycle_digest);
+        input_digests.push(ts_js_lifecycle_digest);
+        input_digests.push(abstract_domains_parameter_digest);
+        input_digests.extend(source_function_digests);
+
+        let mut dependency_layer_digests =
+            Vec::with_capacity(5 + upstream_syntax_output_digests.len());
+        dependency_layer_digests.extend(
+            upstream_syntax_output_digests
+                .into_iter()
+                .map(dependency_layer_digest),
+        );
+        dependency_layer_digests.push(dependency_layer_digest(semantic_mir_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(cfg_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(calls_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
+        dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
+
+        Self::new(
+            LayerKind::AbstractDomains,
+            manifest.id,
+            manifest.provider_version(),
+            manifest.primary_schema_label(),
+            parameter_digest,
+            lifecycle_digest,
+            config_digest,
+            Digest::absent(DigestKind::ToolInvocation, "abstract_domains_toolchain"),
             input_digests,
             dependency_layer_digests,
             vec![
@@ -2572,6 +2712,7 @@ mod cfg_layer_key {
             .expect("CFG provider manifest exists")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn key(
         source_suffix: &str,
         config_suffix: &str,
@@ -2762,5 +2903,250 @@ mod cfg_layer_key {
             "cfg_graph_views",
             &["normal_control_view", "abrupt_aware_view"]
         )));
+    }
+}
+
+#[cfg(test)]
+mod calls_layer_key {
+    use super::*;
+    use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
+
+    fn manifest() -> &'static crate::analysis_kernel::ProviderManifest {
+        crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls provider manifest exists")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn key(
+        source_suffix: &str,
+        config_suffix: &str,
+        go_suffix: &str,
+        ts_suffix: &str,
+        syntax_suffix: &str,
+        semantic_suffix: &str,
+        cfg_suffix: &str,
+        symbol_suffix: &str,
+        topology_suffix: &str,
+        parameter_digest: Digest,
+    ) -> LayerKey {
+        LayerKey::calls_layer_key(
+            manifest(),
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "source_function",
+                &["src/app.ts", source_suffix],
+            )],
+            Digest::from_parts(DigestKind::Config, "config", &[config_suffix]),
+            Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &[go_suffix]),
+            Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &[ts_suffix]),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "ts_syntax",
+                &[syntax_suffix],
+            )],
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "semantic_mir",
+                &[semantic_suffix],
+            ),
+            Digest::from_parts(DigestKind::ProviderOutput, "cfg", &[cfg_suffix]),
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &[symbol_suffix]),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_topology",
+                &[topology_suffix],
+            ),
+            parameter_digest,
+        )
+    }
+
+    #[test]
+    fn calls_layer_key_changes_for_every_calls_input_family() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            calls_provider_parameter_digest(),
+        );
+
+        let cases = [
+            key(
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                "base",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "changed",
+                calls_provider_parameter_digest(),
+            ),
+            key(
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                "base",
+                Digest::from_parts(
+                    DigestKind::ProviderParameters,
+                    "calls_provider_parameters",
+                    &["direct_binding=disabled"],
+                ),
+            ),
+        ];
+
+        for changed in cases {
+            assert_ne!(base, changed);
+        }
+    }
+
+    #[test]
+    fn calls_layer_key_tracks_absent_extension_model_toolchain() {
+        let base = key(
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            "base",
+            calls_provider_parameter_digest(),
+        );
+
+        assert_eq!(base.layer_kind, LayerKind::Calls);
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ExtensionCode,
+            "extension_digest_absent"
+        )));
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ModelFile,
+            "model_digest_absent"
+        )));
+        assert_eq!(
+            base.toolchain_digest,
+            Digest::absent(DigestKind::ToolInvocation, "calls_toolchain")
+        );
+        assert_eq!(
+            base.lifecycle_digest,
+            Digest::from_unordered(
+                DigestKind::ProviderParameters,
+                "calls_lifecycle_inputs",
+                vec![
+                    Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &["base"]),
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &["base"]),
+                ],
+            )
+        );
     }
 }

@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-21T06:04:08Z"
-last_activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
+status: phase_31_shipped_pr_35
+last_updated: "2026-05-21T13:35:40.808Z"
+last_activity: 2026-05-21
 progress:
   total_phases: 22
-  completed_phases: 10
-  total_plans: 52
-  completed_plans: 52
+  completed_phases: 12
+  total_plans: 65
+  completed_plans: 65
   percent: 100
 ---
 
@@ -17,11 +17,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-18)
+See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 30 — Direct Call Facts
+**Current focus:** Phase 32 — summary-kernel-and-direct-summaries
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready for Phase 30
-Phase: 30 (Direct Call Facts) — PENDING
-Plan: Planning/execution not started
-Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
+Status: Phase 31 shipped - PR #35; ready to discuss next phase
+Phase: 32
+Plan: Not started
+Last activity: 2026-05-21
 
 ## Phase Progress
 
@@ -60,8 +60,8 @@ Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported con
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
-| 30 | Pending | Direct call facts; requirement SAE-SEM-05 |
-| 31 | Pending | P0 abstract-domain kernel; requirement SAE-INT-01 |
+| 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
+| 31 | Complete | 5/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, abstract-domain eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-01 |
 | 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
@@ -228,6 +228,44 @@ Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported con
 - [Phase 29-local-cfg-and-control-dependence]: Use the existing TOML eval fixture manifest format instead of adding JSON fixture files.
 - [Phase 29-local-cfg-and-control-dependence]: CFG stable keys must use MIR/body stable identity, not run-local CFG IDs, to avoid cross-language and cross-function collisions.
 - [Phase 29-local-cfg-and-control-dependence]: Keep reserved public cfg capability unsupported until a later intentional promotion phase.
+- [Phase 30-direct-call-facts]: Call facts remain crate-private under analysis::calls with no SDK, runner, CLI, or docs promotion.
+- [Phase 30-direct-call-facts]: CallStore validates target and unresolved site references before publishing indexes.
+- [Phase 30-direct-call-facts]: CALLS_PROVIDER_ID is polint.calls and call metadata uses compact status/kind/algorithm/reason/stable-key payload fragments.
+- [Phase 30-direct-call-facts]: polint.calls remains crate-private and manifest-owned, with no SDK, runner, CLI, or public call graph promotion.
+- [Phase 30-direct-call-facts]: The calls provider runs after polint.cfg and before polint.metrics so direct calls can consume CFG/MIR context before metrics remain unchanged.
+- [Phase 30-direct-call-facts]: Calls cache identity includes semantic MIR, CFG, symbol graph, module topology, syntax, lifecycle, config, parameters, and absent extension/model/toolchain slots.
+- [Phase 30-direct-call-facts]: Call validation remains crate-private under analysis::calls and is invoked from metadata validation after CFG validation.
+- [Phase 30-direct-call-facts]: Calls debug snapshots stay behind cfg(test) and expose relative paths, stable keys, spans, statuses, precision, compact payload labels, counts, and index evidence only.
+- [Phase 30-direct-call-facts]: Exact metadata precision from polint.calls is rejected because call facts are setup-aware/conservative internal rows, not public exact facts.
+- [Phase 30-direct-call-facts]: Call-site extraction consumes semantic MIR and place rows only; no parser AST or source reparsing dependency was added.
+- [Phase 30-direct-call-facts]: Direct targets remain empty in this plan; function-value, dynamic, unknown, setup-missing, and unsupported call evidence is published as unresolved rows.
+- [Phase 30-direct-call-facts]: Call output digest proof now covers provider-derived populated sites and unresolved rows, while direct target coverage remains in the later direct-target plan.
+- [Phase 30-direct-call-facts]: Direct targets are emitted only from precise resolved ReferenceFact evidence; dynamic/interface/function-token/framework/value-flow cases remain unresolved or unsupported.
+- [Phase 30-direct-call-facts]: Native direct target rows use NativeDirect provenance and SetupAware precision under the private polint.calls provider.
+- [Phase 30-direct-call-facts]: Provider-derived unresolved rows are filtered off call sites that have a resolved direct target, so precise evidence wins over dynamic-shape uncertainty.
+- [Phase 30-direct-call-facts]: Eval call observation stays crate-private/test-facing; no public SDK, runner, CLI, docs, or call graph API was promoted.
+- [Phase 30-direct-call-facts]: Call eval payloads use relative path, source span, status/kind/algorithm/reason/provider, and stable-key target identity only.
+- [Phase 30-direct-call-facts]: Existing matcher/metrics/report unknown-like status accounting already covered unresolved, unsupported, and setup_missing; plan-specific tests now prove it for call rows.
+- [Phase 30-direct-call-facts]: Plan 30-07 kept direct-call fixture coverage internal and test-facing; no public CallGraph API was exposed.
+- [Phase 30-direct-call-facts]: Plan 30-07 uses nonzero eval invariants for direct-call debug count and D-10 index coverage instead of fragile exact counts.
+- [Phase 30-direct-call-facts]: Plan 30-07 derives missing call-site owner symbols from existing function/symbol facts before call-store indexing.
+- [Phase 30-direct-call-facts]: Plan 30-08 kept direct-call internals private and test-facing; no SDK, runner, CLI, README, or docs/facts call surface was promoted.
+- [Phase 30-direct-call-facts]: Plan 30-08 kept CallGraph as an inert reserved SDK view whose call_graph capability remains unsupported.
+- [Phase 30-direct-call-facts]: Plan 30-08 recorded the verification-only regression task as an empty test commit to preserve the per-task commit contract.
+- [Phase 31-p0-abstract-domain-kernel]: Keep abstract-domain contracts and P0 slots crate-private under analysis::domains with no public SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Represent top and unknown causes as private TopReason labels that participate in stable digest parts.
+- [Phase 31-p0-abstract-domain-kernel]: Use BTreeMap and BTreeSet ordering for deterministic product state and literal-set digest behavior.
+- [Phase 31-p0-abstract-domain-kernel]: Keep solver, transfer, and result cursor APIs crate-private under analysis::domains with no SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Materialize result identity and iteration through stable keys while using run-local IDs only for cursor lookup within a run.
+- [Phase 31-p0-abstract-domain-kernel]: Treat calls, unsupported operations, dynamic writes, widening, and iteration budgets as explicit top/unknown events or states rather than silent certainty.
+- [Phase 31-p0-abstract-domain-kernel]: Keep domain facts, provider, store, and cache identity crate-private with no SDK, runner, CLI, README, or docs/facts promotion.
+- [Phase 31-p0-abstract-domain-kernel]: Normalize domain facts into observation rows and event rows with explicit status and precision labels, including top, unknown, setup, and budget cases.
+- [Phase 31-p0-abstract-domain-kernel]: Make abstract-domain cache identity include provider policy, MIR, CFG, calls, symbol graph, module topology, syntax, lifecycle/config, and absent extension/model/toolchain slots.
+- [Phase 31-p0-abstract-domain-kernel]: Represent domain bottom/no-info rows as explicit unknown top reasons before validation so malformed unknown rows fail closed.
+- [Phase 31-p0-abstract-domain-kernel]: Record compact eval provider-output schema evidence for polint.abstract_domains without exposing a public provider surface.
+- [Phase 31-p0-abstract-domain-kernel]: Abstract-domain facts remain internal eval/debug evidence, not SDK or CLI contract.
+- [Phase 31-p0-abstract-domain-kernel]: Deterministic top and budget fixture rows use private test-only solver policies rather than changing production solver defaults.
+- [Phase 31-p0-abstract-domain-kernel]: Transient domain place IDs are retained in stable keys but not exposed as invalid indexed references.
 
 ## Execution Metrics
 
@@ -275,17 +313,30 @@ Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported con
 | 29-local-cfg-and-control-dependence | 04 | 28 min | 2 | 4 |
 | 29-local-cfg-and-control-dependence | 05 | 31 min | 2 | 3 |
 | 29-local-cfg-and-control-dependence | 06 | 68 min | 3 | 19 |
+| 30-direct-call-facts | 02 | 8 min | 2 | 9 |
+| 30-direct-call-facts | 03 | 12 min | 2 | 4 |
+| 30-direct-call-facts | 04 | 17 min | 3 | 7 |
+| 30-direct-call-facts | 05 | 14 min | 3 | 9 |
+| 30-direct-call-facts | 06 | 5min | 1 | 3 |
+| 30-direct-call-facts | 08 | 10 min | 3 | 2 |
+| 31-p0-abstract-domain-kernel | 01 | 8 min | 3 | 5 |
+| 31-p0-abstract-domain-kernel | 02 | 14 min | 3 | 5 |
+| 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
+| 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
+| 31-p0-abstract-domain-kernel | 05 | 43 min | 3 | 19 |
 
 ## Session
 
-- Last session: 2026-05-20
-- Last activity: 2026-05-21 - Completed quick task 260521-b38: Fix CFG digest payload and stable unsupported control-flow keys.
-- Stopped at: Phase 29 PR #34 follow-up digest/stable-key fix complete; ready for Phase 30 direct call facts.
+- Last session: 2026-05-21
+- Last activity: 2026-05-21 - Completed 31-p0-abstract-domain-kernel-05-PLAN.md.
+- Stopped at: Completed 31-p0-abstract-domain-kernel-04-PLAN.md; ready for Plan 31-05.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260521-nem | Add realistic structured coverage for direct calls and abstract domains | 2026-05-21 | implemented | [260521-nem-add-realistic-structured-coverage-for-di](./quick/260521-nem-add-realistic-structured-coverage-for-di/) |
+| 260521-m9k | Fix critical PR review findings for direct calls and abstract domains | 2026-05-21 | implemented | [260521-m9k-fix-critical-pr-review-findings-for-dire](./quick/260521-m9k-fix-critical-pr-review-findings-for-dire/) |
 | 260521-b38 | Fix CFG digest payload and stable unsupported control-flow keys | 2026-05-21 | implemented | [260521-b38-fix-cfg-digest-payload-and-stable-unsupp](./quick/260521-b38-fix-cfg-digest-payload-and-stable-unsupp/) |
 | 260521-af1 | Fix CFG stored reachability for synthetic exits | 2026-05-21 | implemented | [260521-af1-fix-cfg-stored-reachability-for-syntheti](./quick/260521-af1-fix-cfg-stored-reachability-for-syntheti/) |
 | 260521-a5k | Fix CFG PR review findings | 2026-05-21 | implemented | [260521-a5k-fix-cfg-pr-review-findings](./quick/260521-a5k-fix-cfg-pr-review-findings/) |
@@ -307,4 +358,4 @@ Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported con
 
 ## Next Action
 
-Phase 30 is next: plan and execute direct call facts.
+Phase 31 Plan 04 is next: validation, debug, eval observation, and fixture proof for abstract-domain rows.

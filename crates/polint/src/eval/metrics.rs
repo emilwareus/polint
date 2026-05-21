@@ -130,6 +130,7 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                 Some(
                     crate::eval::model::ObservedStatus::Unknown
                     | crate::eval::model::ObservedStatus::Partial
+                    | crate::eval::model::ObservedStatus::Top
                     | crate::eval::model::ObservedStatus::Unresolved
                     | crate::eval::model::ObservedStatus::Ambiguous
                     | crate::eval::model::ObservedStatus::Dynamic
@@ -140,7 +141,8 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
                     | crate::eval::model::ObservedStatus::Cycle
                     | crate::eval::model::ObservedStatus::Generated
                     | crate::eval::model::ObservedStatus::Undeclared
-                    | crate::eval::model::ObservedStatus::OutsideWorkspace,
+                    | crate::eval::model::ObservedStatus::OutsideWorkspace
+                    | crate::eval::model::ObservedStatus::BudgetExceeded,
                 )
                 | None => {}
             },

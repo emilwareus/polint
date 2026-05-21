@@ -1318,6 +1318,316 @@ fn cfg_public_no_leak() {
     assert_cfg_cli_help_is_private();
 }
 
+#[test]
+fn direct_calls_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_direct_calls_public_rule_repo(temp.path());
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/direct-calls-public-probe"),
+        "external direct-calls public-boundary rule should run: {report:#?}"
+    );
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/direct-calls-public-probe"
+    );
+    let fact_views = inspect["rules"][0]["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {inspect:#?}"));
+    for canonical_path in [
+        "polint::sdk::facts::ModuleGraphFacts<'_>",
+        "polint::sdk::facts::References<'_>",
+        "polint::sdk::facts::ResolvedImports<'_>",
+        "polint::sdk::facts::Symbols<'_>",
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["canonical_path"] == canonical_path),
+            "inspect JSON should include public fact view {canonical_path}: {inspect_json}"
+        );
+    }
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_direct_calls_public_output_is_private(output);
+    }
+    assert_direct_calls_public_surfaces_are_private();
+    assert_direct_calls_cli_help_is_private();
+    assert!(!repo_root().join("docs/facts/calls.md").exists());
+    assert!(!repo_root().join("docs/facts/call-graph.md").exists());
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("ResolvedImports<'_>"));
+    assert!(source.contains("ModuleGraphFacts<'_>"));
+    assert!(source.contains("Symbols<'_>"));
+    assert!(source.contains("References<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_direct_calls_public_rule_source(&source);
+}
+
+#[test]
+fn abstract_domain_internals_stay_private() {
+    let temp = tempfile::tempdir().unwrap();
+    write_abstract_domains_public_rule_repo(temp.path());
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.rule_id == "local/abstract-domains-public-probe"),
+        "external abstract-domain public-boundary rule should run: {report:#?}"
+    );
+
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/abstract-domains-public-probe"
+    );
+    let fact_views = inspect["rules"][0]["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("fact_views should be an array: {inspect:#?}"));
+    for canonical_path in [
+        "polint::sdk::facts::ComplexityMetrics<'_>",
+        "polint::sdk::facts::FileMetrics<'_>",
+        "polint::sdk::facts::FunctionMetrics<'_>",
+        "polint::sdk::facts::ModuleGraphFacts<'_>",
+        "polint::sdk::facts::References<'_>",
+        "polint::sdk::facts::ResolvedImports<'_>",
+        "polint::sdk::facts::Symbols<'_>",
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["canonical_path"] == canonical_path),
+            "inspect JSON should include public fact view {canonical_path}: {inspect_json}"
+        );
+    }
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_abstract_domains_public_output_is_private(output);
+    }
+    assert_abstract_domains_public_surfaces_are_private();
+    assert_abstract_domains_cli_help_is_private();
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    assert!(source.contains("ResolvedImports<'_>"));
+    assert!(source.contains("ModuleGraphFacts<'_>"));
+    assert!(source.contains("Symbols<'_>"));
+    assert!(source.contains("References<'_>"));
+    assert!(source.contains("FileMetrics<'_>"));
+    assert!(source.contains("FunctionMetrics<'_>"));
+    assert!(source.contains("ComplexityMetrics<'_>"));
+    assert!(source.contains("polint::runner::run_cli"));
+    assert_abstract_domains_public_rule_source(&source);
+}
+
+fn assert_direct_calls_public_output_is_private(output: &str) {
+    for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak direct-call internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn assert_abstract_domains_public_output_is_private(output: &str) {
+    for marker in ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak abstract-domain internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn assert_abstract_domains_public_surfaces_are_private() {
+    let root = repo_root();
+    let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
+    let public_lib_rs = lib_rs
+        .split("pub(crate) mod analysis;")
+        .next()
+        .unwrap_or(&lib_rs);
+    let mut public_surface = public_lib_rs.to_string();
+    for path in [
+        root.join("README.md"),
+        root.join("docs/facts"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&public_surface_text(&path));
+    }
+
+    for marker in ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public README/docs/facts/CLI/SDK/runner/crate-root source must not expose abstract-domain marker `{marker}`"
+        );
+    }
+}
+
+fn assert_abstract_domains_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose abstract-domain marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
+const ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint.abstract_domains",
+    "abstract-domain-facts",
+    "DomainObservation",
+    "DomainEvent",
+    "Nilness<'_>",
+    "Truthiness<'_>",
+    "Constants<'_>",
+    "StringValues<'_>",
+    "Initializedness<'_>",
+    "AbstractDomains<'_>",
+    "DataFlow<'_>",
+];
+
+fn assert_direct_calls_public_surfaces_are_private() {
+    let root = repo_root();
+    let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
+    let public_lib_rs = lib_rs
+        .split("pub(crate) mod analysis;")
+        .next()
+        .unwrap_or(&lib_rs);
+    let mut public_surface = public_lib_rs.to_string();
+    for path in [
+        root.join("README.md"),
+        root.join("docs/facts"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&public_surface_text(&path));
+    }
+
+    for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public README/docs/facts/CLI/SDK/runner/crate-root source must not expose direct-call marker `{marker}`"
+        );
+    }
+}
+
+fn assert_direct_calls_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose direct-call marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
+const DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint.calls",
+    "calls-facts-1",
+    "CallSiteFact",
+    "CallTargetFact",
+    "UnresolvedCallFact",
+    "analysis::calls",
+    "direct-call-facts",
+    "Calls<'_>",
+    "CallEdges<'_>",
+];
+
 fn assert_cfg_public_surfaces_are_private() {
     let root = repo_root();
     let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
@@ -1383,6 +1693,352 @@ const CFG_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "analysis::cfg",
     "Cfg<'_>",
 ];
+
+fn write_abstract_domains_public_rule_repo(root: &Path) {
+    assert_abstract_domains_public_rule_source(ABSTRACT_DOMAINS_PUBLIC_RULE_SOURCE);
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["web/src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        ABSTRACT_DOMAINS_PUBLIC_RULE_SOURCE,
+    );
+    write_abstract_domains_public_fixture_files(root);
+
+    let case_root = root.join(".polint/tests/rules/abstract_domains_public/basic");
+    write_file(
+        &case_root.join("polint-test.toml"),
+        r#"
+rule = "local/abstract-domains-public-probe"
+paths = ["web/src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/abstract-domains-public-probe"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public facts remain compatible while abstract domains stay private"
+"#,
+    );
+    write_abstract_domains_public_fixture_files(&case_root);
+}
+
+const ABSTRACT_DOMAINS_PUBLIC_RULE_SOURCE: &str = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/abstract-domains-public-probe",
+    description = "Reads supported public facts while abstract domain facts stay private.",
+    severity = "warn"
+)]
+fn abstract_domains_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+    file_metrics: FileMetrics<'_>,
+    function_metrics: FunctionMetrics<'_>,
+    complexity_metrics: ComplexityMetrics<'_>,
+) -> RuleResult {
+    let resolved_count = resolved.iter().count();
+    let edge_count = graph.edges().len();
+    let symbol_count = symbols.iter().count();
+    let reference_count = references.iter().count();
+    let file_metric_count = file_metrics.iter().count();
+    let function_metric_count = function_metrics.iter().count();
+    let complexity_metric_count = complexity_metrics.iter().count();
+    let public_fact_count = resolved_count
+        + edge_count
+        + symbol_count
+        + reference_count
+        + file_metric_count
+        + function_metric_count
+        + complexity_metric_count;
+    if public_fact_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public facts remain compatible while abstract domains stay private",
+        )
+        .with_evidence("resolved_imports", resolved_count.to_string())
+        .with_evidence("module_edges", edge_count.to_string())
+        .with_evidence("symbols", symbol_count.to_string())
+        .with_evidence("references", reference_count.to_string())
+        .with_evidence("file_metrics", file_metric_count.to_string())
+        .with_evidence("function_metrics", function_metric_count.to_string())
+        .with_evidence("complexity_metrics", complexity_metric_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![abstract_domains_public_probe()])
+}
+"#;
+
+fn assert_abstract_domains_public_rule_source(source: &str) {
+    assert!(
+        source.contains("use polint::sdk::prelude::*;"),
+        "external rule must import the public SDK prelude only:\n{source}"
+    );
+    assert!(
+        source.contains("ResolvedImports<'_>")
+            && source.contains("ModuleGraphFacts<'_>")
+            && source.contains("Symbols<'_>")
+            && source.contains("References<'_>")
+            && source.contains("FileMetrics<'_>")
+            && source.contains("FunctionMetrics<'_>")
+            && source.contains("ComplexityMetrics<'_>"),
+        "external rule must request supported public fact views through its signature:\n{source}"
+    );
+    for forbidden in [
+        concat!("polint::", "analysis"),
+        concat!("polint::", "analysis_kernel"),
+        concat!("polint::", "core"),
+        concat!("polint::", "graph"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{source}"
+        );
+    }
+    assert_abstract_domains_public_output_is_private(source);
+}
+
+fn write_abstract_domains_public_fixture_files(root: &Path) {
+    write_file(
+        &root.join("web/package.json"),
+        r#"{"name":"abstract-domains-public-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("web/src/lib.ts"),
+        r#"export function helper(input: string) {
+  return input.trim();
+}
+"#,
+    );
+    write_file(
+        &root.join("web/src/app.ts"),
+        r#"import { helper } from "./lib";
+
+export function render(name: string) {
+  return helper(name);
+}
+"#,
+    );
+}
+
+fn write_direct_calls_public_rule_repo(root: &Path) {
+    assert_direct_calls_public_rule_source(DIRECT_CALLS_PUBLIC_RULE_SOURCE);
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**", "web/src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        DIRECT_CALLS_PUBLIC_RULE_SOURCE,
+    );
+    write_direct_calls_public_fixture_files(root);
+
+    let case_root = root.join(".polint/tests/rules/direct_calls_public/basic");
+    write_file(
+        &case_root.join("polint-test.toml"),
+        r#"
+rule = "local/direct-calls-public-probe"
+paths = ["src/**", "web/src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/direct-calls-public-probe"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public facts remain compatible while direct calls stay private"
+"#,
+    );
+    write_direct_calls_public_fixture_files(&case_root);
+}
+
+const DIRECT_CALLS_PUBLIC_RULE_SOURCE: &str = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/direct-calls-public-probe",
+    description = "Reads supported public facts while direct call facts stay private.",
+    severity = "warn"
+)]
+fn direct_calls_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    resolved: ResolvedImports<'_>,
+    graph: ModuleGraphFacts<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
+) -> RuleResult {
+    let resolved_count = resolved.iter().count();
+    let edge_count = graph.edges().len();
+    let symbol_count = symbols.iter().count();
+    let reference_count = references.iter().count();
+    if resolved_count == 0 && edge_count == 0 && symbol_count == 0 && reference_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public facts remain compatible while direct calls stay private",
+        )
+        .with_evidence("resolved_imports", resolved_count.to_string())
+        .with_evidence("module_edges", edge_count.to_string())
+        .with_evidence("symbols", symbol_count.to_string())
+        .with_evidence("references", reference_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![direct_calls_public_probe()])
+}
+"#;
+
+fn assert_direct_calls_public_rule_source(source: &str) {
+    assert!(
+        source.contains("use polint::sdk::prelude::*;"),
+        "external rule must import the public SDK prelude only:\n{source}"
+    );
+    assert!(
+        source.contains("ResolvedImports<'_>")
+            && source.contains("ModuleGraphFacts<'_>")
+            && source.contains("Symbols<'_>")
+            && source.contains("References<'_>"),
+        "external rule must request supported public fact views through its signature:\n{source}"
+    );
+    for forbidden in [
+        concat!("polint::", "analysis"),
+        concat!("polint::", "analysis_kernel"),
+        concat!("polint::", "core"),
+        concat!("polint::", "graph"),
+        concat!("polint::", "go"),
+        concat!("polint::", "ts"),
+        "Capabilities::new(",
+        "impl Rule for",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external rule source must not depend on internal API `{forbidden}`:\n{source}"
+        );
+    }
+    assert_direct_calls_public_output_is_private(source);
+}
+
+fn write_direct_calls_public_fixture_files(root: &Path) {
+    write_file(
+        &root.join("go.mod"),
+        r#"module example.com/directcallspublic
+
+go 1.22
+"#,
+    );
+    write_file(
+        &root.join("src/service/service.go"),
+        r#"package service
+
+import "fmt"
+
+func FormatUser(name string) string {
+	if name == "" {
+		return fmt.Sprint("anonymous")
+	}
+	return name
+}
+"#,
+    );
+    write_file(
+        &root.join("web/package.json"),
+        r#"{"name":"direct-calls-public-fixture","private":true,"type":"module"}"#,
+    );
+    write_file(
+        &root.join("web/src/lib.ts"),
+        r#"export function helper(input: string) {
+  return input.trim();
+}
+"#,
+    );
+    write_file(
+        &root.join("web/src/app.ts"),
+        r#"import { helper } from "./lib";
+
+export function render(name: string) {
+  return helper(name);
+}
+"#,
+    );
+}
 
 fn write_semantic_mir_public_rule_repo(root: &Path) {
     assert_semantic_mir_public_rule_source(SEMANTIC_MIR_PUBLIC_RULE_SOURCE);
@@ -2247,6 +2903,73 @@ export const value = token;
 "#,
     );
     write_file(&root.join("src/token.ts"), r#"export const token = "ok";"#);
+}
+
+fn write_call_graph_capability_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/needs-call-graph",
+    description = "Needs call graph facts.",
+    severity = "warn"
+)]
+fn needs_call_graph(ctx: &mut RuleCtx<'_>, _call_graph: CallGraph<'_>) -> RuleResult {
+    ctx.report(Diagnostic::warning(
+        ctx.rule_id(),
+        "<workspace>",
+        DiagnosticRange::point(1, 1),
+        "this should not run while call_graph is unsupported",
+    ));
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![needs_call_graph()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/component.ts"),
+        r#"export function component() {
+  return "ok";
+}
+"#,
+    );
 }
 
 fn write_symbol_capability_rule_repo(root: &Path) {
@@ -6127,6 +6850,52 @@ mod capability_planning {
             "rule",
             "local/needs-cfg"
         ));
+    }
+
+    #[test]
+    fn call_graph_capability_remains_unsupported() {
+        let temp = tempfile::tempdir().unwrap();
+        write_call_graph_capability_rule_repo(temp.path());
+
+        let json = stdout_json(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+
+        assert!(
+            diagnostics_for_rule(&json, "local/needs-call-graph").is_empty(),
+            "rule requesting unsupported call_graph must not execute with fabricated facts: {json:#?}"
+        );
+        let diagnostic = diagnostics(&json)
+            .iter()
+            .find(|diagnostic| diagnostic["rule_id"] == "polint/capability")
+            .unwrap_or_else(|| panic!("expected call_graph capability diagnostic: {json:#?}"));
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported capability `call_graph`")),
+            "{diagnostic:#?}"
+        );
+        assert!(
+            diagnostic["help"]
+                .as_str()
+                .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
+            "{diagnostic:#?}"
+        );
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "rule",
+            "local/needs-call-graph"
+        ));
+        assert!(diagnostic_has_evidence(
+            diagnostic,
+            "capability",
+            "call_graph"
+        ));
+        assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
     }
 
     #[test]

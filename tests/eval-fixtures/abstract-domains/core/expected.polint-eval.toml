@@ -1,0 +1,89 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "abstract-domains-core"
+area = "abstract-domains"
+
+# Slot coverage: Reachability, Nilness, Truthiness, Constants, Strings, Initializedness.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "reachability", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "nilness", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "truthiness", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "constants", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "strings", mode = "partial", producer_id = "polint.abstract_domains", precision = "unknown", status = "unknown" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "initializedness", mode = "partial", producer_id = "polint.abstract_domains", precision = "exact_local", status = "present" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "reachability", mode = "partial", producer_id = "polint.abstract_domains", precision = "conservative", status = "top" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "unknown", mode = "partial", producer_id = "polint.abstract_domains", precision = "unknown", status = "unknown" }
+
+[[expected]]
+fact = { family = "DomainObservation", stable_key = "unsupported", mode = "partial", producer_id = "polint.abstract_domains", precision = "unsupported", status = "unsupported" }
+
+[[expected]]
+fact = { family = "DomainEvent", stable_key = "budget", mode = "partial", producer_id = "polint.abstract_domains", precision = "conservative", status = "budget_exceeded" }
+
+[[expected]]
+invariant = { name = "abstract_domains.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.reachability.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.nilness.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.truthiness.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.constants.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.strings.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_slot.initializedness.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_status.present.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_status.unknown.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_status.unsupported.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_status.budget_exceeded.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.index_counts.observations_by_body.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.index_counts.observations_by_slot.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "abstract_domains.index_counts.events_by_status.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "abstract-domains-core", max_runtime_ms = 120000, mode = "exact" }

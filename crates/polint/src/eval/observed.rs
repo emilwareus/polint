@@ -292,6 +292,29 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
     ));
 
     for output in &run_report.provider_outputs {
+        if output.provider_id == "polint.abstract_domains" {
+            let prefix = "provider_output.polint.abstract_domains";
+            invariants.push(observed_invariant(
+                format!("{prefix}.present"),
+                "true",
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.schema_version"),
+                output.schema_version.as_str(),
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.validation"),
+                output.validation.as_str(),
+                "kernel.run_report.provider_outputs",
+            ));
+            invariants.push(observed_invariant(
+                format!("{prefix}.dependency_inputs.count"),
+                output.dependency_inputs.len().to_string(),
+                "kernel.run_report.provider_outputs",
+            ));
+        }
         if !matches!(
             output.provider_id.as_str(),
             "polint.go.syntax" | "polint.ts.syntax"
@@ -439,6 +462,16 @@ pub(crate) fn semantic_mir_facts_for_test(debug_json: &Value) -> Vec<ObservedIte
 #[cfg(test)]
 pub(crate) fn cfg_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     cfg_facts(debug_json)
+}
+
+#[cfg(test)]
+pub(crate) fn call_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    call_facts(debug_json)
+}
+
+#[cfg(test)]
+pub(crate) fn abstract_domain_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    abstract_domain_facts(debug_json)
 }
 
 #[cfg(test)]
@@ -652,6 +685,8 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     }
     facts.extend(semantic_mir_facts(debug_json));
     facts.extend(cfg_facts(debug_json));
+    facts.extend(call_facts(debug_json));
+    facts.extend(abstract_domain_facts(debug_json));
     facts
 }
 
@@ -788,6 +823,331 @@ fn cfg_payload(row: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
+fn call_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(calls) = debug_json.get("calls").and_then(Value::as_object) else {
+        return facts;
+    };
+    for section in ["sites", "targets", "unresolved"] {
+        let Some(rows) = calls.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = call_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts.extend(call_count_invariants(calls));
+    facts.extend(call_index_count_invariants(calls));
+    facts
+}
+
+#[cfg(test)]
+fn call_count_invariants(calls: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(counts) = calls.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut invariants = Vec::new();
+    for group in [
+        "by_language",
+        "by_call_kind",
+        "by_algorithm",
+        "by_status",
+        "by_unresolved_reason",
+        "by_provider",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("direct_calls.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.calls.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn call_index_count_invariants(calls: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(index_counts) = calls.get("index_counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    index_counts
+        .iter()
+        .filter(|(_, count)| count.as_u64().is_some_and(|count| count > 0))
+        .map(|(index, _)| {
+            observed_invariant(
+                format!("direct_calls.index_counts.{index}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.calls.index_counts",
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn call_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.calls".to_string()),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(call_precision_label),
+        status: Some(call_status_from_row(row)),
+        payload: call_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn call_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "path", row.get("path"));
+    push_span_fragment(&mut parts, row.get("span"));
+    push_str_fragment(&mut parts, "kind", row.get("kind"));
+    push_str_fragment(&mut parts, "callee", row.get("callee"));
+    push_str_fragment(&mut parts, "edge_kind", row.get("edge_kind"));
+    push_str_fragment(&mut parts, "algorithm", row.get("algorithm"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "reason", row.get("reason"));
+    push_str_fragment(&mut parts, "provider", row.get("producer_id"));
+    push_str_fragment(&mut parts, "provenance", row.get("provenance"));
+    push_str_fragment(&mut parts, "site", row.get("site_stable_key"));
+    push_str_fragment(&mut parts, "caller", row.get("caller_stable_key"));
+    push_str_fragment(
+        &mut parts,
+        "target_function",
+        row.get("target_function_stable_key"),
+    );
+    push_str_fragment(
+        &mut parts,
+        "target_symbol",
+        row.get("target_symbol_stable_key"),
+    );
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn call_status_from_row(row: &Value) -> ObservedStatus {
+    row.get("status")
+        .and_then(Value::as_str)
+        .and_then(call_status_label)
+        .or_else(|| {
+            row.get("precision")
+                .and_then(Value::as_str)
+                .and_then(call_status_label)
+        })
+        .unwrap_or(ObservedStatus::Present)
+}
+
+#[cfg(test)]
+fn call_status_label(label: &str) -> Option<ObservedStatus> {
+    match label {
+        "Resolved" | "resolved" => Some(ObservedStatus::Resolved),
+        "Ambiguous" | "ambiguous" => Some(ObservedStatus::Ambiguous),
+        "Unresolved" | "unresolved" => Some(ObservedStatus::Unresolved),
+        "Unsupported" | "unsupported" => Some(ObservedStatus::Unsupported),
+        "SetupMissing" | "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "Rejected" | "rejected" => Some(ObservedStatus::Rejected),
+        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::Unknown),
+        "Unknown" | "unknown" => Some(ObservedStatus::Unknown),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn call_precision_label(label: &str) -> String {
+    match label {
+        "Exact" | "exact" => "exact",
+        "SetupAware" | "setup_aware" => "setup_aware",
+        "Conservative" | "conservative" => "conservative",
+        "Heuristic" | "heuristic" => "heuristic",
+        "Ambiguous" | "ambiguous" => "ambiguous",
+        "Unknown" | "unknown" => "unknown",
+        "Unsupported" | "unsupported" => "unsupported",
+        _ => label,
+    }
+    .to_string()
+}
+
+#[cfg(test)]
+fn abstract_domain_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(domains) = debug_json
+        .get("abstract_domains")
+        .and_then(Value::as_object)
+    else {
+        return facts;
+    };
+    for section in ["observations", "events"] {
+        let Some(rows) = domains.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = abstract_domain_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts.extend(abstract_domain_count_invariants(domains));
+    facts.extend(abstract_domain_index_count_invariants(domains));
+    facts
+}
+
+#[cfg(test)]
+fn abstract_domain_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.abstract_domains".to_string()),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(abstract_domain_precision_label),
+        status: Some(abstract_domain_status_from_row(row)),
+        payload: abstract_domain_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn abstract_domain_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "path", row.get("path"));
+    push_span_fragment(&mut parts, row.get("span"));
+    push_str_fragment(&mut parts, "body", row.get("body_stable_key"));
+    push_str_fragment(&mut parts, "block", row.get("block_stable_key"));
+    push_str_fragment(&mut parts, "operation", row.get("operation_stable_key"));
+    push_str_fragment(&mut parts, "place", row.get("place_stable_key"));
+    push_str_fragment(&mut parts, "slot", row.get("slot"));
+    push_str_fragment(&mut parts, "location", row.get("location"));
+    push_str_fragment(&mut parts, "value", row.get("value"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "precision", row.get("precision"));
+    push_str_fragment(&mut parts, "reason", row.get("reason"));
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn abstract_domain_count_invariants(domains: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(counts) = domains.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut invariants = Vec::new();
+    for group in [
+        "by_slot",
+        "by_status",
+        "by_precision",
+        "by_reason",
+        "by_provider",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("abstract_domains.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.abstract_domains.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn abstract_domain_index_count_invariants(
+    domains: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(index_counts) = domains.get("index_counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    index_counts
+        .iter()
+        .filter(|(_, count)| count.as_u64().is_some_and(|count| count > 0))
+        .map(|(index, _)| {
+            observed_invariant(
+                format!("abstract_domains.index_counts.{index}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.abstract_domains.index_counts",
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn abstract_domain_status_from_row(row: &Value) -> ObservedStatus {
+    row.get("status")
+        .and_then(Value::as_str)
+        .and_then(abstract_domain_status_label)
+        .or_else(|| {
+            row.get("precision")
+                .and_then(Value::as_str)
+                .and_then(abstract_domain_status_label)
+        })
+        .unwrap_or(ObservedStatus::Present)
+}
+
+#[cfg(test)]
+fn abstract_domain_status_label(label: &str) -> Option<ObservedStatus> {
+    match label {
+        "Present" | "present" => Some(ObservedStatus::Present),
+        "Top" | "top" => Some(ObservedStatus::Top),
+        "Unknown" | "unknown" => Some(ObservedStatus::Unknown),
+        "Unsupported" | "unsupported" => Some(ObservedStatus::Unsupported),
+        "SetupMissing" | "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::BudgetExceeded),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn abstract_domain_precision_label(label: &str) -> String {
+    match label {
+        "ExactLocal" | "exact_local" => "exact_local",
+        "SetupAware" | "setup_aware" => "setup_aware",
+        "Conservative" | "conservative" => "conservative",
+        "Heuristic" | "heuristic" => "heuristic",
+        "Unknown" | "unknown" => "unknown",
+        "Unsupported" | "unsupported" => "unsupported",
+        _ => label,
+    }
+    .to_string()
+}
+
+#[cfg(test)]
 fn push_str_fragment(parts: &mut Vec<String>, key: &str, value: Option<&Value>) {
     if let Some(value) = value
         .and_then(Value::as_str)
@@ -898,6 +1258,7 @@ fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
     match label {
         "resolved" => Some(ObservedStatus::Resolved),
         "partial" => Some(ObservedStatus::Partial),
+        "top" => Some(ObservedStatus::Top),
         "unknown" => Some(ObservedStatus::Unknown),
         "unresolved" => Some(ObservedStatus::Unresolved),
         "ambiguous" => Some(ObservedStatus::Ambiguous),
@@ -910,6 +1271,7 @@ fn observed_status_from_label(label: &str) -> Option<ObservedStatus> {
         "generated" => Some(ObservedStatus::Generated),
         "undeclared" => Some(ObservedStatus::Undeclared),
         "outside_workspace" => Some(ObservedStatus::OutsideWorkspace),
+        "budget_exceeded" => Some(ObservedStatus::BudgetExceeded),
         _ => None,
     }
 }
@@ -1311,6 +1673,12 @@ path = "repo"
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let mut provider_order = provider_order;
+        provider_order.sort_by_key(|(name, _)| {
+            name.strip_prefix("provider_order.")
+                .and_then(|index| index.parse::<usize>().ok())
+                .expect("provider order invariant names use numeric suffixes")
+        });
 
         assert_eq!(
             provider_order,
@@ -1323,8 +1691,31 @@ path = "repo"
                 ("provider_order.5", "polint.module_topology"),
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
-                ("provider_order.8", "polint.metrics"),
+                ("provider_order.8", "polint.calls"),
+                ("provider_order.9", "polint.abstract_domains"),
+                ("provider_order.10", "polint.metrics"),
             ]
+        );
+    }
+
+    #[test]
+    fn eval_observed_kernel_records_abstract_domain_provider_output_schema() {
+        let (_temp, observed) = observed_for("export function answer() { return 42; }\n", None);
+        let invariants = observed
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            invariants
+                .get("provider_output.polint.abstract_domains.schema_version")
+                .copied(),
+            Some("abstract-domain-facts-1:1")
         );
     }
 

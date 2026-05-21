@@ -510,6 +510,191 @@ pub(crate) fn run_cfg_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_direct_calls_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deterministic {
+        observed.push(direct_calls_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+pub(crate) fn run_abstract_domains_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    observed.extend(abstract_domain_observed_with_policy(
+        temp.path(),
+        &plan,
+        crate::analysis::domains::solver::SolverPolicy::for_test(
+            crate::analysis::domains::solver::SolverBudget {
+                max_iterations: 10_000,
+                widening_fuel: 0,
+            },
+        ),
+    )?);
+    observed.extend(abstract_domain_observed_with_policy(
+        temp.path(),
+        &plan,
+        crate::analysis::domains::solver::SolverPolicy::for_test(
+            crate::analysis::domains::solver::SolverBudget {
+                max_iterations: 0,
+                widening_fuel: 8,
+            },
+        ),
+    )?);
+    if deterministic {
+        observed.push(abstract_domains_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+fn abstract_domain_observed_with_policy(
+    repo_root: &Path,
+    plan: &crate::analysis_plan::AnalysisPlan,
+    policy: crate::analysis::domains::solver::SolverPolicy,
+) -> anyhow::Result<Vec<crate::eval::model::ObservedItem>> {
+    let loaded = crate::config::load_config(repo_root)?;
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let rule_digest = crate::cache::keys::rule_hash(&[], None, &std::collections::BTreeMap::new());
+    let cache = crate::cache::Cache::default_for_repo(repo_root, false);
+    let output =
+        crate::analysis_kernel::AnalysisKernel::run(crate::analysis_kernel::KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: &config_digest,
+            rule_digest: &rule_digest,
+            plan,
+            parallel: true,
+        })?;
+    let solver = crate::analysis::domains::solver::LocalDomainSolver::new(policy);
+    let result = solver.solve(crate::analysis::domains::solver::SolverInput::from(
+        &output.db,
+    ));
+    let mut db = output.db;
+    let place_stable_keys = db
+        .mir_places()
+        .iter()
+        .map(|place| (place.id, place.stable_key.clone()))
+        .collect();
+    db.replace_abstract_domain_facts(
+        crate::analysis::domains::store::DomainOutput::from_results_with_place_keys(
+            result.results(),
+            &place_stable_keys,
+        ),
+    );
+    let debug = crate::analysis_kernel::AnalysisKernel::metadata_debug_json_for_test(&db);
+    Ok(crate::eval::observed::abstract_domain_facts_for_test(
+        &debug,
+    ))
+}
+
+#[cfg(test)]
 fn evaluation_run_for_fixture(
     fixture: &NativeFixture,
     observed: Vec<crate::eval::model::ObservedItem>,
@@ -576,6 +761,32 @@ fn cfg_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("cfg.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn direct_calls_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "direct_calls.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("direct_calls.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn abstract_domains_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "abstract_domains.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("abstract_domains.current_behavior".to_string()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -1096,7 +1307,13 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.5", "polint.module_topology"),
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
-                ("provider_order.8", "polint.metrics"),
+                ("provider_order.8", "polint.calls"),
+                ("provider_order.9", "polint.abstract_domains"),
+                ("provider_order.10", "polint.metrics"),
+                (
+                    "provider_output.polint.abstract_domains.schema_version",
+                    "abstract-domain-facts-1:1",
+                ),
             ]
         );
     }
@@ -1523,6 +1740,14 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "cfg-core"
         {
             run_cfg_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::DirectCalls
+            && fixture.manifest.case_id == "direct-calls-core"
+        {
+            run_direct_calls_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::AbstractDomains
+            && fixture.manifest.case_id == "abstract-domains-core"
+        {
+            run_abstract_domains_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -1994,5 +2219,709 @@ mod cfg_core {
             }
             _ => false,
         }));
+    }
+}
+
+#[cfg(test)]
+mod direct_calls_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/direct-calls/core")
+    }
+
+    const REQUIRED_COUNT_INVARIANTS: &[&str] = &[
+        "direct_calls.counts.by_language.Go.nonzero",
+        "direct_calls.counts.by_language.TypeScript.nonzero",
+        "direct_calls.counts.by_call_kind.Function.nonzero",
+        "direct_calls.counts.by_call_kind.Member.nonzero",
+        "direct_calls.counts.by_call_kind.Constructor.nonzero",
+        "direct_calls.counts.by_algorithm.DirectReference.nonzero",
+        "direct_calls.counts.by_algorithm.ImportBinding.nonzero",
+        "direct_calls.counts.by_algorithm.ConstructorBinding.nonzero",
+        "direct_calls.counts.by_algorithm.DirectMember.nonzero",
+        "direct_calls.counts.by_status.Resolved.nonzero",
+        "direct_calls.counts.by_status.Unresolved.nonzero",
+        "direct_calls.counts.by_status.Unsupported.nonzero",
+        "direct_calls.counts.by_status.SetupMissing.nonzero",
+        "direct_calls.counts.by_unresolved_reason.FunctionValue.nonzero",
+        "direct_calls.counts.by_unresolved_reason.DynamicProperty.nonzero",
+        "direct_calls.counts.by_unresolved_reason.Reflection.nonzero",
+        "direct_calls.counts.by_unresolved_reason.GoroutineBoundary.nonzero",
+        "direct_calls.counts.by_unresolved_reason.Eval.nonzero",
+        "direct_calls.counts.by_unresolved_reason.DynamicImport.nonzero",
+        "direct_calls.counts.by_unresolved_reason.CallApplyBind.nonzero",
+        "direct_calls.counts.by_unresolved_reason.SetupMissing.nonzero",
+        "direct_calls.counts.by_provider.polint.calls.nonzero",
+    ];
+
+    const REQUIRED_INDEX_INVARIANTS: &[&str] = &[
+        "direct_calls.index_counts.outgoing_by_function.nonzero",
+        "direct_calls.index_counts.outgoing_by_symbol.nonzero",
+        "direct_calls.index_counts.incoming_by_symbol.nonzero",
+        "direct_calls.index_counts.incoming_by_function.nonzero",
+        "direct_calls.index_counts.unresolved_by_reason.nonzero",
+        "direct_calls.index_counts.unresolved_by_status.nonzero",
+    ];
+
+    #[derive(Clone, Copy, Debug)]
+    struct DirectCallFeature {
+        marker: &'static str,
+        family: &'static str,
+        stable_key_fragment: &'static str,
+        status: ObservedStatus,
+    }
+
+    const SUPPORTED_DIRECT_CALL_FEATURES: &[DirectCallFeature] = &[
+        DirectCallFeature {
+            marker: "direct-calls/go/direct-function",
+            family: "CallTarget",
+            stable_key_fragment: "DirectReference",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/method-call",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/function-value",
+            family: "UnresolvedCall",
+            stable_key_fragment: "FunctionValue",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/goroutine-boundary",
+            family: "UnresolvedCall",
+            stable_key_fragment: "GoroutineBoundary",
+            status: ObservedStatus::Unsupported,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/reflection",
+            family: "UnresolvedCall",
+            stable_key_fragment: "Reflection",
+            status: ObservedStatus::Unsupported,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/go/setup-missing-interface",
+            family: "UnresolvedCall",
+            stable_key_fragment: "SetupMissing",
+            status: ObservedStatus::SetupMissing,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/local-function",
+            family: "CallTarget",
+            stable_key_fragment: "DirectReference",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/import-binding",
+            family: "CallTarget",
+            stable_key_fragment: "ImportBinding",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/static-member",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/constructor-as-function",
+            family: "CallTarget",
+            stable_key_fragment: "Constructor",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/constructor",
+            family: "CallTarget",
+            stable_key_fragment: "Constructor",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/instance-member",
+            family: "CallTarget",
+            stable_key_fragment: "DirectMember",
+            status: ObservedStatus::Resolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/function-value",
+            family: "UnresolvedCall",
+            stable_key_fragment: "FunctionValue",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/dynamic-property",
+            family: "UnresolvedCall",
+            stable_key_fragment: "DynamicProperty",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/call-apply-bind",
+            family: "UnresolvedCall",
+            stable_key_fragment: "CallApplyBind",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/eval",
+            family: "UnresolvedCall",
+            stable_key_fragment: "Eval",
+            status: ObservedStatus::Unresolved,
+        },
+        DirectCallFeature {
+            marker: "direct-calls/ts/dynamic-import",
+            family: "UnresolvedCall",
+            stable_key_fragment: "DynamicImport",
+            status: ObservedStatus::Unresolved,
+        },
+    ];
+
+    #[test]
+    fn eval_direct_calls_core_fixture_passes() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "direct-calls-core");
+        assert_eq!(case.area, FixtureArea::DirectCalls);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("package directcalls"));
+        assert!(!rendered.contains("export function handler"));
+    }
+
+    #[test]
+    fn eval_direct_calls_core_manifest_covers_required_taxonomy() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                    fact.producer_id.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            ("CallSite", "directFunction", Some(ObservedStatus::Resolved)),
+            ("CallSite", "handler", Some(ObservedStatus::Resolved)),
+            (
+                "CallTarget",
+                "DirectReference",
+                Some(ObservedStatus::Resolved),
+            ),
+            (
+                "CallTarget",
+                "ImportBinding",
+                Some(ObservedStatus::Resolved),
+            ),
+            ("CallTarget", "Constructor", Some(ObservedStatus::Resolved)),
+            ("CallTarget", "DirectMember", Some(ObservedStatus::Resolved)),
+            (
+                "UnresolvedCall",
+                "FunctionValue",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "DynamicProperty",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "Reflection",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "UnresolvedCall",
+                "GoroutineBoundary",
+                Some(ObservedStatus::Unsupported),
+            ),
+            ("UnresolvedCall", "Eval", Some(ObservedStatus::Unresolved)),
+            (
+                "UnresolvedCall",
+                "DynamicImport",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "CallApplyBind",
+                Some(ObservedStatus::Unresolved),
+            ),
+            (
+                "UnresolvedCall",
+                "SetupMissing",
+                Some(ObservedStatus::SetupMissing),
+            ),
+        ] {
+            assert!(
+                expected_facts
+                    .iter()
+                    .any(|(family, key, status, _, producer)| {
+                        *family == required.0
+                            && key.contains(required.1)
+                            && *status == required.2
+                            && *producer == Some("polint.calls")
+                    }),
+                "direct-call fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+        assert!(expected_facts.iter().any(|(_, _, _, precision, _)| {
+            matches!(*precision, Some("setup_aware" | "unknown" | "unsupported"))
+        }));
+    }
+
+    #[test]
+    fn eval_direct_calls_core_source_documents_supported_language_features() {
+        let markers = fixture_feature_markers(&["service.go", "web/src/app.ts"]);
+        let expected = SUPPORTED_DIRECT_CALL_FEATURES
+            .iter()
+            .map(|feature| feature.marker.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(markers, expected);
+    }
+
+    #[test]
+    fn eval_direct_calls_core_observes_supported_language_feature_contract() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+
+        for feature in SUPPORTED_DIRECT_CALL_FEATURES {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => {
+                        fact.family == feature.family
+                            && fact.stable_key.contains(feature.stable_key_fragment)
+                            && fact.status == Some(feature.status)
+                    }
+                    _ => false,
+                }),
+                "direct-call feature {feature:?} was not observed: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    #[test]
+    fn eval_direct_calls_core_manifest_covers_counts_and_indexes() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_invariants = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Invariant(invariant) => Some(invariant.name.as_str()),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for required in REQUIRED_COUNT_INVARIANTS
+            .iter()
+            .chain(REQUIRED_INDEX_INVARIANTS)
+        {
+            assert!(
+                expected_invariants.contains(required),
+                "direct-call fixture manifest missing invariant {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_direct_calls_core_observes_required_families_and_determinism() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+
+        for family in crate::eval::model::CALL_FACT_FAMILIES {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => fact.family == *family,
+                    _ => false,
+                }),
+                "direct-call fixture should observe {family}: {:#?}",
+                case.observed
+            );
+        }
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "direct_calls.current_determinism"
+                    && invariant.value == "cold_warm_no_cache_equal"
+            }
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn eval_direct_calls_core_observes_counts_and_indexes() {
+        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("direct calls core case");
+
+        for required in REQUIRED_COUNT_INVARIANTS
+            .iter()
+            .chain(REQUIRED_INDEX_INVARIANTS)
+        {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == *required && invariant.value == "true"
+                    }
+                    _ => false,
+                }),
+                "direct-call fixture should observe invariant {required}: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {
+        let mut markers = std::collections::BTreeSet::new();
+        for path in paths {
+            let source = std::fs::read_to_string(fixture_dir().join("repo").join(path))
+                .expect("fixture source should be readable");
+            for marker in source.lines().filter_map(feature_marker) {
+                markers.insert(marker);
+            }
+        }
+        markers
+    }
+
+    fn feature_marker(line: &str) -> Option<String> {
+        Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod abstract_domains_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/abstract-domains/core")
+    }
+
+    const REQUIRED_DOMAIN_COUNT_INVARIANTS: &[&str] = &[
+        "abstract_domains.counts.by_slot.reachability.nonzero",
+        "abstract_domains.counts.by_slot.nilness.nonzero",
+        "abstract_domains.counts.by_slot.truthiness.nonzero",
+        "abstract_domains.counts.by_slot.constants.nonzero",
+        "abstract_domains.counts.by_slot.strings.nonzero",
+        "abstract_domains.counts.by_slot.initializedness.nonzero",
+        "abstract_domains.counts.by_status.present.nonzero",
+        "abstract_domains.counts.by_status.top.nonzero",
+        "abstract_domains.counts.by_status.unknown.nonzero",
+        "abstract_domains.counts.by_status.unsupported.nonzero",
+        "abstract_domains.counts.by_status.budget_exceeded.nonzero",
+        "abstract_domains.counts.by_precision.exact_local.nonzero",
+        "abstract_domains.counts.by_precision.conservative.nonzero",
+        "abstract_domains.counts.by_precision.unknown.nonzero",
+        "abstract_domains.counts.by_precision.unsupported.nonzero",
+        "abstract_domains.counts.by_provider.polint.abstract_domains.nonzero",
+    ];
+
+    const REQUIRED_DOMAIN_INDEX_INVARIANTS: &[&str] = &[
+        "abstract_domains.index_counts.observations_by_body.nonzero",
+        "abstract_domains.index_counts.observations_by_slot.nonzero",
+        "abstract_domains.index_counts.events_by_status.nonzero",
+    ];
+
+    #[derive(Clone, Copy, Debug)]
+    struct AbstractDomainFeature {
+        marker: &'static str,
+        stable_key_fragment: &'static str,
+        status: ObservedStatus,
+        precision: &'static str,
+    }
+
+    const SUPPORTED_ABSTRACT_DOMAIN_FEATURES: &[AbstractDomainFeature] = &[
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/initialized-locals",
+            stable_key_fragment: "initializedness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/string-constant",
+            stable_key_fragment: "constants",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/nil-branch",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/boolean-branch",
+            stable_key_fragment: "truthiness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/loop-widening",
+            stable_key_fragment: "reachability",
+            status: ObservedStatus::Top,
+            precision: "conservative",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/go/unknown-call-havoc",
+            stable_key_fragment: "unknown",
+            status: ObservedStatus::Unknown,
+            precision: "unknown",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/maybe-uninitialized-local",
+            stable_key_fragment: "initializedness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/string-constant",
+            stable_key_fragment: "constants",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/nullish-branch",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/boolean-branch",
+            stable_key_fragment: "truthiness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/loop-widening",
+            stable_key_fragment: "reachability",
+            status: ObservedStatus::Top,
+            precision: "conservative",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/dynamic-write-havoc",
+            stable_key_fragment: "unsupported",
+            status: ObservedStatus::Unsupported,
+            precision: "unsupported",
+        },
+        AbstractDomainFeature {
+            marker: "abstract-domains/ts/nullish-coalescing",
+            stable_key_fragment: "nilness",
+            status: ObservedStatus::Present,
+            precision: "exact_local",
+        },
+    ];
+
+    #[test]
+    fn eval_abstract_domains_core_fixture_passes() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "abstract-domains-core");
+        assert_eq!(case.area, FixtureArea::AbstractDomains);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_manifest_covers_p0_slots_and_uncertainty() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected_facts = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Fact(fact) => Some((
+                    fact.family.as_str(),
+                    fact.stable_key.as_str(),
+                    fact.status,
+                    fact.precision.as_deref(),
+                    fact.producer_id.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for required in [
+            (
+                "DomainObservation",
+                "reachability",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "nilness",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "truthiness",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "constants",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "strings",
+                Some(ObservedStatus::Unknown),
+            ),
+            (
+                "DomainObservation",
+                "initializedness",
+                Some(ObservedStatus::Present),
+            ),
+            (
+                "DomainObservation",
+                "reachability",
+                Some(ObservedStatus::Top),
+            ),
+            (
+                "DomainObservation",
+                "unknown",
+                Some(ObservedStatus::Unknown),
+            ),
+            (
+                "DomainObservation",
+                "unsupported",
+                Some(ObservedStatus::Unsupported),
+            ),
+            (
+                "DomainEvent",
+                "budget",
+                Some(ObservedStatus::BudgetExceeded),
+            ),
+        ] {
+            assert!(
+                expected_facts
+                    .iter()
+                    .any(|(family, key, status, _, producer)| {
+                        *family == required.0
+                            && key.contains(required.1)
+                            && *status == required.2
+                            && *producer == Some("polint.abstract_domains")
+                    }),
+                "abstract-domain fixture missing expected {required:?}: {expected_facts:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_source_documents_supported_language_features() {
+        let markers = fixture_feature_markers(&["domain.go", "web/src/domain.ts"]);
+        let expected = SUPPORTED_ABSTRACT_DOMAIN_FEATURES
+            .iter()
+            .map(|feature| feature.marker.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(markers, expected);
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_observes_supported_language_feature_contract() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+
+        for feature in SUPPORTED_ABSTRACT_DOMAIN_FEATURES {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Fact(fact) => {
+                        fact.family == "DomainObservation"
+                            && fact.stable_key.contains(feature.stable_key_fragment)
+                            && fact.status == Some(feature.status)
+                            && fact.precision.as_deref() == Some(feature.precision)
+                    }
+                    _ => false,
+                }),
+                "abstract-domain feature {feature:?} was not observed: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    #[test]
+    fn eval_abstract_domains_core_observes_determinism_and_indexes() {
+        let run = run_abstract_domains_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("abstract-domains core case");
+
+        for required in [(
+            "abstract_domains.current_determinism",
+            "cold_warm_no_cache_equal",
+        )]
+        .into_iter()
+        .chain(
+            REQUIRED_DOMAIN_COUNT_INVARIANTS
+                .iter()
+                .chain(REQUIRED_DOMAIN_INDEX_INVARIANTS)
+                .map(|name| (*name, "true")),
+        ) {
+            assert!(
+                case.observed.iter().any(|item| match item {
+                    ObservedItem::Invariant(invariant) => {
+                        invariant.name == required.0 && invariant.value == required.1
+                    }
+                    _ => false,
+                }),
+                "abstract-domain fixture should observe invariant {required:?}: {:#?}",
+                case.observed
+            );
+        }
+    }
+
+    fn fixture_feature_markers(paths: &[&str]) -> std::collections::BTreeSet<String> {
+        let mut markers = std::collections::BTreeSet::new();
+        for path in paths {
+            let source = std::fs::read_to_string(fixture_dir().join("repo").join(path))
+                .expect("fixture source should be readable");
+            for marker in source.lines().filter_map(feature_marker) {
+                markers.insert(marker);
+            }
+        }
+        markers
+    }
+
+    fn feature_marker(line: &str) -> Option<String> {
+        Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
     }
 }

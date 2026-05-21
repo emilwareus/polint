@@ -23,11 +23,11 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 - [x] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
 - [x] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations.
 - [x] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
-- [ ] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
+- [x] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
 
 ### Interprocedural Substrate
 
-- [ ] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
+- [x] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
 - [ ] **SAE-INT-02**: polint has a summary kernel with summary keys, typed summary domains, local/direct summaries, control effects, return/TITO, memory-touch approximations, resource/external effects, and summary metadata.
 - [ ] **SAE-INT-03**: polint has an internal demand-query layer, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace/debug output for expensive analyses.
 - [ ] **SAE-INT-04**: polint has a repo-local Rust extension/provider sink with typed sinks, declared read sets, validation, precision ceilings, provenance, activation status, fixture requirements, and cache-key participation.
@@ -77,8 +77,8 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-SEM-02 | Phase 27 | Complete |
 | SAE-SEM-03 | Phase 28 | Complete |
 | SAE-SEM-04 | Phase 29 | Complete |
-| SAE-SEM-05 | Phase 30 | Pending |
-| SAE-INT-01 | Phase 31 | Pending |
+| SAE-SEM-05 | Phase 30 | Complete |
+| SAE-INT-01 | Phase 31 | Complete |
 | SAE-INT-02 | Phase 32 | Pending |
 | SAE-INT-03 | Phase 33 | Pending |
 | SAE-INT-04 | Phase 34 | Pending |

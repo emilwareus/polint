@@ -34,6 +34,10 @@ Phase 24 of v1.2 completed on 2026-05-18. Existing cheap fact layers now persist
 
 Phase 28 of v1.2 completed on 2026-05-20. polint now has private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots, explicit unsupported semantic rows, provider/cache/debug/validation wiring, internal eval coverage, and public no-leak proof.
 
+Phase 30 of v1.2 completed on 2026-05-21. polint now records private direct call-site, target, and unresolved-call facts with deterministic indexes, provider/cache/debug/eval wiring, direct target resolution from precise semantic references, explicit unresolved statuses, native fixture coverage, and proof that public whole-program `CallGraph<'_>` remains unsupported.
+
+Phase 31 of v1.2 completed on 2026-05-21. polint now has a private P0 abstract-domain kernel with law-tested lattice contracts, deterministic local solving over MIR/CFG/calls, conservative transfer behavior for uncertainty and budgets, provider/cache/validation/debug/eval wiring, native abstract-domain fixture coverage, and proof that abstract-domain internals do not leak through public SDK, CLI, runner, README, or docs/facts surfaces.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -103,6 +107,8 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] **SAE-FND-04**: polint records input snapshots, typed cache keys, provider output metadata, cache stats, and lifecycle/toolchain/rule/model digest inputs needed for correct cache invalidation. Validated in Phase 23: Input Snapshot and Cache Identity.
 - [x] **SAE-FND-05**: Existing cheap fact layers persist through a conservative layer cache with dependency indexes, change sets, hit/miss reporting, and stale-reuse safeguards. Validated in Phase 24: Persistent Layer Cache for Existing Cheap Facts.
 - [x] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations. Validated in Phase 28: Private Semantic MIR and Place Identity.
+- [x] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported. Validated in Phase 30: Direct Call Facts.
+- [x] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness. Validated in Phase 31: P0 Abstract-Domain Kernel.
 
 ### Active
 
@@ -110,8 +116,6 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [ ] **SAE-SEM-01**: The semantic index includes scopes, richer imports, resolution facts, aliases, generated-symbol hooks, unresolved references, stable export identities, and language-owned Go and TS/JS providers.
 - [ ] **SAE-SEM-02**: The module/package/topology graph models workspace roots, packages/projects/source sets, declared requirements, lockfile/tool-resolved edges, import-to-package facts, and repo topology overlays for Go and TS/JS.
 - [ ] **SAE-SEM-04**: polint builds local CFG, dominance, postdominance, and control-dependence facts over MIR for supported Go and TS/JS constructs.
-- [ ] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported.
-- [ ] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness.
 - [ ] **SAE-INT-02**: polint has a summary kernel with summary keys, typed summary domains, local/direct summaries, control effects, return/TITO, memory-touch approximations, resource/external effects, and summary metadata.
 - [ ] **SAE-INT-03**: polint has an internal demand-query layer, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace/debug output for expensive analyses.
 - [ ] **SAE-INT-04**: polint has a repo-local Rust extension/provider sink with typed sinks, declared read sets, validation, precision ceilings, provenance, activation status, fixture requirements, and cache-key participation.
@@ -163,6 +167,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - Phase 20 completed on 2026-05-16 through GSD plan execution, code review, full workspace regression, and verification, closing the private analysis kernel facade and provider manifest foundation without promoting a public SDK or CLI provider surface.
 - Phase 21 completed on 2026-05-17 through GSD plan execution, code review, full workspace regression, and verification, closing provenance/precision/validation sidecar metadata and deterministic merge validation for current fact families without promoting a public metadata surface.
 - Phase 22 completed on 2026-05-17 through GSD plan execution, code review, post-review determinism fix, full workspace regression, and verification, closing the internal evaluation harness MVP without promoting a public eval CLI, SDK, runner, schema, or check JSON surface.
+- Phase 31 completed on 2026-05-21 through GSD plan execution, code review fixes, full workspace regression, schema-drift verification, and final phase verification, closing the private P0 abstract-domain kernel without promoting a public abstract-domain SDK, CLI, runner, README, or docs/facts surface.
 
 ## Constraints
 
@@ -224,4 +229,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-20 after completing Phase 28 Private Semantic MIR and Place Identity*
+*Last updated: 2026-05-21 after completing Phase 31 P0 Abstract-Domain Kernel*

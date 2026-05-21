@@ -27,6 +27,18 @@ pub(crate) struct UnsupportedId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct CallSiteId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct CallTargetId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct AbstractStateId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct DomainObservationId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct DomainEventId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +74,10 @@ mod tests {
         assert_small_id_contract::<PlaceId>();
         assert_small_id_contract::<UnsupportedId>();
         assert_small_id_contract::<CallSiteId>();
+        assert_small_id_contract::<CallTargetId>();
+        assert_small_id_contract::<AbstractStateId>();
+        assert_small_id_contract::<DomainObservationId>();
+        assert_small_id_contract::<DomainEventId>();
     }
 
     #[test]
