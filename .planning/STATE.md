@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T06:04:08Z"
-last_activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
+last_updated: "2026-05-21T07:35:30.715Z"
+last_activity: 2026-05-21 -- Phase 30 planning complete
 progress:
   total_phases: 22
   completed_phases: 10
-  total_plans: 52
+  total_plans: 60
   completed_plans: 52
-  percent: 100
+  percent: 87
 ---
 
 # State: polint
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready for Phase 30
+Status: Ready to execute
 Phase: 30 (Direct Call Facts) — PENDING
 Plan: Planning/execution not started
-Last activity: 2026-05-21 -- Fixed CFG digest payload and stable unsupported control-flow keys
+Last activity: 2026-05-21 -- Phase 30 planning complete
 
 ## Phase Progress
 
