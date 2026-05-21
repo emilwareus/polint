@@ -272,6 +272,16 @@ Plans:
 **Goal:** Add summary keys, stores, typed summary domains, local/direct summaries, effects, TITO, memory-touch approximations, and metadata.
 **Requirements:** SAE-INT-02
 **Research:** `research/effects-summaries/FINAL-REPORT.md`, `research/effects-summaries/RECOMMENDED_IMPLEMENTATION.md`, `research/effects-summaries/VALIDATION.md`
+**Plans:** 7 plans
+
+Plans:
+- [ ] 32-01-PLAN.md — Private summary contracts, SummaryDomain trait, four core domain types, fact vocabulary, and ID newtypes
+- [ ] 32-02-PLAN.md — SummaryStore with normalization, indexes, AnalysisDb storage, and FactFamily extensions
+- [ ] 32-03-PLAN.md — DirectSummaryBuilder lifting control/call/memory/TITO from domain results and MIR
+- [ ] 32-04-PLAN.md — Summary provider, cache identity, manifest, and kernel run-sequence wiring
+- [ ] 32-05-PLAN.md — Summary validation, debug snapshots, and provider-order proof
+- [ ] 32-06-PLAN.md — Direct-summary eval observation and native mixed Go/TS fixture
+- [ ] 32-07-PLAN.md — Public no-leak boundary proof and full verification
 
 **Success criteria:**
 1. Direct summary snapshots are deterministic.
