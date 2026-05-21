@@ -1,12 +1,18 @@
 #![cfg(test)]
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::analysis::calls::facts::{
+    CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSyntaxKind,
+    CallTargetStatus, UnresolvedCallReason,
+};
+use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
 };
 use crate::analysis::mir::body::MirStatus;
 use crate::analysis::mir::op::{AssignMode, ConservativeAction, MirOperationKind};
 use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus};
-use crate::analysis::cfg::facts::{CfgEdgeKind, CfgPrecision, CfgStatus, CfgView};
 use crate::core::{
     AnalysisDb, FileId, Language, ReferenceFact, Span, SymbolPrecision, SymbolResolutionStatus,
 };
@@ -23,6 +29,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
         semantic: semantic_report(db),
         mir: mir_report(db),
         cfg: cfg_report(db),
+        calls: calls_report(db),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
 }
@@ -36,6 +43,7 @@ struct MetadataDebugReport<'a> {
     semantic: SemanticDebugReport,
     mir: SemanticMirDebugReport,
     cfg: CfgDebugReport,
+    calls: CallDebugReport,
 }
 
 #[derive(Serialize)]
@@ -152,6 +160,71 @@ struct CfgDebugReport {
     postdominators: Vec<CfgDebugRow>,
     control_dependence: Vec<CfgDebugRow>,
     unsupported: Vec<CfgDebugRow>,
+}
+
+#[derive(Serialize)]
+struct CallDebugReport {
+    sites: Vec<CallSiteDebugRow>,
+    targets: Vec<CallTargetDebugRow>,
+    unresolved: Vec<UnresolvedCallDebugRow>,
+    index_counts: BTreeMap<&'static str, usize>,
+    counts: CallDebugCounts,
+}
+
+#[derive(Default, Serialize)]
+struct CallDebugCounts {
+    by_language: BTreeMap<String, usize>,
+    by_call_kind: BTreeMap<String, usize>,
+    by_algorithm: BTreeMap<String, usize>,
+    by_status: BTreeMap<String, usize>,
+    by_unresolved_reason: BTreeMap<String, usize>,
+    by_provider: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct CallDebugMetadata {
+    family: &'static str,
+    stable_key: String,
+    producer_id: &'static str,
+    layer_id: &'static str,
+    status: String,
+    precision: String,
+    path: Option<String>,
+    span: Option<DebugSpan>,
+}
+
+#[derive(Serialize)]
+struct CallSiteDebugRow {
+    #[serde(flatten)]
+    metadata: CallDebugMetadata,
+    language: String,
+    kind: String,
+    callee: String,
+}
+
+#[derive(Serialize)]
+struct CallTargetDebugRow {
+    #[serde(flatten)]
+    metadata: CallDebugMetadata,
+    site_stable_key: Option<String>,
+    caller_stable_key: Option<String>,
+    target_function_stable_key: Option<String>,
+    target_symbol_stable_key: Option<String>,
+    edge_kind: String,
+    algorithm: String,
+    reason: Option<String>,
+    provenance: String,
+}
+
+#[derive(Serialize)]
+struct UnresolvedCallDebugRow {
+    #[serde(flatten)]
+    metadata: CallDebugMetadata,
+    site_stable_key: Option<String>,
+    caller_stable_key: Option<String>,
+    algorithm: String,
+    reason: String,
+    provenance: String,
 }
 
 #[derive(Serialize)]
@@ -653,6 +726,298 @@ fn cfg_report(db: &AnalysisDb) -> CfgDebugReport {
         control_dependence: cfg_control_dependence_rows(db),
         unsupported: cfg_unsupported_rows(db),
     }
+}
+
+fn calls_report(db: &AnalysisDb) -> CallDebugReport {
+    CallDebugReport {
+        sites: call_site_rows(db),
+        targets: call_target_rows(db),
+        unresolved: unresolved_call_rows(db),
+        index_counts: call_index_counts(db),
+        counts: call_counts(db),
+    }
+}
+
+fn call_site_rows(db: &AnalysisDb) -> Vec<CallSiteDebugRow> {
+    let mut rows = db
+        .call_sites()
+        .iter()
+        .filter_map(|row| {
+            call_metadata_row(
+                db,
+                FactFamily::CallSite,
+                row.id.0,
+                row.stable_key.as_str(),
+                call_status_label(row.status),
+                call_precision_label(row.precision),
+                Some(row.file),
+                Some(debug_span(&row.span)),
+            )
+            .map(|metadata| CallSiteDebugRow {
+                metadata,
+                language: call_language_label(row.language).to_string(),
+                kind: call_syntax_kind_label(row.kind).to_string(),
+                callee: call_callee_label(&row.callee),
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| call_metadata_order(&left.metadata).cmp(&call_metadata_order(&right.metadata)));
+    rows
+}
+
+fn call_target_rows(db: &AnalysisDb) -> Vec<CallTargetDebugRow> {
+    let site_keys = db
+        .call_sites()
+        .iter()
+        .map(|site| (site.id, site.stable_key.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = db
+        .call_targets()
+        .iter()
+        .filter_map(|row| {
+            let site = db.call_sites().iter().find(|site| site.id == row.site);
+            call_metadata_row(
+                db,
+                FactFamily::CallTarget,
+                row.id.0,
+                row.stable_key.as_str(),
+                call_status_label(row.status),
+                call_precision_label(row.precision),
+                site.map(|site| site.file),
+                site.map(|site| debug_span(&site.span)),
+            )
+            .map(|metadata| CallTargetDebugRow {
+                metadata,
+                site_stable_key: site_keys.get(&row.site).cloned(),
+                caller_stable_key: stable_key_for(db, FactFamily::Function, row.caller.0),
+                target_function_stable_key: row
+                    .target_function
+                    .and_then(|function| stable_key_for(db, FactFamily::Function, function.0)),
+                target_symbol_stable_key: row
+                    .target_symbol
+                    .and_then(|symbol| stable_key_for(db, FactFamily::Symbol, symbol.0)),
+                edge_kind: call_edge_kind_label(row.edge_kind).to_string(),
+                algorithm: call_algorithm_label(row.algorithm).to_string(),
+                reason: row.reason.map(call_unresolved_reason_label).map(str::to_string),
+                provenance: call_provenance_label(row.provenance).to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| call_metadata_order(&left.metadata).cmp(&call_metadata_order(&right.metadata)));
+    rows
+}
+
+fn unresolved_call_rows(db: &AnalysisDb) -> Vec<UnresolvedCallDebugRow> {
+    let site_keys = db
+        .call_sites()
+        .iter()
+        .map(|site| (site.id, site.stable_key.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = db
+        .unresolved_calls()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let site = db.call_sites().iter().find(|site| site.id == row.site);
+            call_metadata_row(
+                db,
+                FactFamily::UnresolvedCall,
+                index as u64,
+                row.stable_key.as_str(),
+                call_status_label(row.status),
+                call_precision_label(row.precision),
+                site.map(|site| site.file),
+                site.map(|site| debug_span(&site.span)),
+            )
+            .map(|metadata| UnresolvedCallDebugRow {
+                metadata,
+                site_stable_key: site_keys.get(&row.site).cloned(),
+                caller_stable_key: stable_key_for(db, FactFamily::Function, row.caller.0),
+                algorithm: call_algorithm_label(row.algorithm).to_string(),
+                reason: call_unresolved_reason_label(row.reason).to_string(),
+                provenance: call_provenance_label(row.provenance).to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| call_metadata_order(&left.metadata).cmp(&call_metadata_order(&right.metadata)));
+    rows
+}
+
+fn call_metadata_row(
+    db: &AnalysisDb,
+    family: FactFamily,
+    run_id: u64,
+    stable_key: &str,
+    status: &'static str,
+    precision: &'static str,
+    file: Option<FileId>,
+    span: Option<DebugSpan>,
+) -> Option<CallDebugMetadata> {
+    let meta = db.metadata_for(FactRef::new(family, run_id))?;
+    Some(CallDebugMetadata {
+        family: family.label(),
+        stable_key: stable_key.to_string(),
+        producer_id: meta.producer_id,
+        layer_id: meta.layer_id,
+        status: status.to_string(),
+        precision: precision.to_string(),
+        path: relative_path(db, file).map(str::to_string),
+        span,
+    })
+}
+
+fn call_metadata_order(row: &CallDebugMetadata) -> (&str, u32, &str) {
+    (
+        row.path.as_deref().unwrap_or(""),
+        span_start(row.span),
+        row.stable_key.as_str(),
+    )
+}
+
+fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
+    db.metadata_for(FactRef::new(family, run_id))
+        .map(|metadata| metadata.stable_key.clone())
+}
+
+fn call_index_counts(db: &AnalysisDb) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    let caller_functions = db
+        .call_sites()
+        .iter()
+        .map(|site| site.caller)
+        .collect::<BTreeSet<_>>();
+    let sites = db
+        .call_sites()
+        .iter()
+        .map(|site| site.id)
+        .collect::<BTreeSet<_>>();
+    let outgoing_functions = db
+        .call_targets()
+        .iter()
+        .map(|target| target.caller)
+        .collect::<BTreeSet<_>>();
+    let outgoing_symbols = db
+        .call_sites()
+        .iter()
+        .filter_map(|site| site.owner_symbol)
+        .collect::<BTreeSet<_>>();
+    let incoming_symbols = db
+        .call_targets()
+        .iter()
+        .filter_map(|target| target.target_symbol)
+        .collect::<BTreeSet<_>>();
+    let incoming_functions = db
+        .call_targets()
+        .iter()
+        .filter_map(|target| target.target_function)
+        .collect::<BTreeSet<_>>();
+    let unresolved_reasons = db
+        .unresolved_calls()
+        .iter()
+        .map(|row| row.reason)
+        .collect::<BTreeSet<_>>();
+    let unresolved_statuses = db
+        .unresolved_calls()
+        .iter()
+        .map(|row| row.status)
+        .collect::<BTreeSet<_>>();
+
+    counts.insert(
+        "sites_by_caller",
+        caller_functions
+            .iter()
+            .filter(|caller| !db.call_sites_by_caller(**caller).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "targets_by_site",
+        sites.iter()
+            .filter(|site| !db.call_targets_by_site(**site).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "outgoing_by_function",
+        outgoing_functions
+            .iter()
+            .filter(|function| !db.outgoing_calls_by_function(**function).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "outgoing_by_symbol",
+        outgoing_symbols
+            .iter()
+            .filter(|symbol| !db.outgoing_calls_by_symbol(**symbol).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "incoming_by_symbol",
+        incoming_symbols
+            .iter()
+            .filter(|symbol| !db.incoming_calls_by_symbol(**symbol).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "incoming_by_function",
+        incoming_functions
+            .iter()
+            .filter(|function| !db.incoming_calls_by_function(**function).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "unresolved_by_reason",
+        unresolved_reasons
+            .iter()
+            .filter(|reason| !db.unresolved_calls_by_reason(**reason).is_empty())
+            .count(),
+    );
+    counts.insert(
+        "unresolved_by_status",
+        unresolved_statuses
+            .iter()
+            .filter(|status| !db.unresolved_calls_by_status(**status).is_empty())
+            .count(),
+    );
+    counts
+}
+
+fn call_counts(db: &AnalysisDb) -> CallDebugCounts {
+    let mut counts = CallDebugCounts::default();
+    for site in db.call_sites() {
+        increment(&mut counts.by_language, call_language_label(site.language));
+        increment(&mut counts.by_call_kind, call_syntax_kind_label(site.kind));
+        increment(&mut counts.by_status, call_status_label(site.status));
+        if let Some(metadata) = db.metadata_for(FactRef::new(FactFamily::CallSite, site.id.0)) {
+            increment(&mut counts.by_provider, metadata.producer_id);
+        }
+    }
+    for target in db.call_targets() {
+        increment(&mut counts.by_algorithm, call_algorithm_label(target.algorithm));
+        increment(&mut counts.by_status, call_status_label(target.status));
+        if let Some(reason) = target.reason {
+            increment(&mut counts.by_unresolved_reason, call_unresolved_reason_label(reason));
+        }
+        if let Some(metadata) = db.metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0)) {
+            increment(&mut counts.by_provider, metadata.producer_id);
+        }
+    }
+    for (index, unresolved) in db.unresolved_calls().iter().enumerate() {
+        increment(&mut counts.by_algorithm, call_algorithm_label(unresolved.algorithm));
+        increment(&mut counts.by_status, call_status_label(unresolved.status));
+        increment(
+            &mut counts.by_unresolved_reason,
+            call_unresolved_reason_label(unresolved.reason),
+        );
+        if let Some(metadata) =
+            db.metadata_for(FactRef::new(FactFamily::UnresolvedCall, index as u64))
+        {
+            increment(&mut counts.by_provider, metadata.producer_id);
+        }
+    }
+    counts
+}
+
+fn increment(counts: &mut BTreeMap<String, usize>, key: &str) {
+    *counts.entry(key.to_string()).or_default() += 1;
 }
 
 fn cfg_function_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
@@ -1187,6 +1552,144 @@ fn cfg_edge_kind_label(kind: CfgEdgeKind) -> &'static str {
         CfgEdgeKind::Unknown => "unknown",
         CfgEdgeKind::Synthetic => "synthetic",
         CfgEdgeKind::Extension => "extension",
+    }
+}
+
+fn call_language_label(language: Language) -> &'static str {
+    match language {
+        Language::Go => "Go",
+        Language::TypeScript => "TypeScript",
+        Language::Tsx => "Tsx",
+        Language::JavaScript => "JavaScript",
+        Language::Jsx => "Jsx",
+        Language::Unknown => "Unknown",
+    }
+}
+
+fn call_status_label(status: CallTargetStatus) -> &'static str {
+    match status {
+        CallTargetStatus::Resolved => "Resolved",
+        CallTargetStatus::Ambiguous => "Ambiguous",
+        CallTargetStatus::Unresolved => "Unresolved",
+        CallTargetStatus::Unsupported => "Unsupported",
+        CallTargetStatus::SetupMissing => "SetupMissing",
+        CallTargetStatus::BudgetExceeded => "BudgetExceeded",
+        CallTargetStatus::Rejected => "Rejected",
+    }
+}
+
+fn call_precision_label(precision: CallPrecision) -> &'static str {
+    match precision {
+        CallPrecision::Exact => "Exact",
+        CallPrecision::SetupAware => "SetupAware",
+        CallPrecision::Conservative => "Conservative",
+        CallPrecision::Heuristic => "Heuristic",
+        CallPrecision::Ambiguous => "Ambiguous",
+        CallPrecision::Unknown => "Unknown",
+        CallPrecision::Unsupported => "Unsupported",
+    }
+}
+
+fn call_syntax_kind_label(kind: CallSyntaxKind) -> &'static str {
+    match kind {
+        CallSyntaxKind::Function => "Function",
+        CallSyntaxKind::Method => "Method",
+        CallSyntaxKind::Constructor => "Constructor",
+        CallSyntaxKind::StaticMember => "StaticMember",
+        CallSyntaxKind::Member => "Member",
+        CallSyntaxKind::Index => "Index",
+        CallSyntaxKind::Super => "Super",
+        CallSyntaxKind::Import => "Import",
+        CallSyntaxKind::New => "New",
+        CallSyntaxKind::TaggedTemplate => "TaggedTemplate",
+        CallSyntaxKind::GoRoutine => "GoRoutine",
+        CallSyntaxKind::Deferred => "Deferred",
+        CallSyntaxKind::Unknown => "Unknown",
+    }
+}
+
+fn call_edge_kind_label(kind: CallEdgeKind) -> &'static str {
+    match kind {
+        CallEdgeKind::Direct => "Direct",
+        CallEdgeKind::Constructor => "Constructor",
+        CallEdgeKind::StaticMember => "StaticMember",
+        CallEdgeKind::Method => "Method",
+        CallEdgeKind::FunctionValue => "FunctionValue",
+        CallEdgeKind::Synthetic => "Synthetic",
+        CallEdgeKind::Spawn => "Spawn",
+        CallEdgeKind::Deferred => "Deferred",
+        CallEdgeKind::Unknown => "Unknown",
+    }
+}
+
+fn call_algorithm_label(algorithm: CallAlgorithm) -> &'static str {
+    match algorithm {
+        CallAlgorithm::SyntaxOnly => "SyntaxOnly",
+        CallAlgorithm::DirectReference => "DirectReference",
+        CallAlgorithm::ImportBinding => "ImportBinding",
+        CallAlgorithm::ConstructorBinding => "ConstructorBinding",
+        CallAlgorithm::StaticMember => "StaticMember",
+        CallAlgorithm::DirectMember => "DirectMember",
+        CallAlgorithm::GoStatic => "GoStatic",
+        CallAlgorithm::GoCha => "GoCha",
+        CallAlgorithm::GoRta => "GoRta",
+        CallAlgorithm::GoVta => "GoVta",
+        CallAlgorithm::FunctionTokenFlow => "FunctionTokenFlow",
+        CallAlgorithm::TypeHierarchy => "TypeHierarchy",
+        CallAlgorithm::PointsTo => "PointsTo",
+        CallAlgorithm::SummaryAssisted => "SummaryAssisted",
+        CallAlgorithm::FrameworkModel => "FrameworkModel",
+        CallAlgorithm::RepoModel => "RepoModel",
+        CallAlgorithm::Unsupported => "Unsupported",
+    }
+}
+
+fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
+    match reason {
+        UnresolvedCallReason::FunctionValue => "FunctionValue",
+        UnresolvedCallReason::DynamicProperty => "DynamicProperty",
+        UnresolvedCallReason::InterfaceDispatch => "InterfaceDispatch",
+        UnresolvedCallReason::Eval => "Eval",
+        UnresolvedCallReason::CallApplyBind => "CallApplyBind",
+        UnresolvedCallReason::FrameworkDispatch => "FrameworkDispatch",
+        UnresolvedCallReason::Reflection => "Reflection",
+        UnresolvedCallReason::DynamicImport => "DynamicImport",
+        UnresolvedCallReason::ProxyOrAccessor => "ProxyOrAccessor",
+        UnresolvedCallReason::MissingSemanticReference => "MissingSemanticReference",
+        UnresolvedCallReason::MissingImportResolution => "MissingImportResolution",
+        UnresolvedCallReason::SetupMissing => "SetupMissing",
+        UnresolvedCallReason::UnsupportedSyntax => "UnsupportedSyntax",
+        UnresolvedCallReason::BudgetExceeded => "BudgetExceeded",
+        UnresolvedCallReason::Unknown => "Unknown",
+    }
+}
+
+fn call_provenance_label(provenance: CallProvenance) -> &'static str {
+    match provenance {
+        CallProvenance::Native => "Native",
+        CallProvenance::SemanticReference => "SemanticReference",
+        CallProvenance::ImportBinding => "ImportBinding",
+        CallProvenance::MirShape => "MirShape",
+        CallProvenance::Topology => "Topology",
+        CallProvenance::Extension => "Extension",
+        CallProvenance::Model => "Model",
+    }
+}
+
+fn call_callee_label(callee: &CallCallee) -> String {
+    match callee {
+        CallCallee::Identifier { name, .. } => format!("identifier:{name}"),
+        CallCallee::Member { property, .. } => format!("member:{property}"),
+        CallCallee::Index { .. } => "index".to_string(),
+        CallCallee::Super => "super".to_string(),
+        CallCallee::Import => "import".to_string(),
+        CallCallee::FunctionValue { .. } => "function_value".to_string(),
+        CallCallee::Constructor { name, .. } => {
+            format!("constructor:{}", name.as_deref().unwrap_or("<unknown>"))
+        }
+        CallCallee::Unknown { reason } => {
+            format!("unknown:{}", call_unresolved_reason_label(*reason))
+        }
     }
 }
 
