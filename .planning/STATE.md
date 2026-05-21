@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T19:23:17Z"
-last_activity: 2026-05-21 -- Phase 32 Plan 05 complete
+last_updated: "2026-05-21T19:37:01Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 06 complete
 progress:
   total_phases: 22
   completed_phases: 12
   total_plans: 72
-  completed_plans: 70
-  percent: 57
+  completed_plans: 71
+  percent: 58
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Executing Phase 32
 Phase: 32 (summary-kernel-and-direct-summaries) — EXECUTING
-Plan: 6 of 7
-Last activity: 2026-05-21 -- Completed 32-05-PLAN.md
+Plan: 7 of 7
+Last activity: 2026-05-21 -- Completed 32-06-PLAN.md
 
 ## Phase Progress
 
@@ -282,6 +282,10 @@ Last activity: 2026-05-21 -- Completed 32-05-PLAN.md
 - [Phase 32-summary-kernel-and-direct-summaries]: Summary validation runs after validate_abstract_domains in the kernel validation sequence.
 - [Phase 32-summary-kernel-and-direct-summaries]: Precision ceiling check rejects FactPrecision::Exact from polint.direct_summaries metadata rows.
 - [Phase 32-summary-kernel-and-direct-summaries]: Summary debug rows use as_str labels for domain, status, precision, and provenance instead of dense IDs.
+- [Phase 32-summary-kernel-and-direct-summaries]: Eval observation maps summary domain names to fact families: control_effects -> summary_control, call_effects -> summary_call, memory_effects -> summary_memory, data_flow_tito -> summary_tito.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary event facts use a single summary_event family rather than per-domain event families.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary eval payload uses semicolon-delimited compact fragments: domain;status;precision;provenance;payload_digest_prefix.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary determinism comparison uses cold/warm/no-cache three-way equality matching the established direct-calls and abstract-domains patterns.
 
 ## Execution Metrics
 
@@ -345,12 +349,13 @@ Last activity: 2026-05-21 -- Completed 32-05-PLAN.md
 | 32-summary-kernel-and-direct-summaries | 03 | 6 min | 2 | 2 |
 | 32-summary-kernel-and-direct-summaries | 04 | 12 min | 2 | 10 |
 | 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
+| 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-05-PLAN.md.
-- Stopped at: Completed 32-05-PLAN.md; ready for Plan 32-06.
+- Last activity: 2026-05-21 - Completed 32-06-PLAN.md.
+- Stopped at: Completed 32-06-PLAN.md; ready for Plan 32-07.
 
 ### Quick Tasks Completed
 
@@ -379,4 +384,4 @@ Last activity: 2026-05-21 -- Completed 32-05-PLAN.md
 
 ## Next Action
 
-Phase 32 Plan 06 is next: summary eval fixtures and public boundary proof.
+Phase 32 Plan 07 is next: public boundary proof for direct summaries.

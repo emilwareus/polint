@@ -312,7 +312,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 32-06-PLAN.md — Direct-summary eval observation and native mixed Go/TS fixture
+- [x] 32-06-PLAN.md — Direct-summary eval observation and native mixed Go/TS fixture
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
