@@ -141,8 +141,16 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
     #[test]
     fn call_unresolved_unsupported_and_setup_missing_statuses_count_as_unknown_metrics() {
         let expected = [
-            expected_call_fact("CallSite", "call-site:unresolved", ObservedStatus::Unresolved),
-            expected_call_fact("CallSite", "call-site:unsupported", ObservedStatus::Unsupported),
+            expected_call_fact(
+                "CallSite",
+                "call-site:unresolved",
+                ObservedStatus::Unresolved,
+            ),
+            expected_call_fact(
+                "CallSite",
+                "call-site:unsupported",
+                ObservedStatus::Unsupported,
+            ),
             expected_call_fact(
                 "UnresolvedCall",
                 "call-unresolved:setup",
@@ -150,8 +158,16 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
             ),
         ];
         let observed = [
-            observed_call_fact("CallSite", "call-site:unresolved", ObservedStatus::Unresolved),
-            observed_call_fact("CallSite", "call-site:unsupported", ObservedStatus::Unsupported),
+            observed_call_fact(
+                "CallSite",
+                "call-site:unresolved",
+                ObservedStatus::Unresolved,
+            ),
+            observed_call_fact(
+                "CallSite",
+                "call-site:unsupported",
+                ObservedStatus::Unsupported,
+            ),
             observed_call_fact(
                 "UnresolvedCall",
                 "call-unresolved:setup",
@@ -191,11 +207,7 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
         })
     }
 
-    fn expected_call_fact(
-        family: &str,
-        stable_key: &str,
-        status: ObservedStatus,
-    ) -> ExpectedItem {
+    fn expected_call_fact(family: &str, stable_key: &str, status: ObservedStatus) -> ExpectedItem {
         ExpectedItem::Fact(ExpectedFact {
             family: family.to_string(),
             stable_key: stable_key.to_string(),
@@ -207,11 +219,7 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
         })
     }
 
-    fn observed_call_fact(
-        family: &str,
-        stable_key: &str,
-        status: ObservedStatus,
-    ) -> ObservedItem {
+    fn observed_call_fact(family: &str, stable_key: &str, status: ObservedStatus) -> ObservedItem {
         ObservedItem::Fact(ObservedFact {
             family: family.to_string(),
             stable_key: stable_key.to_string(),

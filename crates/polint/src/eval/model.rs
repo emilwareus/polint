@@ -35,6 +35,8 @@ pub(crate) const CFG_FACT_FAMILIES: &[&str] = &[
     "UnsupportedControlFlow",
 ];
 
+pub(crate) const CALL_FACT_FAMILIES: &[&str] = &["CallSite", "CallTarget", "UnresolvedCall"];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -67,6 +69,8 @@ pub(crate) enum FixtureArea {
     #[serde(rename = "semantic-mir")]
     SemanticMir,
     Cfg,
+    #[serde(rename = "direct-calls")]
+    DirectCalls,
     Facts,
     Graphs,
     Paths,

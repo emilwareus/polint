@@ -442,6 +442,11 @@ pub(crate) fn cfg_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
 }
 
 #[cfg(test)]
+pub(crate) fn call_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    call_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
     topology_facts(db)
 }
@@ -652,6 +657,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     }
     facts.extend(semantic_mir_facts(debug_json));
     facts.extend(cfg_facts(debug_json));
+    facts.extend(call_facts(debug_json));
     facts
 }
 
@@ -785,6 +791,121 @@ fn cfg_payload(row: &Value) -> Option<String> {
     } else {
         Some(parts.join(";"))
     }
+}
+
+#[cfg(test)]
+fn call_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(calls) = debug_json.get("calls").and_then(Value::as_object) else {
+        return facts;
+    };
+    for section in ["sites", "targets", "unresolved"] {
+        let Some(rows) = calls.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = call_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+fn call_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.calls".to_string()),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(call_precision_label),
+        status: Some(call_status_from_row(row)),
+        payload: call_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn call_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "path", row.get("path"));
+    push_span_fragment(&mut parts, row.get("span"));
+    push_str_fragment(&mut parts, "kind", row.get("kind"));
+    push_str_fragment(&mut parts, "callee", row.get("callee"));
+    push_str_fragment(&mut parts, "edge_kind", row.get("edge_kind"));
+    push_str_fragment(&mut parts, "algorithm", row.get("algorithm"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "reason", row.get("reason"));
+    push_str_fragment(&mut parts, "provider", row.get("producer_id"));
+    push_str_fragment(&mut parts, "provenance", row.get("provenance"));
+    push_str_fragment(&mut parts, "site", row.get("site_stable_key"));
+    push_str_fragment(&mut parts, "caller", row.get("caller_stable_key"));
+    push_str_fragment(
+        &mut parts,
+        "target_function",
+        row.get("target_function_stable_key"),
+    );
+    push_str_fragment(
+        &mut parts,
+        "target_symbol",
+        row.get("target_symbol_stable_key"),
+    );
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn call_status_from_row(row: &Value) -> ObservedStatus {
+    row.get("status")
+        .and_then(Value::as_str)
+        .and_then(call_status_label)
+        .or_else(|| {
+            row.get("precision")
+                .and_then(Value::as_str)
+                .and_then(call_status_label)
+        })
+        .unwrap_or(ObservedStatus::Present)
+}
+
+#[cfg(test)]
+fn call_status_label(label: &str) -> Option<ObservedStatus> {
+    match label {
+        "Resolved" | "resolved" => Some(ObservedStatus::Resolved),
+        "Ambiguous" | "ambiguous" => Some(ObservedStatus::Ambiguous),
+        "Unresolved" | "unresolved" => Some(ObservedStatus::Unresolved),
+        "Unsupported" | "unsupported" => Some(ObservedStatus::Unsupported),
+        "SetupMissing" | "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "Rejected" | "rejected" => Some(ObservedStatus::Rejected),
+        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::Unknown),
+        "Unknown" | "unknown" => Some(ObservedStatus::Unknown),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn call_precision_label(label: &str) -> String {
+    match label {
+        "Exact" | "exact" => "exact",
+        "SetupAware" | "setup_aware" => "setup_aware",
+        "Conservative" | "conservative" => "conservative",
+        "Heuristic" | "heuristic" => "heuristic",
+        "Ambiguous" | "ambiguous" => "ambiguous",
+        "Unknown" | "unknown" => "unknown",
+        "Unsupported" | "unsupported" => "unsupported",
+        _ => label,
+    }
+    .to_string()
 }
 
 #[cfg(test)]
