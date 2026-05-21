@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-21T09:12:53.781Z"
+last_updated: "2026-05-21T09:38:32.743Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
   completed_phases: 10
   total_plans: 60
-  completed_plans: 58
-  percent: 97
+  completed_plans: 59
+  percent: 98
 ---
 
 # State: polint
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 30 (direct-call-facts) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Last activity: 2026-05-21
 
 ## Phase Progress
@@ -246,6 +246,9 @@ Last activity: 2026-05-21
 - [Phase 30-direct-call-facts]: Eval call observation stays crate-private/test-facing; no public SDK, runner, CLI, docs, or call graph API was promoted.
 - [Phase 30-direct-call-facts]: Call eval payloads use relative path, source span, status/kind/algorithm/reason/provider, and stable-key target identity only.
 - [Phase 30-direct-call-facts]: Existing matcher/metrics/report unknown-like status accounting already covered unresolved, unsupported, and setup_missing; plan-specific tests now prove it for call rows.
+- [Phase 30-direct-call-facts]: Plan 30-07 kept direct-call fixture coverage internal and test-facing; no public CallGraph API was exposed.
+- [Phase 30-direct-call-facts]: Plan 30-07 uses nonzero eval invariants for direct-call debug count and D-10 index coverage instead of fragile exact counts.
+- [Phase 30-direct-call-facts]: Plan 30-07 derives missing call-site owner symbols from existing function/symbol facts before call-store indexing.
 
 ## Execution Metrics
 
