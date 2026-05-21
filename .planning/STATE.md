@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: verifying
-last_updated: "2026-05-21T09:51:49.137Z"
+last_updated: "2026-05-21T10:29:49.640Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 22
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-18)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Phase complete — ready for verification
-Phase: 30 (direct-call-facts) — COMPLETE
-Plan: 8 of 8
+Phase: 31
+Plan: Not started
 Last activity: 2026-05-21
 
 ## Phase Progress
