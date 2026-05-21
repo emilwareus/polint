@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::core::{CallEffects, ControlEffects, DataFlowTito, FlowEdge, MemoryEffects};
-use super::domain::SummaryTopReason;
 use super::facts::{
     AccessKind, AsyncKind, ExitKind, FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact,
     SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
@@ -10,7 +9,7 @@ use super::store::SummaryOutput;
 use crate::analysis::calls::facts::UnresolvedCallFact;
 use crate::analysis::cfg::facts::{BasicBlockKind, CfgEdgeKind};
 use crate::analysis::domains::facts::{
-    DomainLocation, DomainObservationFact, DomainSlot, DomainStatus, DomainValue,
+    DomainLocation, DomainObservationFact, DomainSlot, DomainValue,
 };
 use crate::analysis::ids::{MirBodyId, PlaceId, SummaryEventId, SummaryId};
 use crate::analysis::mir::body::MirBody;
@@ -453,6 +452,7 @@ fn build_call_effects(
 ) -> CallEffects {
     let mut direct_callees = BTreeSet::new();
     let mut has_callback_invoked = false;
+    // Callback-stored detection requires value-flow tracking (Phase 38)
     let has_callback_stored = false;
     let unresolved_count = function_unresolved.len() as u32;
 
@@ -692,6 +692,8 @@ fn build_memory_effects(
     }
 }
 
+// receiver, return_access, module are reserved for Phase 36 (type/value/place/alias substrate)
+// when PlaceRoot gains Receiver/Module variants and return-place tracking improves.
 #[allow(clippy::too_many_arguments)]
 fn track_access(
     place: PlaceId,
@@ -759,23 +761,11 @@ fn build_tito(
             MirOperationKind::Return {
                 value: Some(MirValue::Place(src)),
             } => {
-                // Check if the return value traces back to a parameter
-                let sources = trace_sources(*src, &copy_map);
-                for source in &sources {
-                    if let Some(place_fact) = places_by_id.get(source) {
-                        if let PlaceRoot::Parameter { index, .. } = &place_fact.root {
-                            edges.insert(FlowEdge {
-                                from: FlowRoot::Param(*index as u16),
-                                to: FlowRoot::Return,
-                                kind: FlowKind::Value,
-                            });
-                            has_source_return = true;
-                        }
-                    }
-                }
-                // Also check the direct source itself
-                if let Some(place_fact) = places_by_id.get(src) {
-                    if let PlaceRoot::Parameter { index, .. } = &place_fact.root {
+                // trace_sources returns the transitive closure including *src itself
+                for source in &trace_sources(*src, &copy_map) {
+                    if let Some(place_fact) = places_by_id.get(source)
+                        && let PlaceRoot::Parameter { index, .. } = &place_fact.root
+                    {
                         edges.insert(FlowEdge {
                             from: FlowRoot::Param(*index as u16),
                             to: FlowRoot::Return,
@@ -786,17 +776,16 @@ fn build_tito(
                 }
             }
             MirOperationKind::Write { place, .. } => {
-                // Check for writes to parameter places (argument mutation)
-                if let Some(place_fact) = places_by_id.get(place) {
-                    if let PlaceRoot::Parameter { index, .. } = &place_fact.root {
-                        let idx = *index as u16;
-                        edges.insert(FlowEdge {
-                            from: FlowRoot::Param(idx),
-                            to: FlowRoot::Param(idx),
-                            kind: FlowKind::BySideEffect,
-                        });
-                        has_sink_param = true;
-                    }
+                if let Some(place_fact) = places_by_id.get(place)
+                    && let PlaceRoot::Parameter { index, .. } = &place_fact.root
+                {
+                    let idx = *index as u16;
+                    edges.insert(FlowEdge {
+                        from: FlowRoot::Param(idx),
+                        to: FlowRoot::Param(idx),
+                        kind: FlowKind::BySideEffect,
+                    });
+                    has_sink_param = true;
                 }
             }
             _ => {}
@@ -846,7 +835,6 @@ fn trace_sources(
 trait DigestAndClassify {
     fn stable_digest_parts(&self) -> Vec<String>;
     fn is_top(&self) -> bool;
-    fn is_bottom(&self) -> bool;
 }
 
 impl DigestAndClassify for ControlEffects {
@@ -855,9 +843,6 @@ impl DigestAndClassify for ControlEffects {
     }
     fn is_top(&self) -> bool {
         <Self as super::domain::SummaryDomain>::is_top(self)
-    }
-    fn is_bottom(&self) -> bool {
-        <Self as super::domain::SummaryDomain>::is_bottom(self)
     }
 }
 
@@ -868,9 +853,6 @@ impl DigestAndClassify for CallEffects {
     fn is_top(&self) -> bool {
         <Self as super::domain::SummaryDomain>::is_top(self)
     }
-    fn is_bottom(&self) -> bool {
-        <Self as super::domain::SummaryDomain>::is_bottom(self)
-    }
 }
 
 impl DigestAndClassify for MemoryEffects {
@@ -880,9 +862,6 @@ impl DigestAndClassify for MemoryEffects {
     fn is_top(&self) -> bool {
         <Self as super::domain::SummaryDomain>::is_top(self)
     }
-    fn is_bottom(&self) -> bool {
-        <Self as super::domain::SummaryDomain>::is_bottom(self)
-    }
 }
 
 impl DigestAndClassify for DataFlowTito {
@@ -891,9 +870,6 @@ impl DigestAndClassify for DataFlowTito {
     }
     fn is_top(&self) -> bool {
         <Self as super::domain::SummaryDomain>::is_top(self)
-    }
-    fn is_bottom(&self) -> bool {
-        <Self as super::domain::SummaryDomain>::is_bottom(self)
     }
 }
 
@@ -906,13 +882,9 @@ fn classify_domain_output(
             SummaryPrecision::UnknownTop,
             SummaryProvenance::NativeLocal,
         )
-    } else if domain.is_bottom() {
-        (
-            SummaryStatus::Present,
-            SummaryPrecision::Local,
-            SummaryProvenance::NativeLocal,
-        )
     } else {
+        // Bottom (no effects observed) and non-bottom (effects present) both
+        // get Local precision — all direct summaries come from local analysis.
         (
             SummaryStatus::Present,
             SummaryPrecision::Local,
@@ -925,18 +897,11 @@ fn classify_domain_output(
 mod tests {
     use super::*;
     use crate::analysis::calls::facts::{
-        CallAlgorithm, CallCallee, CallEdgeKind as CallEdgeKindFact, CallPrecision,
-        CallProvenance as CallProvenanceFact, CallSiteFact, CallSyntaxKind, CallTargetFact,
-        CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+        CallAlgorithm, CallCallee, CallPrecision, CallProvenance as CallProvenanceFact,
+        CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
     };
     use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::cfg::facts::{
-        BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
-        CfgNodeKind, CfgPrecision, CfgStatus, CfgView,
-    };
-    use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
-    use crate::analysis::cfg::store::CfgOutput;
-    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
@@ -1070,7 +1035,7 @@ mod tests {
         .expect("MIR should store");
 
         // Add call output with unresolved calls
-        db.replace_call_facts(CallOutput {
+        let _ = db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 id: CallSiteId(1),
                 language: Language::TypeScript,
@@ -1352,7 +1317,7 @@ mod tests {
         .expect("MIR should store");
 
         // Add unresolved call facts
-        db.replace_call_facts(CallOutput {
+        let _ = db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 id: CallSiteId(1),
                 language: Language::Go,
@@ -1402,13 +1367,11 @@ mod tests {
         );
 
         // Should also have a memory event for may_have_external_effects
-        let mem_events: Vec<_> = output
-            .events
-            .iter()
-            .filter(|e| e.domain == SummaryDomainKind::MemoryEffects)
-            .collect();
         assert!(
-            !mem_events.is_empty(),
+            output
+                .events
+                .iter()
+                .any(|e| e.domain == SummaryDomainKind::MemoryEffects),
             "should have memory effect event for unresolved calls"
         );
     }

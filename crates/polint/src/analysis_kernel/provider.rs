@@ -188,7 +188,7 @@ const ABSTRACT_DOMAINS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "direct-summary-facts-1",
+    name: crate::analysis::summaries::cache_key::DIRECT_SUMMARIES_SCHEMA_LABEL,
     version: 1,
 }];
 

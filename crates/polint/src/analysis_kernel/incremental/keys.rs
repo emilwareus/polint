@@ -672,6 +672,8 @@ impl LayerKey {
         )
     }
 
+    // Layer cache reuse for direct summaries is wired in Phase 33 (demand queries + SCC cache).
+    #[expect(dead_code, reason = "reserved for Phase 33 persistent layer cache")]
     #[expect(
         clippy::too_many_arguments,
         reason = "Direct summaries layer cache identity is intentionally explicit so every upstream digest input remains visible."

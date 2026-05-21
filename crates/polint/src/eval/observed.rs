@@ -1263,8 +1263,8 @@ fn direct_summary_domain_count_invariants(
     };
     domain_counts
         .iter()
-        .filter(|(_, count)| count.as_u64().is_some_and(|count| count > 0))
-        .map(|(domain, count)| {
+        .filter(|(_, v)| v.as_u64().is_some_and(|n| n > 0))
+        .map(|(domain, _)| {
             observed_invariant(
                 format!("direct_summaries.domain_counts.{domain}.nonzero"),
                 "true",

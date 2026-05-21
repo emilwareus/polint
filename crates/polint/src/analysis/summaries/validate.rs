@@ -308,10 +308,8 @@ mod tests {
         SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::analysis_kernel::validation::validate_fact_metadata;
     use crate::analysis_kernel::{
-        AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
-        ValidationStatus,
+        FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef, ValidationStatus,
     };
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
     use std::path::PathBuf;

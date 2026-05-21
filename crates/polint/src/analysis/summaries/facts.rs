@@ -103,6 +103,8 @@ pub(crate) enum AccessKind {
     ReadWrite,
 }
 
+// Per-resource external effects replace the coarse bool in Phase 36/38.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum ExternalEffectKind {
     FileSystem,
@@ -305,8 +307,7 @@ mod tests {
         exits.insert(ExitKind::Returns);
         exits.insert(ExitKind::Panics);
 
-        let ordered: Vec<_> = exits.into_iter().collect();
-        assert_eq!(ordered.len(), 3);
+        assert_eq!(exits.len(), 3);
     }
 
     #[test]

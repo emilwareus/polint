@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "Phase 32 introduces core summary domains before builders arrive in later plans."
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::domain::{SummaryDomain, SummaryTopReason};
@@ -149,8 +144,6 @@ pub(crate) enum CallEffects {
     },
     Top(SummaryTopReason),
 }
-
-const UNRESOLVED_COUNT_CAP: u32 = u32::MAX;
 
 impl SummaryDomain for CallEffects {
     const ID: &'static str = "summary.call_effects";
@@ -812,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn call_join_merges_callees_and_sums_unresolved() {
+    fn call_join_merges_callees_and_maxes_unresolved() {
         let a = CallEffects::Effects {
             direct_callees: BTreeSet::from(["foo".to_string()]),
             unresolved_count: 1,
