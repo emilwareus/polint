@@ -254,6 +254,7 @@ mod calls_provider {
 
     use tempfile::tempdir;
 
+    use crate::analysis::calls::facts::CallAlgorithm;
     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
@@ -293,6 +294,8 @@ mod calls_provider {
         let output = call_output(1, "resolved");
         let shifted_dense_ids = call_output(100, "resolved");
         let changed_status = call_output(1, "unresolved");
+        let changed_algorithm =
+            call_output_with_algorithm(1, "resolved", CallAlgorithm::StaticMember);
 
         assert_eq!(
             digest_for_output(&output),
@@ -301,6 +304,10 @@ mod calls_provider {
         assert_ne!(
             digest_for_output(&output),
             digest_for_output(&changed_status)
+        );
+        assert_ne!(
+            digest_for_output(&output),
+            digest_for_output(&changed_algorithm)
         );
     }
 
@@ -472,10 +479,17 @@ mod calls_provider {
     }
 
     fn call_output(id_offset: u64, status: &str) -> crate::analysis::calls::store::CallOutput {
+        call_output_with_algorithm(id_offset, status, CallAlgorithm::DirectReference)
+    }
+
+    fn call_output_with_algorithm(
+        id_offset: u64,
+        status: &str,
+        algorithm: CallAlgorithm,
+    ) -> crate::analysis::calls::store::CallOutput {
         use crate::analysis::calls::facts::{
-            CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
-            CallSyntaxKind, CallTargetFact, CallTargetStatus, UnresolvedCallFact,
-            UnresolvedCallReason,
+            CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
+            CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
         };
         use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
 
@@ -512,7 +526,7 @@ mod calls_provider {
             target_function: Some(FunctionId(id_offset + 10)),
             target_symbol: Some(SymbolId(id_offset + 20)),
             edge_kind: CallEdgeKind::Direct,
-            algorithm: CallAlgorithm::DirectReference,
+            algorithm,
             status: target_status,
             reason: None,
             provenance: CallProvenance::Native,

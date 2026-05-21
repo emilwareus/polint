@@ -219,6 +219,18 @@ pub(crate) fn validate_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                 "missing unresolved reason",
             );
         }
+        if unresolved_status(target.status)
+            && target.reason.is_some()
+            && (target.target_function.is_some() || target.target_symbol.is_some())
+        {
+            push_call_diagnostic(
+                diagnostics,
+                "CallTarget",
+                &target.stable_key,
+                "target",
+                "unresolved call target cannot carry target identity",
+            );
+        }
     }
 
     for unresolved in db.unresolved_calls() {
