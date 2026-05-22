@@ -7,6 +7,11 @@ the codebase: modules, symbols, references, calls, CFGs, test/coverage evidence,
 dataflow, taint, and interprocedural summaries. The sequence below favors
 truthful, useful slices over broad placeholder analysis.
 
+The research trace behind this agent-oriented direction is in
+[`research/STATIC-ANALYSIS-FOR-AI-AGENTS.md`](research/STATIC-ANALYSIS-FOR-AI-AGENTS.md).
+It maps recent coding-agent papers and practitioner tooling to the fact
+families below.
+
 The table lists **shipped** scenarios (with example repos that prove them) and **planned** work in rough dependency order. Heuristic and future typed rules should state their precision tier in messaging so teams know what they are enforcing.
 
 | Status | Scenario | Notes | Examples |

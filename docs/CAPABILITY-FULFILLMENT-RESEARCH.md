@@ -16,6 +16,13 @@ This document ranks the most impactful work to make those promises real.
 The actionable checkbox roadmap derived from this research lives in
 [`roadmap/00_ROADMAP.md`](roadmap/00_ROADMAP.md).
 
+The coding-agent research imported from the `write-code-ai-agents-love` corpus
+lives in
+[`research/STATIC-ANALYSIS-FOR-AI-AGENTS.md`](research/STATIC-ANALYSIS-FOR-AI-AGENTS.md).
+It supports the same capability order: resolved imports/module graph,
+symbols/references, type facts, test evidence, CFG, call graph, dataflow, and
+coverage.
+
 ## Product Direction
 
 Go and TypeScript/JavaScript are the first target languages for full capability

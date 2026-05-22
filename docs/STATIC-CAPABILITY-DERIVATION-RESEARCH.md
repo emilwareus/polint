@@ -19,6 +19,11 @@ compiles the rule, so the engine cannot fully trust the declaration.
 The goal is not to remove capability planning. The goal is to make capability
 planning mechanically trustworthy.
 
+The broader agent-facing static-analysis rationale is captured in
+[`research/STATIC-ANALYSIS-FOR-AI-AGENTS.md`](research/STATIC-ANALYSIS-FOR-AI-AGENTS.md).
+That note explains why typed fact views, setup diagnostics, and machine-readable
+rule output matter for coding-agent repair loops.
+
 ## Short Conclusion
 
 Do not infer capabilities from arbitrary Rust rule bodies.
