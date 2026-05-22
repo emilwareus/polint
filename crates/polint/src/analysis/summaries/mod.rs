@@ -1,5 +1,6 @@
 pub(crate) mod builder;
 pub(crate) mod cache_key;
+pub(crate) mod closure;
 pub(crate) mod core;
 pub(crate) mod domain;
 pub(crate) mod facts;
