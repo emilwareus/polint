@@ -9,6 +9,7 @@
 pub(crate) mod cache_key;
 pub(crate) mod calls;
 pub(crate) mod cfg;
+pub(crate) mod demand;
 pub(crate) mod domains;
 pub(crate) mod error;
 pub(crate) mod ids;
