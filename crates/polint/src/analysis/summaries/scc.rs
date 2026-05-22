@@ -193,14 +193,12 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
 
         let member_stable_keys: Vec<String> =
             members_with_keys.iter().map(|(k, _)| k.clone()).collect();
-        let members: Vec<FunctionId> =
-            members_with_keys.iter().map(|(_, id)| *id).collect();
+        let members: Vec<FunctionId> = members_with_keys.iter().map(|(_, id)| *id).collect();
 
         let size = members.len();
 
         // Determine if recursive: multi-member SCC or single member with self-edge.
-        let is_recursive = size > 1
-            || (size == 1 && has_self_edge.contains(&members[0]));
+        let is_recursive = size > 1 || (size == 1 && has_self_edge.contains(&members[0]));
 
         if is_recursive {
             recursive_scc_count += 1;
@@ -235,12 +233,12 @@ mod tests {
         CallSyntaxKind, CallTargetFact, CallTargetStatus,
     };
     use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::ids::SummaryId;
     use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
     use crate::analysis::summaries::facts::{
         SummaryDomainKind, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::analysis::ids::SummaryId;
     use crate::core::{FileId, Language, Span};
 
     // -----------------------------------------------------------------------
@@ -252,7 +250,10 @@ mod tests {
     }
 
     /// Create a minimal SummaryFact for a function.
-    fn summary_fact(function_id: u64, callable_key: &str) -> crate::analysis::summaries::facts::SummaryFact {
+    fn summary_fact(
+        function_id: u64,
+        callable_key: &str,
+    ) -> crate::analysis::summaries::facts::SummaryFact {
         crate::analysis::summaries::facts::SummaryFact {
             id: SummaryId(0),
             callable_stable_key: callable_key.to_string(),
@@ -466,7 +467,10 @@ mod tests {
             .map(|scc| scc.member_stable_keys[0].as_str())
             .collect();
 
-        assert_eq!(keys, keys2, "SCC schedule must be deterministic across runs");
+        assert_eq!(
+            keys, keys2,
+            "SCC schedule must be deterministic across runs"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -517,15 +521,9 @@ mod tests {
     #[test]
     fn mutual_recursion_forms_single_scc() {
         // A -> B, B -> A
-        let summaries = vec![
-            summary_fact(1, "func::a"),
-            summary_fact(2, "func::b"),
-        ];
+        let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
 
-        let sites = vec![
-            call_site(1, 1),
-            call_site(2, 2),
-        ];
+        let sites = vec![call_site(1, 1), call_site(2, 2)];
 
         let targets = vec![
             call_target(1, 1, 1, 2), // A -> B
@@ -553,10 +551,7 @@ mod tests {
 
     #[test]
     fn unresolved_targets_are_excluded() {
-        let summaries = vec![
-            summary_fact(1, "func::a"),
-            summary_fact(2, "func::b"),
-        ];
+        let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
 
         let sites = vec![call_site(1, 1)];
 
@@ -601,10 +596,7 @@ mod tests {
 
     #[test]
     fn schedule_serializes_to_json() {
-        let summaries = vec![
-            summary_fact(1, "func::a"),
-            summary_fact(2, "func::b"),
-        ];
+        let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
         let db = build_db(summaries, Vec::new(), Vec::new());
         let schedule = compute_scc_schedule(&db);
 

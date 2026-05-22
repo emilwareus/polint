@@ -100,21 +100,6 @@ pub(crate) use invalidation::{
     test,
     allow(
         unused_imports,
-        reason = "Unit tests exercise only selected re-exported quarantine vocabulary terms."
-    )
-)]
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
-    )
-)]
-pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
-#[cfg_attr(
-    test,
-    allow(
-        unused_imports,
         reason = "Unit tests exercise only selected re-exported cache vocabulary terms."
     )
 )]
@@ -148,6 +133,21 @@ pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
     LayerCacheStore, LayerCacheWriteStatus,
 };
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported quarantine vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
+    )
+)]
+pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
 };

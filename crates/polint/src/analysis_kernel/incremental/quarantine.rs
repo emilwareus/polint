@@ -236,9 +236,7 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
             .find(|d| **d != sentinel)
             .cloned()
             .unwrap_or_else(|| sentinel.clone()),
-        CacheNode::Extension(key) => {
-            Digest::from_parts(DigestKind::ExtensionCode, key, &[key])
-        }
+        CacheNode::Extension(key) => Digest::from_parts(DigestKind::ExtensionCode, key, &[key]),
         CacheNode::Query(_) | CacheNode::Diagnostic(_) => sentinel,
         CacheNode::Input(_) | CacheNode::ToolInvocation(_) => sentinel,
     }
@@ -252,9 +250,7 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        Digest, DigestKind, LayerKey, QueryKey, SummaryKey,
-        keys::LayerKind,
-        keys::PrecisionTier,
+        Digest, DigestKind, LayerKey, QueryKey, SummaryKey, keys::LayerKind, keys::PrecisionTier,
     };
 
     fn ext_digest(label: &str) -> Digest {
@@ -560,14 +556,8 @@ mod tests {
         let native = native_layer_node("polint.ts.syntax");
         let ext_summary = summary_node("func_ext", ext_digest("ext-v1"));
         let actions = vec![
-            InvalidationAction::Quarantine(
-                native.clone(),
-                QuarantineReason::ExtensionChanged,
-            ),
-            InvalidationAction::Quarantine(
-                ext_summary.clone(),
-                QuarantineReason::ExtensionChanged,
-            ),
+            InvalidationAction::Quarantine(native.clone(), QuarantineReason::ExtensionChanged),
+            InvalidationAction::Quarantine(ext_summary.clone(), QuarantineReason::ExtensionChanged),
         ];
 
         let count = apply_quarantine_actions(&actions, &mut store, 1);
@@ -589,14 +579,8 @@ mod tests {
 
         // Quarantine ext-v1 nodes.
         let actions_v1 = vec![
-            InvalidationAction::Quarantine(
-                node_v1_a.clone(),
-                QuarantineReason::ExtensionChanged,
-            ),
-            InvalidationAction::Quarantine(
-                node_v1_b.clone(),
-                QuarantineReason::ExtensionChanged,
-            ),
+            InvalidationAction::Quarantine(node_v1_a.clone(), QuarantineReason::ExtensionChanged),
+            InvalidationAction::Quarantine(node_v1_b.clone(), QuarantineReason::ExtensionChanged),
         ];
         let count_v1 = apply_quarantine_actions(&actions_v1, &mut store, 1);
         assert_eq!(count_v1, 2);
@@ -630,10 +614,7 @@ mod tests {
         let summary = summary_node("func_a", ext_digest("ext-v1"));
         let actions = vec![
             InvalidationAction::Reuse(reuse_node),
-            InvalidationAction::Quarantine(
-                summary.clone(),
-                QuarantineReason::ExtensionChanged,
-            ),
+            InvalidationAction::Quarantine(summary.clone(), QuarantineReason::ExtensionChanged),
         ];
 
         let count = apply_quarantine_actions(&actions, &mut store, 1);

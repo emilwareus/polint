@@ -10,11 +10,11 @@ use super::scc::{Scc, SccSchedule};
 use super::store::SummaryOutput;
 use crate::analysis::calls::facts::CallTargetStatus;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
+use crate::analysis_kernel::FactFamily;
 use crate::analysis_kernel::incremental::{
     DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryKey,
 };
 use crate::analysis_kernel::stable_key_from_parts;
-use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FunctionId};
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,8 @@ pub(crate) fn close_summaries_by_scc(
                 process_recursive_scc(db, scc, config);
 
             result.total_iterations += iterations as usize;
-            result.scc_iteration_counts
+            result
+                .scc_iteration_counts
                 .push((scc.member_stable_keys.clone(), iterations));
 
             if budget_exceeded {
@@ -245,8 +246,7 @@ fn process_recursive_scc(
         );
     }
 
-    let member_set: std::collections::BTreeSet<FunctionId> =
-        scc.members.iter().copied().collect();
+    let member_set: std::collections::BTreeSet<FunctionId> = scc.members.iter().copied().collect();
 
     let mut iteration = 0_u32;
     let mut converged = false;
@@ -272,17 +272,15 @@ fn process_recursive_scc(
             }
 
             // Compute new digests by joining callee effects
-            let old_state = states.get(&func_id).cloned().unwrap_or_else(|| {
-                FunctionSummaryState {
+            let old_state = states
+                .get(&func_id)
+                .cloned()
+                .unwrap_or_else(|| FunctionSummaryState {
                     digests: BTreeMap::new(),
                     callable_stable_key: String::new(),
-                }
-            });
+                });
 
-            let new_digests = join_callee_digests_into(
-                &old_state.digests,
-                &effective_callee_info,
-            );
+            let new_digests = join_callee_digests_into(&old_state.digests, &effective_callee_info);
 
             // Check convergence via digest equality (leq in digest space)
             if new_digests != old_state.digests {
@@ -480,19 +478,19 @@ fn apply_callee_effects(
                 // If any callee throws, that propagates to the caller's call-effect.
                 if !callee_control_digests.is_empty() {
                     let mut parts: Vec<String> = vec![fact.payload_digest.clone()];
-                    parts.extend(callee_control_digests.iter().map(|d| {
-                        format!("callee_control:{d}")
-                    }));
+                    parts.extend(
+                        callee_control_digests
+                            .iter()
+                            .map(|d| format!("callee_control:{d}")),
+                    );
                     parts.sort();
                     updated_fact.payload_digest = parts.join(";");
                 }
 
                 // (c) Mark unresolved callee
                 if has_unresolved_callee || has_callee_with_no_summary {
-                    updated_fact.payload_digest = format!(
-                        "{};unresolved_callee:true",
-                        updated_fact.payload_digest
-                    );
+                    updated_fact.payload_digest =
+                        format!("{};unresolved_callee:true", updated_fact.payload_digest);
                     if fact.status != SummaryStatus::Unknown {
                         // Keep original status but note the unknown callee
                     }
@@ -504,9 +502,11 @@ fn apply_callee_effects(
                 // (b) Join callee memory effects for transitive param effects
                 if !callee_memory_digests.is_empty() {
                     let mut parts: Vec<String> = vec![fact.payload_digest.clone()];
-                    parts.extend(callee_memory_digests.iter().map(|d| {
-                        format!("callee_memory:{d}")
-                    }));
+                    parts.extend(
+                        callee_memory_digests
+                            .iter()
+                            .map(|d| format!("callee_memory:{d}")),
+                    );
                     parts.sort();
                     updated_fact.payload_digest = parts.join(";");
                 }
@@ -524,9 +524,11 @@ fn apply_callee_effects(
                 // Control effects: if any callee throws, caller may also throw
                 if !callee_control_digests.is_empty() {
                     let mut parts: Vec<String> = vec![fact.payload_digest.clone()];
-                    parts.extend(callee_control_digests.iter().map(|d| {
-                        format!("callee_propagated:{d}")
-                    }));
+                    parts.extend(
+                        callee_control_digests
+                            .iter()
+                            .map(|d| format!("callee_propagated:{d}")),
+                    );
                     parts.sort();
                     updated_fact.payload_digest = parts.join(";");
                 }
@@ -601,7 +603,14 @@ fn join_callee_digests_into(
 fn compute_scc_digest(member_keys: &[String], summaries: &[SummaryFact]) -> String {
     let mut digest_parts: Vec<String> = summaries
         .iter()
-        .map(|s| format!("{}:{}:{}", s.callable_stable_key, s.domain.as_str(), s.payload_digest))
+        .map(|s| {
+            format!(
+                "{}:{}:{}",
+                s.callable_stable_key,
+                s.domain.as_str(),
+                s.payload_digest
+            )
+        })
         .collect();
     digest_parts.sort();
     let combined = digest_parts.join("|");
@@ -737,8 +746,8 @@ fn merge_updated_summaries(
 mod tests {
     use super::*;
     use crate::analysis::calls::facts::{
-        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision,
-        CallProvenance, CallSiteFact, CallSyntaxKind, CallTargetFact, CallTargetStatus,
+        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+        CallSyntaxKind, CallTargetFact, CallTargetStatus,
     };
     use crate::analysis::calls::store::CallOutput;
     use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
@@ -754,7 +763,11 @@ mod tests {
         Span::point(FileId(1), 1, 1)
     }
 
-    fn summary_fact(function_id: u64, callable_key: &str, domain: SummaryDomainKind) -> SummaryFact {
+    fn summary_fact(
+        function_id: u64,
+        callable_key: &str,
+        domain: SummaryDomainKind,
+    ) -> SummaryFact {
         SummaryFact {
             id: SummaryId(0),
             callable_stable_key: callable_key.to_string(),
@@ -969,7 +982,9 @@ mod tests {
             let store = db.summary_store().expect("store should exist");
             let a_summaries = store.summaries_by_function(FunctionId(1));
             assert!(
-                a_summaries.iter().any(|s| s.status == SummaryStatus::BudgetExceeded),
+                a_summaries
+                    .iter()
+                    .any(|s| s.status == SummaryStatus::BudgetExceeded),
                 "BudgetExceeded SCCs should produce BudgetExceeded summaries"
             );
         }
@@ -982,9 +997,11 @@ mod tests {
     #[test]
     fn closure_backdating_detects_unchanged_digests() {
         // Single function, no calls — SCC closure produces same digest both times.
-        let summaries = vec![
-            summary_fact(1, "func::a", SummaryDomainKind::ControlEffects),
-        ];
+        let summaries = vec![summary_fact(
+            1,
+            "func::a",
+            SummaryDomainKind::ControlEffects,
+        )];
 
         let mut db = build_db(summaries.clone(), Vec::new(), Vec::new());
         let schedule = compute_scc_schedule(&db);
@@ -1001,7 +1018,10 @@ mod tests {
             &BTreeMap::new(),
         );
 
-        assert_eq!(result1.backdated_sccs, 0, "first run has no previous digests");
+        assert_eq!(
+            result1.backdated_sccs, 0,
+            "first run has no previous digests"
+        );
 
         // Compute the SCC digest from the first run to use as "previous"
         let store = db.summary_store().expect("store should exist");

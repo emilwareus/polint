@@ -1024,7 +1024,12 @@ mod tests {
         );
 
         // Check README
-        let readme_path = crate_root.parent().unwrap().parent().unwrap().join("README.md");
+        let readme_path = crate_root
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("README.md");
         if readme_path.exists() {
             let readme = read_source(&readme_path);
             for marker in &demand_markers {
