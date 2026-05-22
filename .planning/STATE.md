@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-22T08:45:48.789Z"
-last_activity: 2026-05-22 -- Phase 33 planning complete
+last_updated: "2026-05-22T08:47:06.913Z"
+last_activity: 2026-05-22 -- Phase 33 execution started
 progress:
   total_phases: 22
   completed_phases: 13
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 32 — summary-kernel-and-direct-summaries
+**Current focus:** Phase 33 — demand-queries-and-summary-scc-cache
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 32 (summary-kernel-and-direct-summaries) — COMPLETE
-Plan: 7 of 7 (all complete)
-Last activity: 2026-05-22 -- Phase 33 planning complete
+Status: Executing Phase 33
+Phase: 33 (demand-queries-and-summary-scc-cache) — EXECUTING
+Plan: 1 of 7
+Last activity: 2026-05-22 -- Phase 33 execution started
 
 ## Phase Progress
 

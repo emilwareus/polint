@@ -47,6 +47,47 @@ impl QuarantineReason {
             Self::NativeConflict { .. } => "native_conflict",
         }
     }
+
+    fn digest_part(&self) -> String {
+        match self {
+            Self::ExtensionCodeChanged => self.as_str().to_string(),
+            Self::UndeclaredRead {
+                extension_key,
+                observed_key,
+            } => format!(
+                "{}:extension={}:observed={}",
+                self.as_str(),
+                extension_key,
+                observed_key
+            ),
+            Self::ValidationFailed { extension_key } => {
+                format!("{}:extension={}", self.as_str(), extension_key)
+            }
+            Self::PrecisionCeilingChanged {
+                extension_key,
+                previous,
+                current,
+            } => format!(
+                "{}:extension={}:previous={}:current={}",
+                self.as_str(),
+                extension_key,
+                previous,
+                current
+            ),
+            Self::ExtensionRemoved { extension_key } => {
+                format!("{}:extension={}", self.as_str(), extension_key)
+            }
+            Self::NativeConflict {
+                extension_key,
+                fact_key,
+            } => format!(
+                "{}:extension={}:fact={}",
+                self.as_str(),
+                extension_key,
+                fact_key
+            ),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,8 +136,7 @@ impl QuarantineSet {
 
     /// Adds a quarantine entry.
     pub(crate) fn quarantine(&mut self, entry: QuarantineEntry) {
-        self.quarantined_keys
-            .insert(entry.quarantined_key.clone());
+        self.quarantined_keys.insert(entry.quarantined_key.clone());
         self.entries.push(entry);
     }
 
@@ -133,12 +173,21 @@ impl QuarantineSet {
             .entries
             .iter()
             .map(|e| {
-                format!(
-                    "q:{}:{}:{}",
-                    e.extension_key,
-                    e.quarantined_key,
-                    e.reason.as_str()
+                let reason = e.reason.digest_part();
+                let extension_digest = e.extension_digest.to_string();
+                let quarantined_digest = e.quarantined_digest.to_string();
+                Digest::from_parts(
+                    DigestKind::ExtensionCode,
+                    "quarantine_entry",
+                    &[
+                        &e.extension_key,
+                        &e.quarantined_key,
+                        &reason,
+                        &extension_digest,
+                        &quarantined_digest,
+                    ],
                 )
+                .to_string()
             })
             .collect();
         parts.sort();
@@ -280,6 +329,54 @@ mod tests {
 
         assert_eq!(qs1.digest(), qs2.digest());
         assert!(!qs1.digest().value.is_empty());
+    }
+
+    #[test]
+    fn quarantine_digest_changes_when_reason_payload_changes() {
+        let mut qs1 = QuarantineSet::new();
+        qs1.quarantine(test_entry(
+            "ext::a",
+            "key:1",
+            QuarantineReason::UndeclaredRead {
+                extension_key: "ext::a".to_string(),
+                observed_key: "read:a".to_string(),
+            },
+        ));
+
+        let mut qs2 = QuarantineSet::new();
+        qs2.quarantine(test_entry(
+            "ext::a",
+            "key:1",
+            QuarantineReason::UndeclaredRead {
+                extension_key: "ext::a".to_string(),
+                observed_key: "read:b".to_string(),
+            },
+        ));
+
+        assert_ne!(qs1.digest(), qs2.digest());
+    }
+
+    #[test]
+    fn quarantine_digest_changes_when_entry_digest_changes() {
+        let mut qs1 = QuarantineSet::new();
+        qs1.quarantine(QuarantineEntry {
+            extension_key: "ext::a".to_string(),
+            quarantined_key: "key:1".to_string(),
+            reason: QuarantineReason::ExtensionCodeChanged,
+            extension_digest: test_digest("ext-a-v1"),
+            quarantined_digest: test_digest("result-a"),
+        });
+
+        let mut qs2 = QuarantineSet::new();
+        qs2.quarantine(QuarantineEntry {
+            extension_key: "ext::a".to_string(),
+            quarantined_key: "key:1".to_string(),
+            reason: QuarantineReason::ExtensionCodeChanged,
+            extension_digest: test_digest("ext-a-v2"),
+            quarantined_digest: test_digest("result-a"),
+        });
+
+        assert_ne!(qs1.digest(), qs2.digest());
     }
 
     #[test]

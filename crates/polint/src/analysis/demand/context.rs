@@ -60,7 +60,7 @@ pub(crate) struct QueryContext {
     /// Whether trace recording is enabled.
     trace_enabled: bool,
     /// Per-query memoization table for in-run deduplication.
-    memo_table: BTreeMap<String, MemoEntry>,
+    memo_table: BTreeMap<MemoKey, MemoEntry>,
 }
 
 /// An in-run memoized query result.
@@ -68,6 +68,22 @@ pub(crate) struct QueryContext {
 pub(crate) struct MemoEntry {
     pub(crate) output_digest: Digest,
     pub(crate) status: QueryStatus,
+}
+
+/// Key for in-run memoized results.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MemoKey {
+    pub(crate) query_kind: QueryKind,
+    pub(crate) key: String,
+}
+
+impl MemoKey {
+    pub(crate) fn new(query_kind: QueryKind, key: impl Into<String>) -> Self {
+        Self {
+            query_kind,
+            key: key.into(),
+        }
+    }
 }
 
 impl QueryContext {
@@ -150,12 +166,22 @@ impl QueryContext {
 
     /// Checks if a memoized result exists for the given key.
     pub(crate) fn memo_lookup(&self, key: &str) -> Option<&MemoEntry> {
-        self.memo_table.get(key)
+        self.memo_lookup_for(self.query_kind, key)
+    }
+
+    /// Checks if a memoized result exists for a specific query family and key.
+    pub(crate) fn memo_lookup_for(&self, query_kind: QueryKind, key: &str) -> Option<&MemoEntry> {
+        self.memo_table.get(&MemoKey::new(query_kind, key))
     }
 
     /// Records a memoized result for the given key.
     pub(crate) fn memo_store(&mut self, key: String, entry: MemoEntry) {
-        self.memo_table.insert(key, entry);
+        self.memo_store_for(self.query_kind, key, entry);
+    }
+
+    /// Records a memoized result for a specific query family and key.
+    pub(crate) fn memo_store_for(&mut self, query_kind: QueryKind, key: String, entry: MemoEntry) {
+        self.memo_table.insert(MemoKey::new(query_kind, key), entry);
     }
 
     /// Returns the current recursion depth.
@@ -251,18 +277,28 @@ mod tests {
         ctx.read_layer(LayerKind::Cfg, "polint.cfg", test_digest("cfg"));
 
         assert_eq!(ctx.reads().len(), 2);
-        assert_eq!(ctx.reads()[0].kind, DependencyReadKind::Layer(LayerKind::Calls));
-        assert_eq!(ctx.reads()[1].kind, DependencyReadKind::Layer(LayerKind::Cfg));
+        assert_eq!(
+            ctx.reads()[0].kind,
+            DependencyReadKind::Layer(LayerKind::Calls)
+        );
+        assert_eq!(
+            ctx.reads()[1].kind,
+            DependencyReadKind::Layer(LayerKind::Cfg)
+        );
     }
 
     #[test]
     fn context_tracks_query_reads() {
-        let mut ctx = QueryContext::new(QueryKind::SummarySccFixpoint, QueryBudget::default(), false);
+        let mut ctx =
+            QueryContext::new(QueryKind::SummarySccFixpoint, QueryBudget::default(), false);
 
         ctx.read_query(QueryKind::FunctionSummary, "func::a", test_digest("sum_a"));
 
         assert_eq!(ctx.reads().len(), 1);
-        assert_eq!(ctx.reads()[0].kind, DependencyReadKind::Query(QueryKind::FunctionSummary));
+        assert_eq!(
+            ctx.reads()[0].kind,
+            DependencyReadKind::Query(QueryKind::FunctionSummary)
+        );
         assert_eq!(ctx.reads()[0].key, "func::a");
     }
 
@@ -333,6 +369,39 @@ mod tests {
     }
 
     #[test]
+    fn memo_table_separates_query_kinds_for_same_subject_key() {
+        let mut ctx = QueryContext::new(QueryKind::FunctionSummary, QueryBudget::default(), false);
+
+        ctx.memo_store_for(
+            QueryKind::FunctionSummary,
+            "func::a".to_string(),
+            MemoEntry {
+                output_digest: test_digest("summary"),
+                status: QueryStatus::Complete,
+            },
+        );
+        ctx.memo_store_for(
+            QueryKind::FunctionCfg,
+            "func::a".to_string(),
+            MemoEntry {
+                output_digest: test_digest("cfg"),
+                status: QueryStatus::Partial,
+            },
+        );
+
+        let summary = ctx
+            .memo_lookup_for(QueryKind::FunctionSummary, "func::a")
+            .expect("summary memo should exist");
+        let cfg = ctx
+            .memo_lookup_for(QueryKind::FunctionCfg, "func::a")
+            .expect("cfg memo should exist");
+
+        assert_ne!(summary.output_digest, cfg.output_digest);
+        assert_eq!(summary.status, QueryStatus::Complete);
+        assert_eq!(cfg.status, QueryStatus::Partial);
+    }
+
+    #[test]
     fn dependency_digest_is_deterministic() {
         let mut ctx = QueryContext::new(QueryKind::FunctionSummary, QueryBudget::default(), false);
 
@@ -387,6 +456,8 @@ mod tests {
             ..QueryBudget::default()
         };
         let mut ctx = QueryContext::new(QueryKind::FunctionSummary, budget, true);
+        assert_eq!(ctx.query_kind(), QueryKind::FunctionSummary);
+        assert_eq!(ctx.budget().max_depth, 1);
         ctx.enter_depth(); // depth 1 (ok)
         ctx.enter_depth(); // depth 2 (exceeds max_depth=1)
 

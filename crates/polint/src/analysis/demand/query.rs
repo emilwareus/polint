@@ -185,14 +185,14 @@ pub(crate) fn demand_query_key(
     budget: &QueryBudget,
     precision_tier: PrecisionTier,
 ) -> QueryKey {
-    QueryKey {
-        query_kind: kind.as_str().to_string(),
-        query_version: kind.version().to_string(),
+    QueryKey::new(
+        kind.as_str(),
+        kind.version(),
         parameter_digest,
         layer_digests,
-        budget_digest: budget.digest(),
+        budget.digest(),
         precision_tier,
-    }
+    )
 }
 
 #[cfg(test)]
@@ -270,7 +270,7 @@ mod tests {
         let key = demand_query_key(
             QueryKind::FunctionSummary,
             param_digest,
-            layer_digests.clone(),
+            layer_digests,
             &budget,
             PrecisionTier::SetupAware,
         );
@@ -279,6 +279,35 @@ mod tests {
         assert_eq!(key.query_version, "1");
         assert_eq!(key.layer_digests.len(), 1);
         assert_eq!(key.precision_tier, PrecisionTier::SetupAware);
+    }
+
+    #[test]
+    fn demand_query_key_canonicalizes_layer_digest_order() {
+        let param_digest = Digest::from_parts(
+            DigestKind::QueryParameters,
+            "test_params",
+            &["callable:func_a"],
+        );
+        let first = Digest::from_parts(DigestKind::ProviderOutput, "calls_output", &["a"]);
+        let second = Digest::from_parts(DigestKind::ProviderOutput, "cfg_output", &["b"]);
+        let budget = QueryBudget::default();
+
+        let key_a = demand_query_key(
+            QueryKind::FunctionSummary,
+            param_digest.clone(),
+            vec![first.clone(), second.clone()],
+            &budget,
+            PrecisionTier::SetupAware,
+        );
+        let key_b = demand_query_key(
+            QueryKind::FunctionSummary,
+            param_digest,
+            vec![second, first],
+            &budget,
+            PrecisionTier::SetupAware,
+        );
+
+        assert_eq!(key_a, key_b);
     }
 
     #[test]

@@ -488,13 +488,13 @@ mod tests {
         let node_b = summary_node("func_b", ext_digest("ext-v2"));
 
         store.quarantine(
-            node_a.clone(),
+            node_a,
             QuarantineReason::ExtensionChanged,
             ext_digest("ext-v1"),
             1,
         );
         store.quarantine(
-            node_b.clone(),
+            node_b,
             QuarantineReason::ExtensionChanged,
             ext_digest("ext-v2"),
             1,

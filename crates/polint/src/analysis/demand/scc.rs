@@ -109,9 +109,9 @@ impl SccGraph {
             }
 
             let is_recursive = member_keys.len() > 1
-                || scc_members.iter().any(|&node_idx| {
-                    adjacency[node_idx].contains(&node_idx)
-                });
+                || scc_members
+                    .iter()
+                    .any(|&node_idx| adjacency[node_idx].contains(&node_idx));
 
             components.push(SccComponent {
                 id: scc_id,
@@ -253,9 +253,14 @@ impl SccCacheEntry {
     pub(crate) fn is_valid(
         &self,
         current_scc_digest: &Digest,
+        current_member_summary_digests: &BTreeMap<String, Digest>,
         current_dependency_digests: &BTreeMap<SccId, Digest>,
     ) -> bool {
         if &self.scc_digest != current_scc_digest {
+            return false;
+        }
+
+        if &self.member_summary_digests != current_member_summary_digests {
             return false;
         }
 
@@ -343,8 +348,7 @@ fn tarjan_scc(count: usize, adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
 
                 // Propagate lowlink to parent
                 if let Some(parent_frame) = call_stack.last() {
-                    lowlink[parent_frame.node] =
-                        lowlink[parent_frame.node].min(finished_lowlink);
+                    lowlink[parent_frame.node] = lowlink[parent_frame.node].min(finished_lowlink);
                 }
 
                 // Check if this is an SCC root
@@ -523,32 +527,43 @@ mod tests {
     fn scc_cache_entry_validates_against_current_digests() {
         let scc_digest = Digest::from_parts(DigestKind::ProviderOutput, "scc", &["test"]);
         let dep_digest = Digest::from_parts(DigestKind::ProviderOutput, "dep", &["test"]);
+        let current_members = BTreeMap::from([(
+            "func::a".to_string(),
+            Digest::from_parts(DigestKind::SummaryBody, "member", &["test"]),
+        )]);
 
         let entry = SccCacheEntry {
             scc_id: SccId(0),
             scc_digest: scc_digest.clone(),
-            member_summary_digests: BTreeMap::new(),
+            member_summary_digests: current_members.clone(),
             dependency_scc_digests: BTreeMap::from([(SccId(1), dep_digest.clone())]),
             fixpoint_status: SccFixpointStatus::Converged { iterations: 3 },
             output_digest: Digest::from_parts(DigestKind::ProviderOutput, "output", &["test"]),
         };
 
         // Valid when digests match
-        let current_deps = BTreeMap::from([(SccId(1), dep_digest.clone())]);
-        assert!(entry.is_valid(&scc_digest, &current_deps));
+        let current_deps = BTreeMap::from([(SccId(1), dep_digest)]);
+        assert!(entry.is_valid(&scc_digest, &current_members, &current_deps));
 
         // Invalid when SCC structure changed
         let changed_scc = Digest::from_parts(DigestKind::ProviderOutput, "scc", &["changed"]);
-        assert!(!entry.is_valid(&changed_scc, &current_deps));
+        assert!(!entry.is_valid(&changed_scc, &current_members, &current_deps));
+
+        // Invalid when a member summary digest changed
+        let changed_members = BTreeMap::from([(
+            "func::a".to_string(),
+            Digest::from_parts(DigestKind::SummaryBody, "member", &["changed"]),
+        )]);
+        assert!(!entry.is_valid(&scc_digest, &changed_members, &current_deps));
 
         // Invalid when dependency digest changed
         let changed_dep = Digest::from_parts(DigestKind::ProviderOutput, "dep", &["changed"]);
         let changed_deps = BTreeMap::from([(SccId(1), changed_dep)]);
-        assert!(!entry.is_valid(&scc_digest, &changed_deps));
+        assert!(!entry.is_valid(&scc_digest, &current_members, &changed_deps));
 
         // Invalid when dependency is missing
         let missing_deps: BTreeMap<SccId, Digest> = BTreeMap::new();
-        assert!(!entry.is_valid(&scc_digest, &missing_deps));
+        assert!(!entry.is_valid(&scc_digest, &current_members, &missing_deps));
     }
 
     #[test]

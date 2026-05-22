@@ -244,6 +244,7 @@ mod tests {
         });
 
         assert_eq!(trace.len(), 3);
+        assert_eq!(trace.entries().len(), 3);
         assert!(!trace.is_empty());
     }
 
