@@ -721,33 +721,47 @@ pub(crate) fn run_direct_summaries_scc_closure_fixture_for_test(
 ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
-    let mut observed = [
-        ("scc_schedule.total_sccs.nonzero", "true"),
-        ("scc_schedule.recursive_scc_count.nonzero", "true"),
-        ("scc_schedule.max_scc_size.at_least_2", "true"),
-        ("scc_schedule.iteration_counts.nonzero", "true"),
-        ("demand_queries.total_queries.nonzero", "true"),
-        ("demand_queries.cache_misses.nonzero", "true"),
-        (
-            "direct_summaries.current_determinism",
-            "cold_warm_no_cache_equal",
-        ),
-    ]
-    .into_iter()
-    .map(|(name, value)| {
-        scc_closure_fixture_invariant(
-            name,
-            value,
-            if name.starts_with("scc_schedule") {
-                "kernel.metadata_debug_json.scc_schedule"
-            } else if name.starts_with("demand_queries") {
-                "kernel.metadata_debug_json.demand_queries"
-            } else {
-                "direct_summaries.current_behavior"
-            },
-        )
-    })
-    .collect::<Vec<_>>();
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deterministic {
+        observed.push(direct_summaries_determinism_observed_invariant());
+    }
 
     if let Some(budget) = &fixture.manifest.budget {
         let elapsed = started.elapsed();
@@ -1073,23 +1087,6 @@ fn layer_cache_fixture_invariant(
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("kernel.run_report.layer_cache.fixture".to_string()),
-        precision: Some("exact".to_string()),
-        status: Some(crate::eval::model::ObservedStatus::Present),
-    })
-}
-
-#[cfg(test)]
-fn scc_closure_fixture_invariant(
-    name: impl Into<String>,
-    value: impl Into<String>,
-    provenance: impl Into<String>,
-) -> crate::eval::model::ObservedItem {
-    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
-        name: name.into(),
-        value: value.into(),
-        mode: crate::eval::model::AssertionMode::Exact,
-        producer_id: Some("polint.eval".to_string()),
-        provenance: Some(provenance.into()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -3316,6 +3313,14 @@ mod direct_summaries_scc_closure {
         let run = run_direct_summaries_scc_closure_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("scc closure case");
         let rendered = serde_json::to_string_pretty(&run).unwrap_or_else(|_| "{}".to_string());
+        let summary_fact_count = case
+            .observed
+            .iter()
+            .filter(|item| match item {
+                ObservedItem::Fact(fact) => fact.family.starts_with("summary_"),
+                _ => false,
+            })
+            .count();
         let observed = case
             .observed
             .iter()
@@ -3332,6 +3337,10 @@ mod direct_summaries_scc_closure {
         assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
         assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
         assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(
+            summary_fact_count > 0,
+            "SCC fixture runner must observe real kernel summary facts, not only synthesize invariants: {rendered}"
+        );
 
         for required in [
             ("scc_schedule.total_sccs.nonzero", "true"),

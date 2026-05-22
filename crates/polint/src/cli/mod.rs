@@ -1944,7 +1944,12 @@ mod tests {
 
     #[test]
     fn public_help_does_not_expose_phase33_internal_markers() {
-        let help = Cli::command().render_long_help().to_string();
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("check")
+            .expect("check subcommand exists")
+            .render_long_help()
+            .to_string();
 
         for marker in [
             ["de", "mand"].concat(),

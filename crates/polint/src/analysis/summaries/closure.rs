@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -589,12 +589,20 @@ fn join_callee_digests_into(
     for info in callee_info {
         for (domain, callee_digest) in &info.callee_digests {
             let entry = new_digests.entry(*domain).or_default();
-            if !entry.contains(callee_digest.as_str()) {
-                // Join by appending callee contribution to form a combined digest
-                let mut parts: Vec<&str> = entry.split(';').collect();
-                parts.push(callee_digest);
-                parts.sort();
-                *entry = parts.join(";");
+            let mut parts = entry
+                .split(';')
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            let before = parts.len();
+            parts.extend(
+                callee_digest
+                    .split(';')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+            if parts.len() != before {
+                *entry = parts.into_iter().collect::<Vec<_>>().join(";");
             }
         }
     }
@@ -994,6 +1002,53 @@ mod tests {
                 "BudgetExceeded SCCs should produce BudgetExceeded summaries"
             );
         }
+    }
+
+    #[test]
+    fn closure_recursive_scc_reaches_fixpoint_without_digest_growth() {
+        let summaries = vec![
+            summary_fact(1, "func::a", SummaryDomainKind::ControlEffects),
+            summary_fact(1, "func::a", SummaryDomainKind::CallEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::ControlEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::CallEffects),
+        ];
+        let sites = vec![call_site(1, 1), call_site(2, 2)];
+        let targets = vec![call_target(1, 1, 1, 2), call_target(2, 2, 2, 1)];
+        let mut db = build_db(summaries, sites, targets);
+        let schedule = compute_scc_schedule(&db);
+        let config = SccClosureConfig {
+            max_iterations: 6,
+            enable_backdating: true,
+        };
+        let mut demand_engine = DemandQueryEngine::default();
+
+        let result = close_summaries_by_scc(
+            &mut db,
+            &schedule,
+            &config,
+            &mut demand_engine,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(result.recursive_sccs, 1);
+        assert_eq!(
+            result.budget_exceeded_sccs, 0,
+            "recursive SCC should converge before budget: {result:#?}"
+        );
+        assert!(
+            result.scc_iteration_counts[0].1 < config.max_iterations,
+            "recursive SCC should not consume the whole budget: {result:#?}"
+        );
+        let max_digest_len = db
+            .summary_facts()
+            .iter()
+            .map(|fact| fact.payload_digest.len())
+            .max()
+            .unwrap_or_default();
+        assert!(
+            max_digest_len < 256,
+            "fixpoint digests should stay bounded, got max len {max_digest_len}"
+        );
     }
 
     // -----------------------------------------------------------------------

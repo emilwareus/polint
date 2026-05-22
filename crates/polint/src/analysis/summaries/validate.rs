@@ -373,12 +373,18 @@ fn push_summary_diagnostic(
         reason,
         "summary validation failed"
     );
-    diagnostics.push(Diagnostic::error(
-        "polint/internal",
-        "<workspace>",
-        TextRange::point(1, 1),
-        "Internal analysis validation failed.",
-    ));
+    diagnostics.push(
+        Diagnostic::error(
+            "polint/internal",
+            "<workspace>",
+            TextRange::point(1, 1),
+            "Internal analysis validation failed.",
+        )
+        .with_evidence("family", family)
+        .with_evidence("stable_key", stable_key)
+        .with_evidence("field", field)
+        .with_evidence("reason", reason),
+    );
 }
 
 #[cfg(test)]
@@ -486,6 +492,15 @@ mod tests {
             precision: SummaryPrecision::UnknownTop,
             stable_key: stable_key.to_string(),
         }
+    }
+
+    fn diagnostic_reasons(diagnostics: &[crate::diagnostics::Diagnostic]) -> Vec<&str> {
+        diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.evidence.iter())
+            .filter(|evidence| evidence.label == "reason")
+            .map(|evidence| evidence.value.as_str())
+            .collect()
     }
 
     #[test]
@@ -647,9 +662,9 @@ mod tests {
         validate_summaries(&db, &mut diagnostics);
 
         assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "polint/internal"),
+            diagnostic_reasons(&diagnostics).contains(
+                &"BudgetExceeded summaries require matching budget-exceeded summary event evidence",
+            ),
             "expected BudgetExceeded evidence diagnostic: {diagnostics:#?}"
         );
     }
@@ -687,9 +702,8 @@ mod tests {
         validate_summaries(&db, &mut diagnostics);
 
         assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.rule_id == "polint/internal"),
+            diagnostic_reasons(&diagnostics)
+                .contains(&"interprocedural SCC summaries must not claim Exact metadata precision"),
             "expected SCC precision diagnostic: {diagnostics:#?}"
         );
     }

@@ -13,7 +13,7 @@ use crate::analysis::domains::facts::{
 use crate::analysis::mir::body::MirStatus;
 use crate::analysis::mir::op::{AssignMode, ConservativeAction, MirOperationKind};
 use crate::analysis::places::{PlaceProjection, PlaceRoot, PlaceStatus};
-use crate::analysis::summaries::closure::SccClosureResult;
+use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis::summaries::scc::compute_scc_schedule;
 use crate::analysis_kernel::incremental::DemandQueryTrace;
 use crate::analysis_kernel::{
@@ -33,7 +33,7 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
 pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
     db: &AnalysisDb,
     demand_query_trace: &DemandQueryTrace,
-    scc_closure_result: Option<&SccClosureResult>,
+    scc_closure_debug: Option<&SccClosureDebugSnapshot>,
 ) -> Value {
     let report = MetadataDebugReport {
         files: file_rows(db),
@@ -46,7 +46,7 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         calls: calls_report(db),
         abstract_domains: abstract_domains_report(db),
         summaries: summaries_report(db),
-        scc_schedule: scc_schedule_report(db, scc_closure_result),
+        scc_schedule: scc_schedule_report(db, scc_closure_debug),
         demand_queries: demand_query_report(demand_query_trace),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
@@ -1210,12 +1210,15 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
 
 fn scc_schedule_report(
     db: &AnalysisDb,
-    closure_result: Option<&SccClosureResult>,
+    closure_debug: Option<&SccClosureDebugSnapshot>,
 ) -> SccScheduleDebugSection {
-    let schedule = compute_scc_schedule(db);
-    let iteration_counts = closure_result
+    let schedule = closure_debug
+        .map(|debug| debug.schedule.clone())
+        .unwrap_or_else(|| compute_scc_schedule(db));
+    let iteration_counts = closure_debug
         .map(|result| {
             result
+                .result
                 .scc_iteration_counts
                 .iter()
                 .map(|(members, iterations)| SccIterationDebugEntry {
@@ -1241,11 +1244,11 @@ fn scc_schedule_report(
                 size: scc.size,
             })
             .collect(),
-        total_iterations: closure_result
-            .map(|result| result.total_iterations)
+        total_iterations: closure_debug
+            .map(|debug| debug.result.total_iterations)
             .unwrap_or_default(),
-        backdated_sccs: closure_result
-            .map(|result| result.backdated_sccs)
+        backdated_sccs: closure_debug
+            .map(|debug| debug.result.backdated_sccs)
             .unwrap_or_default(),
         iteration_counts,
     }
@@ -3449,10 +3452,14 @@ mod abstract_domains_debug_json {
     #[test]
     fn metadata_debug_json_with_scc_closure_result_contains_iteration_and_backdating_rows() {
         use crate::analysis::summaries::closure::SccClosureResult;
+        use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
+        use crate::analysis::summaries::scc::compute_scc_schedule;
         use crate::analysis_kernel::incremental::DemandQueryTrace;
 
         let db = base_db();
-        let closure_result = SccClosureResult {
+        let closure_debug = SccClosureDebugSnapshot {
+            schedule: compute_scc_schedule(&db),
+            result: SccClosureResult {
             total_sccs_processed: 1,
             non_recursive_sccs: 0,
             recursive_sccs: 1,
@@ -3461,12 +3468,13 @@ mod abstract_domains_debug_json {
             total_iterations: 3,
             updated_summaries: 2,
             scc_iteration_counts: vec![(vec!["func::app".to_string()], 3)],
+            },
         };
 
         let json = metadata_debug_json_with_demand_trace_for_test(
             &db,
             &DemandQueryTrace::default(),
-            Some(&closure_result),
+            Some(&closure_debug),
         );
         let scc_schedule = json
             .get("scc_schedule")

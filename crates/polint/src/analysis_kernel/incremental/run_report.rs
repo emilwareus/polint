@@ -1,6 +1,7 @@
 use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
-use crate::analysis::summaries::closure::SccClosureResult;
+#[cfg(test)]
+use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,7 +10,8 @@ pub(crate) struct KernelRunReport {
     pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
-    pub(crate) scc_closure_result: Option<SccClosureResult>,
+    #[cfg(test)]
+    pub(crate) scc_closure_debug: Option<SccClosureDebugSnapshot>,
 }
 
 impl KernelRunReport {
@@ -17,7 +19,6 @@ impl KernelRunReport {
         input_snapshot: InputSnapshot,
         provider_outputs: Vec<ProviderOutputMeta>,
         demand_query_trace: DemandQueryTrace,
-        scc_closure_result: Option<SccClosureResult>,
     ) -> Self {
         let mut cache_stats = aggregate_cache_stats(&provider_outputs);
         aggregate_demand_query_stats(&demand_query_trace, &mut cache_stats);
@@ -27,7 +28,8 @@ impl KernelRunReport {
             provider_outputs,
             cache_stats,
             demand_query_trace,
-            scc_closure_result,
+            #[cfg(test)]
+            scc_closure_debug: None,
         }
     }
 
@@ -42,15 +44,15 @@ impl KernelRunReport {
         &self.demand_query_trace
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "SCC closure result is currently surfaced through test-only metadata debug output"
-        )
-    )]
-    pub(crate) fn scc_closure_result(&self) -> Option<&SccClosureResult> {
-        self.scc_closure_result.as_ref()
+    #[cfg(test)]
+    pub(crate) fn with_scc_closure_debug(mut self, debug: Option<SccClosureDebugSnapshot>) -> Self {
+        self.scc_closure_debug = debug;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scc_closure_debug(&self) -> Option<&SccClosureDebugSnapshot> {
+        self.scc_closure_debug.as_ref()
     }
 }
 

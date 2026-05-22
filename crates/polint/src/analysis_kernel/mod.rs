@@ -334,6 +334,8 @@ impl AnalysisKernel {
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
         let scc_closure = crate::analysis::summaries::provider::run_scc_closure(&mut db);
+        #[cfg(test)]
+        let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -360,8 +362,9 @@ impl AnalysisKernel {
             input_snapshot,
             provider_outputs,
             scc_closure.demand_query_trace,
-            scc_closure.closure_result,
         );
+        #[cfg(test)]
+        let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
 
         Ok(KernelOutput {
             db,
@@ -388,7 +391,7 @@ impl AnalysisKernel {
         debug::metadata_debug_json_with_demand_trace_for_test(
             &output.db,
             output.run_report.demand_query_trace(),
-            output.run_report.scc_closure_result(),
+            output.run_report.scc_closure_debug(),
         )
     }
 

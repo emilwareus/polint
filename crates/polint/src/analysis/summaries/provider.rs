@@ -2,7 +2,11 @@ use std::collections::BTreeMap;
 
 use super::builder::DirectSummaryBuilder;
 use super::cache_key::direct_summaries_provider_parameter_digest;
-use super::closure::{SccClosureConfig, SccClosureResult, close_summaries_by_scc};
+#[cfg(test)]
+use super::closure::SccClosureResult;
+use super::closure::{SccClosureConfig, close_summaries_by_scc};
+#[cfg(test)]
+use super::scc::SccSchedule;
 use super::scc::compute_scc_schedule;
 use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
@@ -68,8 +72,16 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SccClosureProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) closure_result: Option<SccClosureResult>,
     pub(crate) demand_query_trace: DemandQueryTrace,
+    #[cfg(test)]
+    pub(crate) debug_snapshot: Option<SccClosureDebugSnapshot>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SccClosureDebugSnapshot {
+    pub(crate) schedule: SccSchedule,
+    pub(crate) result: SccClosureResult,
 }
 
 /// Runs interprocedural summary closure over SCCs discovered from the current
@@ -100,6 +112,11 @@ pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
         &mut demand_engine,
         &previous_scc_digests,
     );
+    #[cfg(test)]
+    let debug_snapshot = Some(SccClosureDebugSnapshot {
+        schedule: schedule.clone(),
+        result: closure_result.clone(),
+    });
 
     // Generate diagnostics for budget-exceeded SCCs
     let mut diagnostics = Vec::new();
@@ -124,8 +141,9 @@ pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
 
     SccClosureProviderOutput {
         diagnostics,
-        closure_result: Some(closure_result),
         demand_query_trace: trace,
+        #[cfg(test)]
+        debug_snapshot,
     }
 }
 
@@ -429,8 +447,9 @@ mod scc_closure_provider {
 
         // Should have processed 2 SCCs (B and A, both non-recursive)
         let result = output
-            .closure_result
-            .expect("closure result should be present");
+            .debug_snapshot
+            .expect("closure debug snapshot should be present")
+            .result;
         assert_eq!(result.total_sccs_processed, 2);
         assert_eq!(result.non_recursive_sccs, 2);
         assert_eq!(result.recursive_sccs, 0);
@@ -457,7 +476,7 @@ mod scc_closure_provider {
 
         let output = run_scc_closure(&mut db);
 
-        assert!(output.closure_result.is_none());
+        assert!(output.debug_snapshot.is_none());
         assert!(output.demand_query_trace.is_empty());
         assert!(output.diagnostics.is_empty());
     }

@@ -1,5 +1,6 @@
 mod common;
 
+use assert_cmd::assert::Assert;
 use common::*;
 use predicates::prelude::*;
 use std::collections::BTreeSet;
@@ -71,6 +72,102 @@ fn check_help_guides_ai_agents_to_compact_output() {
         help.contains(".polint/output/"),
         "check help should mention saved AI-friendly output path: {help}"
     );
+}
+
+#[test]
+fn phase33_internals_do_not_leak_from_real_public_cli_surfaces() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let surfaces = vec![
+        (
+            "polint check --format json",
+            output_string(
+                polint_cmd()
+                    .current_dir(temp.path())
+                    .args(["check", "--format", "json", "--fail-on", "none"])
+                    .assert()
+                    .success(),
+            ),
+        ),
+        (
+            "polint check --help",
+            output_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        ),
+        (
+            "polint inspect rule --format json",
+            output_string(
+                polint_cmd()
+                    .current_dir(temp.path())
+                    .args(["inspect", "rule", "--format", "json"])
+                    .assert()
+                    .success(),
+            ),
+        ),
+        (
+            "polint test --format json",
+            output_string(
+                polint_cmd()
+                    .current_dir(temp.path())
+                    .args(["test", "--format", "json"])
+                    .assert()
+                    .success(),
+            ),
+        ),
+    ];
+
+    for (surface, output) in surfaces {
+        assert_no_phase33_internal_markers(surface, &output);
+    }
+}
+
+fn output_string(assert: Assert) -> String {
+    let output = assert.get_output();
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be valid UTF-8");
+    let stderr = String::from_utf8(output.stderr.clone()).expect("stderr should be valid UTF-8");
+    format!("{stdout}\n{stderr}")
+}
+
+fn assert_no_phase33_internal_markers(surface: &str, output: &str) {
+    for marker in [
+        "demand_query",
+        "DemandQuery",
+        "scc_schedule",
+        "SccSchedule",
+        "SccClosure",
+        "scc_closure",
+        "quarantine",
+        "QuarantineStore",
+        "QuarantineEntry",
+        "quarantine_policy",
+        "backdating",
+        "backdated",
+        "interprocedural_closure",
+        "SccClosureResult",
+        "SccClosureConfig",
+        "DemandQueryEngine",
+        "DemandQueryTrace",
+        "DemandQueryTraceEntry",
+        "DemandQueryResult",
+        "is_quarantined",
+        "reinstate",
+    ] {
+        assert!(
+            !output.contains(marker),
+            "{surface} leaked Phase 33 internal marker `{marker}`:\n{output}"
+        );
+    }
 }
 
 #[test]
