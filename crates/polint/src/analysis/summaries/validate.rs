@@ -1,10 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis_kernel::{FactFamily, FactPrecision, FactRef};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 
-use super::facts::{SummaryDomainKind, SummaryEventFact, SummaryFact};
+use super::facts::{
+    SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryProvenance, SummaryStatus,
+};
 
 pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     let functions = db
@@ -61,6 +63,8 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
         validate_summary_event(diagnostics, &functions, event);
     }
 
+    validate_scc_closure_results(db, diagnostics);
+
     for family in [
         FactFamily::SummaryControl,
         FactFamily::SummaryCall,
@@ -79,6 +83,84 @@ pub(crate) fn validate_summaries(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
                     &metadata.stable_key,
                     "precision",
                     "precision ceiling exceeded: polint.direct_summaries metadata is SetupAware or weaker, not Exact",
+                );
+            }
+        }
+    }
+}
+
+fn validate_scc_closure_results(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let budget_events = db
+        .summary_events()
+        .iter()
+        .filter(|event| {
+            event.status == SummaryStatus::BudgetExceeded
+                && (event.event_kind == "budget_exceeded"
+                    || event.reason.contains("budget_exceeded")
+                    || event.reason.contains("budget"))
+        })
+        .map(|event| event.function)
+        .collect::<BTreeSet<_>>();
+
+    let outgoing_counts = db
+        .call_store()
+        .map(|store| {
+            db.functions()
+                .iter()
+                .map(|function| {
+                    (
+                        function.id,
+                        store
+                            .outgoing_by_function(function.id)
+                            .into_iter()
+                            .filter(|target| {
+                                target.status
+                                    == crate::analysis::calls::facts::CallTargetStatus::Resolved
+                            })
+                            .count(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    for fact in db.summary_facts().iter().filter(|fact| {
+        fact.provenance == SummaryProvenance::InterproceduralClosure
+            || fact.status == SummaryStatus::BudgetExceeded
+    }) {
+        let family = summary_domain_family_label(fact.domain);
+        if fact.status == SummaryStatus::BudgetExceeded && !budget_events.contains(&fact.function) {
+            push_summary_diagnostic(
+                diagnostics,
+                family,
+                &fact.stable_key,
+                "budget_exceeded",
+                "BudgetExceeded summaries require matching budget-exceeded summary event evidence",
+            );
+        }
+
+        if fact.provenance == SummaryProvenance::InterproceduralClosure {
+            let metadata = db.metadata_for(FactRef::new(
+                summary_domain_to_fact_family(fact.domain),
+                fact.id.0,
+            ));
+            if metadata.is_some_and(|metadata| metadata.precision == FactPrecision::Exact) {
+                push_summary_diagnostic(
+                    diagnostics,
+                    family,
+                    &fact.stable_key,
+                    "precision",
+                    "interprocedural SCC summaries must not claim Exact metadata precision",
+                );
+            }
+
+            if outgoing_counts.get(&fact.function).copied().unwrap_or(0) == 0 {
+                push_summary_diagnostic(
+                    diagnostics,
+                    family,
+                    &fact.stable_key,
+                    "provenance",
+                    "interprocedural SCC summary has no resolved outgoing call evidence",
                 );
             }
         }
@@ -291,12 +373,18 @@ fn push_summary_diagnostic(
         reason,
         "summary validation failed"
     );
-    diagnostics.push(Diagnostic::error(
-        "polint/internal",
-        "<workspace>",
-        TextRange::point(1, 1),
-        "Internal analysis validation failed.",
-    ));
+    diagnostics.push(
+        Diagnostic::error(
+            "polint/internal",
+            "<workspace>",
+            TextRange::point(1, 1),
+            "Internal analysis validation failed.",
+        )
+        .with_evidence("family", family)
+        .with_evidence("stable_key", stable_key)
+        .with_evidence("field", field)
+        .with_evidence("reason", reason),
+    );
 }
 
 #[cfg(test)]
@@ -367,6 +455,26 @@ mod tests {
         }
     }
 
+    fn interprocedural_summary_fact(
+        id: u64,
+        callable_key: &str,
+        function: u64,
+        domain: SummaryDomainKind,
+        stable_key: &str,
+        status: SummaryStatus,
+    ) -> SummaryFact {
+        SummaryFact {
+            provenance: SummaryProvenance::InterproceduralClosure,
+            precision: if status == SummaryStatus::BudgetExceeded {
+                SummaryPrecision::UnknownTop
+            } else {
+                SummaryPrecision::SetupAware
+            },
+            status,
+            ..summary_fact(id, callable_key, function, domain, stable_key)
+        }
+    }
+
     fn event_fact(
         id: u64,
         callable_key: &str,
@@ -384,6 +492,15 @@ mod tests {
             precision: SummaryPrecision::UnknownTop,
             stable_key: stable_key.to_string(),
         }
+    }
+
+    fn diagnostic_reasons(diagnostics: &[crate::diagnostics::Diagnostic]) -> Vec<&str> {
+        diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.evidence.iter())
+            .filter(|evidence| evidence.label == "reason")
+            .map(|evidence| evidence.value.as_str())
+            .collect()
     }
 
     #[test]
@@ -523,6 +640,71 @@ mod tests {
         assert!(
             diagnostics.is_empty(),
             "expected no diagnostics for valid summary facts: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn validate_summaries_rejects_budget_exceeded_summary_without_matching_event() {
+        let mut db = base_db();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![interprocedural_summary_fact(
+                0,
+                "func::main",
+                0,
+                SummaryDomainKind::ControlEffects,
+                "summary:budget-missing-event",
+                SummaryStatus::BudgetExceeded,
+            )],
+            events: Vec::new(),
+        });
+
+        let mut diagnostics = Vec::new();
+        validate_summaries(&db, &mut diagnostics);
+
+        assert!(
+            diagnostic_reasons(&diagnostics).contains(
+                &"BudgetExceeded summaries require matching budget-exceeded summary event evidence",
+            ),
+            "expected BudgetExceeded evidence diagnostic: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn validate_summaries_rejects_exact_precision_on_scc_produced_summary_metadata() {
+        let mut db = base_db();
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![interprocedural_summary_fact(
+                0,
+                "func::main",
+                0,
+                SummaryDomainKind::ControlEffects,
+                "summary:scc-exact",
+                SummaryStatus::Present,
+            )],
+            events: Vec::new(),
+        });
+        db.fact_meta_mut_for_test()
+            .remove_for_test(FactRef::new(FactFamily::SummaryControl, 0));
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::SummaryControl, 0),
+            FactMeta {
+                stable_key: "summary:scc-exact".to_string(),
+                producer_id: "polint.direct_summaries",
+                layer_id: "polint.direct_summaries",
+                precision: FactPrecision::Exact,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "digest:summary:scc-exact".to_string(),
+            },
+        );
+
+        let mut diagnostics = Vec::new();
+        validate_summaries(&db, &mut diagnostics);
+
+        assert!(
+            diagnostic_reasons(&diagnostics)
+                .contains(&"interprocedural SCC summaries must not claim Exact metadata precision"),
+            "expected SCC precision diagnostic: {diagnostics:#?}"
         );
     }
 }

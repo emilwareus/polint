@@ -2,6 +2,11 @@
 
 **Gathered:** 2026-05-22
 **Status:** Ready for planning
+**Refreshed:** 2026-05-22 via `$gsd-discuss-phase 33 --auto`
+
+> Auto-refresh note: Phase 33 already had context and plans when this discussion
+> was re-run. The existing decisions remain locked; no new gray areas or scope
+> changes were introduced.
 
 <domain>
 ## Phase Boundary

@@ -34,7 +34,7 @@ pub(crate) struct Scc {
 /// first so their summaries are available when callers are processed.
 /// Independent SCCs at the same topological level are ordered by the
 /// sorted stable keys of their members for determinism (D-17).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SccSchedule {
     /// SCCs in reverse topological order (leaf callees first).
     pub(crate) sccs: Vec<Scc>,

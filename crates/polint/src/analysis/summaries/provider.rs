@@ -1,8 +1,14 @@
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::builder::DirectSummaryBuilder;
 use super::cache_key::direct_summaries_provider_parameter_digest;
-use super::closure::{SccClosureConfig, SccClosureResult, close_summaries_by_scc};
+#[cfg(test)]
+use super::closure::SccClosureResult;
+use super::closure::{SccClosureConfig, close_summaries_by_scc};
+#[cfg(test)]
+use super::scc::SccSchedule;
 use super::scc::compute_scc_schedule;
 use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
@@ -11,6 +17,7 @@ use crate::analysis_kernel::incremental::{
     CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputComponent,
     InputSnapshot,
 };
+use crate::cache::{Cache, CacheKey};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -68,8 +75,29 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SccClosureProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) closure_result: Option<SccClosureResult>,
     pub(crate) demand_query_trace: DemandQueryTrace,
+    pub(crate) scc_output_digests: BTreeMap<Vec<String>, String>,
+    #[cfg(test)]
+    pub(crate) debug_snapshot: Option<SccClosureDebugSnapshot>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SccClosureDebugSnapshot {
+    pub(crate) schedule: SccSchedule,
+    pub(crate) result: SccClosureResult,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct SccClosureDigestCache {
+    schema: String,
+    scc_digests: Vec<SccClosureDigestCacheEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SccClosureDigestCacheEntry {
+    members: Vec<String>,
+    digest: String,
 }
 
 /// Runs interprocedural summary closure over SCCs discovered from the current
@@ -83,6 +111,54 @@ pub(crate) struct SccClosureProviderOutput {
 /// 4. Call close_summaries_by_scc.
 /// 5. Return closure result, demand query trace, and any diagnostics.
 pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
+    run_scc_closure_with_previous_digests(db, BTreeMap::new())
+}
+
+pub(crate) fn run_scc_closure_with_cache(
+    db: &mut AnalysisDb,
+    cache: &Cache,
+    config_digest: &str,
+    rule_digest: &str,
+    plan_digest: &str,
+) -> SccClosureProviderOutput {
+    let cache_key = scc_closure_cache_key(config_digest, rule_digest, plan_digest);
+    let previous_scc_digests = cache
+        .read_json_with_status::<SccClosureDigestCache>(&cache_key)
+        .value
+        .filter(|entry| entry.schema == "summary-scc-closure-digests-v1")
+        .map(|entry| {
+            entry
+                .scc_digests
+                .into_iter()
+                .map(|entry| (entry.members, entry.digest))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    let output = run_scc_closure_with_previous_digests(db, previous_scc_digests);
+
+    let scc_digests = output.scc_output_digests.clone();
+
+    if !scc_digests.is_empty() {
+        let _ = cache.write_json_with_status(
+            &cache_key,
+            &SccClosureDigestCache {
+                schema: "summary-scc-closure-digests-v1".to_string(),
+                scc_digests: scc_digests
+                    .into_iter()
+                    .map(|(members, digest)| SccClosureDigestCacheEntry { members, digest })
+                    .collect(),
+            },
+        );
+    }
+
+    output
+}
+
+fn run_scc_closure_with_previous_digests(
+    db: &mut AnalysisDb,
+    previous_scc_digests: BTreeMap<Vec<String>, String>,
+) -> SccClosureProviderOutput {
     let schedule = compute_scc_schedule(db);
 
     if schedule.sccs.is_empty() {
@@ -90,7 +166,6 @@ pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
     }
 
     let config = SccClosureConfig::default();
-    let previous_scc_digests: BTreeMap<Vec<String>, String> = BTreeMap::new();
     let mut demand_engine = DemandQueryEngine::default();
 
     let closure_result = close_summaries_by_scc(
@@ -100,6 +175,11 @@ pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
         &mut demand_engine,
         &previous_scc_digests,
     );
+    #[cfg(test)]
+    let debug_snapshot = Some(SccClosureDebugSnapshot {
+        schedule: schedule.clone(),
+        result: closure_result.clone(),
+    });
 
     // Generate diagnostics for budget-exceeded SCCs
     let mut diagnostics = Vec::new();
@@ -121,12 +201,26 @@ pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
     }
 
     let trace = demand_engine.into_trace();
+    let scc_output_digests = closure_result.scc_output_digests;
 
     SccClosureProviderOutput {
         diagnostics,
-        closure_result: Some(closure_result),
         demand_query_trace: trace,
+        scc_output_digests,
+        #[cfg(test)]
+        debug_snapshot,
     }
+}
+
+fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &str) -> CacheKey {
+    CacheKey::for_file(
+        "summary-scc-closure",
+        "scc-output-digests",
+        config_digest,
+        rule_digest,
+        plan_digest,
+        "summary-scc-closure-digests-v1",
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -344,6 +438,7 @@ mod scc_closure_provider {
         SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
+    use crate::cache::Cache;
     use crate::core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
@@ -429,8 +524,9 @@ mod scc_closure_provider {
 
         // Should have processed 2 SCCs (B and A, both non-recursive)
         let result = output
-            .closure_result
-            .expect("closure result should be present");
+            .debug_snapshot
+            .expect("closure debug snapshot should be present")
+            .result;
         assert_eq!(result.total_sccs_processed, 2);
         assert_eq!(result.non_recursive_sccs, 2);
         assert_eq!(result.recursive_sccs, 0);
@@ -457,8 +553,83 @@ mod scc_closure_provider {
 
         let output = run_scc_closure(&mut db);
 
-        assert!(output.closure_result.is_none());
+        assert!(output.debug_snapshot.is_none());
         assert!(output.demand_query_trace.is_empty());
         assert!(output.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn scc_closure_with_cache_backdates_warm_run_and_records_hit_trace() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::default_for_repo(temp.path(), true);
+        let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
+        let sites = vec![call_site(1, 1)];
+        let targets = vec![call_target(1, 1, 1, 2)];
+
+        let mut cold_db = AnalysisDb::new();
+        cold_db.replace_summary_facts(SummaryOutput {
+            summaries: summaries.clone(),
+            events: Vec::new(),
+        });
+        cold_db
+            .replace_call_facts(CallOutput {
+                sites: sites.clone(),
+                targets: targets.clone(),
+                unresolved: Vec::new(),
+            })
+            .expect("call output should be valid");
+        let cold = run_scc_closure_with_cache(
+            &mut cold_db,
+            &cache,
+            "config-digest",
+            "rule-digest",
+            "plan-digest",
+        );
+        assert_eq!(
+            cold.debug_snapshot
+                .as_ref()
+                .expect("cold snapshot")
+                .result
+                .backdated_sccs,
+            0
+        );
+
+        let mut warm_db = AnalysisDb::new();
+        warm_db.replace_summary_facts(SummaryOutput {
+            summaries,
+            events: Vec::new(),
+        });
+        warm_db
+            .replace_call_facts(CallOutput {
+                sites,
+                targets,
+                unresolved: Vec::new(),
+            })
+            .expect("call output should be valid");
+        let warm = run_scc_closure_with_cache(
+            &mut warm_db,
+            &cache,
+            "config-digest",
+            "rule-digest",
+            "plan-digest",
+        );
+
+        assert!(
+            warm.debug_snapshot
+                .as_ref()
+                .expect("warm snapshot")
+                .result
+                .backdated_sccs
+                > 0,
+            "warm SCC closure should backdate from persisted SCC digests"
+        );
+        assert!(
+            warm.demand_query_trace
+                .entries()
+                .iter()
+                .any(|entry| entry.cache_status == "hit"),
+            "warm SCC closure should record hit trace rows: {:#?}",
+            warm.demand_query_trace
+        );
     }
 }

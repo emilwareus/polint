@@ -66,6 +66,7 @@ impl SummaryPrecision {
 pub(crate) enum SummaryProvenance {
     NativeLocal,
     LiftedFromDomain,
+    InterproceduralClosure,
 }
 
 impl SummaryProvenance {
@@ -73,6 +74,7 @@ impl SummaryProvenance {
         match self {
             Self::NativeLocal => "native_local",
             Self::LiftedFromDomain => "lifted_from_domain",
+            Self::InterproceduralClosure => "interprocedural_closure",
         }
     }
 }
@@ -228,6 +230,7 @@ mod tests {
         let provenances = [
             SummaryProvenance::NativeLocal,
             SummaryProvenance::LiftedFromDomain,
+            SummaryProvenance::InterproceduralClosure,
         ];
 
         for provenance in &provenances {
@@ -235,7 +238,7 @@ mod tests {
             assert!(!s.is_empty(), "as_str must be non-empty for {provenance:?}");
         }
 
-        assert_eq!(provenances.len(), 2);
+        assert_eq!(provenances.len(), 3);
     }
 
     #[test]

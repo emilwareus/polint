@@ -1,0 +1,35 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "direct-summaries-scc-closure"
+area = "direct-summaries"
+
+# Coverage: SCC scheduling, recursive closure iteration, demand query trace rows, and cold/warm/no-cache determinism.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "scc_schedule.total_sccs.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "scc_schedule.recursive_scc_count.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "scc_schedule.max_scc_size.at_least_2", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "scc_schedule.iteration_counts.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "demand_queries.total_queries.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "demand_queries.cache_misses.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_summaries.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "direct-summaries-scc-closure", max_runtime_ms = 120000, mode = "exact" }

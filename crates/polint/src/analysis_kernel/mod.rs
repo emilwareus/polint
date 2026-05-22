@@ -333,8 +333,15 @@ impl AnalysisKernel {
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
-        let scc_closure = crate::analysis::summaries::provider::run_scc_closure(&mut db);
-        let scc_closure_demand_trace = scc_closure.demand_query_trace;
+        let scc_closure = crate::analysis::summaries::provider::run_scc_closure_with_cache(
+            &mut db,
+            input.cache,
+            input.config_digest,
+            input.rule_digest,
+            input.plan.digest(),
+        );
+        #[cfg(test)]
+        let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -360,8 +367,10 @@ impl AnalysisKernel {
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,
-            scc_closure_demand_trace,
+            scc_closure.demand_query_trace,
         );
+        #[cfg(test)]
+        let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
 
         Ok(KernelOutput {
             db,
@@ -379,6 +388,17 @@ impl AnalysisKernel {
     #[cfg(test)]
     pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
         debug::metadata_debug_json_for_test(db)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn metadata_debug_json_for_output_for_test(
+        output: &KernelOutput,
+    ) -> serde_json::Value {
+        debug::metadata_debug_json_with_demand_trace_for_test(
+            &output.db,
+            output.run_report.demand_query_trace(),
+            output.run_report.scc_closure_debug(),
+        )
     }
 
     #[cfg(test)]

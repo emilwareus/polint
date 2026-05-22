@@ -1,5 +1,7 @@
 use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
+#[cfg(test)]
+use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -8,6 +10,8 @@ pub(crate) struct KernelRunReport {
     pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
+    #[cfg(test)]
+    pub(crate) scc_closure_debug: Option<SccClosureDebugSnapshot>,
 }
 
 impl KernelRunReport {
@@ -24,16 +28,31 @@ impl KernelRunReport {
             provider_outputs,
             cache_stats,
             demand_query_trace,
+            #[cfg(test)]
+            scc_closure_debug: None,
         }
     }
 
-    /// Returns the demand query trace for this kernel run.
-    #[expect(
-        dead_code,
-        reason = "Demand query trace accessor is established before Plan 04 wires real demand-driven consumers."
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "demand trace is currently surfaced through test-only metadata debug output"
+        )
     )]
     pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
         &self.demand_query_trace
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_scc_closure_debug(mut self, debug: Option<SccClosureDebugSnapshot>) -> Self {
+        self.scc_closure_debug = debug;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scc_closure_debug(&self) -> Option<&SccClosureDebugSnapshot> {
+        self.scc_closure_debug.as_ref()
     }
 }
 

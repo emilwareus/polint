@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -44,7 +44,7 @@ impl Default for SccClosureConfig {
 // ---------------------------------------------------------------------------
 
 /// Result of interprocedural SCC closure across all SCCs.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SccClosureResult {
     pub(crate) total_sccs_processed: usize,
     pub(crate) non_recursive_sccs: usize,
@@ -54,6 +54,7 @@ pub(crate) struct SccClosureResult {
     pub(crate) total_iterations: usize,
     pub(crate) updated_summaries: usize,
     pub(crate) scc_iteration_counts: Vec<(Vec<String>, u32)>,
+    pub(crate) scc_output_digests: BTreeMap<Vec<String>, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,12 +101,8 @@ pub(crate) fn close_summaries_by_scc(
         total_iterations: 0,
         updated_summaries: 0,
         scc_iteration_counts: Vec::new(),
+        scc_output_digests: BTreeMap::new(),
     };
-
-    // Collect the updated summaries and events across all SCCs, then replace
-    // them in the AnalysisDb at the end.
-    let mut all_updated_summaries: Vec<SummaryFact> = Vec::new();
-    let mut all_events: Vec<SummaryEventFact> = Vec::new();
 
     for scc in &schedule.sccs {
         result.total_sccs_processed += 1;
@@ -125,49 +122,52 @@ pub(crate) fn close_summaries_by_scc(
             }
 
             result.updated_summaries += scc_summaries.len();
-            all_updated_summaries.extend(scc_summaries.iter().cloned());
-            all_events.extend(scc_events.iter().cloned());
 
-            // Compute SCC output digest for backdating
-            let scc_digest = compute_scc_digest(&scc.member_stable_keys, &scc_summaries);
-            check_backdating(
+            if !scc_summaries.is_empty() || !scc_events.is_empty() {
+                merge_updated_summaries(db, &scc_summaries, &scc_events);
+            }
+
+            // Compute the post-merge SCC output digest for backdating.
+            let scc_digest = compute_current_scc_digest(db, scc);
+            let was_backdated = check_backdating(
                 config,
                 &scc.member_stable_keys,
                 &scc_digest,
                 previous_scc_digests,
                 &mut result,
             );
+            result
+                .scc_output_digests
+                .insert(scc.member_stable_keys.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, iterations);
+            record_scc_demand_query(demand_engine, scc, &scc_digest, iterations, was_backdated);
         } else {
             result.non_recursive_sccs += 1;
             let (scc_summaries, scc_events) = process_non_recursive_scc(db, scc);
 
             result.updated_summaries += scc_summaries.len();
-            all_updated_summaries.extend(scc_summaries.iter().cloned());
-            all_events.extend(scc_events.iter().cloned());
 
-            // Compute SCC output digest for backdating
-            let scc_digest = compute_scc_digest(&scc.member_stable_keys, &scc_summaries);
-            check_backdating(
+            if !scc_summaries.is_empty() || !scc_events.is_empty() {
+                merge_updated_summaries(db, &scc_summaries, &scc_events);
+            }
+
+            // Compute the post-merge SCC output digest for backdating.
+            let scc_digest = compute_current_scc_digest(db, scc);
+            let was_backdated = check_backdating(
                 config,
                 &scc.member_stable_keys,
                 &scc_digest,
                 previous_scc_digests,
                 &mut result,
             );
+            result
+                .scc_output_digests
+                .insert(scc.member_stable_keys.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, 1);
+            record_scc_demand_query(demand_engine, scc, &scc_digest, 1, was_backdated);
         }
-    }
-
-    // Merge updated summaries back into the AnalysisDb.
-    // We read existing summaries, replace those with matching function+domain,
-    // and add any new ones.
-    if !all_updated_summaries.is_empty() {
-        merge_updated_summaries(db, &all_updated_summaries, &all_events);
     }
 
     result
@@ -201,6 +201,9 @@ fn process_non_recursive_scc(
 
     // For each callee of this function, look up their current summaries
     let callee_info = collect_callee_info(db, function);
+    if callee_info.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     let mut events = Vec::new();
 
     // Apply callee effects to improve caller summaries
@@ -323,13 +326,13 @@ fn process_recursive_scc(
                 (
                     SummaryStatus::BudgetExceeded,
                     SummaryPrecision::UnknownTop,
-                    SummaryProvenance::NativeLocal,
+                    SummaryProvenance::InterproceduralClosure,
                 )
             } else {
                 (
                     fact.status,
                     SummaryPrecision::SetupAware,
-                    SummaryProvenance::NativeLocal,
+                    SummaryProvenance::InterproceduralClosure,
                 )
             };
 
@@ -545,6 +548,12 @@ fn apply_callee_effects(
         result.push(updated_fact);
     }
 
+    if !callee_info.is_empty() {
+        for fact in &mut result {
+            fact.provenance = SummaryProvenance::InterproceduralClosure;
+        }
+    }
+
     // Add events for unresolved callees
     if has_unresolved_callee || has_callee_with_no_summary {
         events.push(SummaryEventFact {
@@ -583,12 +592,20 @@ fn join_callee_digests_into(
     for info in callee_info {
         for (domain, callee_digest) in &info.callee_digests {
             let entry = new_digests.entry(*domain).or_default();
-            if !entry.contains(callee_digest.as_str()) {
-                // Join by appending callee contribution to form a combined digest
-                let mut parts: Vec<&str> = entry.split(';').collect();
-                parts.push(callee_digest);
-                parts.sort();
-                *entry = parts.join(";");
+            let mut parts = entry
+                .split(';')
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            let before = parts.len();
+            parts.extend(
+                callee_digest
+                    .split(';')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+            if parts.len() != before {
+                *entry = parts.into_iter().collect::<Vec<_>>().join(";");
             }
         }
     }
@@ -618,6 +635,20 @@ fn compute_scc_digest(member_keys: &[String], summaries: &[SummaryFact]) -> Stri
     format!("scc_digest:{}:{}", member_keys.join(","), combined)
 }
 
+fn compute_current_scc_digest(db: &AnalysisDb, scc: &Scc) -> String {
+    let summaries = db
+        .summary_store()
+        .map(|store| {
+            scc.members
+                .iter()
+                .flat_map(|function| store.summaries_by_function(*function).into_iter().cloned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    compute_scc_digest(&scc.member_stable_keys, &summaries)
+}
+
 // ---------------------------------------------------------------------------
 // Backdating check
 // ---------------------------------------------------------------------------
@@ -628,16 +659,18 @@ fn check_backdating(
     current_digest: &str,
     previous_digests: &BTreeMap<Vec<String>, String>,
     result: &mut SccClosureResult,
-) {
+) -> bool {
     if !config.enable_backdating {
-        return;
+        return false;
     }
 
     if let Some(previous) = previous_digests.get(member_keys)
         && previous == current_digest
     {
         result.backdated_sccs += 1;
+        return true;
     }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +682,7 @@ fn record_scc_demand_query(
     scc: &Scc,
     scc_digest: &str,
     iterations: u32,
+    was_backdated: bool,
 ) {
     let param_parts: Vec<String> = scc
         .member_stable_keys
@@ -679,13 +713,20 @@ fn record_scc_demand_query(
         &[scc_digest],
     );
 
-    demand_engine.insert(DemandQueryResult {
+    let query_result = DemandQueryResult {
         query_key,
         output_digest,
         precision_tier: PrecisionTier::SetupAware,
         provenance: "native_scc_closure".to_string(),
-        was_cached: false,
-    });
+        was_cached: was_backdated,
+    };
+
+    if was_backdated {
+        let key = query_result.query_key.clone();
+        demand_engine.record_cache_hit(&key, &query_result, 0);
+    } else {
+        demand_engine.insert(query_result);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +961,121 @@ mod tests {
         assert!(!demand_engine.trace().is_empty());
     }
 
+    #[test]
+    fn closure_non_recursive_chain_uses_already_closed_callee_summary() {
+        let summaries = vec![
+            summary_fact(1, "func::a", SummaryDomainKind::CallEffects),
+            summary_fact(1, "func::a", SummaryDomainKind::ControlEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::CallEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::ControlEffects),
+            control_summary_with_throw(3, "func::c"),
+            summary_fact(3, "func::c", SummaryDomainKind::CallEffects),
+        ];
+        let sites = vec![call_site(1, 1), call_site(2, 2)];
+        let targets = vec![call_target(1, 1, 1, 2), call_target(2, 2, 2, 3)];
+        let mut db = build_db(summaries, sites, targets);
+        let schedule = compute_scc_schedule(&db);
+        let mut demand_engine = DemandQueryEngine::default();
+
+        let result = close_summaries_by_scc(
+            &mut db,
+            &schedule,
+            &SccClosureConfig::default(),
+            &mut demand_engine,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(result.non_recursive_sccs, 3);
+        let store = db.summary_store().expect("summary store should exist");
+        let a_call_effects = store
+            .summaries_by_function(FunctionId(1))
+            .into_iter()
+            .find(|summary| summary.domain == SummaryDomainKind::CallEffects)
+            .expect("A should have call effects");
+        assert!(
+            a_call_effects.payload_digest.contains("callee_propagated:"),
+            "A should observe B's closed control summary, got {}",
+            a_call_effects.payload_digest
+        );
+    }
+
+    #[test]
+    fn closure_leaf_scc_without_callees_preserves_direct_summary() {
+        let summaries = vec![
+            summary_fact(1, "func::leaf", SummaryDomainKind::ControlEffects),
+            summary_fact(1, "func::leaf", SummaryDomainKind::CallEffects),
+        ];
+        let mut db = build_db(summaries, Vec::new(), Vec::new());
+        let schedule = compute_scc_schedule(&db);
+        let mut demand_engine = DemandQueryEngine::default();
+
+        let result = close_summaries_by_scc(
+            &mut db,
+            &schedule,
+            &SccClosureConfig::default(),
+            &mut demand_engine,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(
+            result.updated_summaries, 0,
+            "leaf SCCs with no callees should not be rewritten"
+        );
+        let store = db.summary_store().expect("summary store should exist");
+        let leaf_summaries = store.summaries_by_function(FunctionId(1));
+        assert!(
+            leaf_summaries
+                .iter()
+                .all(|summary| summary.precision == SummaryPrecision::Local
+                    && summary.provenance == SummaryProvenance::NativeLocal),
+            "leaf summaries should stay local: {leaf_summaries:#?}"
+        );
+    }
+
+    #[test]
+    fn closure_leaf_scc_digest_tracks_preserved_direct_summary() {
+        let first_summaries = vec![
+            summary_fact(1, "func::leaf", SummaryDomainKind::ControlEffects),
+            summary_fact(1, "func::leaf", SummaryDomainKind::CallEffects),
+        ];
+        let mut db = build_db(first_summaries, Vec::new(), Vec::new());
+        let schedule = compute_scc_schedule(&db);
+        let mut demand_engine = DemandQueryEngine::default();
+
+        let first = close_summaries_by_scc(
+            &mut db,
+            &schedule,
+            &SccClosureConfig::default(),
+            &mut demand_engine,
+            &BTreeMap::new(),
+        );
+
+        let mut changed_call_summary =
+            summary_fact(1, "func::leaf", SummaryDomainKind::CallEffects);
+        changed_call_summary.payload_digest = "digest:func::leaf:call_effects:changed".to_string();
+        let changed_summaries = vec![
+            summary_fact(1, "func::leaf", SummaryDomainKind::ControlEffects),
+            changed_call_summary,
+        ];
+        let mut changed_db = build_db(changed_summaries, Vec::new(), Vec::new());
+        let changed_schedule = compute_scc_schedule(&changed_db);
+        let mut changed_demand_engine = DemandQueryEngine::default();
+
+        let changed = close_summaries_by_scc(
+            &mut changed_db,
+            &changed_schedule,
+            &SccClosureConfig::default(),
+            &mut changed_demand_engine,
+            &first.scc_output_digests,
+        );
+
+        assert_eq!(
+            changed.backdated_sccs, 0,
+            "preserved leaf summaries must not backdate when their direct output changed"
+        );
+        assert_ne!(first.scc_output_digests, changed.scc_output_digests);
+    }
+
     // -----------------------------------------------------------------------
     // Test (b): Recursive SCC with two mutually-calling functions
     // -----------------------------------------------------------------------
@@ -990,6 +1146,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn closure_recursive_scc_reaches_fixpoint_without_digest_growth() {
+        let summaries = vec![
+            summary_fact(1, "func::a", SummaryDomainKind::ControlEffects),
+            summary_fact(1, "func::a", SummaryDomainKind::CallEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::ControlEffects),
+            summary_fact(2, "func::b", SummaryDomainKind::CallEffects),
+        ];
+        let sites = vec![call_site(1, 1), call_site(2, 2)];
+        let targets = vec![call_target(1, 1, 1, 2), call_target(2, 2, 2, 1)];
+        let mut db = build_db(summaries, sites, targets);
+        let schedule = compute_scc_schedule(&db);
+        let config = SccClosureConfig {
+            max_iterations: 6,
+            enable_backdating: true,
+        };
+        let mut demand_engine = DemandQueryEngine::default();
+
+        let result = close_summaries_by_scc(
+            &mut db,
+            &schedule,
+            &config,
+            &mut demand_engine,
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(result.recursive_sccs, 1);
+        assert_eq!(
+            result.budget_exceeded_sccs, 0,
+            "recursive SCC should converge before budget: {result:#?}"
+        );
+        assert!(
+            result.scc_iteration_counts[0].1 < config.max_iterations,
+            "recursive SCC should not consume the whole budget: {result:#?}"
+        );
+        let max_digest_len = db
+            .summary_facts()
+            .iter()
+            .map(|fact| fact.payload_digest.len())
+            .max()
+            .unwrap_or_default();
+        assert!(
+            max_digest_len < 256,
+            "fixpoint digests should stay bounded, got max len {max_digest_len}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Test (c): Backdating — same inputs twice, second run is backdated
     // -----------------------------------------------------------------------
@@ -1023,19 +1226,6 @@ mod tests {
             "first run has no previous digests"
         );
 
-        // Compute the SCC digest from the first run to use as "previous"
-        let store = db.summary_store().expect("store should exist");
-        let a_summaries: Vec<SummaryFact> = store
-            .summaries_by_function(FunctionId(1))
-            .into_iter()
-            .cloned()
-            .collect();
-
-        let scc_key = vec!["func::a".to_string()];
-        let scc_digest = compute_scc_digest(&scc_key, &a_summaries);
-        let mut previous_digests = BTreeMap::new();
-        previous_digests.insert(scc_key, scc_digest);
-
         // Second run: with previous digests, same inputs
         let mut db2 = build_db(summaries, Vec::new(), Vec::new());
         let schedule2 = compute_scc_schedule(&db2);
@@ -1046,7 +1236,7 @@ mod tests {
             &schedule2,
             &config,
             &mut demand_engine2,
-            &previous_digests,
+            &result1.scc_output_digests,
         );
 
         assert_eq!(
@@ -1112,6 +1302,7 @@ mod tests {
             total_iterations: 5,
             updated_summaries: 10,
             scc_iteration_counts: vec![(vec!["func::a".to_string(), "func::b".to_string()], 5)],
+            scc_output_digests: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&result).expect("should serialize");
