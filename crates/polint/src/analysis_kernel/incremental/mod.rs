@@ -1,4 +1,5 @@
 mod change_set;
+mod demand;
 mod dependency_index;
 mod digest;
 mod input_snapshot;
@@ -22,6 +23,23 @@ mod stats;
         reason = "Layer manifest reuse consumes this vocabulary; some future change kinds remain reserved."
     )
 )]
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
+    )
+)]
+pub(crate) use demand::{
+    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
+};
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 #[cfg_attr(
     test,
