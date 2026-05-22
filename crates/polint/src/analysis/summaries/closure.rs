@@ -44,7 +44,7 @@ impl Default for SccClosureConfig {
 // ---------------------------------------------------------------------------
 
 /// Result of interprocedural SCC closure across all SCCs.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SccClosureResult {
     pub(crate) total_sccs_processed: usize,
     pub(crate) non_recursive_sccs: usize,
