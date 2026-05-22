@@ -3113,6 +3113,7 @@ mod abstract_domains_debug_json {
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
     use serde_json::Value;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     #[test]
@@ -3460,14 +3461,15 @@ mod abstract_domains_debug_json {
         let closure_debug = SccClosureDebugSnapshot {
             schedule: compute_scc_schedule(&db),
             result: SccClosureResult {
-            total_sccs_processed: 1,
-            non_recursive_sccs: 0,
-            recursive_sccs: 1,
-            budget_exceeded_sccs: 0,
-            backdated_sccs: 1,
-            total_iterations: 3,
-            updated_summaries: 2,
-            scc_iteration_counts: vec![(vec!["func::app".to_string()], 3)],
+                total_sccs_processed: 1,
+                non_recursive_sccs: 0,
+                recursive_sccs: 1,
+                budget_exceeded_sccs: 0,
+                backdated_sccs: 1,
+                total_iterations: 3,
+                updated_summaries: 2,
+                scc_iteration_counts: vec![(vec!["func::app".to_string()], 3)],
+                scc_output_digests: BTreeMap::new(),
             },
         };
 

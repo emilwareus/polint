@@ -51,7 +51,7 @@ invariant = { name = "layer_cache.provider.polint.metrics.hits", value = "warm=1
 invariant = { name = "layer_cache.provider.polint.module_topology.hits", value = "warm=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.hits", value = "warm=6", mode = "exact" }
+invariant = { name = "layer_cache.aggregate.hits", value = "warm=8", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.aggregate.verified_reuse", value = "warm=6", mode = "exact" }
@@ -99,7 +99,7 @@ invariant = { name = "layer_cache.provider.polint.symbol_graph.misses", value = 
 invariant = { name = "layer_cache.provider.polint.metrics.misses", value = "import_edit=1", mode = "exact" }
 
 [[expected]]
-invariant = { name = "layer_cache.aggregate.hits", value = "import_edit=1", mode = "exact" }
+invariant = { name = "layer_cache.aggregate.hits", value = "import_edit=2", mode = "exact" }
 
 [[expected]]
 invariant = { name = "layer_cache.provider.polint.module_topology.misses", value = "import_edit=1", mode = "exact" }

@@ -12,19 +12,19 @@ max_runtime_ms = 120000
 
 # Control effects: at least one present summary for control domain after SCC closure
 [[expected]]
-fact = { family = "summary_control", stable_key = "control_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "setup_aware", status = "present" }
+fact = { family = "summary_control", stable_key = "control_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
 
 # Call effects: at least one present summary for call domain after SCC closure
 [[expected]]
-fact = { family = "summary_call", stable_key = "call_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "setup_aware", status = "present" }
+fact = { family = "summary_call", stable_key = "call_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
 
 # Memory effects: at least one present summary for memory domain after SCC closure
 [[expected]]
-fact = { family = "summary_memory", stable_key = "memory_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "setup_aware", status = "present" }
+fact = { family = "summary_memory", stable_key = "memory_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
 
 # TITO: at least one present summary for tito domain after SCC closure
 [[expected]]
-fact = { family = "summary_tito", stable_key = "data_flow_tito", mode = "partial", producer_id = "polint.direct_summaries", precision = "setup_aware", status = "present" }
+fact = { family = "summary_tito", stable_key = "data_flow_tito", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
 
 # Unknown summaries: unresolved calls should produce unknown summary events
 [[expected]]

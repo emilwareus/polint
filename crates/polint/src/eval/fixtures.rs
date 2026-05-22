@@ -365,7 +365,7 @@ pub(crate) fn run_module_topology_core_fixture_for_test(
 
     let mut observed = warm_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
@@ -426,7 +426,7 @@ pub(crate) fn run_semantic_mir_core_fixture_for_test(
 
     let mut observed = warm_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     if cold_warm_equal {
@@ -488,7 +488,7 @@ pub(crate) fn run_cfg_core_fixture_for_test(
 
     let mut observed = no_cache_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     if deterministic {
@@ -550,7 +550,7 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
 
     let mut observed = no_cache_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     if deterministic {
@@ -612,7 +612,7 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
 
     let mut observed = no_cache_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     observed.extend(abstract_domain_observed_with_policy(
@@ -694,7 +694,7 @@ pub(crate) fn run_direct_summaries_core_fixture_for_test(
 
     let mut observed = no_cache_observed
         .iter()
-        .filter(|item| !is_cache_stats_observed_invariant(item))
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
         .cloned()
         .collect::<Vec<_>>();
     if deterministic {
@@ -945,7 +945,7 @@ fn run_without_runtime_durations(
     for case in &mut normalized.cases {
         case.runtime.observed_runtime_ms = None;
         case.observed
-            .retain(|item| !is_cache_stats_observed_invariant(item));
+            .retain(|item| !is_cache_comparison_observed_invariant(item));
         for item in &mut case.observed {
             if let crate::eval::model::ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = None;
@@ -976,6 +976,22 @@ fn is_cache_stats_observed_invariant(item: &crate::eval::model::ObservedItem) ->
             (invariant.name.starts_with("provider_output.polint.")
                 && invariant.name.contains(".cache_stats."))
                 || invariant.name.starts_with("layer_cache.")
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+fn is_cache_comparison_observed_invariant(item: &crate::eval::model::ObservedItem) -> bool {
+    if is_cache_stats_observed_invariant(item) {
+        return true;
+    }
+    match item {
+        crate::eval::model::ObservedItem::Invariant(invariant) => {
+            matches!(
+                invariant.name.as_str(),
+                "demand_queries.cache_hits.nonzero" | "demand_queries.cache_misses.nonzero"
+            )
         }
         _ => false,
     }

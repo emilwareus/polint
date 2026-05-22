@@ -333,7 +333,13 @@ impl AnalysisKernel {
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
-        let scc_closure = crate::analysis::summaries::provider::run_scc_closure(&mut db);
+        let scc_closure = crate::analysis::summaries::provider::run_scc_closure_with_cache(
+            &mut db,
+            input.cache,
+            input.config_digest,
+            input.rule_digest,
+            input.plan.digest(),
+        );
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
