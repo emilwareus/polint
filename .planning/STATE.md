@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: phase_31_shipped_pr_35
-last_updated: "2026-05-21T13:35:40.808Z"
-last_activity: 2026-05-21
+status: executing
+last_updated: "2026-05-21T19:50:01Z"
+last_activity: 2026-05-21 -- Phase 32 Plan 07 complete (Phase 32 complete)
 progress:
   total_phases: 22
-  completed_phases: 12
-  total_plans: 65
-  completed_plans: 65
-  percent: 100
+  completed_phases: 13
+  total_plans: 72
+  completed_plans: 72
+  percent: 59
 ---
 
 # State: polint
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase 31 shipped - PR #35; ready to discuss next phase
-Phase: 32
-Plan: Not started
-Last activity: 2026-05-21
+Status: Executing Phase 32
+Phase: 32 (summary-kernel-and-direct-summaries) — COMPLETE
+Plan: 7 of 7 (all complete)
+Last activity: 2026-05-21 -- Completed 32-07-PLAN.md (Phase 32 complete)
 
 ## Phase Progress
 
@@ -62,7 +62,7 @@ Last activity: 2026-05-21
 | 29 | Complete | 6/6 plans complete; private CFG contracts/storage, shared builder/derived analyses, provider/cache/validation/debug wiring, Go CFG lowering, TS/JS CFG lowering, eval fixtures, and public-boundary proof done; requirement SAE-SEM-04 |
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
 | 31 | Complete | 5/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, abstract-domain eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-01 |
-| 32 | Pending | Summary kernel and direct summaries; requirement SAE-INT-02 |
+| 32 | Complete | 7/7 plans complete; summary kernel contracts, store, builder, provider, cache identity, validation, debug, eval fixtures, and public-boundary proof done; requirement SAE-INT-02 |
 | 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
 | 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
 | 35 | Pending | Framework entrypoints and trust boundaries; requirement SAE-INT-05 |
@@ -266,6 +266,27 @@ Last activity: 2026-05-21
 - [Phase 31-p0-abstract-domain-kernel]: Abstract-domain facts remain internal eval/debug evidence, not SDK or CLI contract.
 - [Phase 31-p0-abstract-domain-kernel]: Deterministic top and budget fixture rows use private test-only solver policies rather than changing production solver defaults.
 - [Phase 31-p0-abstract-domain-kernel]: Transient domain place IDs are retained in stable keys but not exposed as invalid indexed references.
+- [Phase 32-summary-kernel-and-direct-summaries]: Use max instead of saturating_add for CallEffects unresolved_count join to preserve lattice idempotence.
+- [Phase 32-summary-kernel-and-direct-summaries]: Re-declare Changed enum locally in summaries::domain rather than importing from domains::lattice to keep module boundaries clean.
+- [Phase 32-summary-kernel-and-direct-summaries]: Place AccessKind::join impl in core.rs since it is specific to summary domain join behavior.
+- [Phase 32-summary-kernel-and-direct-summaries]: SummaryOutput normalized() sorts by (stable_key, id) then reassigns IDs sequentially, matching CallOutput pattern.
+- [Phase 32-summary-kernel-and-direct-summaries]: Each SummaryDomainKind maps to a separate FactFamily variant for independent metadata tracking and removal.
+- [Phase 32-summary-kernel-and-direct-summaries]: SummaryPrecision::Local and SetupAware both map to FactPrecision::SetupAware since summary facts are never Exact.
+- [Phase 32-summary-kernel-and-direct-summaries]: Use polint.direct_summaries as the producer_id and layer_id for all summary metadata.
+- [Phase 32-summary-kernel-and-direct-summaries]: Implement all four domain builders in a single DirectSummaryBuilder::build pass for deterministic output.
+- [Phase 32-summary-kernel-and-direct-summaries]: TITO uses simple copy-chain tracing without field-level access paths per D-07/D-10.
+- [Phase 32-summary-kernel-and-direct-summaries]: Memory effects treat all PlaceRoot::Parameter variants uniformly as Param(index) since the place model has no separate Receiver root.
+- [Phase 32-summary-kernel-and-direct-summaries]: Output digest includes abstract_domains_output_digest as upstream input for cache invalidation when domain results change.
+- [Phase 32-summary-kernel-and-direct-summaries]: Provider parameter digest includes all four summary domain IDs and versions for cache identity.
+- [Phase 32-summary-kernel-and-direct-summaries]: LayerKind::DirectSummaries and direct_summaries_layer_key include absent extension/model/toolchain slots per D-14.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary validation runs after validate_abstract_domains in the kernel validation sequence.
+- [Phase 32-summary-kernel-and-direct-summaries]: Precision ceiling check rejects FactPrecision::Exact from polint.direct_summaries metadata rows.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary debug rows use as_str labels for domain, status, precision, and provenance instead of dense IDs.
+- [Phase 32-summary-kernel-and-direct-summaries]: Eval observation maps summary domain names to fact families: control_effects -> summary_control, call_effects -> summary_call, memory_effects -> summary_memory, data_flow_tito -> summary_tito.
+- [Phase 32-summary-kernel-and-direct-summaries]: Summary event facts use a single summary_event family rather than per-domain event families.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary eval payload uses semicolon-delimited compact fragments: domain;status;precision;provenance;payload_digest_prefix.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary determinism comparison uses cold/warm/no-cache three-way equality matching the established direct-calls and abstract-domains patterns.
+- [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary public-boundary proof uses 21 specific internal markers (provider IDs, domain names, type names, fact families) rather than generic substring markers that would match test naming.
 
 ## Execution Metrics
 
@@ -324,12 +345,19 @@ Last activity: 2026-05-21
 | 31-p0-abstract-domain-kernel | 03 | 16 min | 2 | 13 |
 | 31-p0-abstract-domain-kernel | 04 | 14 min | 2 | 9 |
 | 31-p0-abstract-domain-kernel | 05 | 43 min | 3 | 19 |
+| 32-summary-kernel-and-direct-summaries | 01 | 8 min | 2 | 6 |
+| 32-summary-kernel-and-direct-summaries | 02 | 5 min | 2 | 4 |
+| 32-summary-kernel-and-direct-summaries | 03 | 6 min | 2 | 2 |
+| 32-summary-kernel-and-direct-summaries | 04 | 12 min | 2 | 10 |
+| 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
+| 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
+| 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
 
 ## Session
 
 - Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 31-p0-abstract-domain-kernel-05-PLAN.md.
-- Stopped at: Completed 31-p0-abstract-domain-kernel-04-PLAN.md; ready for Plan 31-05.
+- Last activity: 2026-05-21 - Completed 32-07-PLAN.md (Phase 32 complete).
+- Stopped at: Completed Phase 32; ready for Phase 33.
 
 ### Quick Tasks Completed
 
@@ -358,4 +386,4 @@ Last activity: 2026-05-21
 
 ## Next Action
 
-Phase 31 Plan 04 is next: validation, debug, eval observation, and fixture proof for abstract-domain rows.
+Phase 32 is complete. Phase 33 (demand queries and summary SCC cache) is next.

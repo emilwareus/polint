@@ -19,6 +19,10 @@ use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceStatus};
 use crate::analysis::store::SemanticStore;
+use crate::analysis::summaries::facts::{
+    SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
+};
+use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
@@ -56,6 +60,7 @@ pub(crate) const SEMANTIC_MIR_PROVIDER_ID: &str = "polint.semantic_mir";
 pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
 pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
+pub(crate) const POLINT_DIRECT_SUMMARIES_PROVIDER_ID: &str = "polint.direct_summaries";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -641,6 +646,9 @@ pub struct AnalysisDb {
     abstract_domain_observations: Vec<DomainObservationFact>,
     abstract_domain_events: Vec<DomainEventFact>,
     abstract_domain_store: Option<DomainStore>,
+    summary_facts: Vec<SummaryFact>,
+    summary_events: Vec<SummaryEventFact>,
+    summary_store: Option<SummaryStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -1051,6 +1059,28 @@ impl AnalysisDb {
         self.abstract_domain_store.as_ref()
     }
 
+    pub(crate) fn replace_summary_facts(&mut self, output: SummaryOutput) {
+        let store =
+            SummaryStore::from_output(output).expect("summary output should produce a valid store");
+        self.summary_facts = store.all_summaries().to_vec();
+        self.summary_events = store.all_events().to_vec();
+        self.summary_store = Some(store);
+        self.refresh_summary_metadata();
+    }
+
+    pub(crate) fn summary_facts(&self) -> &[SummaryFact] {
+        &self.summary_facts
+    }
+
+    pub(crate) fn summary_events(&self) -> &[SummaryEventFact] {
+        &self.summary_events
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn summary_store(&self) -> Option<&SummaryStore> {
+        self.summary_store.as_ref()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
         self.call_store
@@ -1168,6 +1198,72 @@ impl AnalysisDb {
         for (run_id, metadata) in event_metadata {
             self.record_fact_meta(FactFamily::DomainEvent, run_id, metadata);
         }
+    }
+
+    fn refresh_summary_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::SummaryControl);
+        self.fact_meta.remove_family(FactFamily::SummaryCall);
+        self.fact_meta.remove_family(FactFamily::SummaryMemory);
+        self.fact_meta.remove_family(FactFamily::SummaryTito);
+        self.fact_meta.remove_family(FactFamily::SummaryEvent);
+
+        let summary_metadata = self
+            .summary_facts
+            .iter()
+            .map(|fact| {
+                let family = summary_domain_to_fact_family(fact.domain);
+                (family, fact.id.0, self.summary_fact_metadata(fact))
+            })
+            .collect::<Vec<_>>();
+        for (family, run_id, metadata) in summary_metadata {
+            self.record_fact_meta(family, run_id, metadata);
+        }
+
+        let event_metadata = self
+            .summary_events
+            .iter()
+            .map(|fact| (fact.id.0, self.summary_event_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in event_metadata {
+            self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+        }
+    }
+
+    fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
+        let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            summary_domain_to_fact_family(fact.domain),
+            POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                ("domain", fact.domain.as_str().to_string()),
+                ("callable", fact.callable_stable_key.clone()),
+                ("provenance", fact.provenance.as_str().to_string()),
+            ]),
+        )
+    }
+
+    fn summary_event_metadata(&self, fact: &SummaryEventFact) -> FactMeta {
+        let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::SummaryEvent,
+            POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                ("domain", fact.domain.as_str().to_string()),
+                ("callable", fact.callable_stable_key.clone()),
+                ("event_kind", fact.event_kind.clone()),
+                ("reason", fact.reason.clone()),
+            ]),
+        )
     }
 
     fn refresh_cfg_metadata(&mut self) {
@@ -3869,6 +3965,43 @@ fn domain_status_metadata(
         | DomainStatus::Unsupported
         | DomainStatus::SetupMissing
         | DomainStatus::BudgetExceeded => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn summary_domain_to_fact_family(domain: SummaryDomainKind) -> FactFamily {
+    match domain {
+        SummaryDomainKind::ControlEffects => FactFamily::SummaryControl,
+        SummaryDomainKind::CallEffects => FactFamily::SummaryCall,
+        SummaryDomainKind::MemoryEffects => FactFamily::SummaryMemory,
+        SummaryDomainKind::DataFlowTito => FactFamily::SummaryTito,
+    }
+}
+
+fn summary_precision_metadata(
+    status: SummaryStatus,
+    precision: SummaryPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        SummaryStatus::Present => match precision {
+            SummaryPrecision::Local | SummaryPrecision::SetupAware => FactPrecision::SetupAware,
+            SummaryPrecision::Heuristic => FactPrecision::Heuristic,
+            SummaryPrecision::UnknownTop => FactPrecision::Unresolved,
+        },
+        SummaryStatus::Unknown | SummaryStatus::BudgetExceeded => FactPrecision::Unresolved,
+        SummaryStatus::Unsupported => FactPrecision::Unsupported,
+        SummaryStatus::SetupMissing => FactPrecision::SetupMissing,
+    };
+    let confidence = match status {
+        SummaryStatus::Present => match precision {
+            SummaryPrecision::Local | SummaryPrecision::SetupAware => FactConfidence::High,
+            SummaryPrecision::Heuristic => FactConfidence::Medium,
+            SummaryPrecision::UnknownTop => FactConfidence::Low,
+        },
+        SummaryStatus::Unknown
+        | SummaryStatus::Unsupported
+        | SummaryStatus::SetupMissing
+        | SummaryStatus::BudgetExceeded => FactConfidence::Low,
     };
     (fact_precision, confidence)
 }

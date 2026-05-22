@@ -1,0 +1,52 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "direct-summaries-core"
+area = "direct-summaries"
+
+# Coverage: Go panic/return/receiver/global/unresolved/pure; TS throw/identity/paramWrite/callback/noEffects.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+# Control effects: at least one present summary for control domain
+[[expected]]
+fact = { family = "summary_control", stable_key = "control_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+# Call effects: at least one present summary for call domain
+[[expected]]
+fact = { family = "summary_call", stable_key = "call_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+# Memory effects: at least one present summary for memory domain
+[[expected]]
+fact = { family = "summary_memory", stable_key = "memory_effects", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+# TITO: at least one present summary for tito domain
+[[expected]]
+fact = { family = "summary_tito", stable_key = "data_flow_tito", mode = "partial", producer_id = "polint.direct_summaries", precision = "local", status = "present" }
+
+# Unknown summaries: unresolved calls should produce unknown summary events
+[[expected]]
+fact = { family = "summary_event", stable_key = "SummaryEvent", mode = "partial", producer_id = "polint.direct_summaries", precision = "unknown_top", status = "unknown" }
+
+# Determinism: repeated runs produce identical output
+[[expected]]
+invariant = { name = "direct_summaries.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+# Domain counts: each domain has at least one summary
+[[expected]]
+invariant = { name = "direct_summaries.domain_counts.control_effects.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_summaries.domain_counts.call_effects.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_summaries.domain_counts.memory_effects.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "direct_summaries.domain_counts.data_flow_tito.nonzero", value = "true", mode = "exact" }
+
+# Runtime budget
+[[expected]]
+runtime_budget = { name = "direct-summaries-core", max_runtime_ms = 120000, mode = "exact" }

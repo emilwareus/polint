@@ -39,6 +39,12 @@ pub(crate) struct DomainObservationId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct DomainEventId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct SummaryId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct SummaryEventId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +84,8 @@ mod tests {
         assert_small_id_contract::<AbstractStateId>();
         assert_small_id_contract::<DomainObservationId>();
         assert_small_id_contract::<DomainEventId>();
+        assert_small_id_contract::<SummaryId>();
+        assert_small_id_contract::<SummaryEventId>();
     }
 
     #[test]

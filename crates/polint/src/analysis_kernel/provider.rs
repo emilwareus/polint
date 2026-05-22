@@ -187,6 +187,11 @@ const ABSTRACT_DOMAINS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::summaries::cache_key::DIRECT_SUMMARIES_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -409,6 +414,37 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.direct_summaries",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "unsupported_semantics",
+            "cfg_functions",
+            "basic_blocks",
+            "cfg_edges",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+            "domain_observations",
+            "domain_events",
+        ],
+        outputs: &[
+            "summary_control",
+            "summary_call",
+            "summary_memory",
+            "summary_tito",
+            "summary_events",
+        ],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: DIRECT_SUMMARIES_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -456,6 +492,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );
@@ -476,6 +513,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );
@@ -523,6 +561,7 @@ mod tests {
                 "polint.cfg",
                 "polint.calls",
                 "polint.abstract_domains",
+                "polint.direct_summaries",
                 "polint.metrics",
             ]
         );
@@ -762,6 +801,34 @@ mod tests {
                     outputs: vec!["domain_observations", "domain_events"],
                 },
                 ProviderOrderRow {
+                    id: "polint.direct_summaries",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "unsupported_semantics",
+                        "cfg_functions",
+                        "basic_blocks",
+                        "cfg_edges",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                        "domain_observations",
+                        "domain_events",
+                    ],
+                    outputs: vec![
+                        "summary_control",
+                        "summary_call",
+                        "summary_memory",
+                        "summary_tito",
+                        "summary_events",
+                    ],
+                },
+                ProviderOrderRow {
                     id: "polint.metrics",
                     kind: "metrics_derived",
                     language_scope: "multi_language",
@@ -886,6 +953,47 @@ mod tests {
         assert_eq!(
             manifest.outputs,
             &["call_sites", "call_targets", "unresolved_calls"]
+        );
+    }
+
+    #[test]
+    fn direct_summaries_provider_manifest_declares_private_outputs() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.direct_summaries")
+            .expect("direct summaries manifest should exist");
+
+        assert_eq!(manifest.primary_schema_label(), "direct-summary-facts-1:1");
+        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
+        assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
+        for input in [
+            "source_files",
+            "functions",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "unsupported_semantics",
+            "cfg_functions",
+            "basic_blocks",
+            "cfg_edges",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+            "domain_observations",
+            "domain_events",
+        ] {
+            assert!(manifest.inputs.contains(&input), "missing input {input}");
+        }
+        assert_eq!(
+            manifest.outputs,
+            &[
+                "summary_control",
+                "summary_call",
+                "summary_memory",
+                "summary_tito",
+                "summary_events",
+            ]
         );
     }
 }
