@@ -23,6 +23,7 @@ mod stats;
         reason = "Layer manifest reuse consumes this vocabulary; some future change kinds remain reserved."
     )
 )]
+pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 #[cfg_attr(
     test,
     allow(
@@ -40,7 +41,6 @@ mod stats;
 pub(crate) use demand::{
     DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
 };
-pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 #[cfg_attr(
     test,
     allow(

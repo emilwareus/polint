@@ -351,7 +351,11 @@ impl AnalysisKernel {
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
-        let run_report = incremental::KernelRunReport::new(input_snapshot, provider_outputs);
+        let run_report = incremental::KernelRunReport::new(
+            input_snapshot,
+            provider_outputs,
+            incremental::DemandQueryTrace::default(),
+        );
 
         Ok(KernelOutput {
             db,

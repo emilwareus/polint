@@ -1,3 +1,4 @@
+use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 
@@ -6,20 +7,33 @@ pub(crate) struct KernelRunReport {
     pub(crate) input_snapshot: InputSnapshot,
     pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) demand_query_trace: DemandQueryTrace,
 }
 
 impl KernelRunReport {
     pub(crate) fn new(
         input_snapshot: InputSnapshot,
         provider_outputs: Vec<ProviderOutputMeta>,
+        demand_query_trace: DemandQueryTrace,
     ) -> Self {
-        let cache_stats = aggregate_cache_stats(&provider_outputs);
+        let mut cache_stats = aggregate_cache_stats(&provider_outputs);
+        aggregate_demand_query_stats(&demand_query_trace, &mut cache_stats);
 
         Self {
             input_snapshot,
             provider_outputs,
             cache_stats,
+            demand_query_trace,
         }
+    }
+
+    /// Returns the demand query trace for this kernel run.
+    #[expect(
+        dead_code,
+        reason = "Demand query trace accessor is established before Plan 04 wires real demand-driven consumers."
+    )]
+    pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
+        &self.demand_query_trace
     }
 }
 
@@ -95,6 +109,20 @@ fn precision_label(precision: PrecisionCeiling) -> &'static str {
         PrecisionCeiling::Exact => "exact",
         PrecisionCeiling::Syntax => "syntax",
         PrecisionCeiling::SetupAware => "setup_aware",
+    }
+}
+
+/// Aggregates demand query cache statistics into an existing `CacheStats`.
+///
+/// Entries with `cache_status == "hit"` count as hits; entries with
+/// `cache_status == "miss"` or `"computed"` count as recomputes.
+fn aggregate_demand_query_stats(trace: &DemandQueryTrace, stats: &mut CacheStats) {
+    for entry in trace.entries() {
+        match entry.cache_status.as_str() {
+            "hit" => stats.hits += 1,
+            "miss" | "computed" => stats.recomputes += 1,
+            _ => {}
+        }
     }
 }
 

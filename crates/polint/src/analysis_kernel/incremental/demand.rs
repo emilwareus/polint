@@ -39,7 +39,7 @@ pub(crate) struct DemandQueryResult {
 ///
 /// Per D-13, records query kind, precision tier, input layer digests, cache
 /// hit/miss, compute time, and result digest.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct DemandQueryTraceEntry {
     pub(crate) query_kind: String,
     pub(crate) query_version: String,
@@ -59,7 +59,7 @@ pub(crate) struct DemandQueryTraceEntry {
 ///
 /// Wraps a `Vec<DemandQueryTraceEntry>`. Crate-private and test-facing per
 /// D-13.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct DemandQueryTrace {
     entries: Vec<DemandQueryTraceEntry>,
 }
