@@ -1,10 +1,12 @@
 mod change_set;
+mod demand;
 mod dependency_index;
 mod digest;
 mod input_snapshot;
 mod invalidation;
 mod keys;
 mod layer_cache;
+mod quarantine;
 mod run_report;
 mod stats;
 
@@ -23,6 +25,23 @@ mod stats;
     )
 )]
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported demand query vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
+    )
+)]
+pub(crate) use demand::{
+    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
+};
 #[cfg_attr(
     test,
     allow(
@@ -114,6 +133,21 @@ pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
     LayerCacheStore, LayerCacheWriteStatus,
 };
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported quarantine vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
+    )
+)]
+pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
 };

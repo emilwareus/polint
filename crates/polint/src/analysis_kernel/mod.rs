@@ -331,6 +331,12 @@ impl AnalysisKernel {
             _direct_summaries_output_digest,
         ));
 
+        // SCC closure: interprocedural summary improvement over SCCs.
+        // Runs after direct summaries so callee summaries are available.
+        let scc_closure = crate::analysis::summaries::provider::run_scc_closure(&mut db);
+        let scc_closure_demand_trace = scc_closure.demand_query_trace;
+        diagnostics.extend(scc_closure.diagnostics);
+
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
             &mut db,
             input.plan,
@@ -351,7 +357,11 @@ impl AnalysisKernel {
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
-        let run_report = incremental::KernelRunReport::new(input_snapshot, provider_outputs);
+        let run_report = incremental::KernelRunReport::new(
+            input_snapshot,
+            provider_outputs,
+            scc_closure_demand_trace,
+        );
 
         Ok(KernelOutput {
             db,

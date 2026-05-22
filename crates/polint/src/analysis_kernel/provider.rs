@@ -957,6 +957,111 @@ mod tests {
     }
 
     #[test]
+    fn demand_query_internals_are_not_public_sdk_runner_cli_or_docs_surface() {
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        // Specific internal type and module names that must not appear in
+        // public surfaces.
+        let demand_markers = [
+            "QueryContext",
+            "QueryKind",
+            "QueryBudget",
+            "QueryTrace",
+            "QuarantineSet",
+            "QuarantineEntry",
+            "QuarantineReason",
+            "SccComponent",
+            "SccGraph",
+            "SccCacheEntry",
+            "SccFixpointStatus",
+            "DependencyRead",
+            "DependencyReadKind",
+            "MemoEntry",
+            "demand_query_key",
+            "analysis::demand",
+            "DemandQuery",
+            "demand::query",
+            "demand::context",
+            "demand::scc",
+            "demand::quarantine",
+        ];
+
+        // Check SDK sources
+        for source_path in rust_sources_under(&crate_root.join("src/sdk")) {
+            let source = read_source(&source_path);
+            for marker in &demand_markers {
+                assert!(
+                    !source.contains(marker),
+                    "demand query internal `{marker}` leaked into SDK: {}",
+                    source_path.display()
+                );
+            }
+        }
+
+        // Check runner
+        let runner = read_source(&crate_root.join("src/runner/mod.rs"));
+        for marker in &demand_markers {
+            assert!(
+                !runner.contains(marker),
+                "demand query internal `{marker}` leaked into runner"
+            );
+        }
+
+        // Check CLI
+        let cli = read_source(&crate_root.join("src/cli/mod.rs"));
+        for marker in &demand_markers {
+            assert!(
+                !cli.contains(marker),
+                "demand query internal `{marker}` leaked into CLI"
+            );
+        }
+
+        // Check lib.rs
+        let lib = read_source(&crate_root.join("src/lib.rs"));
+        assert!(
+            !lib.contains("pub mod demand"),
+            "demand module should not be public in lib.rs"
+        );
+
+        // Check README
+        let readme_path = crate_root
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("README.md");
+        if readme_path.exists() {
+            let readme = read_source(&readme_path);
+            for marker in &demand_markers {
+                assert!(
+                    !readme.contains(marker),
+                    "demand query internal `{marker}` leaked into README"
+                );
+            }
+        }
+
+        // Check docs/facts
+        let docs_facts = crate_root
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("docs/facts");
+        if docs_facts.exists() {
+            for source_path in rust_sources_under(&docs_facts) {
+                let source = read_source(&source_path);
+                for marker in &demand_markers {
+                    assert!(
+                        !source.contains(marker),
+                        "demand query internal `{marker}` leaked into docs/facts: {}",
+                        source_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn direct_summaries_provider_manifest_declares_private_outputs() {
         let manifest = provider_manifests()
             .iter()

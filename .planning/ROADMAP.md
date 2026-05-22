@@ -330,6 +330,30 @@ Plans:
 **Goal:** Add internal demand queries for expensive views, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace output.
 **Requirements:** SAE-INT-03
 **Research:** `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/effects-summaries/RECOMMENDED_IMPLEMENTATION.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`
+**Plans:** 7 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 33-01-PLAN.md — Direct summaries layer cache activation and warm-run restore
+- [ ] 33-02-PLAN.md — Demand query engine contracts, in-run memoization, and trace types
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 33-03-PLAN.md — SCC discovery from direct call targets and deterministic scheduling
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 33-04-PLAN.md — Interprocedural summary closure with fixpoint iteration and backdating
+- [ ] 33-05-PLAN.md — Extension-aware cache quarantine mechanism and synthetic tests
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 33-06-PLAN.md — Validation, debug JSON, and demand query trace wiring
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 33-07-PLAN.md — Eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
 

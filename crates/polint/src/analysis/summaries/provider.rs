@@ -1,10 +1,15 @@
+use std::collections::BTreeMap;
+
 use super::builder::DirectSummaryBuilder;
 use super::cache_key::direct_summaries_provider_parameter_digest;
+use super::closure::{SccClosureConfig, SccClosureResult, close_summaries_by_scc};
+use super::scc::compute_scc_schedule;
 use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
+    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputComponent,
+    InputSnapshot,
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
@@ -52,6 +57,75 @@ pub(crate) fn derive_direct_summaries_with_cache_stats(
         diagnostics: Vec::new(),
         cache_stats,
         output_digest: Some(output_digest),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SCC closure orchestration
+// ---------------------------------------------------------------------------
+
+/// Output of the SCC closure step.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SccClosureProviderOutput {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) closure_result: Option<SccClosureResult>,
+    pub(crate) demand_query_trace: DemandQueryTrace,
+}
+
+/// Runs interprocedural summary closure over SCCs discovered from the current
+/// call graph.
+///
+/// Steps:
+/// 1. Compute SCC schedule from current call targets.
+/// 2. If no SCCs exist, return empty output with default trace.
+/// 3. Create SccClosureConfig, empty previous_scc_digests (cross-run caching
+///    is future work), and a DemandQueryEngine.
+/// 4. Call close_summaries_by_scc.
+/// 5. Return closure result, demand query trace, and any diagnostics.
+pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
+    let schedule = compute_scc_schedule(db);
+
+    if schedule.sccs.is_empty() {
+        return SccClosureProviderOutput::default();
+    }
+
+    let config = SccClosureConfig::default();
+    let previous_scc_digests: BTreeMap<Vec<String>, String> = BTreeMap::new();
+    let mut demand_engine = DemandQueryEngine::default();
+
+    let closure_result = close_summaries_by_scc(
+        db,
+        &schedule,
+        &config,
+        &mut demand_engine,
+        &previous_scc_digests,
+    );
+
+    // Generate diagnostics for budget-exceeded SCCs
+    let mut diagnostics = Vec::new();
+    if closure_result.budget_exceeded_sccs > 0 {
+        for (members, iterations) in &closure_result.scc_iteration_counts {
+            if *iterations >= config.max_iterations {
+                diagnostics.push(Diagnostic::warning(
+                    "internal/scc-closure",
+                    members.join(", "),
+                    crate::diagnostics::TextRange::point(0, 0),
+                    format!(
+                        "SCC fixpoint did not converge within {} iterations for SCC with members: {}",
+                        config.max_iterations,
+                        members.join(", ")
+                    ),
+                ));
+            }
+        }
+    }
+
+    let trace = demand_engine.into_trace();
+
+    SccClosureProviderOutput {
+        diagnostics,
+        closure_result: Some(closure_result),
+        demand_query_trace: trace,
     }
 }
 
@@ -254,5 +328,137 @@ mod direct_summaries_provider_order {
         assert!(calls < abstract_domains);
         assert!(abstract_domains < direct_summaries);
         assert!(direct_summaries < metrics);
+    }
+}
+
+#[cfg(test)]
+mod scc_closure_provider {
+    use super::*;
+    use crate::analysis::calls::facts::{
+        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+        CallSyntaxKind, CallTargetFact, CallTargetStatus,
+    };
+    use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, SummaryId};
+    use crate::analysis::summaries::facts::{
+        SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
+    };
+    use crate::analysis::summaries::store::SummaryOutput;
+    use crate::core::{FileId, FunctionId, Language, Span};
+
+    fn span() -> Span {
+        Span::point(FileId(1), 1, 1)
+    }
+
+    fn summary_fact(function_id: u64, callable_key: &str) -> SummaryFact {
+        SummaryFact {
+            id: SummaryId(0),
+            callable_stable_key: callable_key.to_string(),
+            function: FunctionId(function_id),
+            domain: SummaryDomainKind::ControlEffects,
+            status: SummaryStatus::Present,
+            precision: SummaryPrecision::Local,
+            provenance: SummaryProvenance::NativeLocal,
+            payload_digest: format!("digest:{callable_key}"),
+            stable_key: format!("summary:control_effects:{callable_key}"),
+        }
+    }
+
+    fn call_site(id: u64, caller: u64) -> CallSiteFact {
+        CallSiteFact {
+            id: CallSiteId(id),
+            language: Language::TypeScript,
+            file: FileId(1),
+            caller: FunctionId(caller),
+            owner_symbol: None,
+            body: MirBodyId(caller),
+            operation: MirOpId(id),
+            span: span(),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: None,
+                name: format!("call_{id}"),
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Resolved,
+            precision: CallPrecision::Exact,
+            stable_key: format!("site:{id}"),
+        }
+    }
+
+    fn call_target(id: u64, site_id: u64, caller: u64, target_func: u64) -> CallTargetFact {
+        CallTargetFact {
+            id: CallTargetId(id),
+            site: CallSiteId(site_id),
+            caller: FunctionId(caller),
+            target_function: Some(FunctionId(target_func)),
+            target_symbol: None,
+            edge_kind: CallEdgeKind::Direct,
+            algorithm: CallAlgorithm::DirectReference,
+            status: CallTargetStatus::Resolved,
+            reason: None,
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Exact,
+            stable_key: format!("target:{id}"),
+        }
+    }
+
+    #[test]
+    fn scc_closure_processes_chain_in_correct_order_and_records_demand_trace() {
+        // A calls B. Both have direct summaries.
+        // SCC closure should process B first (leaf callee), then A.
+        let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
+        let sites = vec![call_site(1, 1)]; // A calls something
+        let targets = vec![call_target(1, 1, 1, 2)]; // A -> B
+
+        let mut db = AnalysisDb::new();
+        db.replace_summary_facts(SummaryOutput {
+            summaries,
+            events: Vec::new(),
+        });
+        db.replace_call_facts(CallOutput {
+            sites,
+            targets,
+            unresolved: Vec::new(),
+        })
+        .expect("call output should be valid");
+
+        let output = run_scc_closure(&mut db);
+
+        // Should have processed 2 SCCs (B and A, both non-recursive)
+        let result = output
+            .closure_result
+            .expect("closure result should be present");
+        assert_eq!(result.total_sccs_processed, 2);
+        assert_eq!(result.non_recursive_sccs, 2);
+        assert_eq!(result.recursive_sccs, 0);
+
+        // Demand query trace should have entries for each SCC
+        assert_eq!(
+            output.demand_query_trace.len(),
+            2,
+            "demand trace should have one entry per SCC"
+        );
+
+        // All entries should be scc_closure queries
+        for entry in output.demand_query_trace.entries() {
+            assert_eq!(entry.query_kind, "scc_closure");
+        }
+
+        // No diagnostics for non-recursive SCCs
+        assert!(output.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn scc_closure_skips_empty_schedule() {
+        let mut db = AnalysisDb::new();
+
+        let output = run_scc_closure(&mut db);
+
+        assert!(output.closure_result.is_none());
+        assert!(output.demand_query_trace.is_empty());
+        assert!(output.diagnostics.is_empty());
     }
 }
