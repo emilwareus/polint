@@ -103,7 +103,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(observed_diagnostics(&output.diagnostics, repo_root));
     observed.extend(provider_order_invariants());
     observed.extend(metadata_debug_facts(
-        &AnalysisKernel::metadata_debug_json_for_test(&output.db),
+        &AnalysisKernel::metadata_debug_json_for_output_for_test(&output),
     ));
     observed.extend(topology_facts(&output.db));
     observed.extend(snapshot_invariants(&output.run_report));
@@ -632,6 +632,113 @@ fn topology_precision_label(precision: TopologyPrecision) -> &'static str {
 }
 
 #[cfg(test)]
+mod public_boundary_no_leak {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    const INTERNAL_MARKERS: &[&str] = &[
+        "demand_query",
+        "DemandQuery",
+        "scc_schedule",
+        "SccSchedule",
+        "SccClosure",
+        "scc_closure",
+        "quarantine",
+        "QuarantineStore",
+        "QuarantineEntry",
+        "quarantine_policy",
+        "backdating",
+        "backdated",
+        "interprocedural_closure",
+        "SccClosureResult",
+        "SccClosureConfig",
+        "DemandQueryEngine",
+        "DemandQueryTrace",
+        "DemandQueryTraceEntry",
+        "DemandQueryResult",
+        "is_quarantined",
+        "reinstate",
+    ];
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn assert_no_markers(label: &str, source: &str) {
+        for marker in INTERNAL_MARKERS {
+            assert!(
+                !source.contains(marker),
+                "{label} leaked Phase 33 internal marker `{marker}`"
+            );
+        }
+    }
+
+    fn collect_files(root: &Path, files: &mut Vec<PathBuf>) {
+        if !root.exists() {
+            return;
+        }
+        for entry in fs::read_dir(root).expect("read public surface directory") {
+            let entry = entry.expect("public surface entry");
+            let path = entry.path();
+            if entry
+                .file_type()
+                .expect("public surface file type")
+                .is_dir()
+            {
+                collect_files(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn public_check_json_does_not_expose_phase33_internal_markers() {
+        let rendered = crate::diagnostics::render(
+            crate::diagnostics::OutputFormat::Json,
+            &[],
+            crate::diagnostics::RenderOpts {
+                json: crate::diagnostics::JsonReportMeta {
+                    tool_name: "polint",
+                    tool_version: "test",
+                },
+                color: crate::diagnostics::ColorChoice::Never,
+                sources: None,
+            },
+        );
+
+        assert_no_markers("polint check --format json", &rendered);
+    }
+
+    #[test]
+    fn public_sdk_runner_cli_docs_and_readme_do_not_expose_phase33_internal_markers() {
+        let root = repo_root();
+        let crate_root = root.join("crates/polint");
+        let mut sources = Vec::new();
+
+        for dir in [crate_root.join("src/sdk"), root.join("docs")] {
+            collect_files(&dir, &mut sources);
+        }
+        sources.extend([
+            crate_root.join("src/runner/mod.rs"),
+            crate_root.join("src/cli/mod.rs"),
+            crate_root.join("src/lib.rs"),
+            root.join("README.md"),
+        ]);
+
+        for source in sources {
+            let text = fs::read_to_string(&source)
+                .unwrap_or_else(|err| panic!("read {}: {err}", source.display()));
+            assert_no_markers(&source.display().to_string(), &text);
+        }
+    }
+}
+
+#[cfg(test)]
 fn topology_status(status: TopologyStatus) -> ObservedStatus {
     match status {
         TopologyStatus::Present => ObservedStatus::Present,
@@ -675,16 +782,15 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
             }
         }
     }
-    let Some(semantic) = debug_json.get("semantic").and_then(Value::as_object) else {
-        return facts;
-    };
-    for &section in SEMANTIC_DEBUG_SECTIONS {
-        let Some(rows) = semantic.get(section).and_then(Value::as_array) else {
-            continue;
-        };
-        for row in rows {
-            if let Some(fact) = metadata_debug_fact(row) {
-                facts.push(ObservedItem::Fact(fact));
+    if let Some(semantic) = debug_json.get("semantic").and_then(Value::as_object) {
+        for &section in SEMANTIC_DEBUG_SECTIONS {
+            let Some(rows) = semantic.get(section).and_then(Value::as_array) else {
+                continue;
+            };
+            for row in rows {
+                if let Some(fact) = metadata_debug_fact(row) {
+                    facts.push(ObservedItem::Fact(fact));
+                }
             }
         }
     }
@@ -693,7 +799,98 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
     facts.extend(direct_summary_facts(debug_json));
+    facts.extend(scc_and_demand_query_invariants(debug_json));
     facts
+}
+
+#[cfg(test)]
+fn scc_and_demand_query_invariants(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut invariants = Vec::new();
+
+    if let Some(scc_schedule) = debug_json.get("scc_schedule").and_then(Value::as_object) {
+        if scc_schedule
+            .get("total_sccs")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            invariants.push(observed_invariant(
+                "scc_schedule.total_sccs.nonzero",
+                "true",
+                "kernel.metadata_debug_json.scc_schedule",
+            ));
+        }
+        if scc_schedule
+            .get("recursive_scc_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            invariants.push(observed_invariant(
+                "scc_schedule.recursive_scc_count.nonzero",
+                "true",
+                "kernel.metadata_debug_json.scc_schedule",
+            ));
+        }
+        if scc_schedule
+            .get("max_scc_size")
+            .and_then(Value::as_u64)
+            .is_some_and(|size| size >= 2)
+        {
+            invariants.push(observed_invariant(
+                "scc_schedule.max_scc_size.at_least_2",
+                "true",
+                "kernel.metadata_debug_json.scc_schedule",
+            ));
+        }
+        if scc_schedule
+            .get("iteration_counts")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            invariants.push(observed_invariant(
+                "scc_schedule.iteration_counts.nonzero",
+                "true",
+                "kernel.metadata_debug_json.scc_schedule",
+            ));
+        }
+    }
+
+    if let Some(demand_queries) = debug_json.get("demand_queries").and_then(Value::as_object) {
+        if demand_queries
+            .get("total_queries")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            invariants.push(observed_invariant(
+                "demand_queries.total_queries.nonzero",
+                "true",
+                "kernel.metadata_debug_json.demand_queries",
+            ));
+        }
+        if demand_queries
+            .get("cache_hits")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            invariants.push(observed_invariant(
+                "demand_queries.cache_hits.nonzero",
+                "true",
+                "kernel.metadata_debug_json.demand_queries",
+            ));
+        }
+        if demand_queries
+            .get("cache_misses")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            invariants.push(observed_invariant(
+                "demand_queries.cache_misses.nonzero",
+                "true",
+                "kernel.metadata_debug_json.demand_queries",
+            ));
+        }
+    }
+
+    invariants
 }
 
 #[cfg(test)]
@@ -1885,6 +2082,48 @@ path = "repo"
                 .copied(),
             Some("abstract-domain-facts-1:1")
         );
+    }
+
+    #[test]
+    fn eval_observed_kernel_extracts_scc_and_demand_query_debug_invariants() {
+        let debug = serde_json::json!({
+            "scc_schedule": {
+                "total_sccs": 3,
+                "recursive_scc_count": 1,
+                "max_scc_size": 2,
+                "iteration_counts": [
+                    {"member_stable_keys": ["func::pingGo", "func::pongGo"], "iterations": 2}
+                ]
+            },
+            "demand_queries": {
+                "total_queries": 3,
+                "cache_hits": 1,
+                "cache_misses": 2,
+                "entries": []
+            }
+        });
+        let observed = metadata_debug_facts_for_test(&debug);
+        let invariants = observed
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        for required in [
+            "scc_schedule.total_sccs.nonzero",
+            "scc_schedule.recursive_scc_count.nonzero",
+            "scc_schedule.max_scc_size.at_least_2",
+            "scc_schedule.iteration_counts.nonzero",
+            "demand_queries.total_queries.nonzero",
+            "demand_queries.cache_hits.nonzero",
+            "demand_queries.cache_misses.nonzero",
+        ] {
+            assert_eq!(invariants.get(required).copied(), Some("true"));
+        }
     }
 
     #[test]

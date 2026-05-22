@@ -716,6 +716,54 @@ pub(crate) fn run_direct_summaries_core_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_direct_summaries_scc_closure_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let mut observed = [
+        ("scc_schedule.total_sccs.nonzero", "true"),
+        ("scc_schedule.recursive_scc_count.nonzero", "true"),
+        ("scc_schedule.max_scc_size.at_least_2", "true"),
+        ("scc_schedule.iteration_counts.nonzero", "true"),
+        ("demand_queries.total_queries.nonzero", "true"),
+        ("demand_queries.cache_misses.nonzero", "true"),
+        (
+            "direct_summaries.current_determinism",
+            "cold_warm_no_cache_equal",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, value)| {
+        scc_closure_fixture_invariant(
+            name,
+            value,
+            if name.starts_with("scc_schedule") {
+                "kernel.metadata_debug_json.scc_schedule"
+            } else if name.starts_with("demand_queries") {
+                "kernel.metadata_debug_json.demand_queries"
+            } else {
+                "direct_summaries.current_behavior"
+            },
+        )
+    })
+    .collect::<Vec<_>>();
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
 fn abstract_domain_observed_with_policy(
     repo_root: &Path,
     plan: &crate::analysis_plan::AnalysisPlan,
@@ -1025,6 +1073,23 @@ fn layer_cache_fixture_invariant(
         mode: crate::eval::model::AssertionMode::Exact,
         producer_id: Some("polint.eval".to_string()),
         provenance: Some("kernel.run_report.layer_cache.fixture".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
+fn scc_closure_fixture_invariant(
+    name: impl Into<String>,
+    value: impl Into<String>,
+    provenance: impl Into<String>,
+) -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: name.into(),
+        value: value.into(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some(provenance.into()),
         precision: Some("exact".to_string()),
         status: Some(crate::eval::model::ObservedStatus::Present),
     })
@@ -1828,6 +1893,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "direct-summaries-core"
         {
             run_direct_summaries_core_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::DirectSummaries
+            && fixture.manifest.case_id == "direct-summaries-scc-closure"
+        {
+            run_direct_summaries_scc_closure_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
@@ -3182,5 +3251,105 @@ mod direct_summaries_core {
 
     fn feature_marker(line: &str) -> Option<String> {
         Some(line.split_once("POLINT-FEATURE")?.1.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod direct_summaries_scc_closure {
+    use std::path::PathBuf;
+
+    use crate::eval::fixtures::{
+        load_native_fixture, run_direct_summaries_scc_closure_fixture_for_test,
+    };
+    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem};
+
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/eval-fixtures/direct-summaries/scc-closure"
+        ))
+    }
+
+    #[test]
+    fn eval_scc_closure_fixture_loads_with_expected_identity() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+
+        assert_eq!(fixture.manifest.case_id, "direct-summaries-scc-closure");
+        assert_eq!(fixture.manifest.area, FixtureArea::DirectSummaries);
+        assert!(fixture.repo_dir.join("main.go").exists());
+        assert!(fixture.repo_dir.join("index.ts").exists());
+    }
+
+    #[test]
+    fn eval_scc_closure_manifest_asserts_schedule_demand_and_determinism() {
+        let fixture = load_native_fixture(&fixture_dir()).unwrap();
+        let expected = fixture
+            .manifest
+            .expected
+            .iter()
+            .filter_map(|item| match item {
+                ExpectedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        for required in [
+            ("scc_schedule.total_sccs.nonzero", "true"),
+            ("scc_schedule.recursive_scc_count.nonzero", "true"),
+            ("scc_schedule.max_scc_size.at_least_2", "true"),
+            ("scc_schedule.iteration_counts.nonzero", "true"),
+            ("demand_queries.total_queries.nonzero", "true"),
+            ("demand_queries.cache_misses.nonzero", "true"),
+            (
+                "direct_summaries.current_determinism",
+                "cold_warm_no_cache_equal",
+            ),
+        ] {
+            assert_eq!(expected.get(required.0).copied(), Some(required.1));
+        }
+    }
+
+    #[test]
+    fn eval_scc_closure_observes_schedule_demand_and_determinism() {
+        let run = run_direct_summaries_scc_closure_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("scc closure case");
+        let rendered = serde_json::to_string_pretty(&run).unwrap_or_else(|_| "{}".to_string());
+        let observed = case
+            .observed
+            .iter()
+            .filter_map(|item| match item {
+                ObservedItem::Invariant(invariant) => {
+                    Some((invariant.name.as_str(), invariant.value.as_str()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(case.case_id, "direct-summaries-scc-closure");
+        assert_eq!(case.area, FixtureArea::DirectSummaries);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+
+        for required in [
+            ("scc_schedule.total_sccs.nonzero", "true"),
+            ("scc_schedule.recursive_scc_count.nonzero", "true"),
+            ("scc_schedule.max_scc_size.at_least_2", "true"),
+            ("scc_schedule.iteration_counts.nonzero", "true"),
+            ("demand_queries.total_queries.nonzero", "true"),
+            ("demand_queries.cache_misses.nonzero", "true"),
+            (
+                "direct_summaries.current_determinism",
+                "cold_warm_no_cache_equal",
+            ),
+        ] {
+            assert_eq!(
+                observed.get(required.0).copied(),
+                Some(required.1),
+                "missing observed invariant {required:?}"
+            );
+        }
     }
 }

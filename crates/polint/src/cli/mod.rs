@@ -1906,7 +1906,9 @@ fn sanitize_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::LocalRuleHostProfile;
+    use clap::CommandFactory;
+
+    use super::{Cli, LocalRuleHostProfile};
 
     #[test]
     fn local_rule_host_profile_defaults_to_release() {
@@ -1938,5 +1940,22 @@ mod tests {
             LocalRuleHostProfile::from_env_value(Some("profiling".to_string())),
             LocalRuleHostProfile::Custom("profiling".to_string())
         );
+    }
+
+    #[test]
+    fn public_help_does_not_expose_phase33_internal_markers() {
+        let help = Cli::command().render_long_help().to_string();
+
+        for marker in [
+            ["de", "mand"].concat(),
+            ["s", "cc"].concat(),
+            ["quaran", "tine"].concat(),
+            ["back", "dating"].concat(),
+        ] {
+            assert!(
+                !help.contains(marker.as_str()),
+                "public help leaked Phase 33 internal marker `{marker}`"
+            );
+        }
     }
 }

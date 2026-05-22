@@ -382,10 +382,6 @@ impl AnalysisKernel {
     }
 
     #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "Plan 33-06 exposes this crate-private helper for eval/debug consumers that need KernelRunReport demand trace data."
-    )]
     pub(crate) fn metadata_debug_json_for_output_for_test(
         output: &KernelOutput,
     ) -> serde_json::Value {
