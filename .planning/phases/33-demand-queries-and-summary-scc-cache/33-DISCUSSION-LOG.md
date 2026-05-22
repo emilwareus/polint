@@ -3,10 +3,11 @@
 **Date:** 2026-05-22
 **Mode:** --auto (fully autonomous)
 **Phase:** 33 - Demand Queries and Summary SCC Cache
+**Refresh:** Re-run on existing Phase 33 context/plans; decisions retained.
 
 ## Discussion Summary
 
-Auto mode selected all 4 gray areas and resolved each with recommended defaults from research documents and established patterns.
+Auto mode selected all 4 gray areas and resolved each with recommended defaults from research documents and established patterns. On refresh, the existing context already matched those selections, so no substantive decision changes were made.
 
 ## Areas Discussed
 
