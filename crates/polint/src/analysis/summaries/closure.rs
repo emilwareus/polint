@@ -323,13 +323,13 @@ fn process_recursive_scc(
                 (
                     SummaryStatus::BudgetExceeded,
                     SummaryPrecision::UnknownTop,
-                    SummaryProvenance::NativeLocal,
+                    SummaryProvenance::InterproceduralClosure,
                 )
             } else {
                 (
                     fact.status,
                     SummaryPrecision::SetupAware,
-                    SummaryProvenance::NativeLocal,
+                    SummaryProvenance::InterproceduralClosure,
                 )
             };
 
@@ -543,6 +543,12 @@ fn apply_callee_effects(
         }
 
         result.push(updated_fact);
+    }
+
+    if !callee_info.is_empty() {
+        for fact in &mut result {
+            fact.provenance = SummaryProvenance::InterproceduralClosure;
+        }
     }
 
     // Add events for unresolved callees

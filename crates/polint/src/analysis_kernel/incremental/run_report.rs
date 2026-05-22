@@ -27,10 +27,12 @@ impl KernelRunReport {
         }
     }
 
-    /// Returns the demand query trace for this kernel run.
-    #[expect(
-        dead_code,
-        reason = "Demand query trace accessor is established before Plan 04 wires real demand-driven consumers."
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "demand trace is currently surfaced through test-only metadata debug output"
+        )
     )]
     pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
         &self.demand_query_trace

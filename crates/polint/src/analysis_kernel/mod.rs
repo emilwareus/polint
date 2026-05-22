@@ -382,6 +382,20 @@ impl AnalysisKernel {
     }
 
     #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "Plan 33-06 exposes this crate-private helper for eval/debug consumers that need KernelRunReport demand trace data."
+    )]
+    pub(crate) fn metadata_debug_json_for_output_for_test(
+        output: &KernelOutput,
+    ) -> serde_json::Value {
+        debug::metadata_debug_json_with_demand_trace_for_test(
+            &output.db,
+            output.run_report.demand_query_trace(),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn input_snapshot_json_for_test(output: &KernelOutput) -> serde_json::Value {
         serde_json::to_value(&output.run_report.input_snapshot)
             .expect("input snapshot should serialize")
