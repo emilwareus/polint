@@ -192,6 +192,59 @@ fn all_extension_digests_absent(key: &LayerKey) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Invalidation -> Quarantine integration
+// ---------------------------------------------------------------------------
+
+use super::invalidation::InvalidationAction;
+
+/// Applies quarantine actions from an invalidation plan to a quarantine store.
+///
+/// For each `InvalidationAction::Quarantine`, extracts the extension digest
+/// from the quarantined node (using the node's extension_digest for Summary nodes,
+/// or the first non-absent extension_digest for Layer nodes) and calls
+/// `store.quarantine()`. Returns the count of successfully quarantined nodes.
+pub(crate) fn apply_quarantine_actions(
+    actions: &[InvalidationAction],
+    store: &mut QuarantineStore,
+    run_id: u64,
+) -> usize {
+    let mut count = 0;
+    for action in actions {
+        if let InvalidationAction::Quarantine(node, reason) = action {
+            let ext_digest = extract_extension_digest(node);
+            if store.quarantine(node.clone(), *reason, ext_digest, run_id) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Extracts the extension digest from a cache node for quarantine tracking.
+///
+/// - For `Summary` nodes: uses the `extension_digest` field.
+/// - For `Layer` nodes: uses the first non-absent extension digest.
+/// - For other nodes: returns an absent sentinel (the node may still be
+///   quarantined if it is not native-only).
+fn extract_extension_digest(node: &CacheNode) -> Digest {
+    let sentinel = absent_extension_sentinel();
+    match node {
+        CacheNode::Summary(key) => key.extension_digest.clone(),
+        CacheNode::Layer(key) => key
+            .extension_digests
+            .iter()
+            .find(|d| **d != sentinel)
+            .cloned()
+            .unwrap_or_else(|| sentinel.clone()),
+        CacheNode::Extension(key) => {
+            Digest::from_parts(DigestKind::ExtensionCode, key, &[key])
+        }
+        CacheNode::Query(_) | CacheNode::Diagnostic(_) => sentinel,
+        CacheNode::Input(_) | CacheNode::ToolInvocation(_) => sentinel,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -449,5 +502,159 @@ mod tests {
 
         let nodes = store.quarantined_nodes();
         assert_eq!(nodes.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: invalidation-to-quarantine flow with synthetic
+    // extension digests per D-10
+    // -----------------------------------------------------------------------
+
+    // (a) Create a synthetic Summary node with InvalidationAction::Quarantine,
+    //     apply through apply_quarantine_actions, verify quarantined.
+    #[test]
+    fn integration_invalidation_quarantines_summary_node() {
+        let mut store = QuarantineStore::default();
+        let node = summary_node("func_a", ext_digest("ext-v1"));
+        let actions = vec![InvalidationAction::Quarantine(
+            node.clone(),
+            QuarantineReason::ExtensionChanged,
+        )];
+
+        let count = apply_quarantine_actions(&actions, &mut store, 1);
+
+        assert_eq!(count, 1);
+        assert!(store.is_quarantined(&node));
+    }
+
+    // (b) Two Summary nodes with same extension digest "ext-v1". Quarantine
+    //     both. Reinstate with "ext-v1". Verify both reinstated.
+    #[test]
+    fn integration_reinstate_both_nodes_with_same_digest() {
+        let mut store = QuarantineStore::default();
+        let node_a = summary_node("func_a", ext_digest("ext-v1"));
+        let node_b = summary_node("func_b", ext_digest("ext-v1"));
+        let actions = vec![
+            InvalidationAction::Quarantine(node_a.clone(), QuarantineReason::ExtensionChanged),
+            InvalidationAction::Quarantine(node_b.clone(), QuarantineReason::ExtensionChanged),
+        ];
+
+        let count = apply_quarantine_actions(&actions, &mut store, 1);
+        assert_eq!(count, 2);
+        assert!(store.is_quarantined(&node_a));
+        assert!(store.is_quarantined(&node_b));
+
+        // Simulate extension revert by reinstating "ext-v1".
+        let reinstated = store.reinstate(&ext_digest("ext-v1"));
+        assert_eq!(reinstated.len(), 2);
+        assert!(!store.is_quarantined(&node_a));
+        assert!(!store.is_quarantined(&node_b));
+        assert_eq!(store.quarantine_count(), 0);
+    }
+
+    // (c) Mixed set: one native Layer node (all absent extension digests),
+    //     one extension-influenced Summary node. Quarantine both via
+    //     invalidation actions. Verify only Summary is quarantined.
+    #[test]
+    fn integration_native_layer_rejected_summary_accepted() {
+        let mut store = QuarantineStore::default();
+        let native = native_layer_node("polint.ts.syntax");
+        let ext_summary = summary_node("func_ext", ext_digest("ext-v1"));
+        let actions = vec![
+            InvalidationAction::Quarantine(
+                native.clone(),
+                QuarantineReason::ExtensionChanged,
+            ),
+            InvalidationAction::Quarantine(
+                ext_summary.clone(),
+                QuarantineReason::ExtensionChanged,
+            ),
+        ];
+
+        let count = apply_quarantine_actions(&actions, &mut store, 1);
+
+        assert_eq!(count, 1);
+        assert!(!store.is_quarantined(&native));
+        assert!(store.is_quarantined(&ext_summary));
+    }
+
+    // (d) Extension upgrade scenario: quarantine "ext-v1" nodes, then
+    //     quarantine "ext-v2" nodes. Reinstate "ext-v1" leaves "ext-v2"
+    //     quarantined.
+    #[test]
+    fn integration_extension_upgrade_multi_digest() {
+        let mut store = QuarantineStore::default();
+        let node_v1_a = summary_node("func_a", ext_digest("ext-v1"));
+        let node_v1_b = summary_node("func_b", ext_digest("ext-v1"));
+        let node_v2 = summary_node("func_c", ext_digest("ext-v2"));
+
+        // Quarantine ext-v1 nodes.
+        let actions_v1 = vec![
+            InvalidationAction::Quarantine(
+                node_v1_a.clone(),
+                QuarantineReason::ExtensionChanged,
+            ),
+            InvalidationAction::Quarantine(
+                node_v1_b.clone(),
+                QuarantineReason::ExtensionChanged,
+            ),
+        ];
+        let count_v1 = apply_quarantine_actions(&actions_v1, &mut store, 1);
+        assert_eq!(count_v1, 2);
+
+        // Quarantine ext-v2 node (extension upgraded).
+        let actions_v2 = vec![InvalidationAction::Quarantine(
+            node_v2.clone(),
+            QuarantineReason::ExtensionChanged,
+        )];
+        let count_v2 = apply_quarantine_actions(&actions_v2, &mut store, 2);
+        assert_eq!(count_v2, 1);
+
+        assert_eq!(store.quarantine_count(), 3);
+
+        // Reinstate ext-v1 (extension reverts to v1).
+        let reinstated = store.reinstate(&ext_digest("ext-v1"));
+        assert_eq!(reinstated.len(), 2);
+
+        // ext-v2 remains quarantined.
+        assert!(!store.is_quarantined(&node_v1_a));
+        assert!(!store.is_quarantined(&node_v1_b));
+        assert!(store.is_quarantined(&node_v2));
+        assert_eq!(store.quarantine_count(), 1);
+    }
+
+    // (e) apply_quarantine_actions ignores non-Quarantine actions.
+    #[test]
+    fn integration_non_quarantine_actions_ignored() {
+        let mut store = QuarantineStore::default();
+        let reuse_node = CacheNode::Input("src/a.ts".to_string());
+        let summary = summary_node("func_a", ext_digest("ext-v1"));
+        let actions = vec![
+            InvalidationAction::Reuse(reuse_node),
+            InvalidationAction::Quarantine(
+                summary.clone(),
+                QuarantineReason::ExtensionChanged,
+            ),
+        ];
+
+        let count = apply_quarantine_actions(&actions, &mut store, 1);
+
+        assert_eq!(count, 1);
+        assert!(store.is_quarantined(&summary));
+    }
+
+    // (f) Extension Layer node can be quarantined through invalidation flow.
+    #[test]
+    fn integration_extension_layer_quarantined() {
+        let mut store = QuarantineStore::default();
+        let ext_layer = extension_layer_node("ext-provider", "ext-v1");
+        let actions = vec![InvalidationAction::Quarantine(
+            ext_layer.clone(),
+            QuarantineReason::ExtensionChanged,
+        )];
+
+        let count = apply_quarantine_actions(&actions, &mut store, 1);
+
+        assert_eq!(count, 1);
+        assert!(store.is_quarantined(&ext_layer));
     }
 }
