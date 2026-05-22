@@ -6,6 +6,7 @@ mod input_snapshot;
 mod invalidation;
 mod keys;
 mod layer_cache;
+mod quarantine;
 mod run_report;
 mod stats;
 
@@ -95,6 +96,21 @@ pub(crate) use invalidation::{
     DropReason, InvalidationAction, InvalidationPlan, InvalidationStats, QuarantineReason,
     RecomputeReason, VerifyReason,
 };
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "Unit tests exercise only selected re-exported quarantine vocabulary terms."
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
+    )
+)]
+pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 #[cfg_attr(
     test,
     allow(
