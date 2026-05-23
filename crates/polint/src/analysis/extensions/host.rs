@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,7 @@ where
         response.validate_schema().map_err(|error| {
             ExtensionHostError::from_protocol_error(&extension.extension_id, None, error)
         })?;
+        ensure_extension_identity(&response.extension_id, &extension.extension_id, None)?;
         Ok(response)
     }
 
@@ -120,6 +121,12 @@ where
                 error,
             )
         })?;
+        ensure_extension_identity(
+            &response.extension_id,
+            &extension.extension_id,
+            Some(provider_id),
+        )?;
+        ensure_provider_identity(&response.provider_id, &extension.extension_id, provider_id)?;
         Ok(response)
     }
 
@@ -245,6 +252,7 @@ impl ExtensionHostError {
     pub(crate) fn activation_status(&self) -> ExtensionActivationStatus {
         match self.kind {
             ExtensionHostFailureKind::MalformedResponse
+            | ExtensionHostFailureKind::IdentityMismatch
             | ExtensionHostFailureKind::UnsupportedProtocol => {
                 ExtensionActivationStatus::ValidationFailed
             }
@@ -272,6 +280,7 @@ pub(crate) enum ExtensionHostFailureKind {
     ProviderFailed,
     Timeout,
     MalformedResponse,
+    IdentityMismatch,
     UnsupportedProtocol,
 }
 
@@ -283,6 +292,7 @@ impl ExtensionHostFailureKind {
             Self::ProviderFailed => "provider_failed",
             Self::Timeout => "timeout",
             Self::MalformedResponse => "malformed_response",
+            Self::IdentityMismatch => "identity_mismatch",
             Self::UnsupportedProtocol => "unsupported_protocol",
         }
     }
@@ -329,6 +339,7 @@ fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_child_process_group(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -354,7 +365,7 @@ fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if started.elapsed() >= spec.timeout => {
-                let _ = child.kill();
+                terminate_child_process_tree(&mut child);
                 let output = child.wait_with_output().ok();
                 return ExtensionCommandOutcome {
                     status: output.as_ref().and_then(|output| output.status.code()),
@@ -399,6 +410,64 @@ fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
             spawn_error: Some(error.to_string()),
         },
     }
+}
+
+fn ensure_extension_identity(
+    actual: &str,
+    expected: &str,
+    provider_id: Option<&str>,
+) -> ExtensionHostResult<()> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(ExtensionHostError::new(
+        ExtensionHostFailureKind::IdentityMismatch,
+        expected,
+        provider_id,
+        format!("extension identity mismatch: expected {expected}, got {actual}"),
+    ))
+}
+
+fn ensure_provider_identity(
+    actual: &str,
+    extension_id: &str,
+    expected: &str,
+) -> ExtensionHostResult<()> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(ExtensionHostError::new(
+        ExtensionHostFailureKind::IdentityMismatch,
+        extension_id,
+        Some(expected),
+        format!("provider identity mismatch: expected {expected}, got {actual}"),
+    ))
+}
+
+#[cfg(unix)]
+fn configure_child_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_child_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_tree(child: &mut Child) {
+    let process_group = format!("-{}", child.id());
+    let _ = Command::new("kill")
+        .args(["-KILL", &process_group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_child_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn classify_nonzero(
@@ -540,6 +609,55 @@ mod tests {
     }
 
     #[test]
+    fn handshake_rejects_mismatched_extension_id() {
+        let temp = TempDir::new().expect("create temp repo");
+        let runner = FakeRunner::new(vec![outcome(
+            0,
+            r#"{"schema_version":"polint-extension-handshake-v1","extension_id":"spoof","activation_status":"handshake_ok","providers":[],"diagnostics":[]}"#,
+            "",
+        )]);
+        let host = ExtensionHost::with_runner(temp.path(), runner);
+
+        let error = host.handshake(&extension()).unwrap_err();
+
+        assert_eq!(error.kind, ExtensionHostFailureKind::IdentityMismatch);
+        assert_eq!(
+            error.activation_status(),
+            ExtensionActivationStatus::ValidationFailed
+        );
+    }
+
+    #[test]
+    fn provider_run_rejects_mismatched_identity() {
+        let temp = TempDir::new().expect("create temp repo");
+        let mismatched_extension = outcome(
+            0,
+            r#"{"schema_version":"polint-extension-provider-run-v1","extension_id":"spoof","provider_id":"routes","activation_status":"active","diagnostics":[],"facts":[],"output_digest_inputs":[]}"#,
+            "",
+        );
+        let mismatched_provider = outcome(
+            0,
+            r#"{"schema_version":"polint-extension-provider-run-v1","extension_id":"demo","provider_id":"other","activation_status":"active","diagnostics":[],"facts":[],"output_digest_inputs":[]}"#,
+            "",
+        );
+        let host = ExtensionHost::with_runner(
+            temp.path(),
+            FakeRunner::new(vec![mismatched_extension, mismatched_provider]),
+        );
+
+        let extension = extension();
+        let first = host
+            .run_provider(&extension, "routes", Vec::new(), Vec::new(), Vec::new())
+            .unwrap_err();
+        let second = host
+            .run_provider(&extension, "routes", Vec::new(), Vec::new(), Vec::new())
+            .unwrap_err();
+
+        assert_eq!(first.kind, ExtensionHostFailureKind::IdentityMismatch);
+        assert_eq!(second.kind, ExtensionHostFailureKind::IdentityMismatch);
+    }
+
+    #[test]
     fn timeout_is_classified() {
         let temp = TempDir::new().expect("create temp repo");
         let runner = FakeRunner::new(vec![ExtensionCommandOutcome {
@@ -555,5 +673,70 @@ mod tests {
         let error = host.handshake(&extension()).unwrap_err();
 
         assert_eq!(error.kind, ExtensionHostFailureKind::Timeout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_descendant_processes() {
+        let temp = TempDir::new().expect("create temp repo");
+        let pid_file = temp.path().join("sleep.pid");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "PID_FILE".to_string(),
+            pid_file.to_string_lossy().to_string(),
+        );
+        let spec = ExtensionCommandSpec {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "sleep 3 & echo $! > \"$PID_FILE\"; wait".to_string(),
+            ],
+            env,
+            stdin: Vec::new(),
+            timeout: Duration::from_millis(50),
+            stdout_limit: DEFAULT_STDOUT_LIMIT,
+            stderr_limit: DEFAULT_STDERR_LIMIT,
+        };
+
+        let started = Instant::now();
+        let outcome = run_std_command(&spec);
+
+        assert!(outcome.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timeout waited for descendant process to finish"
+        );
+        if let Ok(pid) = std::fs::read_to_string(pid_file)
+            && let Ok(pid) = pid.trim().parse::<i32>()
+        {
+            assert_process_exits(pid);
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_process_exits(pid: i32) {
+        for _ in 0..20 {
+            if !process_exists(pid) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        // Best-effort cleanup if the regression leaves the descendant around.
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("descendant process {pid} was still running after extension timeout");
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: i32) -> bool {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }

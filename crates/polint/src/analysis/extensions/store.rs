@@ -19,6 +19,8 @@ pub(crate) struct ExtensionActivationRow {
     pub(crate) provider_id: Option<String>,
     pub(crate) status: ExtensionActivationStatus,
     pub(crate) diagnostic_count: usize,
+    pub(crate) output_digest_inputs: Vec<String>,
+    pub(crate) diagnostic_digest: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +50,10 @@ pub(crate) struct RejectedExtensionFact {
 
 impl ExtensionOutput {
     pub(crate) fn normalized(mut self) -> Self {
+        for activation in &mut self.activations {
+            activation.output_digest_inputs.sort();
+            activation.output_digest_inputs.dedup();
+        }
         self.activations.sort_by(|left, right| {
             (
                 left.extension_id.as_str(),

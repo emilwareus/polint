@@ -115,6 +115,9 @@ fn rejection_reason(
 }
 
 fn bindings_exist(db: &AnalysisDb, bindings: &[String]) -> bool {
+    if bindings.is_empty() {
+        return false;
+    }
     bindings.iter().all(|binding| {
         if let Some(path) = binding.strip_prefix("file:") {
             db.files().iter().any(|file| file.relative_path == path)
@@ -199,6 +202,20 @@ mod tests {
         assert_eq!(
             output.rejected[0].reason,
             ExtensionRejectionReason::UndeclaredOutput
+        );
+    }
+
+    #[test]
+    fn rejects_empty_binding_refs() {
+        let mut candidate = candidate("route:no-bindings");
+        candidate.binding_refs.clear();
+
+        let output = validate_extension_output(&db(), input(vec![candidate]));
+
+        assert_eq!(output.accepted.len(), 0);
+        assert_eq!(
+            output.rejected[0].reason,
+            ExtensionRejectionReason::MissingBinding
         );
     }
 

@@ -32,7 +32,7 @@ pub(crate) fn discover_local_extensions(root: &Path) -> Vec<DiscoveredExtension>
     let mut manifests = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
+        .filter(|path| is_real_dir(path))
         .filter_map(|path| discovered_extension(root, &path))
         .collect::<Vec<_>>();
     manifests.sort_by(|left, right| left.manifest_path.cmp(&right.manifest_path));
@@ -41,7 +41,7 @@ pub(crate) fn discover_local_extensions(root: &Path) -> Vec<DiscoveredExtension>
 
 fn discovered_extension(root: &Path, extension_dir: &Path) -> Option<DiscoveredExtension> {
     let manifest_path = extension_dir.join("Cargo.toml");
-    if !manifest_path.is_file() {
+    if !is_real_file(&manifest_path) {
         return None;
     }
 
@@ -51,8 +51,8 @@ fn discovered_extension(root: &Path, extension_dir: &Path) -> Option<DiscoveredE
         .map(str::to_string)?;
     let manifest = ExtensionManifest::repo_local(extension_id.clone()).ok()?;
     let manifest_path = repo_relative_path(root, &manifest_path)?;
-    let dependency_paths = dependency_digest_paths(root, extension_dir);
-    let source_paths = source_digest_paths(root, extension_dir);
+    let dependency_paths = dependency_digest_paths(root, extension_dir)?;
+    let source_paths = source_digest_paths(root, extension_dir)?;
     let source_digest = digest_files(
         root,
         "extension_source",
@@ -81,37 +81,78 @@ fn discovered_extension(root: &Path, extension_dir: &Path) -> Option<DiscoveredE
     })
 }
 
-fn dependency_digest_paths(root: &Path, extension_dir: &Path) -> Vec<String> {
+fn dependency_digest_paths(root: &Path, extension_dir: &Path) -> Option<Vec<String>> {
     ["Cargo.toml", "Cargo.lock"]
         .into_iter()
-        .filter_map(|file_name| {
+        .map(|file_name| {
             let path = extension_dir.join(file_name);
-            path.is_file().then(|| repo_relative_path(root, &path))?
+            if !path.exists() {
+                return Some(None);
+            }
+            if !is_real_file(&path) {
+                return None;
+            }
+            Some(repo_relative_path(root, &path))
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()
+        .map(|paths| paths.into_iter().flatten().collect())
 }
 
-fn source_digest_paths(root: &Path, extension_dir: &Path) -> Vec<String> {
+fn source_digest_paths(root: &Path, extension_dir: &Path) -> Option<Vec<String>> {
     let mut paths = Vec::new();
-    collect_rust_sources(root, &extension_dir.join("src"), &mut paths);
-    paths.sort();
-    paths
+    collect_rust_sources(root, &extension_dir.join("src"), &mut paths).then(|| {
+        paths.sort();
+        paths
+    })
 }
 
-fn collect_rust_sources(root: &Path, dir: &Path, paths: &mut Vec<String>) {
+fn collect_rust_sources(root: &Path, dir: &Path, paths: &mut Vec<String>) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(dir) else {
+        return true;
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return false;
+    }
+    if !file_type.is_dir() {
+        return true;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
-        return;
+        return true;
     };
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_dir() {
-            collect_rust_sources(root, &path, paths);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            return false;
+        };
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return false;
+        }
+        if file_type.is_dir() {
+            if !collect_rust_sources(root, &path, paths) {
+                return false;
+            }
+        } else if file_type.is_file()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("rs")
             && let Some(relative_path) = repo_relative_path(root, &path)
         {
             paths.push(relative_path);
         }
     }
+    true
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_dir())
+        .unwrap_or(false)
+}
+
+fn is_real_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
 }
 
 fn digest_files(root: &Path, label: &str, paths: &[String], default_max_bytes: u64) -> Digest {
@@ -122,11 +163,15 @@ fn digest_files(root: &Path, label: &str, paths: &[String], default_max_bytes: u
         } else {
             default_max_bytes
         };
-        let Ok(contents) = read_repo_file_with_limit(root, path, max_bytes) else {
-            continue;
-        };
         parts.push(format!("path={path}"));
-        parts.push(format!("content_hash={}", stable_hash_bytes(&contents)));
+        match read_repo_file_with_limit(root, path, max_bytes) {
+            Ok(contents) => {
+                parts.push(format!("content_hash={}", stable_hash_bytes(&contents)));
+            }
+            Err(_error) => {
+                parts.push("read_error=unreadable".to_string());
+            }
+        }
     }
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ExtensionCode, label, &refs)
@@ -221,5 +266,75 @@ mod tests {
             .expect("extension discovered");
 
         assert_ne!(first.source_digest, second.source_digest);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_extension_directories_are_not_discovered() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("create temp repo");
+        let outside = TempDir::new().expect("create outside extension");
+        fs::create_dir_all(temp.path().join(".polint/extensions")).expect("create extension root");
+        write_file(
+            outside.path(),
+            "Cargo.toml",
+            "[package]\nname = \"outside\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        );
+        symlink(
+            outside.path(),
+            temp.path().join(".polint/extensions/outside"),
+        )
+        .expect("create extension symlink");
+
+        assert!(discover_local_extensions(temp.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_extension_sources_are_not_discovered() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("create temp repo");
+        let outside = TempDir::new().expect("create outside source");
+        write_file(
+            temp.path(),
+            ".polint/extensions/demo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        );
+        write_file(outside.path(), "main.rs", "fn main() {}\n");
+        fs::create_dir_all(temp.path().join(".polint/extensions/demo/src"))
+            .expect("create extension src");
+        symlink(
+            outside.path().join("main.rs"),
+            temp.path().join(".polint/extensions/demo/src/main.rs"),
+        )
+        .expect("create source symlink");
+
+        assert!(discover_local_extensions(temp.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_extension_source_directories_are_not_discovered() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("create temp repo");
+        let outside = TempDir::new().expect("create outside source");
+        write_file(
+            temp.path(),
+            ".polint/extensions/demo/Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        );
+        write_file(outside.path(), "main.rs", "fn main() {}\n");
+        fs::create_dir_all(temp.path().join(".polint/extensions/demo"))
+            .expect("create extension dir");
+        symlink(
+            outside.path(),
+            temp.path().join(".polint/extensions/demo/src"),
+        )
+        .expect("create source dir symlink");
+
+        assert!(discover_local_extensions(temp.path()).is_empty());
     }
 }

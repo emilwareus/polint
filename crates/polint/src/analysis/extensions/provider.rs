@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use super::discovery::discover_local_extensions;
-use super::host::ExtensionHost;
+use super::host::{ExtensionHost, ExtensionHostError};
 use super::manifest::ExtensionActivationStatus;
+use super::protocol::ExtensionProtocolDiagnostic;
 use super::sinks::{
     ExtensionFactCandidate, ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
 };
@@ -52,6 +53,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                     provider_id: None,
                     status: response.activation_status,
                     diagnostic_count: response.diagnostics.len(),
+                    output_digest_inputs: Vec::new(),
+                    diagnostic_digest: protocol_diagnostic_digest(&response.diagnostics),
                 });
                 response
             }
@@ -62,6 +65,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                     provider_id: None,
                     status: error.activation_status(),
                     diagnostic_count: 1,
+                    output_digest_inputs: Vec::new(),
+                    diagnostic_digest: host_error_digest(&error),
                 });
                 continue;
             }
@@ -82,6 +87,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
             );
             match run {
                 Ok(response) => {
+                    let diagnostic_digest = protocol_diagnostic_digest(&response.diagnostics);
+                    let output_digest_inputs = response.output_digest_inputs.clone();
                     let candidates = response
                         .facts
                         .into_iter()
@@ -121,6 +128,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                             ExtensionActivationStatus::ValidationFailed
                         },
                         diagnostic_count: response.diagnostics.len(),
+                        output_digest_inputs,
+                        diagnostic_digest,
                     });
                     accepted.extend(validation.accepted);
                     rejected.extend(validation.rejected);
@@ -132,6 +141,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                         provider_id: Some(provider_id),
                         status: error.activation_status(),
                         diagnostic_count: 1,
+                        output_digest_inputs: Vec::new(),
+                        diagnostic_digest: host_error_digest(&error),
                     });
                 }
             }
@@ -167,15 +178,19 @@ fn extension_output_digest(
             component.name, component.digest, component.status
         )
     }));
-    parts.extend(db.extension_activations().iter().map(|row| {
-        format!(
-            "activation={}:{}:{:?}:{}",
-            row.extension_id,
-            row.provider_id.as_deref().unwrap_or("<handshake>"),
-            row.status,
-            row.diagnostic_count
-        )
-    }));
+    for row in db.extension_activations() {
+        let provider_id = row.provider_id.as_deref().unwrap_or("<handshake>");
+        parts.push(format!(
+            "activation={}:{}:{:?}:{}:{}",
+            row.extension_id, provider_id, row.status, row.diagnostic_count, row.diagnostic_digest
+        ));
+        parts.extend(row.output_digest_inputs.iter().map(|input| {
+            format!(
+                "activation_output_input={}:{}:{}",
+                row.extension_id, provider_id, input
+            )
+        }));
+    }
     parts.extend(db.extension_facts().iter().map(|fact| {
         format!(
             "accepted={}:{}:{}:{}:{}",
@@ -195,6 +210,36 @@ fn extension_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "extension_output", &refs)
+}
+
+fn protocol_diagnostic_digest(diagnostics: &[ExtensionProtocolDiagnostic]) -> String {
+    let mut parts = vec![format!("diagnostic_count={}", diagnostics.len())];
+    for diagnostic in diagnostics {
+        let mut evidence = diagnostic
+            .evidence
+            .iter()
+            .map(|evidence| format!("evidence={}:{}", evidence.label, evidence.value))
+            .collect::<Vec<_>>();
+        evidence.sort();
+        let evidence_refs = evidence.iter().map(String::as_str).collect::<Vec<_>>();
+        let evidence_digest = crate::cache::stable_hash(&evidence_refs);
+        parts.push(format!(
+            "diagnostic={}:{}:{}:{}",
+            diagnostic.rule_id, diagnostic.severity, diagnostic.message, evidence_digest
+        ));
+    }
+    parts.sort();
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::cache::stable_hash(&refs)
+}
+
+fn host_error_digest(error: &ExtensionHostError) -> String {
+    let parts = [
+        format!("kind={}", error.kind.as_str()),
+        format!("summary={}", error.summary),
+    ];
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::cache::stable_hash(&refs)
 }
 
 fn native_stable_keys(db: &AnalysisDb) -> BTreeSet<String> {
@@ -226,6 +271,9 @@ fn parse_confidence(value: &str) -> ExtensionFactConfidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::extensions::protocol::{
+        ExtensionProtocolDiagnostic, ExtensionProtocolEvidence,
+    };
     use crate::analysis::extensions::sinks::ExtensionFactStatus;
     use crate::analysis::extensions::store::AcceptedExtensionFact;
     use crate::analysis_kernel::incremental::InputSnapshot;
@@ -239,6 +287,8 @@ mod tests {
                 provider_id: Some("routes".to_string()),
                 status: ExtensionActivationStatus::Active,
                 diagnostic_count: 0,
+                output_digest_inputs: Vec::new(),
+                diagnostic_digest: "empty".to_string(),
             }],
             accepted: vec![AcceptedExtensionFact {
                 extension_id: "demo".to_string(),
@@ -286,5 +336,111 @@ mod tests {
         );
 
         assert_eq!(digest.kind, DigestKind::ProviderOutput);
+    }
+
+    #[test]
+    fn extension_output_digest_changes_for_provider_digest_inputs_and_diagnostics() {
+        let snapshot = empty_snapshot();
+        let manifest = crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.extensions")
+            .expect("extension provider manifest exists");
+
+        let mut first = AnalysisDb::new();
+        first.replace_extension_facts(ExtensionOutput {
+            activations: vec![activation_row(vec!["output=one".to_string()], "diag:a")],
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+        });
+        let mut second = AnalysisDb::new();
+        second.replace_extension_facts(ExtensionOutput {
+            activations: vec![activation_row(vec!["output=two".to_string()], "diag:a")],
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+        });
+        let mut third = AnalysisDb::new();
+        third.replace_extension_facts(ExtensionOutput {
+            activations: vec![activation_row(vec!["output=one".to_string()], "diag:b")],
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+        });
+
+        let first_digest = extension_output_digest(manifest, &snapshot, &first);
+
+        assert_ne!(
+            first_digest,
+            extension_output_digest(manifest, &snapshot, &second)
+        );
+        assert_ne!(
+            first_digest,
+            extension_output_digest(manifest, &snapshot, &third)
+        );
+    }
+
+    #[test]
+    fn protocol_diagnostic_digest_preserves_field_association() {
+        let first = vec![
+            protocol_diagnostic("extension/a", "message one"),
+            protocol_diagnostic("extension/b", "message two"),
+        ];
+        let second = vec![
+            protocol_diagnostic("extension/a", "message two"),
+            protocol_diagnostic("extension/b", "message one"),
+        ];
+
+        assert_ne!(
+            protocol_diagnostic_digest(&first),
+            protocol_diagnostic_digest(&second)
+        );
+    }
+
+    fn activation_row(
+        output_digest_inputs: Vec<String>,
+        diagnostic_digest: &str,
+    ) -> ExtensionActivationRow {
+        ExtensionActivationRow {
+            extension_id: "demo".to_string(),
+            provider_id: Some("routes".to_string()),
+            status: ExtensionActivationStatus::Active,
+            diagnostic_count: 0,
+            output_digest_inputs,
+            diagnostic_digest: diagnostic_digest.to_string(),
+        }
+    }
+
+    fn protocol_diagnostic(rule_id: &str, message: &str) -> ExtensionProtocolDiagnostic {
+        ExtensionProtocolDiagnostic {
+            rule_id: rule_id.to_string(),
+            severity: "warning".to_string(),
+            message: message.to_string(),
+            evidence: vec![ExtensionProtocolEvidence {
+                label: "fixture".to_string(),
+                value: "value".to_string(),
+            }],
+        }
+    }
+
+    fn empty_snapshot() -> InputSnapshot {
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: crate::analysis_kernel::incremental::InputComponent {
+                name: "config".to_string(),
+                status: crate::analysis_kernel::incremental::InputComponentStatus::Present,
+                digest: Digest::absent(DigestKind::Config, "test"),
+                detail: Vec::new(),
+            },
+            go_lifecycle: crate::analysis_kernel::incremental::GoLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            ts_js_lifecycle: crate::analysis_kernel::incremental::TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        }
     }
 }

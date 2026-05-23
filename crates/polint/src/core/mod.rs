@@ -7852,6 +7852,8 @@ mod tests {
                 provider_id: Some("routes".to_string()),
                 status: crate::analysis::extensions::manifest::ExtensionActivationStatus::Active,
                 diagnostic_count: 0,
+                output_digest_inputs: Vec::new(),
+                diagnostic_digest: "empty".to_string(),
             }],
             accepted: vec![AcceptedExtensionFact {
                 extension_id: "demo".to_string(),
