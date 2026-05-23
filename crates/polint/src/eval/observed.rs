@@ -110,6 +110,8 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(layer_key_invariants(&output.run_report));
     observed.extend(provider_output_invariants(&output.run_report));
     observed.extend(layer_cache_invariants(&output.run_report));
+    observed.extend(extension_facts(&output.db));
+    observed.extend(extension_invariants(&output.db));
     if let Some(budget) = &fixture.manifest.budget {
         observed.push(ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
             name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
@@ -253,6 +255,11 @@ fn snapshot_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
             "kernel.run_report.input_snapshot",
         ),
         observed_invariant(
+            "snapshot.extension.providers.present",
+            bool_string(snapshot.extensions.iter().any(component_present)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
             "snapshot.tool_invocation.unsupported",
             bool_string(
                 snapshot
@@ -315,6 +322,13 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
                 "kernel.run_report.provider_outputs",
             ));
         }
+        if output.provider_id == "polint.extensions" {
+            invariants.push(observed_invariant(
+                "provider_output.polint.extensions.present",
+                "true",
+                "kernel.run_report.provider_outputs",
+            ));
+        }
         if !matches!(
             output.provider_id.as_str(),
             "polint.go.syntax" | "polint.ts.syntax"
@@ -331,6 +345,136 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
     }
 
     invariants
+}
+
+#[cfg(test)]
+fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
+    let mut facts = db
+        .extension_facts()
+        .iter()
+        .map(|fact| {
+            ObservedItem::Fact(ObservedFact {
+                family: fact.fact_family.clone(),
+                stable_key: fact.stable_key.clone(),
+                mode: AssertionMode::Exact,
+                producer_id: Some(extension_producer_id(&fact.extension_id, &fact.provider_id)),
+                provenance: Some("kernel.extension_sink.accepted".to_string()),
+                precision: Some(extension_precision_label(fact.precision).to_string()),
+                status: Some(ObservedStatus::Accepted),
+                payload: Some(format!(
+                    "bindings={};confidence={};payload={}",
+                    fact.binding_refs.join(","),
+                    extension_confidence_label(fact.confidence),
+                    fact.payload_labels.join(",")
+                )),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    facts.extend(db.rejected_extension_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: fact.fact_family.clone(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some(extension_producer_id(&fact.extension_id, &fact.provider_id)),
+            provenance: Some("kernel.extension_sink.rejected".to_string()),
+            precision: None,
+            status: Some(ObservedStatus::Rejected),
+            payload: Some(format!(
+                "reason={};evidence={}",
+                extension_rejection_reason_label(fact.reason),
+                fact.evidence.join(",")
+            )),
+        })
+    }));
+
+    facts
+}
+
+#[cfg(test)]
+fn extension_invariants(db: &AnalysisDb) -> Vec<ObservedItem> {
+    let changed_facts = db.extension_facts().len() + db.rejected_extension_facts().len();
+    let rejected = db.rejected_extension_facts().len();
+    let real_sink_active = !db.extension_facts().is_empty()
+        && db
+            .extension_activations()
+            .iter()
+            .any(|row| row.provider_id.is_some());
+
+    vec![
+        observed_invariant(
+            "extension.default_vs_extension_delta",
+            format!("changed_facts={changed_facts},rejected={rejected}"),
+            "kernel.extension_sink",
+        ),
+        observed_invariant(
+            "extension.real_sink_active",
+            bool_string(real_sink_active),
+            "kernel.extension_sink",
+        ),
+    ]
+}
+
+#[cfg(test)]
+fn extension_producer_id(extension_id: &str, provider_id: &str) -> String {
+    format!("polint.extension.{extension_id}.{provider_id}")
+}
+
+#[cfg(test)]
+fn extension_precision_label(
+    precision: crate::analysis::extensions::sinks::ExtensionFactPrecision,
+) -> &'static str {
+    match precision {
+        crate::analysis::extensions::sinks::ExtensionFactPrecision::Exact => "exact",
+        crate::analysis::extensions::sinks::ExtensionFactPrecision::SetupAware => "setup_aware",
+        crate::analysis::extensions::sinks::ExtensionFactPrecision::Heuristic => "heuristic",
+        crate::analysis::extensions::sinks::ExtensionFactPrecision::GeneratedUnvalidated => {
+            "generated_unvalidated"
+        }
+    }
+}
+
+#[cfg(test)]
+fn extension_confidence_label(
+    confidence: crate::analysis::extensions::sinks::ExtensionFactConfidence,
+) -> &'static str {
+    match confidence {
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::High => "high",
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::Medium => "medium",
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::Low => "low",
+    }
+}
+
+#[cfg(test)]
+fn extension_rejection_reason_label(
+    reason: crate::analysis::extensions::validate::ExtensionRejectionReason,
+) -> &'static str {
+    match reason {
+        crate::analysis::extensions::validate::ExtensionRejectionReason::UndeclaredOutput => {
+            "undeclared_output"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::MissingBinding => {
+            "missing_binding"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::InvalidSpan => {
+            "invalid_span"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::MissingPrecision => {
+            "missing_precision"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::MissingProvenance => {
+            "missing_provenance"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::SyntheticIdMissingEvidence => {
+            "synthetic_id_missing_evidence"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::DuplicateStableKey => {
+            "duplicate_stable_key"
+        }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::NativeConflict => {
+            "native_conflict"
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2058,7 +2202,8 @@ path = "repo"
                 ("provider_order.8", "polint.calls"),
                 ("provider_order.9", "polint.abstract_domains"),
                 ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.metrics"),
+                ("provider_order.11", "polint.extensions"),
+                ("provider_order.12", "polint.metrics"),
             ]
         );
     }

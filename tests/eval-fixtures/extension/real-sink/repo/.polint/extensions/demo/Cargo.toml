@@ -1,0 +1,8 @@
+[package]
+name = "polint-fixture-extension-demo"
+version = "0.0.0"
+edition = "2024"
+
+[[bin]]
+name = "polint-fixture-extension-demo"
+path = "src/main.rs"

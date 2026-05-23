@@ -514,6 +514,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -535,6 +536,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -583,6 +585,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -848,6 +851,19 @@ mod tests {
                         "summary_tito",
                         "summary_events",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.extensions",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "extension.providers",
+                    ],
+                    outputs: vec!["extension_facts", "extension_rejections"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",
