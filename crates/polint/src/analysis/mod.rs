@@ -12,6 +12,7 @@ pub(crate) mod cfg;
 pub(crate) mod demand;
 pub(crate) mod domains;
 pub(crate) mod error;
+pub(crate) mod extensions;
 pub(crate) mod ids;
 pub(crate) mod mir;
 pub(crate) mod places;
