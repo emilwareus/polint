@@ -193,7 +193,7 @@ const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "extension-facts-1",
+    name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
 }];
 
