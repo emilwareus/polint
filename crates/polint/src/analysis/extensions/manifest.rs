@@ -66,12 +66,12 @@ impl ExtensionManifest {
         for provider in &providers {
             if provider.extension_id != self.extension_id {
                 return Err(ManifestError::MismatchedExtensionId {
-                    expected: self.extension_id.clone(),
+                    expected: self.extension_id,
                     actual: provider.extension_id.clone(),
                 });
             }
             if !provider_ids.insert(provider.provider_id.clone()) {
-                return Err(ManifestError::DuplicateProviderId(
+                return Err(ManifestError::DuplicateProvider(
                     provider.provider_id.clone(),
                 ));
             }
@@ -125,9 +125,9 @@ impl Default for ExtensionBudget {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ManifestError {
-    EmptyId,
-    InvalidId(String),
-    DuplicateProviderId(String),
+    Empty,
+    Invalid(String),
+    DuplicateProvider(String),
     MismatchedExtensionId { expected: String, actual: String },
 }
 
@@ -157,13 +157,13 @@ fn normalize_family_labels(
 fn normalize_id(value: String) -> Result<String, ManifestError> {
     let value = value.trim().to_string();
     if value.is_empty() {
-        return Err(ManifestError::EmptyId);
+        return Err(ManifestError::Empty);
     }
     if !value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
     {
-        return Err(ManifestError::InvalidId(value));
+        return Err(ManifestError::Invalid(value));
     }
     Ok(value)
 }
@@ -219,12 +219,9 @@ mod tests {
                 ExtensionActivationStatus::Configured,
             )
             .unwrap_err(),
-            ManifestError::EmptyId
+            ManifestError::Empty
         );
-        assert_eq!(
-            FactFamilyLabel::new(" ").unwrap_err(),
-            ManifestError::EmptyId
-        );
+        assert_eq!(FactFamilyLabel::new(" ").unwrap_err(), ManifestError::Empty);
     }
 
     #[test]

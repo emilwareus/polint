@@ -245,6 +245,37 @@ impl Diagnostic {
     }
 }
 
+pub(crate) fn extension_setup_diagnostic(
+    failure_kind: &str,
+    extension_id: &str,
+    provider_id: Option<&str>,
+    summary: &str,
+) -> Diagnostic {
+    let provider_label = provider_id.unwrap_or("<handshake>");
+    Diagnostic::warning(
+        "polint/extension",
+        "",
+        TextRange::point(1, 1),
+        format!("Extension provider setup failed: {failure_kind}"),
+    )
+    .with_evidence("extension_id", extension_id)
+    .with_evidence("provider_id", provider_label)
+    .with_evidence("failure_kind", failure_kind)
+    .with_evidence("summary", bounded_extension_summary(summary))
+}
+
+fn bounded_extension_summary(summary: &str) -> String {
+    summary
+        .replace('\\', "/")
+        .lines()
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(512)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Human,
