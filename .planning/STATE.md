@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-23T19:39:26.639Z"
-last_activity: 2026-05-23 -- Phase 35 planning complete
+last_updated: "2026-05-23T19:47:18.931Z"
+last_activity: 2026-05-23
 progress:
   total_phases: 22
   completed_phases: 15
   total_plans: 93
-  completed_plans: 85
+  completed_plans: 86
   percent: 68
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 34 — rust-extension-provider-sink
+**Current focus:** Phase 35 — framework-entrypoints-and-trust-boundaries
 
 ## Current Status
 
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 34 (rust-extension-provider-sink) — EXECUTING
-Plan: 6 of 6
-Last activity: 2026-05-23 -- Phase 35 planning complete
+Phase: 35 (framework-entrypoints-and-trust-boundaries) — EXECUTING
+Plan: 2 of 8
+Last activity: 2026-05-23
 
 ## Phase Progress
 
@@ -287,6 +287,10 @@ Last activity: 2026-05-23 -- Phase 35 planning complete
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary eval payload uses semicolon-delimited compact fragments: domain;status;precision;provenance;payload_digest_prefix.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary determinism comparison uses cold/warm/no-cache three-way equality matching the established direct-calls and abstract-domains patterns.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary public-boundary proof uses 21 specific internal markers (provider IDs, domain names, type names, fact families) rather than generic substring markers that would match test naming.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: EntrypointOutput normalized() sorts by stable_key then reassigns sequential IDs from 0, matching the CallOutput pattern.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: EntrypointStore validates referential integrity: trust boundaries and dispatch edges must reference existing entrypoint stable keys via from_output.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Four new FactFamily variants placed after ExtensionFact: Entrypoint, TrustBoundary, DispatchEdge, UnresolvedFramework.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: TriggerMetadata is a struct with optional fields (method, path, tool_name, event_name, test_name) rather than an enum.
 
 ## Execution Metrics
 
@@ -352,12 +356,13 @@ Last activity: 2026-05-23 -- Phase 35 planning complete
 | 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
 | 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
 | 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
+| 35-framework-entrypoints-and-trust-boundaries | 01 | 5 min | 2 | 6 |
 
 ## Session
 
-- Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-07-PLAN.md (Phase 32 complete).
-- Stopped at: Completed Phase 32; ready for Phase 33.
+- Last session: 2026-05-23
+- Last activity: 2026-05-23 - Completed 35-01-PLAN.md.
+- Stopped at: Completed 35-01; continuing Phase 35 plan 2 of 8.
 
 ### Quick Tasks Completed
 
@@ -387,4 +392,4 @@ Last activity: 2026-05-23 -- Phase 35 planning complete
 
 ## Next Action
 
-Phase 32 is complete. Phase 33 (demand queries and summary SCC cache) is next.
+Continue Phase 35 plan 2 of 8 (framework entrypoints and trust boundaries).
