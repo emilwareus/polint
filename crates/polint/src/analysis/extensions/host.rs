@@ -331,10 +331,39 @@ impl ExtensionCommandRunner for StdCommandRunner {
     }
 }
 
+const EXTENSION_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "TERM",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "CARGO_HOME",
+    "RUSTC",
+    "RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "PKG_CONFIG_PATH",
+    "SDKROOT",
+    "MACOSX_DEPLOYMENT_TARGET",
+];
+
 fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
+        .env_clear()
+        .envs(
+            EXTENSION_ENV_ALLOWLIST
+                .iter()
+                .filter_map(|key| std::env::var(key).ok().map(|val| (*key, val))),
+        )
         .envs(&spec.env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -487,16 +516,11 @@ fn bounded_summary(bytes: &[u8], limit: usize) -> String {
 }
 
 fn sanitize_summary(summary: &str) -> String {
-    summary
-        .replace('\\', "/")
-        .lines()
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(" ")
+    summary.lines().take(4).collect::<Vec<_>>().join(" ")
 }
 
 fn truncate_bytes(bytes: &[u8], limit: usize) -> Vec<u8> {
-    bytes.iter().copied().take(limit).collect()
+    bytes[..bytes.len().min(limit)].to_vec()
 }
 
 #[cfg(test)]
