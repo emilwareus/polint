@@ -16,7 +16,7 @@ use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
 use crate::analysis::extensions::store::{
-    AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact,
+    AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
 };
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
@@ -653,6 +653,7 @@ pub struct AnalysisDb {
     summary_facts: Vec<SummaryFact>,
     summary_events: Vec<SummaryEventFact>,
     summary_store: Option<SummaryStore>,
+    extension_activations: Vec<ExtensionActivationRow>,
     extension_facts: Vec<AcceptedExtensionFact>,
     #[allow(
         dead_code,
@@ -1084,6 +1085,7 @@ impl AnalysisDb {
     )]
     pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
         let output = output.normalized();
+        self.extension_activations = output.activations;
         self.extension_facts = output.accepted;
         self.rejected_extension_facts = output.rejected;
         self.refresh_extension_metadata();
@@ -1104,6 +1106,10 @@ impl AnalysisDb {
 
     pub(crate) fn extension_facts(&self) -> &[AcceptedExtensionFact] {
         &self.extension_facts
+    }
+
+    pub(crate) fn extension_activations(&self) -> &[ExtensionActivationRow] {
+        &self.extension_activations
     }
 
     #[allow(
@@ -7841,6 +7847,12 @@ mod tests {
     fn extension_facts_are_sidecar_metadata_and_rejections_are_audit_only() {
         let mut db = AnalysisDb::new();
         db.replace_extension_facts(ExtensionOutput {
+            activations: vec![ExtensionActivationRow {
+                extension_id: "demo".to_string(),
+                provider_id: Some("routes".to_string()),
+                status: crate::analysis::extensions::manifest::ExtensionActivationStatus::Active,
+                diagnostic_count: 0,
+            }],
             accepted: vec![AcceptedExtensionFact {
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
@@ -7866,6 +7878,7 @@ mod tests {
         });
 
         assert_eq!(db.extension_facts().len(), 1);
+        assert_eq!(db.extension_activations().len(), 1);
         assert_eq!(db.rejected_extension_facts().len(), 1);
         let metadata = db
             .metadata_for(FactRef::new(FactFamily::ExtensionFact, 0))

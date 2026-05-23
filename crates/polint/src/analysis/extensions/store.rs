@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::manifest::ExtensionActivationStatus;
 use super::sinks::{
     ExtensionFactCandidate, ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
 };
@@ -7,8 +8,17 @@ use super::validate::ExtensionRejectionReason;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ExtensionOutput {
+    pub(crate) activations: Vec<ExtensionActivationRow>,
     pub(crate) accepted: Vec<AcceptedExtensionFact>,
     pub(crate) rejected: Vec<RejectedExtensionFact>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExtensionActivationRow {
+    pub(crate) extension_id: String,
+    pub(crate) provider_id: Option<String>,
+    pub(crate) status: ExtensionActivationStatus,
+    pub(crate) diagnostic_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +48,18 @@ pub(crate) struct RejectedExtensionFact {
 
 impl ExtensionOutput {
     pub(crate) fn normalized(mut self) -> Self {
+        self.activations.sort_by(|left, right| {
+            (
+                left.extension_id.as_str(),
+                left.provider_id.as_deref().unwrap_or(""),
+                left.status,
+            )
+                .cmp(&(
+                    right.extension_id.as_str(),
+                    right.provider_id.as_deref().unwrap_or(""),
+                    right.status,
+                ))
+        });
         self.accepted.sort_by(|left, right| {
             (
                 left.extension_id.as_str(),
@@ -147,6 +169,7 @@ mod tests {
     #[test]
     fn output_sorts_accepted_and_rejected_rows_deterministically() {
         let output = ExtensionOutput {
+            activations: Vec::new(),
             accepted: vec![
                 accepted("demo", "z", "family", "b"),
                 accepted("demo", "a", "family", "a"),

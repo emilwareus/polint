@@ -1987,14 +1987,18 @@ fn validate_metadata_providers(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (reference, metadata) in db.fact_meta().rows() {
-        if !manifests_by_id.contains_key(metadata.producer_id) {
+        if !manifests_by_id.contains_key(metadata.producer_id)
+            && !is_known_extension_producer(db, metadata.producer_id)
+        {
             diagnostics.push(provider_manifest_diagnostic(
                 reference,
                 "producer_id",
                 metadata.producer_id,
             ));
         }
-        if !manifests_by_id.contains_key(metadata.layer_id) {
+        if !manifests_by_id.contains_key(metadata.layer_id)
+            && !is_known_extension_producer(db, metadata.layer_id)
+        {
             diagnostics.push(provider_manifest_diagnostic(
                 reference,
                 "layer_id",
@@ -2594,6 +2598,10 @@ fn validate_precision_ceilings(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (reference, metadata) in db.fact_meta().rows() {
+        if metadata.producer_id.starts_with("polint.extension.") {
+            validate_extension_precision(reference, metadata, db, diagnostics);
+            continue;
+        }
         let Some(manifest) = manifests_by_id.get(metadata.producer_id) else {
             continue;
         };
@@ -2612,6 +2620,49 @@ fn validate_precision_ceilings(
             .with_evidence("ceiling", ceiling_label(manifest.precision_ceiling)),
         );
     }
+}
+
+fn is_known_extension_producer(db: &AnalysisDb, producer_id: &str) -> bool {
+    producer_id.starts_with("polint.extension.")
+        && db.extension_facts().iter().any(|fact| {
+            producer_id
+                == format!(
+                    "polint.extension.{}.{}",
+                    fact.extension_id, fact.provider_id
+                )
+        })
+}
+
+fn validate_extension_precision(
+    reference: FactRef,
+    metadata: &crate::analysis_kernel::FactMeta,
+    db: &AnalysisDb,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(fact) = db.extension_facts().get(reference.run_id as usize) else {
+        return;
+    };
+    if metadata.precision != FactPrecision::Exact {
+        return;
+    }
+    if fact
+        .evidence
+        .iter()
+        .any(|evidence| evidence == "exact_validation")
+    {
+        return;
+    }
+    diagnostics.push(
+        internal_diagnostic(format!(
+            "Fact metadata precision ceiling violated for {}#{}.",
+            reference.family.label(),
+            reference.run_id
+        ))
+        .with_evidence("producer_id", metadata.producer_id)
+        .with_evidence("family", reference.family.label())
+        .with_evidence("precision", precision_label(metadata.precision))
+        .with_evidence("ceiling", "extension_exact_requires_validation_evidence"),
+    );
 }
 
 fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
@@ -4140,6 +4191,45 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(provider_fields, BTreeSet::from(["layer_id", "producer_id"]));
+    }
+
+    #[test]
+    fn metadata_validation_accepts_known_extension_producer_and_rejects_exact_without_evidence() {
+        let mut db = AnalysisDb::new();
+        db.replace_extension_facts(crate::analysis::extensions::store::ExtensionOutput {
+            activations: Vec::new(),
+            accepted: vec![crate::analysis::extensions::store::AcceptedExtensionFact {
+                extension_id: "demo".to_string(),
+                provider_id: "routes".to_string(),
+                fact_family: "extension.routes".to_string(),
+                stable_key: "route:/a".to_string(),
+                binding_refs: Vec::new(),
+                precision: crate::analysis::extensions::sinks::ExtensionFactPrecision::Exact,
+                confidence: crate::analysis::extensions::sinks::ExtensionFactConfidence::High,
+                status: crate::analysis::extensions::sinks::ExtensionFactStatus::Accepted,
+                evidence: vec!["fixture".to_string()],
+                payload_labels: Vec::new(),
+                payload_digest: "payload".to_string(),
+            }],
+            rejected: Vec::new(),
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with("Fact metadata provider manifest missing")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with("Fact metadata precision ceiling violated")
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "ceiling"
+                        && evidence.value == "extension_exact_requires_validation_evidence"
+                })
+        }));
     }
 
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {

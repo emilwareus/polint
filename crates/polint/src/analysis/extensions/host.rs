@@ -1,4 +1,4 @@
-#![expect(
+#![allow(
     dead_code,
     reason = "Phase 34 introduces the extension host before the later kernel orchestration plan consumes every path."
 )]

@@ -57,7 +57,12 @@ pub(crate) fn validate_extension_output(
         }
     }
 
-    ExtensionOutput { accepted, rejected }.normalized()
+    ExtensionOutput {
+        activations: Vec::new(),
+        accepted,
+        rejected,
+    }
+    .normalized()
 }
 
 fn sorted_candidates(mut candidates: Vec<ExtensionFactCandidate>) -> Vec<ExtensionFactCandidate> {

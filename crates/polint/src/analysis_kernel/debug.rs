@@ -46,6 +46,7 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         calls: calls_report(db),
         abstract_domains: abstract_domains_report(db),
         summaries: summaries_report(db),
+        extensions: extensions_report(db),
         scc_schedule: scc_schedule_report(db, scc_closure_debug),
         demand_queries: demand_query_report(demand_query_trace),
     };
@@ -64,6 +65,7 @@ struct MetadataDebugReport<'a> {
     calls: CallDebugReport,
     abstract_domains: AbstractDomainDebugReport,
     summaries: SummaryDebugReport,
+    extensions: ExtensionDebugReport,
     scc_schedule: SccScheduleDebugSection,
     demand_queries: DemandQueryDebugSection,
 }
@@ -216,6 +218,51 @@ struct SummaryDebugReport {
     events: Vec<SummaryEventDebugRow>,
     counts: SummaryCounts,
     domain_counts: BTreeMap<String, u32>,
+}
+
+#[derive(Serialize)]
+struct ExtensionDebugReport {
+    activations: Vec<ExtensionActivationDebugRow>,
+    accepted: Vec<ExtensionFactDebugRow>,
+    rejected: Vec<ExtensionRejectedDebugRow>,
+    counts: ExtensionDebugCounts,
+}
+
+#[derive(Serialize)]
+struct ExtensionActivationDebugRow {
+    extension_id: String,
+    provider_id: Option<String>,
+    status: String,
+    diagnostic_count: usize,
+}
+
+#[derive(Serialize)]
+struct ExtensionFactDebugRow {
+    extension_id: String,
+    provider_id: String,
+    fact_family: String,
+    stable_key: String,
+    precision: String,
+    confidence: String,
+    evidence_count: usize,
+    payload_digest: String,
+}
+
+#[derive(Serialize)]
+struct ExtensionRejectedDebugRow {
+    extension_id: String,
+    provider_id: String,
+    fact_family: String,
+    stable_key: String,
+    reason: String,
+    evidence_count: usize,
+}
+
+#[derive(Default, Serialize)]
+struct ExtensionDebugCounts {
+    activations: usize,
+    accepted: usize,
+    rejected: usize,
 }
 
 #[derive(Serialize)]
@@ -1205,6 +1252,70 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
         events,
         counts,
         domain_counts,
+    }
+}
+
+fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
+    let mut activations = db
+        .extension_activations()
+        .iter()
+        .map(|row| ExtensionActivationDebugRow {
+            extension_id: row.extension_id.clone(),
+            provider_id: row.provider_id.clone(),
+            status: format!("{:?}", row.status),
+            diagnostic_count: row.diagnostic_count,
+        })
+        .collect::<Vec<_>>();
+    activations.sort_by(|left, right| {
+        (
+            left.extension_id.as_str(),
+            left.provider_id.as_deref().unwrap_or(""),
+        )
+            .cmp(&(
+                right.extension_id.as_str(),
+                right.provider_id.as_deref().unwrap_or(""),
+            ))
+    });
+
+    let mut accepted = db
+        .extension_facts()
+        .iter()
+        .map(|fact| ExtensionFactDebugRow {
+            extension_id: fact.extension_id.clone(),
+            provider_id: fact.provider_id.clone(),
+            fact_family: fact.fact_family.clone(),
+            stable_key: fact.stable_key.clone(),
+            precision: format!("{:?}", fact.precision),
+            confidence: format!("{:?}", fact.confidence),
+            evidence_count: fact.evidence.len(),
+            payload_digest: fact.payload_digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    accepted.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+
+    let mut rejected = db
+        .rejected_extension_facts()
+        .iter()
+        .map(|fact| ExtensionRejectedDebugRow {
+            extension_id: fact.extension_id.clone(),
+            provider_id: fact.provider_id.clone(),
+            fact_family: fact.fact_family.clone(),
+            stable_key: fact.stable_key.clone(),
+            reason: format!("{:?}", fact.reason),
+            evidence_count: fact.evidence.len(),
+        })
+        .collect::<Vec<_>>();
+    rejected.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+
+    ExtensionDebugReport {
+        counts: ExtensionDebugCounts {
+            activations: activations.len(),
+            accepted: accepted.len(),
+            rejected: rejected.len(),
+        },
+        activations,
+        accepted,
+        rejected,
     }
 }
 

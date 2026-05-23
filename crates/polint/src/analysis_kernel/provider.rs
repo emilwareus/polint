@@ -192,6 +192,11 @@ const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "extension-facts-1",
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -442,6 +447,22 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: DIRECT_SUMMARIES_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
+        id: "polint.extensions",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "extension.providers",
+        ],
+        outputs: &["extension_facts", "extension_rejections"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: EXTENSIONS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
