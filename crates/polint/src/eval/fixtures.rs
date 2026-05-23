@@ -1795,7 +1795,10 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
-    #[cfg_attr(target_os = "windows", ignore = "extension fixture requires cargo build at runtime, which is unreliable on Windows CI")]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "extension fixture requires cargo build at runtime, which is unreliable on Windows CI"
+    )]
     fn eval_extension_real_sink_fixture_passes() {
         let run = run_native_fixture_for_test(&extension_real_sink_fixture_dir()).unwrap();
         let case = run.cases.first().expect("extension real-sink case");
@@ -1842,9 +1845,7 @@ mod eval_native_fixture_runner_tests {
         );
 
         for fixture_dir in fixture_dirs {
-            if cfg!(target_os = "windows")
-                && fixture_dir.ends_with("extension/real-sink")
-            {
+            if cfg!(target_os = "windows") && fixture_dir.ends_with("extension/real-sink") {
                 continue;
             }
             let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
