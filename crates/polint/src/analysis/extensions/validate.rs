@@ -86,11 +86,11 @@ fn rejection_reason(
     if candidate.precision.is_none() {
         return Some(ExtensionRejectionReason::MissingPrecision);
     }
-    if candidate.evidence.is_empty() {
-        return Some(ExtensionRejectionReason::MissingProvenance);
-    }
     if candidate.stable_key.starts_with("synthetic:") && candidate.evidence.is_empty() {
         return Some(ExtensionRejectionReason::SyntheticIdMissingEvidence);
+    }
+    if candidate.evidence.is_empty() {
+        return Some(ExtensionRejectionReason::MissingProvenance);
     }
     if !bindings_exist(db, &candidate.binding_refs) {
         return Some(ExtensionRejectionReason::MissingBinding);

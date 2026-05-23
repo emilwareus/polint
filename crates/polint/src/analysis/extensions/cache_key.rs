@@ -55,6 +55,7 @@ pub(crate) fn extension_layer_key(
 
     let mut input_digests = vec![input.declared_read_digest];
     input_digests.extend(input.input_fact_digests);
+    input_digests.sort();
 
     LayerKey::new(
         LayerKind::Extension,
