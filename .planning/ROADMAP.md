@@ -380,6 +380,31 @@ Plans:
 **Goal:** Model entrypoints, routes, handlers, callbacks, jobs, CLIs, MCP tools/resources/prompts, tests, dispatch, and trust boundaries.
 **Requirements:** SAE-INT-05
 **Research:** `research/framework-entrypoints/FINAL-REPORT.md`, `research/framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`, `research/framework-entrypoints/VALIDATION.md`
+**Plans:** 8 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 35-01-PLAN.md — Framework fact contracts, dense IDs, store, and FactFamily integration
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 35-02-PLAN.md — Provider manifest, cache key, output digest, and kernel run-sequence wiring
+- [ ] 35-03-PLAN.md — Go framework recognizers (net/http, chi, testing, cobra)
+- [ ] 35-04-PLAN.md — TS/JS framework recognizers (Express, MCP SDK, test, CLI)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 35-05-PLAN.md — Trust boundary derivation, dispatch edges, unresolved facts, and provider data pipeline
+- [ ] 35-06-PLAN.md — Framework fact validation and extension overlay merge
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 35-07-PLAN.md — Debug snapshots and deterministic eval fixtures
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 35-08-PLAN.md — Public no-leak boundary proof
 
 **Success criteria:**
 
