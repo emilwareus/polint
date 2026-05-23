@@ -458,7 +458,7 @@ fn configure_child_process_group(_command: &mut Command) {}
 fn terminate_child_process_tree(child: &mut Child) {
     let process_group = format!("-{}", child.id());
     let _ = Command::new("kill")
-        .args(["-KILL", &process_group])
+        .args(["-KILL", "--", &process_group])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();

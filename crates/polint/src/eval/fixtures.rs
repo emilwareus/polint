@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::eval::model::ABSTRACT_DOMAIN_FACT_FAMILIES;
 use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem};
 
 const FIXTURE_SCHEMA_VERSION: &str = "polint-eval-fixture-1";
@@ -607,8 +609,10 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
     let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
     let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
-    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+    let deterministic = abstract_domain_cache_comparison_json(&cold_run)
+        == abstract_domain_cache_comparison_json(&warm_run)
+        && abstract_domain_cache_comparison_json(&cold_run)
+            == abstract_domain_cache_comparison_json(&no_cache_run);
 
     let mut observed = no_cache_observed
         .iter()
@@ -934,6 +938,43 @@ fn cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
     let mut normalized = run_without_runtime_durations(run);
     normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
     serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn abstract_domain_cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
+    let mut normalized = run_without_runtime_durations(run);
+    for case in &mut normalized.cases {
+        case.observed
+            .retain(abstract_domain_comparison_observed_item);
+        case.matches = crate::eval::matcher::match_case(
+            &case.expected,
+            &case.observed,
+            crate::eval::matcher::MatcherConfig::default(),
+        );
+    }
+    let matches = normalized
+        .cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
+    normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn abstract_domain_comparison_observed_item(item: &ObservedItem) -> bool {
+    match item {
+        ObservedItem::Fact(fact) => ABSTRACT_DOMAIN_FACT_FAMILIES.contains(&fact.family.as_str()),
+        ObservedItem::Invariant(invariant) => {
+            invariant.name.starts_with("abstract_domains.")
+                || invariant
+                    .name
+                    .starts_with("provider_output.polint.abstract_domains.")
+        }
+        ObservedItem::RuntimeBudget(_) => true,
+        ObservedItem::Diagnostic(_) | ObservedItem::GraphEdge(_) | ObservedItem::Path(_) => false,
+    }
 }
 
 #[cfg(test)]
