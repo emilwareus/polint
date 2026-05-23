@@ -332,26 +332,42 @@ impl ExtensionCommandRunner for StdCommandRunner {
 }
 
 const EXTENSION_ENV_ALLOWLIST: &[&str] = &[
+    // Cross-platform
     "PATH",
+    "LANG",
+    "TERM",
+    // Unix / macOS
     "HOME",
     "USER",
     "SHELL",
     "TMPDIR",
-    "LANG",
-    "TERM",
+    "SDKROOT",
+    "MACOSX_DEPLOYMENT_TARGET",
+    // Windows — required for cargo, rustc, and MSVC linker
+    "USERPROFILE",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "COMSPEC",
+    "WINDIR",
+    // Rust toolchain
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
     "CARGO_HOME",
     "RUSTC",
     "RUSTFLAGS",
     "RUSTDOCFLAGS",
+    // Native build tools
     "CC",
     "CXX",
     "CFLAGS",
     "CXXFLAGS",
     "PKG_CONFIG_PATH",
-    "SDKROOT",
-    "MACOSX_DEPLOYMENT_TARGET",
 ];
 
 fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
