@@ -14,6 +14,10 @@ use crate::analysis::domains::facts::{
 };
 use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::error::AnalysisError;
+use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
+use crate::analysis::extensions::store::{
+    AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact,
+};
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
@@ -649,6 +653,12 @@ pub struct AnalysisDb {
     summary_facts: Vec<SummaryFact>,
     summary_events: Vec<SummaryEventFact>,
     summary_store: Option<SummaryStore>,
+    extension_facts: Vec<AcceptedExtensionFact>,
+    #[allow(
+        dead_code,
+        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
+    )]
+    rejected_extension_facts: Vec<RejectedExtensionFact>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -1068,6 +1078,17 @@ impl AnalysisDb {
         self.refresh_summary_metadata();
     }
 
+    #[allow(
+        dead_code,
+        reason = "Extension fact replacement is wired into the kernel provider in the next Phase 34 plan."
+    )]
+    pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
+        let output = output.normalized();
+        self.extension_facts = output.accepted;
+        self.rejected_extension_facts = output.rejected;
+        self.refresh_extension_metadata();
+    }
+
     pub(crate) fn summary_facts(&self) -> &[SummaryFact] {
         &self.summary_facts
     }
@@ -1079,6 +1100,18 @@ impl AnalysisDb {
     #[allow(dead_code)]
     pub(crate) fn summary_store(&self) -> Option<&SummaryStore> {
         self.summary_store.as_ref()
+    }
+
+    pub(crate) fn extension_facts(&self) -> &[AcceptedExtensionFact] {
+        &self.extension_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
+    )]
+    pub(crate) fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
+        &self.rejected_extension_facts
     }
 
     #[allow(dead_code)]
@@ -1226,6 +1259,23 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in event_metadata {
             self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Extension metadata refresh is reached through extension provider wiring in the next Phase 34 plan."
+    )]
+    fn refresh_extension_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::ExtensionFact);
+        let metadata = self
+            .extension_facts
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, extension_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in metadata {
+            self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
         }
     }
 
@@ -2096,6 +2146,9 @@ impl AnalysisDb {
         }
         for (run_id, _attribute) in self.jsx_attributes().iter().enumerate() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::JsxAttribute, run_id as u64);
+        }
+        for (run_id, _fact) in self.extension_facts().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ExtensionFact, run_id as u64);
         }
 
         missing.sort_by(|left, right| {
@@ -3663,6 +3716,67 @@ fn source_file_metadata(relative_path: &str, language: Language, content_hash: &
         ]),
         stable_parts([("language", language_label(language).to_string())]),
     )
+}
+
+#[allow(
+    dead_code,
+    reason = "Extension fact metadata is reached through extension provider wiring in the next Phase 34 plan."
+)]
+fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta {
+    let producer_id = leaked_extension_producer_id(&fact.extension_id, &fact.provider_id);
+    let precision = extension_precision_metadata(fact.precision);
+    let confidence = extension_confidence_metadata(fact.confidence);
+    let payload_extra_parts = [
+        ("family", fact.fact_family.clone()),
+        ("bindings", fact.binding_refs.join(",")),
+        ("evidence", fact.evidence.join(",")),
+        ("payload", fact.payload_labels.join(",")),
+        ("status", format!("{:?}", fact.status)),
+    ];
+    let payload_digest = metadata_payload_digest(&fact.stable_key, &payload_extra_parts);
+
+    FactMeta {
+        stable_key: fact.stable_key.clone(),
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation: ValidationStatus::SchemaValidated,
+        payload_digest,
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Extension producer ids are reached through extension provider wiring in the next Phase 34 plan."
+)]
+fn leaked_extension_producer_id(extension_id: &str, provider_id: &str) -> &'static str {
+    Box::leak(format!("polint.extension.{extension_id}.{provider_id}").into_boxed_str())
+}
+
+#[allow(
+    dead_code,
+    reason = "Extension precision mapping is reached through extension provider wiring in the next Phase 34 plan."
+)]
+fn extension_precision_metadata(precision: ExtensionFactPrecision) -> FactPrecision {
+    match precision {
+        ExtensionFactPrecision::Exact => FactPrecision::Exact,
+        ExtensionFactPrecision::SetupAware => FactPrecision::SetupAware,
+        ExtensionFactPrecision::Heuristic => FactPrecision::Heuristic,
+        ExtensionFactPrecision::GeneratedUnvalidated => FactPrecision::Heuristic,
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Extension confidence mapping is reached through extension provider wiring in the next Phase 34 plan."
+)]
+fn extension_confidence_metadata(confidence: ExtensionFactConfidence) -> FactConfidence {
+    match confidence {
+        ExtensionFactConfidence::High => FactConfidence::High,
+        ExtensionFactConfidence::Medium => FactConfidence::Medium,
+        ExtensionFactConfidence::Low => FactConfidence::Low,
+    }
 }
 
 fn fact_meta_from_parts<const STABLE: usize, const EXTRA: usize>(
@@ -7721,6 +7835,45 @@ mod tests {
     fn rule_pattern_matches_prefix() {
         assert!(rule_id_matches("examples/*", "examples/ts-no-raw-colors"));
         assert!(!rule_id_matches("custom/*", "examples/ts-no-raw-colors"));
+    }
+
+    #[test]
+    fn extension_facts_are_sidecar_metadata_and_rejections_are_audit_only() {
+        let mut db = AnalysisDb::new();
+        db.replace_extension_facts(ExtensionOutput {
+            accepted: vec![AcceptedExtensionFact {
+                extension_id: "demo".to_string(),
+                provider_id: "routes".to_string(),
+                fact_family: "extension.routes".to_string(),
+                stable_key: "route:/a".to_string(),
+                binding_refs: vec!["file:src/app.ts".to_string()],
+                precision: ExtensionFactPrecision::Heuristic,
+                confidence: ExtensionFactConfidence::Medium,
+                status: crate::analysis::extensions::sinks::ExtensionFactStatus::Accepted,
+                evidence: vec!["fixture".to_string()],
+                payload_labels: vec!["method=GET".to_string()],
+                payload_digest: "payload".to_string(),
+            }],
+            rejected: vec![RejectedExtensionFact {
+                extension_id: "demo".to_string(),
+                provider_id: "routes".to_string(),
+                fact_family: "extension.routes".to_string(),
+                stable_key: "route:/bad".to_string(),
+                reason:
+                    crate::analysis::extensions::validate::ExtensionRejectionReason::NativeConflict,
+                evidence: vec!["fixture".to_string()],
+            }],
+        });
+
+        assert_eq!(db.extension_facts().len(), 1);
+        assert_eq!(db.rejected_extension_facts().len(), 1);
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::ExtensionFact, 0))
+            .expect("extension metadata exists");
+        assert_eq!(metadata.producer_id, "polint.extension.demo.routes");
+        assert_eq!(metadata.layer_id, "polint.extension.demo.routes");
+        assert_eq!(metadata.precision, FactPrecision::Heuristic);
+        assert_eq!(metadata.validation, ValidationStatus::SchemaValidated);
     }
 
     proptest! {
