@@ -344,6 +344,23 @@ impl AnalysisKernel {
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
 
+        let extensions =
+            crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
+                &mut db,
+                &input.loaded.root,
+                &input_snapshot,
+                Self::provider_manifest("polint.extensions"),
+            );
+        let polint_extensions_cache_stats = extensions.cache_stats.clone();
+        let extensions_output_digest = extensions.output_digest.clone();
+        diagnostics.extend(extensions.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.extensions",
+            &db,
+            polint_extensions_cache_stats,
+            extensions_output_digest,
+        ));
+
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
             &mut db,
             input.plan,
@@ -773,6 +790,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -1248,6 +1266,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );

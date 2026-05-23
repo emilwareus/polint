@@ -192,6 +192,11 @@ const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const METRICS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "metrics-facts-1",
     version: 1,
@@ -445,6 +450,22 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.extensions",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "extension.providers",
+        ],
+        outputs: &["extension_facts", "extension_rejections"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: EXTENSIONS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -493,6 +514,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -514,6 +536,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -562,6 +585,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.extensions",
                 "polint.metrics",
             ]
         );
@@ -827,6 +851,19 @@ mod tests {
                         "summary_tito",
                         "summary_events",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.extensions",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "extension.providers",
+                    ],
+                    outputs: vec!["extension_facts", "extension_rejections"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

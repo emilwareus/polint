@@ -132,6 +132,60 @@ exclude = []
     }
 }
 
+#[test]
+fn extension_no_leak() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let check_json = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let help = output_string(polint_cmd().args(["check", "--help"]).assert().success());
+    let mut public_sources = String::new();
+    for path in [
+        repo_root().join("crates/polint/src/lib.rs"),
+        repo_root().join("crates/polint/src/sdk"),
+        repo_root().join("crates/polint/src/runner"),
+        repo_root().join("README.md"),
+        repo_root().join("docs/API-VISIBILITY-PLAN.md"),
+    ] {
+        public_sources.push_str(&public_surface_text(&path));
+    }
+
+    for (surface, output) in [
+        ("polint check --format json", check_json.as_str()),
+        ("polint check --help", help.as_str()),
+        ("public source/docs", public_sources.as_str()),
+    ] {
+        for marker in [
+            "polint-extension-handshake-v1",
+            "polint-extension-provider-run-v1",
+            "ExtensionProviderRunResponse",
+            "extension.real_sink_active",
+        ] {
+            assert!(
+                !output.contains(marker),
+                "public surface {surface} leaked extension internal marker `{marker}`:\n{output}"
+            );
+        }
+    }
+}
+
 fn output_string(assert: Assert) -> String {
     let output = assert.get_output();
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be valid UTF-8");

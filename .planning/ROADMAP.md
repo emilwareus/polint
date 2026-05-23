@@ -36,7 +36,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 31 | 5/5 | Complete    | 2026-05-21 |
 | 32 | 7/7 | Complete    | 2026-05-21 |
 | 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
-| 34 | Rust Extension/Provider Sink | Add the first advanced repo-local Rust provider boundary with validation and cache participation. | SAE-INT-04 |
+| 34 | 6/6 | Complete   | 2026-05-23 |
 | 35 | Framework Entrypoints and Trust Boundaries | Add native and extension-overlay facts for entrypoints, lifecycle, dispatch, and trust boundaries. | SAE-INT-05 |
 | 36 | P0 Type/Value/Place/Alias Substrate | Add normalized type, value, allocation, access-path, narrowing, and alias facts. | SAE-PREC-01 |
 | 37 | Refined Call Graph Providers | Add opt-in refined call graph providers over direct calls, summaries, entrypoints, and type/value facts. | SAE-PREC-02 |

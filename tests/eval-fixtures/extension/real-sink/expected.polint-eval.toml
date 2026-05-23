@@ -1,0 +1,30 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "extension-real-sink"
+area = "extension"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "extension.routes", stable_key = "extension.route./ok", mode = "exact", producer_id = "polint.extension.demo.routes", precision = "heuristic", status = "accepted" }
+
+[[expected]]
+fact = { family = "extension.undeclared", stable_key = "extension.route./rejected", mode = "exact", producer_id = "polint.extension.demo.routes", status = "rejected" }
+
+[[expected]]
+invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact" }
+
+[[expected]]
+invariant = { name = "extension.real_sink_active", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.extensions.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.extension.providers.present", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "extension.real_sink", max_runtime_ms = 10000, mode = "exact" }

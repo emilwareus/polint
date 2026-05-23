@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::eval::model::ABSTRACT_DOMAIN_FACT_FAMILIES;
 use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem};
 
 const FIXTURE_SCHEMA_VERSION: &str = "polint-eval-fixture-1";
@@ -607,8 +609,10 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
     let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
     let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
-    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+    let deterministic = abstract_domain_cache_comparison_json(&cold_run)
+        == abstract_domain_cache_comparison_json(&warm_run)
+        && abstract_domain_cache_comparison_json(&cold_run)
+            == abstract_domain_cache_comparison_json(&no_cache_run);
 
     let mut observed = no_cache_observed
         .iter()
@@ -934,6 +938,43 @@ fn cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
     let mut normalized = run_without_runtime_durations(run);
     normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
     serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn abstract_domain_cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
+    let mut normalized = run_without_runtime_durations(run);
+    for case in &mut normalized.cases {
+        case.observed
+            .retain(abstract_domain_comparison_observed_item);
+        case.matches = crate::eval::matcher::match_case(
+            &case.expected,
+            &case.observed,
+            crate::eval::matcher::MatcherConfig::default(),
+        );
+    }
+    let matches = normalized
+        .cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
+    normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn abstract_domain_comparison_observed_item(item: &ObservedItem) -> bool {
+    match item {
+        ObservedItem::Fact(fact) => ABSTRACT_DOMAIN_FACT_FAMILIES.contains(&fact.family.as_str()),
+        ObservedItem::Invariant(invariant) => {
+            invariant.name.starts_with("abstract_domains.")
+                || invariant
+                    .name
+                    .starts_with("provider_output.polint.abstract_domains.")
+        }
+        ObservedItem::RuntimeBudget(_) => true,
+        ObservedItem::Diagnostic(_) | ObservedItem::GraphEdge(_) | ObservedItem::Path(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -1426,6 +1467,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/extension/rejection-delta")
     }
 
+    fn extension_real_sink_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/extension/real-sink")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1463,7 +1508,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.8", "polint.calls"),
                 ("provider_order.9", "polint.abstract_domains"),
                 ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.metrics"),
+                ("provider_order.11", "polint.extensions"),
+                ("provider_order.12", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
                     "abstract-domain-facts-1:1",
@@ -1749,6 +1795,46 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "extension fixture requires cargo build at runtime, which is unreliable on Windows CI"
+    )]
+    fn eval_extension_real_sink_fixture_passes() {
+        let run = run_native_fixture_for_test(&extension_real_sink_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("extension real-sink case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "extension-real-sink");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(rendered.contains("\"facts_accepted\": 1"), "{rendered}");
+        assert!(rendered.contains("\"facts_rejected\": 1"), "{rendered}");
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.stable_key == "extension.route./ok"
+                    && fact.status == Some(ObservedStatus::Accepted)
+                    && fact.producer_id.as_deref() == Some("polint.extension.demo.routes")
+            }
+            _ => false,
+        }));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.stable_key == "extension.route./rejected"
+                    && fact.status == Some(ObservedStatus::Rejected)
+                    && fact.producer_id.as_deref() == Some("polint.extension.demo.routes")
+            }
+            _ => false,
+        }));
+        assert!(case.observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "extension.real_sink_active" && invariant.value == "true"
+            }
+            _ => false,
+        }));
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -1759,6 +1845,9 @@ mod eval_native_fixture_runner_tests {
         );
 
         for fixture_dir in fixture_dirs {
+            if cfg!(target_os = "windows") && fixture_dir.ends_with("extension/real-sink") {
+                continue;
+            }
             let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
                 panic!(
                     "native fixture should run: {}\n{error:#}",

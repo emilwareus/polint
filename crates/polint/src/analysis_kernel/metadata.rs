@@ -60,6 +60,7 @@ pub(crate) enum FactFamily {
     SummaryMemory,
     SummaryTito,
     SummaryEvent,
+    ExtensionFact,
     #[expect(
         dead_code,
         reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
@@ -132,6 +133,7 @@ impl FactFamily {
             Self::SummaryMemory => "SummaryMemory",
             Self::SummaryTito => "SummaryTito",
             Self::SummaryEvent => "SummaryEvent",
+            Self::ExtensionFact => "ExtensionFact",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",

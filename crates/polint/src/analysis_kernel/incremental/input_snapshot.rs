@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Digest, DigestKind};
+use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
 use crate::analysis_kernel::{CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
@@ -114,11 +115,7 @@ impl InputSnapshot {
                 DigestKind::ModelFile,
                 "no model files configured",
             )],
-            extensions: vec![InputComponent::absent(
-                "extension.providers",
-                DigestKind::ExtensionCode,
-                "no extension providers configured",
-            )],
+            extensions: extension_components_from_repo(&loaded.root),
             tool_invocations,
             provider_schemas,
         }
@@ -669,6 +666,52 @@ fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> 
     ]
 }
 
+fn extension_components_from_repo(root: &FsPath) -> Vec<InputComponent> {
+    let discovered = discover_local_extensions(root);
+    if discovered.is_empty() {
+        return vec![InputComponent::absent(
+            "extension.providers",
+            DigestKind::ExtensionCode,
+            "no extension providers configured",
+        )];
+    }
+
+    discovered
+        .iter()
+        .map(extension_component)
+        .collect::<Vec<_>>()
+}
+
+fn extension_component(extension: &DiscoveredExtension) -> InputComponent {
+    let source_digest = extension.source_digest.to_string();
+    let dependency_digest = extension.dependency_digest.to_string();
+    let status = extension_activation_status_label(extension.activation_status);
+    let mut detail = vec![
+        format!("extension_id={}", extension.extension_id),
+        format!("manifest={}", extension.manifest_path),
+        format!("activation_status={status}"),
+        format!("source_digest={source_digest}"),
+        format!("dependency_digest={dependency_digest}"),
+    ];
+    detail.extend(
+        extension
+            .digest_input_paths
+            .iter()
+            .map(|path| format!("digest_input={path}")),
+    );
+    let digest_refs = detail.iter().map(String::as_str).collect::<Vec<_>>();
+    InputComponent::new(
+        format!("extension.providers.{}", extension.extension_id),
+        InputComponentStatus::Present,
+        Digest::from_parts(
+            DigestKind::ExtensionCode,
+            "extension_provider",
+            &digest_refs,
+        ),
+        detail,
+    )
+}
+
 fn module_lifecycle_candidates(module_roots: &[String], file_name: &str) -> Vec<String> {
     module_roots
         .iter()
@@ -1075,6 +1118,28 @@ fn precision_ceiling_label(precision: PrecisionCeiling) -> &'static str {
     }
 }
 
+fn extension_activation_status_label(
+    status: crate::analysis::extensions::manifest::ExtensionActivationStatus,
+) -> &'static str {
+    match status {
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::Configured => {
+            "configured"
+        }
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::Discovered => {
+            "discovered"
+        }
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::HandshakeOk => {
+            "handshake_ok"
+        }
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::Active => "active",
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::Failed => "failed",
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::ValidationFailed => {
+            "validation_failed"
+        }
+        crate::analysis::extensions::manifest::ExtensionActivationStatus::Disabled => "disabled",
+    }
+}
+
 #[cfg(test)]
 mod source_config_rule_model_extension {
     use super::*;
@@ -1216,6 +1281,46 @@ mod source_config_rule_model_extension {
         assert!(snapshot.provider_schemas.iter().all(|provider| {
             provider.provider_manifest_digest.kind == DigestKind::ProviderParameters
         }));
+    }
+
+    #[test]
+    fn configured_local_extension_records_present_extension_code_component() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        std::fs::create_dir_all(temp.path().join(".polint/extensions/demo/src"))
+            .expect("create extension src");
+        std::fs::write(
+            temp.path().join(".polint/extensions/demo/Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write extension manifest");
+        std::fs::write(
+            temp.path().join(".polint/extensions/demo/src/main.rs"),
+            "fn main() {}\n",
+        )
+        .expect("write extension source");
+
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let rendered = serde_json::to_string_pretty(&snapshot).expect("serialize snapshot");
+
+        assert_eq!(snapshot.extensions.len(), 1);
+        assert_eq!(snapshot.extensions[0].status, InputComponentStatus::Present);
+        assert_eq!(
+            snapshot.extensions[0].digest.kind,
+            DigestKind::ExtensionCode
+        );
+        assert!(
+            snapshot.extensions[0]
+                .detail
+                .contains(&"manifest=.polint/extensions/demo/Cargo.toml".to_string())
+        );
+        assert!(rendered.contains("activation_status=discovered"));
+        assert!(!rendered.contains(temp.path().to_string_lossy().as_ref()));
     }
 
     #[test]
