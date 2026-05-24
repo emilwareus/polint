@@ -289,7 +289,7 @@ pub(crate) fn validate_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     let files = db.files().iter().map(|row| row.id).collect::<BTreeSet<_>>();
     let functions = db.functions().iter().map(|row| row.id).collect::<BTreeSet<_>>();
     // ...
-    
+
     // 2. Check duplicate stable keys
     check_duplicate_stable_keys(diagnostics, "CallSite", db.call_sites().iter().map(|row| row.stable_key.as_str()));
 
@@ -347,12 +347,12 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
     let bodies = db.mir_bodies().iter().map(|body| (body.id, body)).collect::<BTreeMap<_, _>>();
     let places = db.mir_places().iter().map(|place| (place.id, place)).collect::<BTreeMap<_, _>>();
     let functions = db.functions().iter().map(|function| (function.id, function)).collect::<BTreeMap<_, _>>();
-    
+
     // ... filter, sort by stable keys for determinism ...
-    
+
     // Build facts with stable keys using semantic_stable_key
     sites.push(CallSiteFact { ... stable_key: call_site_stable_key(db, body, operation, kind, &callee_shape, &operation_stable_key), });
-    
+
     sites.sort_by(|left, right| (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id)));
     sites
 }
