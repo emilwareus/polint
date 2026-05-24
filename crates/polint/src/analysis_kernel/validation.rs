@@ -3,10 +3,12 @@ use std::fmt::Debug;
 
 use serde::Serialize;
 
+use crate::analysis::aliases::facts::{AliasOperand, AliasPrecision, AliasStatus};
 use crate::analysis::calls::validate::validate_calls;
 use crate::analysis::cfg::validate::validate_cfg;
 use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::entrypoints::validate::validate_entrypoints;
+use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToStatus};
 use crate::analysis::summaries::validate::validate_summaries;
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis_kernel::{
@@ -49,11 +51,164 @@ pub(crate) fn validate_fact_metadata(
     validate_abstract_domains(db, &mut diagnostics);
     validate_summaries(db, &mut diagnostics);
     validate_entrypoints(db, &mut diagnostics);
+    validate_type_value_alias(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::Type,
+        db.type_facts().iter().map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::Value,
+        db.value_facts().iter().map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::AccessPath,
+        db.access_path_facts()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::AliasAnswer,
+        db.alias_answers()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+
+    let places = db
+        .mir_places()
+        .iter()
+        .map(|place| place.id)
+        .collect::<BTreeSet<_>>();
+    let access_paths = db
+        .access_path_facts()
+        .iter()
+        .map(|path| path.id)
+        .collect::<BTreeSet<_>>();
+
+    for fact in db.type_facts() {
+        if let Some(place) = fact.place
+            && !places.contains(&place)
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::Type,
+                &fact.stable_key,
+                "place",
+                "dangling_place_reference",
+            ));
+        }
+    }
+
+    for fact in db.access_path_facts() {
+        if !places.contains(&fact.base) {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AccessPath,
+                &fact.stable_key,
+                "base",
+                "dangling_place_reference",
+            ));
+        }
+        if fact.depth != fact.projections.len() as u32 {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AccessPath,
+                &fact.stable_key,
+                "depth",
+                "access_path_depth_mismatch",
+            ));
+        }
+    }
+
+    for fact in db.points_to_sets() {
+        if fact.status == PointsToStatus::BudgetExceeded
+            && fact.budget != PointsToBudgetStatus::BudgetExceeded
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::PointsToSet,
+                &fact.stable_key,
+                "budget",
+                "budget_status_mismatch",
+            ));
+        }
+    }
+
+    for fact in db.alias_answers() {
+        validate_alias_operand(
+            db,
+            diagnostics,
+            &places,
+            &access_paths,
+            fact.stable_key.as_str(),
+            fact.left,
+        );
+        validate_alias_operand(
+            db,
+            diagnostics,
+            &places,
+            &access_paths,
+            fact.stable_key.as_str(),
+            fact.right,
+        );
+        if matches!(fact.status, AliasStatus::MustAlias | AliasStatus::NoAlias)
+            && (fact.evidence.is_empty() || fact.precision == AliasPrecision::Unknown)
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AliasAnswer,
+                &fact.stable_key,
+                "evidence",
+                "overconfident_alias_answer",
+            ));
+        }
+    }
+}
+
+fn check_type_value_alias_stable_keys<'a>(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    keys: impl Iterator<Item = &'a str>,
+) {
+    let mut seen = BTreeSet::new();
+    for key in keys {
+        if !seen.insert(key) {
+            diagnostics.push(type_value_alias_diagnostic(
+                family,
+                key,
+                "stable_key",
+                "duplicate_stable_key",
+            ));
+        }
+    }
+}
+
+fn validate_alias_operand(
+    _db: &AnalysisDb,
+    diagnostics: &mut Vec<Diagnostic>,
+    places: &BTreeSet<crate::analysis::ids::PlaceId>,
+    access_paths: &BTreeSet<crate::analysis::ids::AccessPathId>,
+    stable_key: &str,
+    operand: AliasOperand,
+) {
+    let valid = match operand {
+        AliasOperand::Place(place) => places.contains(&place),
+        AliasOperand::AccessPath(path) => access_paths.contains(&path),
+    };
+    if !valid {
+        diagnostics.push(type_value_alias_diagnostic(
+            FactFamily::AliasAnswer,
+            stable_key,
+            "operand",
+            "dangling_alias_operand",
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +480,135 @@ mod abstract_domains {
             .iter()
             .filter(|diagnostic| diagnostic.message == "Internal analysis validation failed.")
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod type_value_alias_validation {
+    use super::validate_fact_metadata;
+    use crate::analysis::access_paths::facts::{AccessPathFact, AccessPathStatus};
+    use crate::analysis::access_paths::store::AccessPathOutput;
+    use crate::analysis::aliases::facts::{
+        AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus,
+    };
+    use crate::analysis::aliases::store::AliasOutput;
+    use crate::analysis::ids::{
+        AccessPathId, AliasAnswerId, ObjectTokenId, PlaceId, PointsToSetId, PtVarId, TypeFactId,
+        TypeSetId,
+    };
+    use crate::analysis::points_to::facts::{
+        PointsToBudgetStatus, PointsToPrecision, PointsToSetFact, PointsToStatus,
+    };
+    use crate::analysis::points_to::store::PointsToOutput;
+    use crate::analysis::types::facts::{
+        TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance, TypeShape, TypeStatus,
+        TypeSubject,
+    };
+    use crate::analysis::types::store::{TypeOutput, TypeValueAliasOutput};
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::core::{AnalysisDb, Language};
+
+    #[test]
+    fn type_value_alias_validation_reports_malformed_rows_deterministically() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            types: TypeOutput {
+                types: vec![
+                    type_fact(0, "type:dup", Some(PlaceId(99))),
+                    type_fact(1, "type:dup", None),
+                ],
+                narrowed: Vec::new(),
+            },
+            access_paths: AccessPathOutput {
+                access_paths: vec![AccessPathFact {
+                    id: AccessPathId(0),
+                    base: PlaceId(42),
+                    projections: Vec::new(),
+                    depth: 1,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    status: AccessPathStatus::Resolved,
+                    stable_key: "path:bad".to_string(),
+                }],
+            },
+            points_to: PointsToOutput {
+                constraints: Vec::new(),
+                sets: vec![PointsToSetFact {
+                    id: PointsToSetId(0),
+                    variable: PtVarId(1),
+                    objects: vec![ObjectTokenId(1)],
+                    status: PointsToStatus::BudgetExceeded,
+                    precision: PointsToPrecision::Unknown,
+                    budget: PointsToBudgetStatus::WithinBudget,
+                    stable_key: "pt:budget".to_string(),
+                }],
+            },
+            aliases: AliasOutput {
+                answers: vec![AliasAnswerFact {
+                    id: AliasAnswerId(0),
+                    left: AliasOperand::Place(PlaceId(1)),
+                    right: AliasOperand::AccessPath(AccessPathId(99)),
+                    status: AliasStatus::MustAlias,
+                    reason: AliasReason::ExtensionProvided,
+                    evidence: Vec::new(),
+                    precision: AliasPrecision::Unknown,
+                    stable_key: "alias:bad".to_string(),
+                }],
+            },
+            ..TypeValueAliasOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let reasons = diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.evidence.iter())
+            .filter(|evidence| evidence.label == "reason")
+            .map(|evidence| evidence.value.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for expected in [
+            "duplicate_stable_key",
+            "dangling_place_reference",
+            "access_path_depth_mismatch",
+            "budget_status_mismatch",
+            "dangling_alias_operand",
+            "overconfident_alias_answer",
+        ] {
+            assert!(
+                reasons.contains(expected),
+                "missing {expected}: {diagnostics:#?}"
+            );
+        }
+    }
+
+    fn type_fact(id: u64, stable_key: &str, place: Option<PlaceId>) -> TypeFact {
+        TypeFact {
+            id: TypeFactId(id),
+            subject: place
+                .map(TypeSubject::Place)
+                .unwrap_or_else(|| TypeSubject::Synthetic(stable_key.to_string())),
+            type_set: TypeSetId(id),
+            shape: TypeShape::Unknown {
+                reason: "fixture".to_string(),
+            },
+            phase: TypePhase::ExtensionProvided,
+            language: Language::TypeScript,
+            file: None,
+            function: None,
+            body: None,
+            place,
+            cfg_block: None,
+            operation: None,
+            precision: TypePrecision::Heuristic,
+            confidence: TypeConfidence::Medium,
+            status: TypeStatus::Present,
+            provenance: TypeProvenance::Extension {
+                extension_id: "fixture".to_string(),
+            },
+            stable_key: stable_key.to_string(),
+        }
     }
 }
 
@@ -3575,6 +3859,22 @@ fn topology_diagnostic(
 ) -> Diagnostic {
     internal_diagnostic(format!(
         "Topology validation failed for {} stable key.",
+        family.label()
+    ))
+    .with_evidence("family", family.label())
+    .with_evidence("stable_key", stable_key.to_string())
+    .with_evidence("field", field)
+    .with_evidence("reason", reason.into())
+}
+
+fn type_value_alias_diagnostic(
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    reason: impl Into<String>,
+) -> Diagnostic {
+    internal_diagnostic(format!(
+        "Type/value/alias validation failed for {} stable key.",
         family.label()
     ))
     .with_evidence("family", family.label())

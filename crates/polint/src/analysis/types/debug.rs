@@ -40,6 +40,7 @@ struct TypeValueAliasDebugCounts {
     by_value_precision: BTreeMap<String, usize>,
     by_alias_status: BTreeMap<String, usize>,
     by_points_to_budget: BTreeMap<String, usize>,
+    by_provenance: BTreeMap<String, usize>,
 }
 
 fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
@@ -62,6 +63,7 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
             &mut counts.by_type_precision,
             &format!("{:?}", fact.precision),
         );
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
     }
     for fact in db.value_facts() {
         increment(&mut counts.by_language, language_label(fact.language));
@@ -70,6 +72,10 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
             &mut counts.by_value_precision,
             &format!("{:?}", fact.precision),
         );
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
+    }
+    for fact in db.allocation_tokens() {
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
     }
     for fact in db.alias_answers() {
         increment(&mut counts.by_alias_status, alias_status_label(fact.status));
@@ -163,6 +169,12 @@ fn budget_label(status: PointsToBudgetStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::aliases::facts::{
+        AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason,
+    };
+    use crate::analysis::aliases::store::AliasOutput;
+    use crate::analysis::ids::{AliasAnswerId, PlaceId};
+    use crate::analysis::types::store::TypeValueAliasOutput;
 
     #[test]
     fn empty_type_value_alias_debug_is_deterministic_and_path_free() {
@@ -175,5 +187,48 @@ mod tests {
         assert!(!text.contains("/Users/"));
         assert!(!text.contains("parser_id"));
         assert!(!text.contains("timestamp"));
+    }
+
+    #[test]
+    fn type_value_alias_debug_counts_alias_statuses_deterministically() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            aliases: AliasOutput {
+                answers: vec![
+                    alias(AliasStatus::NoAlias, "alias:no"),
+                    alias(AliasStatus::MayAlias, "alias:may"),
+                    alias(AliasStatus::MustAlias, "alias:must"),
+                    alias(AliasStatus::PartialAlias, "alias:partial"),
+                    alias(AliasStatus::Unknown, "alias:unknown"),
+                ],
+            },
+            ..TypeValueAliasOutput::default()
+        });
+
+        let debug = type_value_alias_debug_json_for_test(&db);
+        let counts = &debug["counts"]["by_alias_status"];
+
+        for status in [
+            "NoAlias",
+            "MayAlias",
+            "MustAlias",
+            "PartialAlias",
+            "Unknown",
+        ] {
+            assert_eq!(counts[status], 1);
+        }
+    }
+
+    fn alias(status: AliasStatus, stable_key: &str) -> AliasAnswerFact {
+        AliasAnswerFact {
+            id: AliasAnswerId(0),
+            left: AliasOperand::Place(PlaceId(1)),
+            right: AliasOperand::Place(PlaceId(2)),
+            status,
+            reason: AliasReason::ExtensionProvided,
+            evidence: vec![stable_key.to_string()],
+            precision: AliasPrecision::Heuristic,
+            stable_key: stable_key.to_string(),
+        }
     }
 }
