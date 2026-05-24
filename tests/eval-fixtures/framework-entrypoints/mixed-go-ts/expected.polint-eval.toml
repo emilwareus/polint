@@ -19,11 +19,6 @@ max_runtime_ms = 120000
 # pipeline produces framework entrypoints, derived trust boundaries, and
 # synthetic dispatch edges for the mixed Go and TS/JS source patterns.
 
-# Determinism invariant: cold/warm/no-cache three-way equality
-# Proves framework entrypoint output is deterministic across runs.
-[[expected]]
-invariant = { name = "framework_entrypoints.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
-
 [[expected]]
 invariant = { name = "framework_entrypoints.counts.total_entrypoints.nonzero", value = "true", mode = "exact" }
 

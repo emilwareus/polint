@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::sinks::{
-    ExtensionFactCandidate, ExtensionFactPrecision, has_required_type_value_alias_payload,
+    ExtensionFactCandidate, ExtensionFactPrecision, TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
+    TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY, TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY, TYPE_VALUE_ALIAS_TYPE_FAMILY,
+    TYPE_VALUE_ALIAS_VALUE_FAMILY, has_required_type_value_alias_payload,
     is_type_value_alias_fact_family,
 };
 use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact};
@@ -53,8 +56,39 @@ pub(crate) fn validate_extension_output(
     let mut rejected = Vec::new();
     let mut accepted_keys = BTreeSet::new();
 
+    let mut type_value_alias_refs = TypeValueAliasRefContext::from_db(db);
+    let mut relation_candidates = Vec::new();
+
     for candidate in sorted_candidates(candidates) {
-        let reason = rejection_reason(db, &rule_input, &candidate, &accepted_keys);
+        if is_type_value_alias_relation_family(&candidate.fact_family) {
+            relation_candidates.push(candidate);
+            continue;
+        }
+
+        let reason = rejection_reason(
+            db,
+            &rule_input,
+            &candidate,
+            &accepted_keys,
+            &type_value_alias_refs,
+        );
+        if let Some(reason) = reason {
+            rejected.push(RejectedExtensionFact::from_candidate(&candidate, reason));
+        } else {
+            accepted_keys.insert(candidate.stable_key.clone());
+            type_value_alias_refs.record_extension_base_fact(&candidate);
+            accepted.push(AcceptedExtensionFact::from_candidate(candidate));
+        }
+    }
+
+    for candidate in relation_candidates {
+        let reason = rejection_reason(
+            db,
+            &rule_input,
+            &candidate,
+            &accepted_keys,
+            &type_value_alias_refs,
+        );
         if let Some(reason) = reason {
             rejected.push(RejectedExtensionFact::from_candidate(&candidate, reason));
         } else {
@@ -98,6 +132,7 @@ fn rejection_reason(
     input: &ExtensionValidationInput,
     candidate: &ExtensionFactCandidate,
     accepted_keys: &BTreeSet<String>,
+    type_value_alias_refs: &TypeValueAliasRefContext,
 ) -> Option<ExtensionRejectionReason> {
     if !input.declared_outputs.contains(&candidate.fact_family) {
         return Some(ExtensionRejectionReason::UndeclaredOutput);
@@ -107,6 +142,11 @@ fn rejection_reason(
     }
     if is_type_value_alias_fact_family(&candidate.fact_family)
         && !has_required_type_value_alias_payload(candidate)
+    {
+        return Some(ExtensionRejectionReason::MalformedPayload);
+    }
+    if is_type_value_alias_fact_family(&candidate.fact_family)
+        && !type_value_alias_refs.resolve_candidate_refs(candidate)
     {
         return Some(ExtensionRejectionReason::MalformedPayload);
     }
@@ -153,6 +193,150 @@ fn rejection_reason(
     None
 }
 
+fn is_type_value_alias_relation_family(family: &str) -> bool {
+    matches!(
+        family,
+        TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY | TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
+    )
+}
+
+#[derive(Debug, Default)]
+struct TypeValueAliasRefContext {
+    places: BTreeSet<u64>,
+    extension_access_paths: BTreeSet<u64>,
+    extension_allocations: BTreeSet<u64>,
+    extension_values: BTreeSet<u64>,
+}
+
+impl TypeValueAliasRefContext {
+    fn from_db(db: &AnalysisDb) -> Self {
+        Self {
+            places: db.mir_places().iter().map(|place| place.id.0).collect(),
+            ..Self::default()
+        }
+    }
+
+    fn record_extension_base_fact(&mut self, candidate: &ExtensionFactCandidate) {
+        match candidate.fact_family.as_str() {
+            TYPE_VALUE_ALIAS_VALUE_FAMILY => {
+                self.extension_values
+                    .insert(self.extension_values.len() as u64);
+            }
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => {
+                self.extension_allocations
+                    .insert(self.extension_allocations.len() as u64);
+            }
+            TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY => {
+                self.extension_access_paths
+                    .insert(self.extension_access_paths.len() as u64);
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_candidate_refs(&self, candidate: &ExtensionFactCandidate) -> bool {
+        match candidate.fact_family.as_str() {
+            TYPE_VALUE_ALIAS_TYPE_FAMILY => {
+                payload_value(candidate, "subject=")
+                    .is_none_or(|value| self.resolve_place_ref_or_non_numeric(value, "place:"))
+                    && payload_value(candidate, "place=")
+                        .is_none_or(|value| self.resolve_place_ref(value))
+            }
+            TYPE_VALUE_ALIAS_VALUE_FAMILY => {
+                payload_value(candidate, "subject=")
+                    .is_none_or(|value| self.resolve_place_ref_or_non_numeric(value, "place:"))
+                    && payload_value(candidate, "kind=").is_none_or(|value| {
+                        self.resolve_place_ref_or_non_numeric(value, "place_ref:")
+                    })
+            }
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => payload_value(candidate, "source_place=")
+                .is_none_or(|value| self.resolve_place_ref(value)),
+            TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY => {
+                payload_value(candidate, "base=").is_some_and(|value| self.resolve_place_ref(value))
+            }
+            TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY => {
+                self.resolve_points_to_ref(payload_value(candidate, "dst="))
+                    && payload_value(candidate, "src=")
+                        .is_none_or(|value| self.resolve_points_to_ref(Some(value)))
+                    && payload_value(candidate, "object=")
+                        .is_none_or(|value| self.resolve_object_ref(Some(value)))
+            }
+            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => {
+                self.resolve_alias_operand_ref(payload_value(candidate, "left="))
+                    && self.resolve_alias_operand_ref(payload_value(candidate, "right="))
+            }
+            _ => true,
+        }
+    }
+
+    fn resolve_place_ref_or_non_numeric(&self, value: &str, prefix: &str) -> bool {
+        value
+            .strip_prefix(prefix)
+            .is_none_or(|id| self.resolve_id(id, &self.places))
+    }
+
+    fn resolve_place_ref(&self, value: &str) -> bool {
+        value
+            .strip_prefix("place:")
+            .is_some_and(|id| self.resolve_id(id, &self.places))
+    }
+
+    fn resolve_points_to_ref(&self, value: Option<&str>) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        if let Some(id) = value.strip_prefix("place:") {
+            self.resolve_id(id, &self.places)
+        } else if let Some(id) = value.strip_prefix("access_path:") {
+            self.resolve_id(id, &self.extension_access_paths)
+        } else if let Some(id) = value.strip_prefix("allocation:") {
+            self.resolve_id(id, &self.extension_allocations)
+        } else {
+            false
+        }
+    }
+
+    fn resolve_object_ref(&self, value: Option<&str>) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        if let Some(id) = value.strip_prefix("allocation:") {
+            self.resolve_id(id, &self.extension_allocations)
+        } else if let Some(id) = value.strip_prefix("value:") {
+            self.resolve_id(id, &self.extension_values)
+        } else if let Some(id) = value.strip_prefix("abstract_value:") {
+            self.resolve_id(id, &self.extension_values)
+        } else {
+            false
+        }
+    }
+
+    fn resolve_alias_operand_ref(&self, value: Option<&str>) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        if let Some(id) = value.strip_prefix("place:") {
+            self.resolve_id(id, &self.places)
+        } else if let Some(id) = value.strip_prefix("access_path:") {
+            self.resolve_id(id, &self.extension_access_paths)
+        } else {
+            false
+        }
+    }
+
+    fn resolve_id(&self, id: &str, accepted: &BTreeSet<u64>) -> bool {
+        id.parse::<u64>()
+            .is_ok_and(|parsed| accepted.contains(&parsed))
+    }
+}
+
+fn payload_value<'a>(candidate: &'a ExtensionFactCandidate, prefix: &str) -> Option<&'a str> {
+    candidate
+        .payload_labels
+        .iter()
+        .find_map(|label| label.strip_prefix(prefix))
+}
+
 fn bindings_exist(db: &AnalysisDb, bindings: &[String]) -> bool {
     if bindings.is_empty() {
         return false;
@@ -187,7 +371,10 @@ mod tests {
         ExtensionFactConfidence, ExtensionFactStatus, ExtensionSpanRef,
         TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
     };
-    use crate::core::{AnalysisDb, Language};
+    use crate::analysis::ids::PlaceId;
+    use crate::analysis::mir::body::MirOutput;
+    use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::core::{AnalysisDb, FileId, FunctionId, Language};
     use std::sync::Arc;
 
     fn db() -> AnalysisDb {
@@ -199,7 +386,30 @@ mod tests {
             Arc::from("export const app = 1;\n"),
             "hash".to_string(),
         );
+        db.replace_semantic_mir(MirOutput {
+            bodies: Vec::new(),
+            places: (0..3).map(test_place).collect(),
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("semantic MIR fixture should be valid");
         db
+    }
+
+    fn test_place(id: u64) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(id),
+            language: Language::TypeScript,
+            file: Some(FileId(0)),
+            function: Some(FunctionId(0)),
+            root: PlaceRoot::Local {
+                function: FunctionId(0),
+                name: format!("p{id}"),
+            },
+            projections: Vec::new(),
+            stable_key: format!("place:{id}"),
+            status: PlaceStatus::Resolved,
+        }
     }
 
     fn candidate(stable_key: &str) -> ExtensionFactCandidate {
@@ -460,21 +670,50 @@ mod tests {
 
     #[test]
     fn type_value_alias_fact_family_rejects_malformed_payload_before_merge() {
-        let mut c = candidate("alias:malformed");
-        c.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
-        c.payload_labels = vec!["left=place:1".to_string(), "right=place:2".to_string()];
-        let mut validation_input = input(vec![c]);
-        validation_input
-            .declared_outputs
-            .insert(TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string());
+        let cases = [
+            (
+                "alias:missing_status",
+                vec!["left=place:1", "right=place:2"],
+            ),
+            (
+                "alias:invalid_left",
+                vec!["left=garbage", "right=place:2", "status=no_alias"],
+            ),
+            (
+                "alias:invalid_right",
+                vec!["left=place:1", "right=garbage", "status=no_alias"],
+            ),
+            (
+                "alias:unresolved_left",
+                vec!["left=place:999", "right=place:2", "status=no_alias"],
+            ),
+            (
+                "alias:unresolved_right",
+                vec!["left=place:1", "right=place:999", "status=no_alias"],
+            ),
+        ];
 
-        let output = validate_extension_output(&db(), validation_input);
+        for (stable_key, payload_labels) in cases {
+            let mut c = candidate(stable_key);
+            c.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
+            c.payload_labels = payload_labels
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut validation_input = input(vec![c]);
+            validation_input
+                .declared_outputs
+                .insert(TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string());
 
-        assert_eq!(output.accepted.len(), 0);
-        assert_eq!(
-            output.rejected[0].reason,
-            ExtensionRejectionReason::MalformedPayload
-        );
+            let output = validate_extension_output(&db(), validation_input);
+
+            assert_eq!(output.accepted.len(), 0, "{stable_key}");
+            assert_eq!(
+                output.rejected[0].reason,
+                ExtensionRejectionReason::MalformedPayload,
+                "{stable_key}"
+            );
+        }
     }
 
     #[test]

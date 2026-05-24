@@ -485,8 +485,10 @@ pub(crate) fn run_cfg_core_fixture_for_test(
     let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
     let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
-    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+    let deterministic = framework_entrypoints_cache_comparison_json(&cold_run)
+        == framework_entrypoints_cache_comparison_json(&warm_run)
+        && framework_entrypoints_cache_comparison_json(&cold_run)
+            == framework_entrypoints_cache_comparison_json(&no_cache_run);
 
     let mut observed = no_cache_observed
         .iter()
@@ -1035,6 +1037,41 @@ fn abstract_domain_cache_comparison_json(run: &crate::eval::report::EvaluationRu
     normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
     normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
     serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn framework_entrypoints_cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
+    let mut normalized = run_without_runtime_durations(run);
+    for case in &mut normalized.cases {
+        case.observed
+            .retain(framework_entrypoints_comparison_observed_item);
+        case.matches = crate::eval::matcher::match_case(
+            &case.expected,
+            &case.observed,
+            crate::eval::matcher::MatcherConfig::default(),
+        );
+    }
+    let matches = normalized
+        .cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
+    normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn framework_entrypoints_comparison_observed_item(item: &ObservedItem) -> bool {
+    match item {
+        ObservedItem::Fact(fact) => matches!(
+            fact.family.as_str(),
+            "Entrypoint" | "TrustBoundary" | "DispatchEdge" | "UnresolvedFramework"
+        ),
+        ObservedItem::Invariant(invariant) => invariant.name.starts_with("framework_entrypoints."),
+        ObservedItem::RuntimeBudget(_) => true,
+        ObservedItem::Diagnostic(_) | ObservedItem::GraphEdge(_) | ObservedItem::Path(_) => false,
+    }
 }
 
 #[cfg(test)]

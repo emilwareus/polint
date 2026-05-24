@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::facts::{
     TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance, TypeShape, TypeStatus,
@@ -41,9 +41,10 @@ pub(crate) fn merge_extension_type_value_alias_facts(
     output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
 ) -> TypeValueAliasOutput {
-    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |_| true)
-        .output
-        .normalized()
+    let base_merge = merge_extension_type_value_alias_base_facts(output, extension_facts);
+    let relation_merge =
+        merge_extension_type_value_alias_relation_facts(base_merge.output, extension_facts);
+    relation_merge.output.normalized()
 }
 
 pub(crate) fn merge_extension_type_value_alias_base_facts(
@@ -80,6 +81,7 @@ fn merge_extension_type_value_alias_facts_with_filter(
 ) -> ExtensionTypeValueAliasMerge {
     let mut diagnostics = Vec::new();
     let mut stable_keys = native_stable_keys(&output);
+    let extension_refs = ExtensionRefMaps::from_output(&output, extension_facts);
     for fact in extension_facts {
         if !include_family(fact.fact_family.as_str()) {
             continue;
@@ -94,9 +96,11 @@ fn merge_extension_type_value_alias_facts_with_filter(
             TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => merge_allocation_fact(&mut output, fact),
             TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY => merge_access_path_fact(&mut output, fact),
             TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY => {
-                merge_points_to_constraint(&mut output, fact)
+                merge_points_to_constraint(&mut output, fact, &extension_refs)
             }
-            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => merge_alias_answer(&mut output, fact),
+            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => {
+                merge_alias_answer(&mut output, fact, &extension_refs)
+            }
             _ => false,
         };
         if inserted {
@@ -272,8 +276,9 @@ fn merge_access_path_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExte
 fn merge_points_to_constraint(
     output: &mut TypeValueAliasOutput,
     fact: &AcceptedExtensionFact,
+    extension_refs: &ExtensionRefMaps,
 ) -> bool {
-    let Some(kind) = extension_constraint_kind(fact) else {
+    let Some(kind) = extension_constraint_kind(fact, extension_refs) else {
         return false;
     };
     output.points_to.constraints.push(PointsToConstraintFact {
@@ -286,11 +291,19 @@ fn merge_points_to_constraint(
     true
 }
 
-fn merge_alias_answer(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
-    let Some(left) = label(fact, "left=").and_then(alias_operand) else {
+fn merge_alias_answer(
+    output: &mut TypeValueAliasOutput,
+    fact: &AcceptedExtensionFact,
+    extension_refs: &ExtensionRefMaps,
+) -> bool {
+    let Some(left) =
+        label(fact, "left=").and_then(|value| alias_operand(fact, value, extension_refs))
+    else {
         return false;
     };
-    let Some(right) = label(fact, "right=").and_then(alias_operand) else {
+    let Some(right) =
+        label(fact, "right=").and_then(|value| alias_operand(fact, value, extension_refs))
+    else {
         return false;
     };
     let Some(status) = label(fact, "status=").and_then(alias_status) else {
@@ -309,17 +322,152 @@ fn merge_alias_answer(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensio
     true
 }
 
-fn extension_constraint_kind(fact: &AcceptedExtensionFact) -> Option<PointsToConstraintKind> {
+fn extension_constraint_kind(
+    fact: &AcceptedExtensionFact,
+    extension_refs: &ExtensionRefMaps,
+) -> Option<PointsToConstraintKind> {
     match label(fact, "kind=")? {
         "address_of" => Some(PointsToConstraintKind::AddressOf {
-            dst: label(fact, "dst=").and_then(pt_var_id)?,
-            object: label(fact, "object=").and_then(object_token_id)?,
+            dst: label(fact, "dst=").and_then(|value| pt_var_id(fact, value, extension_refs))?,
+            object: label(fact, "object=")
+                .and_then(|value| object_token_id(fact, value, extension_refs))?,
         }),
         "copy" => Some(PointsToConstraintKind::Copy {
-            dst: label(fact, "dst=").and_then(pt_var_id)?,
-            src: label(fact, "src=").and_then(pt_var_id)?,
+            dst: label(fact, "dst=").and_then(|value| pt_var_id(fact, value, extension_refs))?,
+            src: label(fact, "src=").and_then(|value| pt_var_id(fact, value, extension_refs))?,
         }),
         _ => None,
+    }
+}
+
+#[derive(Default)]
+struct ExtensionRefMaps {
+    access_paths: BTreeMap<ExtensionLocalRef, AccessPathId>,
+    allocations: BTreeMap<ExtensionLocalRef, AllocationTokenId>,
+    values: BTreeMap<ExtensionLocalRef, ValueFactId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExtensionLocalRef {
+    extension_id: String,
+    provider_id: String,
+    local_id: u64,
+}
+
+impl ExtensionRefMaps {
+    fn from_output(
+        output: &TypeValueAliasOutput,
+        extension_facts: &[AcceptedExtensionFact],
+    ) -> Self {
+        let access_path_ids_by_stable_key = output
+            .access_paths
+            .access_paths
+            .iter()
+            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .collect::<BTreeMap<_, _>>();
+        let allocation_ids_by_stable_key = output
+            .values
+            .allocations
+            .iter()
+            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .collect::<BTreeMap<_, _>>();
+        let value_ids_by_stable_key = output
+            .values
+            .values
+            .iter()
+            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut maps = Self::default();
+        maps.record_family_refs(
+            extension_facts,
+            TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
+            &access_path_ids_by_stable_key,
+            |maps, key, id| {
+                maps.access_paths.insert(key, id);
+            },
+        );
+        maps.record_family_refs(
+            extension_facts,
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+            &allocation_ids_by_stable_key,
+            |maps, key, id| {
+                maps.allocations.insert(key, id);
+            },
+        );
+        maps.record_family_refs(
+            extension_facts,
+            TYPE_VALUE_ALIAS_VALUE_FAMILY,
+            &value_ids_by_stable_key,
+            |maps, key, id| {
+                maps.values.insert(key, id);
+            },
+        );
+        maps
+    }
+
+    fn record_family_refs<T: Copy>(
+        &mut self,
+        extension_facts: &[AcceptedExtensionFact],
+        family: &str,
+        ids_by_stable_key: &BTreeMap<&str, T>,
+        mut insert: impl FnMut(&mut Self, ExtensionLocalRef, T),
+    ) {
+        let mut local_counts = BTreeMap::<(&str, &str), u64>::new();
+        let mut facts = extension_facts
+            .iter()
+            .filter(|fact| fact.fact_family == family)
+            .collect::<Vec<_>>();
+        facts.sort_by(|left, right| {
+            (
+                left.extension_id.as_str(),
+                left.provider_id.as_str(),
+                left.stable_key.as_str(),
+            )
+                .cmp(&(
+                    right.extension_id.as_str(),
+                    right.provider_id.as_str(),
+                    right.stable_key.as_str(),
+                ))
+        });
+
+        for fact in facts {
+            let count = local_counts
+                .entry((fact.extension_id.as_str(), fact.provider_id.as_str()))
+                .or_default();
+            if let Some(id) = ids_by_stable_key.get(fact.stable_key.as_str()).copied() {
+                insert(
+                    self,
+                    ExtensionLocalRef {
+                        extension_id: fact.extension_id.clone(),
+                        provider_id: fact.provider_id.clone(),
+                        local_id: *count,
+                    },
+                    id,
+                );
+            }
+            *count += 1;
+        }
+    }
+
+    fn access_path(&self, fact: &AcceptedExtensionFact, local_id: u64) -> Option<AccessPathId> {
+        self.access_paths.get(&local_ref(fact, local_id)).copied()
+    }
+
+    fn allocation(&self, fact: &AcceptedExtensionFact, local_id: u64) -> Option<AllocationTokenId> {
+        self.allocations.get(&local_ref(fact, local_id)).copied()
+    }
+
+    fn value(&self, fact: &AcceptedExtensionFact, local_id: u64) -> Option<ValueFactId> {
+        self.values.get(&local_ref(fact, local_id)).copied()
+    }
+}
+
+fn local_ref(fact: &AcceptedExtensionFact, local_id: u64) -> ExtensionLocalRef {
+    ExtensionLocalRef {
+        extension_id: fact.extension_id.clone(),
+        provider_id: fact.provider_id.clone(),
+        local_id,
     }
 }
 
@@ -485,7 +633,11 @@ fn access_path_projections(fact: &AcceptedExtensionFact) -> Vec<AccessPathProjec
     }
 }
 
-fn alias_operand(value: &str) -> Option<AliasOperand> {
+fn alias_operand(
+    fact: &AcceptedExtensionFact,
+    value: &str,
+    extension_refs: &ExtensionRefMaps,
+) -> Option<AliasOperand> {
     if let Some(place) = value.strip_prefix("place:") {
         place
             .parse()
@@ -494,7 +646,8 @@ fn alias_operand(value: &str) -> Option<AliasOperand> {
     } else if let Some(path) = value.strip_prefix("access_path:") {
         path.parse()
             .ok()
-            .map(|id| AliasOperand::AccessPath(crate::analysis::ids::AccessPathId(id)))
+            .and_then(|id| extension_refs.access_path(fact, id))
+            .map(AliasOperand::AccessPath)
     } else {
         None
     }
@@ -520,7 +673,11 @@ fn place_id(value: &str) -> Option<PlaceId> {
         .map(PlaceId)
 }
 
-fn pt_var_id(value: &str) -> Option<PtVarId> {
+fn pt_var_id(
+    fact: &AcceptedExtensionFact,
+    value: &str,
+    extension_refs: &ExtensionRefMaps,
+) -> Option<PtVarId> {
     if let Some(place) = value.strip_prefix("place:") {
         place
             .parse()
@@ -530,37 +687,45 @@ fn pt_var_id(value: &str) -> Option<PtVarId> {
     } else if let Some(path) = value.strip_prefix("access_path:") {
         path.parse()
             .ok()
-            .map(AccessPathId)
+            .and_then(|id| extension_refs.access_path(fact, id))
             .map(crate::analysis::points_to::vars::access_path_var)
     } else if let Some(allocation) = value.strip_prefix("allocation:") {
         allocation
             .parse()
             .ok()
-            .map(AllocationTokenId)
+            .and_then(|id| extension_refs.allocation(fact, id))
             .map(crate::analysis::points_to::vars::allocation_var)
     } else {
         None
     }
 }
 
-fn object_token_id(value: &str) -> Option<ObjectTokenId> {
+fn object_token_id(
+    fact: &AcceptedExtensionFact,
+    value: &str,
+    extension_refs: &ExtensionRefMaps,
+) -> Option<ObjectTokenId> {
     if let Some(allocation) = value.strip_prefix("allocation:") {
         allocation
             .parse()
             .ok()
-            .map(AllocationTokenId)
+            .and_then(|id| extension_refs.allocation(fact, id))
             .map(crate::analysis::points_to::vars::allocation_object)
     } else if let Some(value_fact) = value.strip_prefix("value:") {
         value_fact
             .parse()
             .ok()
-            .map(ValueFactId)
+            .and_then(|id| extension_refs.value(fact, id))
             .map(crate::analysis::points_to::vars::value_fact_object)
     } else if let Some(abstract_value) = value.strip_prefix("abstract_value:") {
         abstract_value
             .parse()
             .ok()
-            .map(AbstractValueId)
+            .and_then(|id| {
+                extension_refs
+                    .value(fact, id)
+                    .map(|value| AbstractValueId(value.0))
+            })
             .map(crate::analysis::points_to::vars::abstract_value_object)
     } else {
         None
@@ -770,6 +935,64 @@ mod tests {
 
         assert_eq!(merged.aliases.answers.len(), 1);
         assert_eq!(merged.aliases.answers[0].status, AliasStatus::Unknown);
+    }
+
+    #[test]
+    fn extension_relation_refs_resolve_to_extension_local_base_facts() {
+        let output = TypeValueAliasOutput {
+            values: crate::analysis::values::store::ValueOutput {
+                allocations: vec![AllocationTokenFact {
+                    id: AllocationTokenId(0),
+                    kind: AllocationKind::ObjectLiteral,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    source_place: None,
+                    source_operation: None,
+                    span: None,
+                    provenance: ValueProvenance::Native,
+                    stable_key: "allocation:a-native".to_string(),
+                }],
+                ..Default::default()
+            },
+            ..TypeValueAliasOutput::default()
+        };
+
+        let merged = merge_extension_type_value_alias_facts(
+            output,
+            &[
+                accepted(
+                    TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+                    "allocation:z-extension",
+                    &["kind=object"],
+                ),
+                accepted(
+                    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+                    "pt:extension",
+                    &["kind=address_of", "dst=allocation:0", "object=allocation:0"],
+                ),
+            ],
+        );
+        let extension_allocation = merged
+            .values
+            .allocations
+            .iter()
+            .find(|allocation| allocation.stable_key == "allocation:z-extension")
+            .expect("extension allocation should be present")
+            .id;
+
+        assert!(merged.points_to.constraints.iter().any(|constraint| {
+            matches!(
+                constraint.kind,
+                PointsToConstraintKind::AddressOf { dst, object }
+                    if dst == crate::analysis::points_to::vars::allocation_var(extension_allocation)
+                        && object
+                            == crate::analysis::points_to::vars::allocation_object(
+                                extension_allocation
+                            )
+            )
+        }));
     }
 
     fn accepted_alias(stable_key: &str, status: &str) -> AcceptedExtensionFact {
