@@ -1,4 +1,6 @@
 pub(crate) mod cache_key;
+#[cfg(test)]
+pub(crate) mod debug;
 pub(crate) mod dispatch;
 pub(crate) mod extract;
 pub(crate) mod facts;
