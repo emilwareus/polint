@@ -17,6 +17,7 @@ pub(crate) enum ExtensionRejectionReason {
     SyntheticIdMissingEvidence,
     DuplicateStableKey,
     NativeConflict,
+    FrameworkPrecisionCeiling,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +75,19 @@ fn sorted_candidates(mut candidates: Vec<ExtensionFactCandidate>) -> Vec<Extensi
     candidates
 }
 
+/// Framework fact families that are subject to framework-specific validation rules.
+/// Extension-emitted facts with these families cannot claim Exact precision per D-18.
+const FRAMEWORK_FACT_FAMILIES: &[&str] = &[
+    "entrypoint",
+    "trust_boundary",
+    "dispatch_edge",
+    "unresolved_framework",
+];
+
+fn is_framework_fact_family(family: &str) -> bool {
+    FRAMEWORK_FACT_FAMILIES.contains(&family)
+}
+
 fn rejection_reason(
     db: &AnalysisDb,
     input: &ExtensionValidationInput,
@@ -85,6 +99,13 @@ fn rejection_reason(
     }
     if candidate.precision.is_none() {
         return Some(ExtensionRejectionReason::MissingPrecision);
+    }
+    // Framework-specific precision ceiling: Exact is unconditionally rejected for
+    // framework fact families per D-18, regardless of validation evidence.
+    if is_framework_fact_family(&candidate.fact_family)
+        && candidate.precision == Some(ExtensionFactPrecision::Exact)
+    {
+        return Some(ExtensionRejectionReason::FrameworkPrecisionCeiling);
     }
     if candidate.stable_key.starts_with("synthetic:") && candidate.evidence.is_empty() {
         return Some(ExtensionRejectionReason::SyntheticIdMissingEvidence);
@@ -272,5 +293,121 @@ mod tests {
             vec!["route:a", "route:z"]
         );
         assert!(output.rejected.is_empty());
+    }
+
+    #[test]
+    fn rejects_exact_precision_for_entrypoint_framework_family() {
+        let mut c = candidate("ep:exact");
+        c.fact_family = "entrypoint".to_string();
+        c.precision = Some(ExtensionFactPrecision::Exact);
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert("entrypoint".to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 0);
+        assert_eq!(output.rejected.len(), 1);
+        assert_eq!(
+            output.rejected[0].reason,
+            ExtensionRejectionReason::FrameworkPrecisionCeiling
+        );
+    }
+
+    #[test]
+    fn rejects_exact_precision_for_all_framework_fact_families() {
+        for family in &[
+            "entrypoint",
+            "trust_boundary",
+            "dispatch_edge",
+            "unresolved_framework",
+        ] {
+            let mut c = candidate(&format!("{family}:exact"));
+            c.fact_family = family.to_string();
+            c.precision = Some(ExtensionFactPrecision::Exact);
+            let mut validation_input = input(vec![c]);
+            validation_input
+                .declared_outputs
+                .insert(family.to_string());
+
+            let output = validate_extension_output(&db(), validation_input);
+
+            assert_eq!(
+                output.rejected[0].reason,
+                ExtensionRejectionReason::FrameworkPrecisionCeiling,
+                "expected FrameworkPrecisionCeiling for family {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn extension_fact_conflicting_with_native_entrypoint_stable_key_is_rejected() {
+        let mut c = candidate("ep:native-route");
+        c.fact_family = "entrypoint".to_string();
+        c.precision = Some(ExtensionFactPrecision::Heuristic);
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert("entrypoint".to_string());
+        validation_input
+            .native_stable_keys
+            .insert("ep:native-route".to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 0);
+        assert_eq!(output.rejected.len(), 1);
+        assert_eq!(
+            output.rejected[0].reason,
+            ExtensionRejectionReason::NativeConflict
+        );
+    }
+
+    #[test]
+    fn non_conflicting_extension_entrypoint_is_accepted_with_extension_precision() {
+        let mut c = candidate("ep:extension-only");
+        c.fact_family = "entrypoint".to_string();
+        c.precision = Some(ExtensionFactPrecision::Heuristic);
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert("entrypoint".to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 1);
+        assert_eq!(output.rejected.len(), 0);
+        assert_eq!(
+            output.accepted[0].precision,
+            ExtensionFactPrecision::Heuristic
+        );
+        assert_eq!(output.accepted[0].fact_family, "entrypoint");
+    }
+
+    #[test]
+    fn non_exact_framework_fact_precision_is_accepted() {
+        for precision in &[
+            ExtensionFactPrecision::SetupAware,
+            ExtensionFactPrecision::Heuristic,
+            ExtensionFactPrecision::GeneratedUnvalidated,
+        ] {
+            let mut c = candidate(&format!("ep:{precision:?}"));
+            c.fact_family = "entrypoint".to_string();
+            c.precision = Some(*precision);
+            let mut validation_input = input(vec![c]);
+            validation_input
+                .declared_outputs
+                .insert("entrypoint".to_string());
+
+            let output = validate_extension_output(&db(), validation_input);
+
+            assert_eq!(
+                output.accepted.len(),
+                1,
+                "expected acceptance for precision {precision:?}"
+            );
+            assert_eq!(output.accepted[0].precision, *precision);
+        }
     }
 }
