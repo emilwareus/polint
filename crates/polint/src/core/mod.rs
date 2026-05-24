@@ -13,6 +13,11 @@ use crate::analysis::domains::facts::{
     DomainEventFact, DomainObservationFact, DomainPrecision, DomainStatus,
 };
 use crate::analysis::domains::store::{DomainOutput, DomainStore};
+use crate::analysis::entrypoints::facts::{
+    EntrypointFact, EntrypointPrecision, EntrypointStatus, FrameworkDispatchEdgeFact,
+    TrustBoundaryFact, UnresolvedFrameworkFact,
+};
+use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
 use crate::analysis::extensions::store::{
@@ -65,6 +70,7 @@ pub(crate) const CFG_PROVIDER_ID: &str = "polint.cfg";
 pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
 pub(crate) const POLINT_ABSTRACT_DOMAINS_PROVIDER_ID: &str = "polint.abstract_domains";
 pub(crate) const POLINT_DIRECT_SUMMARIES_PROVIDER_ID: &str = "polint.direct_summaries";
+pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
@@ -660,6 +666,11 @@ pub struct AnalysisDb {
         reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
     )]
     rejected_extension_facts: Vec<RejectedExtensionFact>,
+    entrypoint_facts: Vec<EntrypointFact>,
+    trust_boundary_facts: Vec<TrustBoundaryFact>,
+    dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
+    unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
+    entrypoint_store: Option<EntrypointStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -1120,6 +1131,36 @@ impl AnalysisDb {
         &self.rejected_extension_facts
     }
 
+    pub(crate) fn replace_entrypoint_facts(
+        &mut self,
+        output: EntrypointOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = EntrypointStore::from_output(output)?;
+        self.entrypoint_facts = store.entrypoints().to_vec();
+        self.trust_boundary_facts = store.trust_boundaries().to_vec();
+        self.dispatch_edge_facts = store.dispatch_edges().to_vec();
+        self.unresolved_framework_facts = store.unresolved().to_vec();
+        self.entrypoint_store = Some(store);
+        self.refresh_entrypoint_metadata();
+        Ok(())
+    }
+
+    pub(crate) fn entrypoint_facts(&self) -> &[EntrypointFact] {
+        &self.entrypoint_facts
+    }
+
+    pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {
+        &self.trust_boundary_facts
+    }
+
+    pub(crate) fn dispatch_edge_facts(&self) -> &[FrameworkDispatchEdgeFact] {
+        &self.dispatch_edge_facts
+    }
+
+    pub(crate) fn unresolved_framework_facts(&self) -> &[UnresolvedFrameworkFact] {
+        &self.unresolved_framework_facts
+    }
+
     #[allow(dead_code)]
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
         self.call_store
@@ -1283,6 +1324,133 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
         }
+    }
+
+    fn refresh_entrypoint_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Entrypoint);
+        self.fact_meta.remove_family(FactFamily::TrustBoundary);
+        self.fact_meta.remove_family(FactFamily::DispatchEdge);
+        self.fact_meta
+            .remove_family(FactFamily::UnresolvedFramework);
+
+        let entrypoint_metadata = self
+            .entrypoint_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.entrypoint_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in entrypoint_metadata {
+            self.record_fact_meta(FactFamily::Entrypoint, run_id, metadata);
+        }
+
+        let trust_boundary_metadata = self
+            .trust_boundary_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.trust_boundary_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in trust_boundary_metadata {
+            self.record_fact_meta(FactFamily::TrustBoundary, run_id, metadata);
+        }
+
+        let dispatch_edge_metadata = self
+            .dispatch_edge_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.dispatch_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in dispatch_edge_metadata {
+            self.record_fact_meta(FactFamily::DispatchEdge, run_id, metadata);
+        }
+
+        let unresolved_metadata = self
+            .unresolved_framework_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.unresolved_framework_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unresolved_metadata {
+            self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
+        }
+    }
+
+    fn entrypoint_fact_metadata(&self, fact: &EntrypointFact) -> FactMeta {
+        let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Entrypoint,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                ("framework", fact.framework_id.clone()),
+                ("file_key", self.source_file_key(fact.registration_file)),
+                (
+                    "function_key",
+                    self.function_key(
+                        fact.target_function,
+                        &fact.framework_id,
+                        &fact.registration_span,
+                    ),
+                ),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn trust_boundary_metadata(&self, fact: &TrustBoundaryFact) -> FactMeta {
+        let (precision, confidence) =
+            entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::TrustBoundary,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("source_kind", format!("{:?}", fact.source_kind)),
+                ("entrypoint_key", fact.entrypoint_stable_key.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
+    }
+
+    fn dispatch_edge_metadata(&self, fact: &FrameworkDispatchEdgeFact) -> FactMeta {
+        let (precision, confidence) =
+            entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DispatchEdge,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("edge_kind", format!("{:?}", fact.edge_kind)),
+                ("from_source", fact.from_source.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
+    }
+
+    fn unresolved_framework_metadata(&self, fact: &UnresolvedFrameworkFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::UnresolvedFramework,
+            ENTRYPOINTS_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("reason", format!("{:?}", fact.reason)),
+                ("framework", fact.framework_id.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
     }
 
     fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
@@ -4085,6 +4253,43 @@ fn domain_status_metadata(
         | DomainStatus::Unsupported
         | DomainStatus::SetupMissing
         | DomainStatus::BudgetExceeded => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn entrypoint_precision_metadata(
+    status: EntrypointStatus,
+    precision: EntrypointPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        EntrypointStatus::Resolved => match precision {
+            EntrypointPrecision::ResolvedStatic | EntrypointPrecision::SetupAware => {
+                FactPrecision::SetupAware
+            }
+            EntrypointPrecision::Heuristic | EntrypointPrecision::Conservative => {
+                FactPrecision::Heuristic
+            }
+            EntrypointPrecision::Unknown => FactPrecision::Unresolved,
+        },
+        EntrypointStatus::Partial => FactPrecision::Ambiguous,
+        EntrypointStatus::Unresolved => FactPrecision::Unresolved,
+        EntrypointStatus::SetupMissing => FactPrecision::SetupMissing,
+        EntrypointStatus::Unsupported => FactPrecision::Unsupported,
+    };
+    let confidence = match status {
+        EntrypointStatus::Resolved => match precision {
+            EntrypointPrecision::ResolvedStatic | EntrypointPrecision::SetupAware => {
+                FactConfidence::High
+            }
+            EntrypointPrecision::Heuristic | EntrypointPrecision::Conservative => {
+                FactConfidence::Medium
+            }
+            EntrypointPrecision::Unknown => FactConfidence::Low,
+        },
+        EntrypointStatus::Partial => FactConfidence::Medium,
+        EntrypointStatus::Unresolved
+        | EntrypointStatus::SetupMissing
+        | EntrypointStatus::Unsupported => FactConfidence::Low,
     };
     (fact_precision, confidence)
 }

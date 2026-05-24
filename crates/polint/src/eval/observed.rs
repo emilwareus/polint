@@ -474,6 +474,9 @@ fn extension_rejection_reason_label(
         crate::analysis::extensions::validate::ExtensionRejectionReason::NativeConflict => {
             "native_conflict"
         }
+        crate::analysis::extensions::validate::ExtensionRejectionReason::FrameworkPrecisionCeiling => {
+            "framework_precision_ceiling"
+        }
     }
 }
 
@@ -621,6 +624,12 @@ pub(crate) fn abstract_domain_facts_for_test(debug_json: &Value) -> Vec<Observed
 #[cfg(test)]
 pub(crate) fn direct_summary_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     direct_summary_facts(debug_json)
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn entrypoint_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    entrypoint_facts(debug_json)
 }
 
 #[cfg(test)]
@@ -943,6 +952,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
     facts.extend(direct_summary_facts(debug_json));
+    facts.extend(entrypoint_facts(debug_json));
     facts.extend(scc_and_demand_query_invariants(debug_json));
     facts
 }
@@ -1616,6 +1626,218 @@ fn direct_summary_domain_count_invariants(
 }
 
 #[cfg(test)]
+fn entrypoint_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(entrypoints) = debug_json.get("entrypoints").and_then(Value::as_object) else {
+        return facts;
+    };
+
+    // Entrypoint detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("entrypoints").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "Entrypoint") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+            if let Some(invariant) = entrypoint_detail_invariant(row) {
+                facts.push(invariant);
+            }
+        }
+    }
+
+    // Trust boundary detail rows -> ObservedFact
+    if let Some(rows) = entrypoints
+        .get("trust_boundaries")
+        .and_then(Value::as_array)
+    {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "TrustBoundary") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Dispatch edge detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("dispatch_edges").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "DispatchEdge") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Unresolved detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("unresolved").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "UnresolvedFramework") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Count invariants from the counts section
+    facts.extend(entrypoint_count_invariants(entrypoints));
+    facts
+}
+
+#[cfg(test)]
+fn entrypoint_fact(row: &Value, family: &str) -> Option<ObservedFact> {
+    let stable_key = row.get("stable_key")?.as_str()?.to_string();
+    let precision = row.get("precision").and_then(Value::as_str).map(|p| {
+        match p {
+            "ResolvedStatic" => "resolved_static",
+            "SetupAware" => "setup_aware",
+            "Heuristic" => "heuristic",
+            "Conservative" => "conservative",
+            "Unknown" => "unknown",
+            other => other,
+        }
+        .to_string()
+    });
+    let status = row
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(|s| match s {
+            "Resolved" => Some(ObservedStatus::Resolved),
+            "Partial" => Some(ObservedStatus::Partial),
+            "Unresolved" => Some(ObservedStatus::Unresolved),
+            "SetupMissing" => Some(ObservedStatus::SetupMissing),
+            "Unsupported" => Some(ObservedStatus::Unsupported),
+            _ => None,
+        });
+
+    // Build compact payload fragment
+    let mut payload_parts = Vec::new();
+    if let Some(framework_id) = row.get("framework_id").and_then(Value::as_str) {
+        payload_parts.push(format!("framework={framework_id}"));
+    }
+    if let Some(function_name) = row.get("function_name").and_then(Value::as_str) {
+        payload_parts.push(format!("function={function_name}"));
+    }
+    if let Some(kind) = row.get("kind").and_then(Value::as_str) {
+        payload_parts.push(format!("kind={kind}"));
+    }
+    if let Some(source_kind) = row.get("source_kind").and_then(Value::as_str) {
+        payload_parts.push(format!("source_kind={source_kind}"));
+    }
+    if let Some(edge_kind) = row.get("edge_kind").and_then(Value::as_str) {
+        payload_parts.push(format!("edge_kind={edge_kind}"));
+    }
+    if let Some(reason) = row.get("reason").and_then(Value::as_str) {
+        payload_parts.push(format!("reason={reason}"));
+    }
+    if let Some(trigger) = row.get("trigger_summary").and_then(Value::as_str)
+        && trigger != "none"
+    {
+        payload_parts.push(format!("trigger={trigger}"));
+    }
+    let payload = if payload_parts.is_empty() {
+        None
+    } else {
+        Some(payload_parts.join(";"))
+    };
+
+    Some(ObservedFact {
+        family: family.to_string(),
+        stable_key,
+        mode: AssertionMode::Partial,
+        producer_id: Some("polint.entrypoints".to_string()),
+        provenance: Some("kernel.metadata_debug_json.entrypoints".to_string()),
+        precision,
+        status: Some(status.unwrap_or(ObservedStatus::Present)),
+        payload,
+    })
+}
+
+#[cfg(test)]
+fn entrypoint_detail_invariant(row: &Value) -> Option<ObservedItem> {
+    let framework_id = row.get("framework_id")?.as_str()?;
+    let kind = row.get("kind")?.as_str()?;
+    let function_name = row.get("function_name")?.as_str()?;
+    let trigger = row
+        .get("trigger_summary")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+
+    Some(observed_invariant(
+        format!(
+            "framework_entrypoints.entrypoint.{}.{}.{}",
+            invariant_label_part(framework_id),
+            invariant_label_part(kind),
+            invariant_label_part(function_name)
+        ),
+        trigger,
+        "kernel.metadata_debug_json.entrypoints.entrypoints",
+    ))
+}
+
+#[cfg(test)]
+fn invariant_label_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch == '.' || ch == '_' || ch == '-' || ch.is_ascii_alphanumeric() {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn entrypoint_count_invariants(entrypoints: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(counts) = entrypoints.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut invariants = Vec::new();
+
+    // Total counts
+    for field in [
+        "total_entrypoints",
+        "total_trust_boundaries",
+        "total_dispatch_edges",
+        "total_unresolved",
+    ] {
+        if let Some(value) = counts.get(field).and_then(Value::as_u64)
+            && value > 0
+        {
+            invariants.push(observed_invariant(
+                format!("framework_entrypoints.counts.{field}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.entrypoints.counts",
+            ));
+        }
+    }
+
+    // Breakdown counts
+    for group in [
+        "by_language",
+        "by_framework_id",
+        "by_kind",
+        "by_status",
+        "by_precision",
+        "trust_boundary_by_source_kind",
+        "dispatch_edge_by_edge_kind",
+        "unresolved_by_reason",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("framework_entrypoints.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.entrypoints.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
 fn abstract_domain_status_from_row(row: &Value) -> ObservedStatus {
     row.get("status")
         .and_then(Value::as_str)
@@ -2202,8 +2424,9 @@ path = "repo"
                 ("provider_order.8", "polint.calls"),
                 ("provider_order.9", "polint.abstract_domains"),
                 ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.extensions"),
-                ("provider_order.12", "polint.metrics"),
+                ("provider_order.11", "polint.entrypoints"),
+                ("provider_order.12", "polint.extensions"),
+                ("provider_order.13", "polint.metrics"),
             ]
         );
     }

@@ -1,0 +1,110 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "framework-entrypoints-core"
+area = "framework-entrypoints"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+# Framework entrypoint fixture with mixed Go and TS/JS sources.
+#
+# Go sources exercise: net/http HandleFunc, chi router (Get/Post), chi middleware (Use),
+# cobra CLI command, Go test and benchmark naming conventions.
+#
+# TS/JS sources exercise: Express (app.get/post/use), MCP SDK (server.tool/resource/prompt).
+#
+# Expected observations assert that the full MIR -> call sites -> recognizer
+# pipeline produces framework entrypoints, derived trust boundaries, and
+# synthetic dispatch edges for the mixed Go and TS/JS source patterns.
+
+# Determinism invariant: cold/warm/no-cache three-way equality
+# Proves framework entrypoint output is deterministic across runs.
+[[expected]]
+invariant = { name = "framework_entrypoints.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.total_entrypoints.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.total_trust_boundaries.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.total_dispatch_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_language.Go.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_language.TypeScript.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_framework_id.go.net_http.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_framework_id.go.chi.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_framework_id.ts.express.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_framework_id.ts.mcp_sdk.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_kind.HttpRoute.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_kind.HttpMiddleware.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_kind.McpTool.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_kind.McpResource.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.by_kind.McpPrompt.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.PathParam.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.QueryString.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.RequestBody.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.RequestHeader.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.McpArguments.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.trust_boundary_by_source_kind.McpResourceUri.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.dispatch_edge_by_edge_kind.RouteDispatch.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.dispatch_edge_by_edge_kind.MiddlewareChain.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.counts.dispatch_edge_by_edge_kind.McpDispatch.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.entrypoint.go.net_http.HttpRoute.healthHandler", value = "path=/health", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.entrypoint.go.chi.HttpRoute.getUsersHandler", value = "method=GET;path=/api/users/{id}", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.entrypoint.ts.express.HttpRoute.getItems", value = "method=GET;path=/api/items/:id", mode = "exact" }
+
+[[expected]]
+invariant = { name = "framework_entrypoints.entrypoint.ts.mcp_sdk.McpTool.calculateHandler", value = "tool_name=calculate", mode = "exact" }
+
+# Runtime budget
+[[expected]]
+runtime_budget = { name = "framework-entrypoints-core", max_runtime_ms = 120000, mode = "exact" }

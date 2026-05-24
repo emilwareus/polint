@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-23T06:38:17.433Z"
-last_activity: 2026-05-23
+last_updated: "2026-05-24T07:17:38Z"
+last_activity: 2026-05-24
 progress:
   total_phases: 22
-  completed_phases: 15
-  total_plans: 85
-  completed_plans: 85
-  percent: 68
+  completed_phases: 16
+  total_plans: 93
+  completed_plans: 93
+  percent: 73
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 34 — rust-extension-provider-sink
+**Current focus:** Phase 36 — p0-type-value-place-alias-substrate
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 34 (rust-extension-provider-sink) — EXECUTING
-Plan: 6 of 6
-Last activity: 2026-05-23
+Status: Ready to discuss/plan
+Phase: 36 (p0-type-value-place-alias-substrate) — NOT STARTED
+Plan: 0 of unknown
+Last activity: 2026-05-24
 
 ## Phase Progress
 
@@ -63,9 +63,9 @@ Last activity: 2026-05-23
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
 | 31 | Complete | 5/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, abstract-domain eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-01 |
 | 32 | Complete | 7/7 plans complete; summary kernel contracts, store, builder, provider, cache identity, validation, debug, eval fixtures, and public-boundary proof done; requirement SAE-INT-02 |
-| 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
-| 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
-| 35 | Pending | Framework entrypoints and trust boundaries; requirement SAE-INT-05 |
+| 33 | Complete | 7/7 plans complete; demand queries, summary SCC cache, extension-aware quarantine, eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-03 |
+| 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
+| 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
 | 36 | Pending | P0 type/value/place/alias substrate; requirement SAE-PREC-01 |
 | 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
 | 38 | Pending | Local plus summary-projected data flow; requirement SAE-PREC-03 |
@@ -287,6 +287,22 @@ Last activity: 2026-05-23
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary eval payload uses semicolon-delimited compact fragments: domain;status;precision;provenance;payload_digest_prefix.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary determinism comparison uses cold/warm/no-cache three-way equality matching the established direct-calls and abstract-domains patterns.
 - [Phase 32-summary-kernel-and-direct-summaries]: Direct-summary public-boundary proof uses 21 specific internal markers (provider IDs, domain names, type names, fact families) rather than generic substring markers that would match test naming.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: EntrypointOutput normalized() sorts by stable_key then reassigns sequential IDs from 0, matching the CallOutput pattern.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: EntrypointStore validates referential integrity: trust boundaries and dispatch edges must reference existing entrypoint stable keys via from_output.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Four new FactFamily variants placed after ExtensionFact: Entrypoint, TrustBoundary, DispatchEdge, UnresolvedFramework.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: TriggerMetadata is a struct with optional fields (method, path, tool_name, event_name, test_name) rather than an enum.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: polint.entrypoints runs after polint.direct_summaries and SCC closure, before polint.extensions in the kernel run sequence.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Direct summaries provider output uses provider-computed digest via provider_output_for_with_optional_digest, not metadata fallback.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Upstream dependency digests are cloned before direct_summaries consumes them so entrypoints can reuse them.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: TS/JS test entrypoints use SetupAware precision (not ResolvedStatic) because they depend on test runner configuration being present.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: MCP SDK detection uses @modelcontextprotocol/ prefix matching to cover all possible subpath imports.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Trust boundaries are per-entrypoint per-source-kind facts derived from EntrypointKind rules per D-19/D-20/D-21.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: HTTP routes produce PathParam (if path has /:id or /{id}), QueryString, RequestBody (POST/PUT/PATCH/DELETE), RequestHeader boundaries.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Dispatch edges map EntrypointKind to DispatchEdgeKind following D-04 specification.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Unresolved merge uses BTreeMap by stable key for dedup (first occurrence wins) and deterministic sort.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Entrypoint fact accessors promoted from #[cfg(test)] to production visibility for validation pipeline access.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Extension framework facts use FrameworkPrecisionCeiling rejection reason separate from MissingProvenance for Exact precision violations.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Conflicting entrypoint registrations detected by same target_function with different framework_ids produce warning diagnostics.
 
 ## Execution Metrics
 
@@ -352,17 +368,27 @@ Last activity: 2026-05-23
 | 32-summary-kernel-and-direct-summaries | 05 | 9 min | 2 | 4 |
 | 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
 | 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
+| 35-framework-entrypoints-and-trust-boundaries | 01 | 5 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 02 | 7 min | 2 | 8 |
+| 35-framework-entrypoints-and-trust-boundaries | 03 | 5 min | 1 | 2 |
+| 35-framework-entrypoints-and-trust-boundaries | 04 | 4 min | 1 | 2 |
+| 35-framework-entrypoints-and-trust-boundaries | 05 | 6 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 06 | 8 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 07 | recorded | 2 | recorded |
+| 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
 
 ## Session
 
-- Last session: 2026-05-21
-- Last activity: 2026-05-21 - Completed 32-07-PLAN.md (Phase 32 complete).
-- Stopped at: Completed Phase 32; ready for Phase 33.
+- Last session: 2026-05-24
+- Last activity: 2026-05-24 - Completed Phase 35 plan 8 of 8 and public no-leak proof.
+- Stopped at: Phase 35 complete; ready to start Phase 36.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260524 | Fix PR 41 Ubuntu clippy failures | 2026-05-24 | implemented | [260524-fix-pr41-ubuntu-clippy](./quick/260524-fix-pr41-ubuntu-clippy/) |
+| 260524 | Fix deep review entrypoint issues | 2026-05-24 | implemented | [260524-fix-deep-review-entrypoint-issues](./quick/260524-fix-deep-review-entrypoint-issues/) |
 | 260522-n3q | Fix Phase 33 review findings with TDD tests | 2026-05-22 | implemented | [260522-n3q-fix-phase-33-review-findings-with-tdd-te](./quick/260522-n3q-fix-phase-33-review-findings-with-tdd-te/) |
 | 260521-nem | Add realistic structured coverage for direct calls and abstract domains | 2026-05-21 | implemented | [260521-nem-add-realistic-structured-coverage-for-di](./quick/260521-nem-add-realistic-structured-coverage-for-di/) |
 | 260521-m9k | Fix critical PR review findings for direct calls and abstract domains | 2026-05-21 | implemented | [260521-m9k-fix-critical-pr-review-findings-for-dire](./quick/260521-m9k-fix-critical-pr-review-findings-for-dire/) |
@@ -387,4 +413,4 @@ Last activity: 2026-05-23
 
 ## Next Action
 
-Phase 32 is complete. Phase 33 (demand queries and summary SCC cache) is next.
+Start Phase 36 (p0-type-value-place-alias-substrate) when ready.

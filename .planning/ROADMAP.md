@@ -35,9 +35,9 @@ The milestone should preserve public API discipline. New internals stay private 
 | 30 | 8/8 | Complete    | 2026-05-21 |
 | 31 | 5/5 | Complete    | 2026-05-21 |
 | 32 | 7/7 | Complete    | 2026-05-21 |
-| 33 | Demand Queries and Summary SCC Cache | Add demand queries, summary SCC scheduling/cache, and extension-aware quarantine. | SAE-INT-03 |
+| 33 | 7/7 | Complete   | 2026-05-24 |
 | 34 | 6/6 | Complete   | 2026-05-23 |
-| 35 | Framework Entrypoints and Trust Boundaries | Add native and extension-overlay facts for entrypoints, lifecycle, dispatch, and trust boundaries. | SAE-INT-05 |
+| 35 | 8/8 | Complete   | 2026-05-24 |
 | 36 | P0 Type/Value/Place/Alias Substrate | Add normalized type, value, allocation, access-path, narrowing, and alias facts. | SAE-PREC-01 |
 | 37 | Refined Call Graph Providers | Add opt-in refined call graph providers over direct calls, summaries, entrypoints, and type/value facts. | SAE-PREC-02 |
 | 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
@@ -330,30 +330,30 @@ Plans:
 **Goal:** Add internal demand queries for expensive views, summary SCC scheduling/cache, extension-aware cache quarantine, and query trace output.
 **Requirements:** SAE-INT-03
 **Research:** `research/incremental-query-engine/RECOMMENDED_IMPLEMENTATION.md`, `research/effects-summaries/RECOMMENDED_IMPLEMENTATION.md`, `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md`
-**Plans:** 7 plans
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1**
 
-- [ ] 33-01-PLAN.md — Direct summaries layer cache activation and warm-run restore
-- [ ] 33-02-PLAN.md — Demand query engine contracts, in-run memoization, and trace types
+- [x] 33-01-PLAN.md — Direct summaries layer cache activation and warm-run restore
+- [x] 33-02-PLAN.md — Demand query engine contracts, in-run memoization, and trace types
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 33-03-PLAN.md — SCC discovery from direct call targets and deterministic scheduling
+- [x] 33-03-PLAN.md — SCC discovery from direct call targets and deterministic scheduling
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 33-04-PLAN.md — Interprocedural summary closure with fixpoint iteration and backdating
-- [ ] 33-05-PLAN.md — Extension-aware cache quarantine mechanism and synthetic tests
+- [x] 33-04-PLAN.md — Interprocedural summary closure with fixpoint iteration and backdating
+- [x] 33-05-PLAN.md — Extension-aware cache quarantine mechanism and synthetic tests
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 33-06-PLAN.md — Validation, debug JSON, and demand query trace wiring
+- [x] 33-06-PLAN.md — Validation, debug JSON, and demand query trace wiring
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 33-07-PLAN.md — Eval fixtures, determinism proof, and public no-leak boundary
+- [x] 33-07-PLAN.md — Eval fixtures, determinism proof, and public no-leak boundary
 
 **Success criteria:**
 
@@ -367,6 +367,7 @@ Plans:
 **Goal:** Add the first advanced repo-local Rust model/provider extension boundary with typed sinks and validation.
 **Requirements:** SAE-INT-04
 **Research:** `research/agent-extension-surface/FINAL-REPORT.md`, `research/agent-extension-surface/RECOMMENDED_IMPLEMENTATION.md`, `research/agent-rule-authoring/RECOMMENDED_IMPLEMENTATION.md`
+**Plans:** 6/6 plans complete
 
 **Success criteria:**
 
@@ -380,6 +381,31 @@ Plans:
 **Goal:** Model entrypoints, routes, handlers, callbacks, jobs, CLIs, MCP tools/resources/prompts, tests, dispatch, and trust boundaries.
 **Requirements:** SAE-INT-05
 **Research:** `research/framework-entrypoints/FINAL-REPORT.md`, `research/framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`, `research/framework-entrypoints/VALIDATION.md`
+**Plans:** 8/8 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 35-01-PLAN.md — Framework fact contracts, dense IDs, store, and FactFamily integration
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 35-02-PLAN.md — Provider manifest, cache key, output digest, and kernel run-sequence wiring
+- [x] 35-03-PLAN.md — Go framework recognizers (net/http, chi, testing, cobra)
+- [x] 35-04-PLAN.md — TS/JS framework recognizers (Express, MCP SDK, test, CLI)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 35-05-PLAN.md — Trust boundary derivation, dispatch edges, unresolved facts, and provider data pipeline
+- [x] 35-06-PLAN.md — Framework fact validation and extension overlay merge
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 35-07-PLAN.md — Debug snapshots and deterministic eval fixtures
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 35-08-PLAN.md — Public no-leak boundary proof
 
 **Success criteria:**
 

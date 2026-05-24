@@ -76,10 +76,20 @@ pub(crate) struct ExtensionFactCandidateWire {
     pub(crate) fact_family: String,
     pub(crate) stable_key: String,
     pub(crate) binding_refs: Vec<String>,
+    #[serde(default)]
+    pub(crate) span: Option<ExtensionSpanWire>,
     pub(crate) precision: String,
     pub(crate) confidence: String,
     pub(crate) evidence: Vec<String>,
     pub(crate) payload_labels: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct ExtensionSpanWire {
+    pub(crate) relative_path: String,
+    pub(crate) start_byte: u32,
+    pub(crate) end_byte: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

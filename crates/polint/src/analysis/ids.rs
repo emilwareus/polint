@@ -45,6 +45,18 @@ pub(crate) struct SummaryId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct SummaryEventId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EntrypointId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct TrustBoundaryId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct DispatchEdgeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct UnresolvedFrameworkId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +98,10 @@ mod tests {
         assert_small_id_contract::<DomainEventId>();
         assert_small_id_contract::<SummaryId>();
         assert_small_id_contract::<SummaryEventId>();
+        assert_small_id_contract::<EntrypointId>();
+        assert_small_id_contract::<TrustBoundaryId>();
+        assert_small_id_contract::<DispatchEdgeId>();
+        assert_small_id_contract::<UnresolvedFrameworkId>();
     }
 
     #[test]

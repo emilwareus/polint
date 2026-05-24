@@ -61,6 +61,10 @@ pub(crate) enum FactFamily {
     SummaryTito,
     SummaryEvent,
     ExtensionFact,
+    Entrypoint,
+    TrustBoundary,
+    DispatchEdge,
+    UnresolvedFramework,
     #[expect(
         dead_code,
         reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
@@ -134,6 +138,10 @@ impl FactFamily {
             Self::SummaryTito => "SummaryTito",
             Self::SummaryEvent => "SummaryEvent",
             Self::ExtensionFact => "ExtensionFact",
+            Self::Entrypoint => "Entrypoint",
+            Self::TrustBoundary => "TrustBoundary",
+            Self::DispatchEdge => "DispatchEdge",
+            Self::UnresolvedFramework => "UnresolvedFramework",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",

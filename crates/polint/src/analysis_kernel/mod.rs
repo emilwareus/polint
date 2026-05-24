@@ -305,6 +305,11 @@ impl AnalysisKernel {
                     "polint.abstract_domains",
                 )
             });
+        let entrypoints_semantic_mir_digest = semantic_mir_dependency_output_digest.clone();
+        let entrypoints_cfg_digest = cfg_dependency_output_digest.clone();
+        let entrypoints_calls_digest = calls_dependency_output_digest.clone();
+        let entrypoints_symbol_digest = symbol_dependency_output_digest.clone();
+        let entrypoints_topology_digest = module_topology_dependency_output_digest.clone();
         let direct_summaries =
             crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
                 &mut db,
@@ -322,14 +327,7 @@ impl AnalysisKernel {
                 ],
             );
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
-        let _direct_summaries_output_digest = direct_summaries.output_digest;
         diagnostics.extend(direct_summaries.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.direct_summaries",
-            &db,
-            polint_direct_summaries_cache_stats,
-            _direct_summaries_output_digest,
-        ));
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
@@ -343,6 +341,36 @@ impl AnalysisKernel {
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
+        provider_outputs.push(Self::provider_output_for(
+            "polint.direct_summaries",
+            &db,
+            polint_direct_summaries_cache_stats,
+        ));
+
+        let entrypoints =
+            crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.entrypoints"),
+                entrypoints_semantic_mir_digest,
+                entrypoints_cfg_digest,
+                entrypoints_calls_digest,
+                entrypoints_symbol_digest,
+                entrypoints_topology_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
+        let entrypoints_output_digest = entrypoints.output_digest;
+        diagnostics.extend(entrypoints.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.entrypoints",
+            &db,
+            polint_entrypoints_cache_stats,
+            entrypoints_output_digest,
+        ));
 
         let extensions =
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
@@ -503,7 +531,7 @@ mod tests {
         Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
         SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
         Span {
@@ -790,10 +818,37 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
         );
+    }
+
+    #[test]
+    fn direct_summaries_provider_output_reflects_final_summary_metadata() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel run should succeed");
+        let manifest = AnalysisKernel::provider_manifest("polint.direct_summaries");
+        let expected = incremental::provider_output_digest_from_manifest(
+            manifest,
+            &provider_output_summary_parts(&output.db, manifest),
+        );
+        let direct_summaries = provider_output(&output, "polint.direct_summaries");
+
+        assert_eq!(direct_summaries.output_digest, expected);
     }
 
     #[test]
@@ -1220,6 +1275,250 @@ mod tests {
     }
 
     #[test]
+    fn framework_entrypoint_internals_do_not_leak_into_public_surfaces_no_leak() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let markers = framework_internal_markers();
+
+        let rendered = crate::diagnostics::render(
+            crate::diagnostics::OutputFormat::Json,
+            &[],
+            crate::diagnostics::RenderOpts {
+                json: crate::diagnostics::JsonReportMeta {
+                    tool_name: "polint",
+                    tool_version: "test",
+                },
+                color: crate::diagnostics::ColorChoice::Never,
+                sources: None,
+            },
+        );
+        assert_no_framework_markers("polint check --format json", &rendered, &markers);
+
+        let mut public_surfaces = Vec::new();
+        collect_files_with_extensions(&crate_root.join("src/sdk"), &["rs"], &mut public_surfaces);
+        public_surfaces.extend([
+            crate_root.join("src/runner/mod.rs"),
+            crate_root.join("src/cli/mod.rs"),
+            crate_root.join("src/lib.rs"),
+            repo_root.join("README.md"),
+            repo_root.join("docs/API-VISIBILITY-PLAN.md"),
+        ]);
+        collect_files_with_extensions(&repo_root.join("docs/facts"), &["md"], &mut public_surfaces);
+        public_surfaces.sort();
+        public_surfaces.dedup();
+
+        for source_path in public_surfaces {
+            if !source_path.exists() {
+                continue;
+            }
+            let source = std::fs::read_to_string(&source_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+            assert_no_framework_markers(&source_path.display().to_string(), &source, &markers);
+        }
+    }
+
+    #[test]
+    fn typescript_framework_entrypoints_from_real_source_include_handler_and_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join(".polint.toml"),
+            r#"
+[workspace]
+include = ["*.ts"]
+"#,
+        )
+        .expect("write config");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            r#"
+import express from "express";
+
+const app = express();
+
+function getUsers(req, res) {
+  res.json([]);
+}
+
+function setup() {
+  app.get("/api/users/:id", getUsers);
+}
+"#,
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            "symbols",
+            "references",
+            "resolved_imports",
+            "module_graph",
+        ]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        let entrypoint = output
+            .db
+            .entrypoint_facts()
+            .iter()
+            .find(|entrypoint| entrypoint.framework_id == "ts.express")
+            .expect("express entrypoint");
+        let function_name = output
+            .db
+            .functions()
+            .iter()
+            .find(|function| function.id == entrypoint.target_function)
+            .map(|function| function.name.as_str());
+
+        assert_eq!(function_name, Some("getUsers"));
+        assert_eq!(
+            entrypoint.trigger_metadata.path.as_deref(),
+            Some("/api/users/:id")
+        );
+    }
+
+    #[test]
+    fn framework_entrypoint_eval_fixture_sources_include_go_and_ts_entrypoints() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let fixture_repo =
+            repo_root.join("tests/eval-fixtures/framework-entrypoints/mixed-go-ts/repo");
+        let loaded = load_config(&fixture_repo).expect("fixture config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            "symbols",
+            "references",
+            "resolved_imports",
+            "module_graph",
+        ]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        let frameworks = output
+            .db
+            .entrypoint_facts()
+            .iter()
+            .map(|entrypoint| entrypoint.framework_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let files = output
+            .db
+            .files()
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.language))
+            .collect::<Vec<_>>();
+        let imports = output
+            .db
+            .imports()
+            .iter()
+            .map(|import| (import.path.as_str(), import.language))
+            .collect::<Vec<_>>();
+        let call_sites = output
+            .db
+            .call_sites()
+            .iter()
+            .map(|site| (&site.callee, site.language))
+            .collect::<Vec<_>>();
+
+        assert!(
+            frameworks.contains("go.net_http"),
+            "expected Go net/http entrypoints, got {frameworks:#?}"
+        );
+        assert!(
+            frameworks.contains("ts.express"),
+            "expected TS Express entrypoints, got frameworks={frameworks:#?} files={files:#?} imports={imports:#?} calls={call_sites:#?}"
+        );
+        assert!(
+            frameworks.contains("ts.mcp_sdk"),
+            "expected TS MCP SDK entrypoints, got {frameworks:#?}"
+        );
+    }
+
+    fn framework_internal_markers() -> [&'static str; 26] {
+        [
+            "polint.entrypoints",
+            "EntrypointFact",
+            "TrustBoundaryFact",
+            "FrameworkDispatchEdgeFact",
+            "UnresolvedFrameworkFact",
+            "EntrypointKind",
+            "TrustBoundarySourceKind",
+            "DispatchEdgeKind",
+            "UnresolvedFrameworkReason",
+            "EntrypointPrecision",
+            "EntrypointProvenance",
+            "EntrypointConfidence",
+            "EntrypointStatus",
+            "recognizers_go",
+            "recognizers_ts",
+            "trust_boundaries",
+            "dispatch",
+            "derive_entrypoints_with_cache_stats",
+            "extract_entrypoints",
+            "recognize_go_entrypoints",
+            "recognize_ts_entrypoints",
+            "entrypoints_debug",
+            "metadata_debug_json_for_test",
+            "EntrypointStore",
+            "EntrypointOutput",
+            "Entrypoints<'_>",
+        ]
+    }
+
+    fn assert_no_framework_markers(label: &str, source: &str, markers: &[&str]) {
+        for marker in markers {
+            assert!(
+                !source.contains(marker),
+                "{label} leaked Phase 35 framework internal marker `{marker}`"
+            );
+        }
+    }
+
+    fn collect_files_with_extensions(root: &Path, extensions: &[&str], files: &mut Vec<PathBuf>) {
+        if !root.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(root)
+            .unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
+        {
+            let entry = entry.expect("read public surface entry");
+            let path = entry.path();
+            if entry
+                .file_type()
+                .expect("public surface file type")
+                .is_dir()
+            {
+                collect_files_with_extensions(&path, extensions, files);
+            } else if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extensions.contains(&extension))
+            {
+                files.push(path);
+            }
+        }
+    }
+
+    #[test]
     fn run_propagates_file_loading_errors() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut loaded = load_config(temp.path()).expect("default config loads");
@@ -1266,6 +1565,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]

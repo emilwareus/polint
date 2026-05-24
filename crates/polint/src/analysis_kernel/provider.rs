@@ -192,6 +192,11 @@ const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const ENTRYPOINTS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: "entrypoints-facts-1",
+    version: 1,
+}];
+
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
@@ -450,6 +455,35 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.entrypoints",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "semantic_imports",
+            "resolved_imports",
+            "import_to_package_edges",
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+        ],
+        outputs: &[
+            "entrypoints",
+            "trust_boundaries",
+            "dispatch_edges",
+            "unresolved_framework",
+        ],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: ENTRYPOINTS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.extensions",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -514,6 +548,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
@@ -536,6 +571,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
@@ -585,6 +621,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
@@ -850,6 +887,32 @@ mod tests {
                         "summary_memory",
                         "summary_tito",
                         "summary_events",
+                    ],
+                },
+                ProviderOrderRow {
+                    id: "polint.entrypoints",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "semantic_imports",
+                        "resolved_imports",
+                        "import_to_package_edges",
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                    ],
+                    outputs: vec![
+                        "entrypoints",
+                        "trust_boundaries",
+                        "dispatch_edges",
+                        "unresolved_framework",
                     ],
                 },
                 ProviderOrderRow {
