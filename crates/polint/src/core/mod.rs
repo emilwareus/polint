@@ -3,11 +3,6 @@ use crate::analysis::calls::facts::{
     CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
 };
 use crate::analysis::calls::store::{CallOutput, CallStore};
-use crate::analysis::entrypoints::facts::{
-    EntrypointFact, EntrypointPrecision, EntrypointStatus, FrameworkDispatchEdgeFact,
-    TrustBoundaryFact, UnresolvedFrameworkFact,
-};
-use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::cfg::facts::{
     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, CfgPrecision, CfgStatus,
     ControlDependenceFact, DominatorFact, PostDominatorFact, ReachabilityFact,
@@ -18,6 +13,11 @@ use crate::analysis::domains::facts::{
     DomainEventFact, DomainObservationFact, DomainPrecision, DomainStatus,
 };
 use crate::analysis::domains::store::{DomainOutput, DomainStore};
+use crate::analysis::entrypoints::facts::{
+    EntrypointFact, EntrypointPrecision, EntrypointStatus, FrameworkDispatchEdgeFact,
+    TrustBoundaryFact, UnresolvedFrameworkFact,
+};
+use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
 use crate::analysis::extensions::store::{
@@ -1330,7 +1330,8 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::Entrypoint);
         self.fact_meta.remove_family(FactFamily::TrustBoundary);
         self.fact_meta.remove_family(FactFamily::DispatchEdge);
-        self.fact_meta.remove_family(FactFamily::UnresolvedFramework);
+        self.fact_meta
+            .remove_family(FactFamily::UnresolvedFramework);
 
         let entrypoint_metadata = self
             .entrypoint_facts
@@ -1370,8 +1371,7 @@ impl AnalysisDb {
     }
 
     fn entrypoint_fact_metadata(&self, fact: &EntrypointFact) -> FactMeta {
-        let (precision, confidence) =
-            entrypoint_precision_metadata(fact.status, fact.precision);
+        let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
             FactFamily::Entrypoint,
             ENTRYPOINTS_PROVIDER_ID,

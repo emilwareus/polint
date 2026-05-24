@@ -8,3 +8,4 @@ pub(crate) mod recognizers_ts;
 pub(crate) mod store;
 pub(crate) mod trust_boundaries;
 pub(crate) mod unresolved;
+pub(crate) mod validate;
