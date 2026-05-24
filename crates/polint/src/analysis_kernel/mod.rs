@@ -305,6 +305,11 @@ impl AnalysisKernel {
                     "polint.abstract_domains",
                 )
             });
+        let entrypoints_semantic_mir_digest = semantic_mir_dependency_output_digest.clone();
+        let entrypoints_cfg_digest = cfg_dependency_output_digest.clone();
+        let entrypoints_calls_digest = calls_dependency_output_digest.clone();
+        let entrypoints_symbol_digest = symbol_dependency_output_digest.clone();
+        let entrypoints_topology_digest = module_topology_dependency_output_digest.clone();
         let direct_summaries =
             crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
                 &mut db,
@@ -322,14 +327,8 @@ impl AnalysisKernel {
                 ],
             );
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
-        let _direct_summaries_output_digest = direct_summaries.output_digest;
+        let direct_summaries_output_digest = direct_summaries.output_digest;
         diagnostics.extend(direct_summaries.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.direct_summaries",
-            &db,
-            polint_direct_summaries_cache_stats,
-            _direct_summaries_output_digest,
-        ));
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
@@ -343,6 +342,37 @@ impl AnalysisKernel {
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.direct_summaries",
+            &db,
+            polint_direct_summaries_cache_stats,
+            direct_summaries_output_digest,
+        ));
+
+        let entrypoints =
+            crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.entrypoints"),
+                entrypoints_semantic_mir_digest,
+                entrypoints_cfg_digest,
+                entrypoints_calls_digest,
+                entrypoints_symbol_digest,
+                entrypoints_topology_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
+        let entrypoints_output_digest = entrypoints.output_digest;
+        diagnostics.extend(entrypoints.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.entrypoints",
+            &db,
+            polint_entrypoints_cache_stats,
+            entrypoints_output_digest,
+        ));
 
         let extensions =
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
@@ -790,10 +820,44 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
         );
+    }
+
+    #[test]
+    fn direct_summaries_provider_output_carries_provider_computed_digest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let first = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("first kernel run should succeed");
+        let second = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("second kernel run should succeed");
+        let first_ds = provider_output(&first, "polint.direct_summaries");
+        let second_ds = provider_output(&second, "polint.direct_summaries");
+
+        assert!(!first_ds.output_digest.value.is_empty());
+        assert_eq!(first_ds.output_digest, second_ds.output_digest);
+        assert_eq!(first_ds.cache_stats.recomputes, 1);
     }
 
     #[test]
@@ -1266,6 +1330,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]

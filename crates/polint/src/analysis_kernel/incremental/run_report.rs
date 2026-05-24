@@ -198,6 +198,7 @@ mod tests {
                 "polint.calls",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
+                "polint.entrypoints",
                 "polint.extensions",
                 "polint.metrics",
             ]
