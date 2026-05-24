@@ -32,6 +32,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     abstract_domains_output_digest: Digest,
     direct_summaries_output_digest: Digest,
     entrypoints_output_digest: Digest,
+    extensions_output_digest: Digest,
     symbol_graph_output_digest: Digest,
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
@@ -62,6 +63,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     );
     output.points_to = points_to_output;
     output.aliases = alias_output;
+    output = super::validate::merge_extension_type_value_alias_facts(output, db.extension_facts());
     output = output.normalized();
     let output_digest = type_value_alias_output_digest(
         manifest,
@@ -72,6 +74,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         &abstract_domains_output_digest,
         &direct_summaries_output_digest,
         &entrypoints_output_digest,
+        &extensions_output_digest,
         &symbol_graph_output_digest,
         &module_topology_output_digest,
         &upstream_syntax_output_digests,
@@ -98,6 +101,7 @@ fn type_value_alias_output_digest(
     abstract_domains_output_digest: &Digest,
     direct_summaries_output_digest: &Digest,
     entrypoints_output_digest: &Digest,
+    extensions_output_digest: &Digest,
     symbol_graph_output_digest: &Digest,
     module_topology_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
@@ -110,6 +114,7 @@ fn type_value_alias_output_digest(
         abstract_domains_output_digest.clone(),
         direct_summaries_output_digest.clone(),
         entrypoints_output_digest.clone(),
+        extensions_output_digest.clone(),
         symbol_graph_output_digest.clone(),
         module_topology_output_digest.clone(),
     ];
@@ -134,6 +139,7 @@ fn type_value_alias_output_digest(
         format!("abstract_domains={abstract_domains_output_digest}"),
         format!("direct_summaries={direct_summaries_output_digest}"),
         format!("entrypoints={entrypoints_output_digest}"),
+        format!("extensions={extensions_output_digest}"),
         format!("symbol_graph={symbol_graph_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
     ];
@@ -400,6 +406,7 @@ export function flow(input, key) {
             absent("abstract_domains"),
             absent("direct_summaries"),
             absent("entrypoints"),
+            absent("extensions"),
             absent("symbol_graph"),
             absent("module_topology"),
             Vec::new(),

@@ -1,0 +1,697 @@
+use std::collections::BTreeSet;
+
+use super::facts::{
+    TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance, TypeShape, TypeStatus,
+    TypeSubject,
+};
+use super::store::TypeValueAliasOutput;
+use crate::analysis::access_paths::facts::{
+    AccessPathFact, AccessPathProjection, AccessPathStatus,
+};
+use crate::analysis::aliases::facts::{
+    AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus,
+};
+use crate::analysis::extensions::sinks::{
+    ExtensionFactPrecision, TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
+    TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY, TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY, TYPE_VALUE_ALIAS_TYPE_FAMILY,
+    TYPE_VALUE_ALIAS_VALUE_FAMILY,
+};
+use crate::analysis::extensions::store::AcceptedExtensionFact;
+use crate::analysis::ids::{
+    AbstractValueId, AccessPathId, AliasAnswerId, AllocationTokenId, ObjectTokenId, PlaceId,
+    PointsToConstraintId, PtVarId, TypeFactId, TypeSetId, ValueFactId,
+};
+use crate::analysis::points_to::facts::{
+    PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
+};
+use crate::analysis::values::facts::{
+    AllocationKind, AllocationTokenFact, ValueFact, ValueKind, ValuePrecision, ValueProvenance,
+    ValueStatus, ValueSubject,
+};
+use crate::core::Language;
+
+pub(crate) fn merge_extension_type_value_alias_facts(
+    mut output: TypeValueAliasOutput,
+    extension_facts: &[AcceptedExtensionFact],
+) -> TypeValueAliasOutput {
+    let mut stable_keys = native_stable_keys(&output);
+    for fact in extension_facts {
+        if stable_keys.contains(&fact.stable_key) {
+            continue;
+        }
+        let inserted = match fact.fact_family.as_str() {
+            TYPE_VALUE_ALIAS_TYPE_FAMILY => merge_type_fact(&mut output, fact),
+            TYPE_VALUE_ALIAS_VALUE_FAMILY => merge_value_fact(&mut output, fact),
+            TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => merge_allocation_fact(&mut output, fact),
+            TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY => merge_access_path_fact(&mut output, fact),
+            TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY => {
+                merge_points_to_constraint(&mut output, fact)
+            }
+            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => merge_alias_answer(&mut output, fact),
+            _ => false,
+        };
+        if inserted {
+            stable_keys.insert(fact.stable_key.clone());
+        }
+    }
+    output.normalized()
+}
+
+fn native_stable_keys(output: &TypeValueAliasOutput) -> BTreeSet<String> {
+    output
+        .types
+        .types
+        .iter()
+        .map(|fact| fact.stable_key.clone())
+        .chain(
+            output
+                .types
+                .narrowed
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .values
+                .values
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .values
+                .allocations
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .access_paths
+                .access_paths
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .points_to
+                .constraints
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .points_to
+                .sets
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .chain(
+            output
+                .aliases
+                .answers
+                .iter()
+                .map(|fact| fact.stable_key.clone()),
+        )
+        .collect()
+}
+
+fn merge_type_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
+    let Some(subject) = label(fact, "subject=").and_then(type_subject) else {
+        return false;
+    };
+    let Some(shape) = label(fact, "shape=").map(type_shape) else {
+        return false;
+    };
+    output.types.types.push(TypeFact {
+        id: TypeFactId(output.types.types.len() as u64),
+        subject,
+        type_set: TypeSetId(output.types.types.len() as u64),
+        shape,
+        phase: TypePhase::ExtensionProvided,
+        language: language_label(label(fact, "language=")),
+        file: None,
+        function: None,
+        body: None,
+        place: label(fact, "place=").and_then(place_id),
+        cfg_block: None,
+        operation: None,
+        precision: type_precision(fact.precision),
+        confidence: type_confidence(fact),
+        status: TypeStatus::Present,
+        provenance: TypeProvenance::Extension {
+            extension_id: fact.extension_id.clone(),
+        },
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn merge_value_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
+    let Some(subject) = label(fact, "subject=").and_then(value_subject) else {
+        return false;
+    };
+    let Some(kind) = label(fact, "kind=").map(value_kind) else {
+        return false;
+    };
+    let id = ValueFactId(output.values.values.len() as u64);
+    output.values.values.push(ValueFact {
+        id,
+        subject,
+        value: AbstractValueId(id.0),
+        kind,
+        language: language_label(label(fact, "language=")),
+        file: None,
+        function: None,
+        body: None,
+        precision: value_precision(fact.precision),
+        status: ValueStatus::Present,
+        provenance: ValueProvenance::Extension {
+            extension_id: fact.extension_id.clone(),
+        },
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn merge_allocation_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
+    let Some(kind) = label(fact, "kind=").map(allocation_kind) else {
+        return false;
+    };
+    output.values.allocations.push(AllocationTokenFact {
+        id: AllocationTokenId(output.values.allocations.len() as u64),
+        kind,
+        language: language_label(label(fact, "language=")),
+        file: None,
+        function: None,
+        body: None,
+        source_place: label(fact, "source_place=").and_then(place_id),
+        source_operation: None,
+        span: None,
+        provenance: ValueProvenance::Extension {
+            extension_id: fact.extension_id.clone(),
+        },
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn merge_access_path_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
+    let Some(base) = label(fact, "base=").and_then(place_id) else {
+        return false;
+    };
+    let projections = access_path_projections(fact);
+    output.access_paths.access_paths.push(AccessPathFact {
+        id: AccessPathId(output.access_paths.access_paths.len() as u64),
+        base,
+        depth: projections.len() as u32,
+        projections,
+        language: language_label(label(fact, "language=")),
+        file: None,
+        function: None,
+        body: None,
+        status: AccessPathStatus::Resolved,
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn merge_points_to_constraint(
+    output: &mut TypeValueAliasOutput,
+    fact: &AcceptedExtensionFact,
+) -> bool {
+    let Some(kind) = extension_constraint_kind(fact) else {
+        return false;
+    };
+    output.points_to.constraints.push(PointsToConstraintFact {
+        id: PointsToConstraintId(output.points_to.constraints.len() as u64),
+        kind,
+        status: PointsToStatus::Present,
+        precision: points_to_precision(fact.precision),
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn merge_alias_answer(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFact) -> bool {
+    let Some(left) = label(fact, "left=").and_then(alias_operand) else {
+        return false;
+    };
+    let Some(right) = label(fact, "right=").and_then(alias_operand) else {
+        return false;
+    };
+    let Some(status) = label(fact, "status=").and_then(alias_status) else {
+        return false;
+    };
+    output.aliases.answers.push(AliasAnswerFact {
+        id: AliasAnswerId(output.aliases.answers.len() as u64),
+        left,
+        right,
+        status,
+        reason: AliasReason::ExtensionProvided,
+        evidence: extension_evidence(fact),
+        precision: alias_precision(fact.precision),
+        stable_key: fact.stable_key.clone(),
+    });
+    true
+}
+
+fn extension_constraint_kind(fact: &AcceptedExtensionFact) -> Option<PointsToConstraintKind> {
+    match label(fact, "kind=")? {
+        "address_of" => Some(PointsToConstraintKind::AddressOf {
+            dst: label(fact, "dst=").and_then(pt_var_id)?,
+            object: label(fact, "object=").and_then(object_token_id)?,
+        }),
+        "copy" => Some(PointsToConstraintKind::Copy {
+            dst: label(fact, "dst=").and_then(pt_var_id)?,
+            src: label(fact, "src=").and_then(pt_var_id)?,
+        }),
+        _ => None,
+    }
+}
+
+fn label<'a>(fact: &'a AcceptedExtensionFact, prefix: &str) -> Option<&'a str> {
+    fact.payload_labels
+        .iter()
+        .find_map(|label| label.strip_prefix(prefix))
+}
+
+fn type_subject(value: &str) -> Option<TypeSubject> {
+    if let Some(place) = value.strip_prefix("place:") {
+        place.parse().ok().map(|id| TypeSubject::Place(PlaceId(id)))
+    } else if let Some(symbol) = value.strip_prefix("symbol:") {
+        symbol
+            .parse()
+            .ok()
+            .map(|id| TypeSubject::Symbol(crate::core::SymbolId(id)))
+    } else if let Some(id) = value.strip_prefix("synthetic:") {
+        Some(TypeSubject::Synthetic(id.to_string()))
+    } else {
+        Some(TypeSubject::Unknown(value.to_string()))
+    }
+}
+
+fn value_subject(value: &str) -> Option<ValueSubject> {
+    if let Some(place) = value.strip_prefix("place:") {
+        place
+            .parse()
+            .ok()
+            .map(|id| ValueSubject::Place(PlaceId(id)))
+    } else if let Some(id) = value.strip_prefix("synthetic:") {
+        Some(ValueSubject::Synthetic(id.to_string()))
+    } else {
+        Some(ValueSubject::Unknown(value.to_string()))
+    }
+}
+
+fn type_shape(value: &str) -> TypeShape {
+    match value {
+        "any" => TypeShape::Any,
+        "object" => TypeShape::Object { shape_id: None },
+        "class" => TypeShape::Class { name: None },
+        other => {
+            if let Some(primitive) = other.strip_prefix("primitive:") {
+                TypeShape::Primitive(primitive.to_string())
+            } else if let Some(literal) = other.strip_prefix("literal:") {
+                TypeShape::Literal(literal.to_string())
+            } else if let Some(signature) = other.strip_prefix("callable:") {
+                TypeShape::Callable {
+                    signature: signature.to_string(),
+                }
+            } else if let Some(module_key) = other.strip_prefix("module:") {
+                TypeShape::Module {
+                    module_key: module_key.to_string(),
+                }
+            } else if let Some(type_id) = other.strip_prefix("nominal:") {
+                TypeShape::Nominal {
+                    type_id: type_id.to_string(),
+                }
+            } else if let Some(shape_id) = other.strip_prefix("structural:") {
+                TypeShape::Structural {
+                    shape_id: shape_id.to_string(),
+                }
+            } else if let Some(reason) = other.strip_prefix("unsupported:") {
+                TypeShape::Unsupported {
+                    reason: reason.to_string(),
+                }
+            } else {
+                TypeShape::Unknown {
+                    reason: other.to_string(),
+                }
+            }
+        }
+    }
+}
+
+fn value_kind(value: &str) -> ValueKind {
+    match value {
+        "null" => ValueKind::Null,
+        "undefined" => ValueKind::Undefined,
+        "nil" => ValueKind::Nil,
+        "function" => ValueKind::FunctionObject,
+        "class" => ValueKind::ClassObject,
+        "module" => ValueKind::ModuleObject,
+        other => {
+            if let Some(value) = other.strip_prefix("bool:") {
+                ValueKind::Bool(value.to_string())
+            } else if let Some(value) = other.strip_prefix("number:") {
+                ValueKind::Number(value.to_string())
+            } else if let Some(value) = other.strip_prefix("string:") {
+                ValueKind::String(value.to_string())
+            } else if let Some(value) = other.strip_prefix("literal:") {
+                ValueKind::Literal(value.to_string())
+            } else if let Some(place) = other.strip_prefix("place_ref:") {
+                place
+                    .parse()
+                    .map(|id| ValueKind::PlaceRef(PlaceId(id)))
+                    .unwrap_or_else(|_| ValueKind::Unknown {
+                        evidence: other.to_string(),
+                    })
+            } else {
+                ValueKind::Unknown {
+                    evidence: other.to_string(),
+                }
+            }
+        }
+    }
+}
+
+fn allocation_kind(value: &str) -> AllocationKind {
+    match value {
+        "object" => AllocationKind::ObjectLiteral,
+        "array" => AllocationKind::ArrayLiteral,
+        "composite" => AllocationKind::CompositeLiteral,
+        "function" => AllocationKind::FunctionObject,
+        "class" => AllocationKind::ClassObject,
+        "module" => AllocationKind::ModuleNamespace,
+        "closure" => AllocationKind::Closure,
+        "synthetic_framework" => AllocationKind::SyntheticFrameworkObject,
+        "extension" => AllocationKind::ExtensionModeledObject,
+        _ => AllocationKind::Unknown,
+    }
+}
+
+fn access_path_projections(fact: &AcceptedExtensionFact) -> Vec<AccessPathProjection> {
+    let projections = fact
+        .payload_labels
+        .iter()
+        .filter_map(|label| label.strip_prefix("projection="))
+        .filter(|value| *value != "base")
+        .map(|value| {
+            if let Some(field) = value.strip_prefix("field:") {
+                AccessPathProjection::Field(field.to_string())
+            } else if let Some(property) = value.strip_prefix("property:") {
+                AccessPathProjection::Property(property.to_string())
+            } else if let Some(index) = value.strip_prefix("index:") {
+                AccessPathProjection::IndexKnown(index.to_string())
+            } else if value == "deref" {
+                AccessPathProjection::Deref
+            } else if value == "await" {
+                AccessPathProjection::AwaitResult
+            } else {
+                AccessPathProjection::Unknown {
+                    evidence: value.to_string(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    if projections.is_empty() {
+        vec![AccessPathProjection::Unknown {
+            evidence: "extension-base-only".to_string(),
+        }]
+    } else {
+        projections
+    }
+}
+
+fn alias_operand(value: &str) -> Option<AliasOperand> {
+    if let Some(place) = value.strip_prefix("place:") {
+        place
+            .parse()
+            .ok()
+            .map(|id| AliasOperand::Place(PlaceId(id)))
+    } else if let Some(path) = value.strip_prefix("access_path:") {
+        path.parse()
+            .ok()
+            .map(|id| AliasOperand::AccessPath(crate::analysis::ids::AccessPathId(id)))
+    } else {
+        None
+    }
+}
+
+fn alias_status(value: &str) -> Option<AliasStatus> {
+    match value {
+        "no_alias" => Some(AliasStatus::NoAlias),
+        "may_alias" => Some(AliasStatus::MayAlias),
+        "must_alias" => Some(AliasStatus::MustAlias),
+        "partial_alias" => Some(AliasStatus::PartialAlias),
+        "unknown" => Some(AliasStatus::Unknown),
+        _ => None,
+    }
+}
+
+fn place_id(value: &str) -> Option<PlaceId> {
+    value
+        .strip_prefix("place:")
+        .unwrap_or(value)
+        .parse()
+        .ok()
+        .map(PlaceId)
+}
+
+fn pt_var_id(value: &str) -> Option<PtVarId> {
+    value
+        .strip_prefix("pt:")
+        .unwrap_or(value)
+        .parse()
+        .ok()
+        .map(PtVarId)
+}
+
+fn object_token_id(value: &str) -> Option<ObjectTokenId> {
+    value
+        .strip_prefix("obj:")
+        .unwrap_or(value)
+        .parse()
+        .ok()
+        .map(ObjectTokenId)
+}
+
+fn language_label(value: Option<&str>) -> Language {
+    match value {
+        Some("go") => Language::Go,
+        Some("javascript") => Language::JavaScript,
+        Some("typescript") => Language::TypeScript,
+        _ => Language::Unknown,
+    }
+}
+
+fn type_precision(precision: ExtensionFactPrecision) -> TypePrecision {
+    match precision {
+        ExtensionFactPrecision::Exact => TypePrecision::ExactLocal,
+        ExtensionFactPrecision::SetupAware => TypePrecision::SetupAware,
+        ExtensionFactPrecision::Heuristic | ExtensionFactPrecision::GeneratedUnvalidated => {
+            TypePrecision::Heuristic
+        }
+    }
+}
+
+fn type_confidence(fact: &AcceptedExtensionFact) -> TypeConfidence {
+    match fact.confidence {
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::High => TypeConfidence::High,
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::Medium => {
+            TypeConfidence::Medium
+        }
+        crate::analysis::extensions::sinks::ExtensionFactConfidence::Low => TypeConfidence::Low,
+    }
+}
+
+fn value_precision(precision: ExtensionFactPrecision) -> ValuePrecision {
+    match precision {
+        ExtensionFactPrecision::Exact => ValuePrecision::ExactLocal,
+        ExtensionFactPrecision::SetupAware => ValuePrecision::SetupAware,
+        ExtensionFactPrecision::Heuristic | ExtensionFactPrecision::GeneratedUnvalidated => {
+            ValuePrecision::Heuristic
+        }
+    }
+}
+
+fn points_to_precision(precision: ExtensionFactPrecision) -> PointsToPrecision {
+    match precision {
+        ExtensionFactPrecision::Exact => PointsToPrecision::LocalFlowSensitive,
+        ExtensionFactPrecision::SetupAware => PointsToPrecision::SummaryProjected,
+        ExtensionFactPrecision::Heuristic | ExtensionFactPrecision::GeneratedUnvalidated => {
+            PointsToPrecision::Heuristic
+        }
+    }
+}
+
+fn alias_precision(precision: ExtensionFactPrecision) -> AliasPrecision {
+    match precision {
+        ExtensionFactPrecision::Exact => AliasPrecision::ExactLocal,
+        ExtensionFactPrecision::SetupAware => AliasPrecision::SetupAware,
+        ExtensionFactPrecision::Heuristic | ExtensionFactPrecision::GeneratedUnvalidated => {
+            AliasPrecision::Heuristic
+        }
+    }
+}
+
+fn extension_evidence(fact: &AcceptedExtensionFact) -> Vec<String> {
+    let mut evidence = vec![format!(
+        "extension:{} provider:{}",
+        fact.extension_id, fact.provider_id
+    )];
+    evidence.extend(fact.evidence.iter().cloned());
+    evidence.sort();
+    evidence.dedup();
+    evidence
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::aliases::facts::{AliasAnswerFact, AliasReason};
+    use crate::analysis::aliases::store::AliasOutput;
+    use crate::analysis::extensions::sinks::{
+        ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
+        TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY, TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+        TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY, TYPE_VALUE_ALIAS_TYPE_FAMILY,
+        TYPE_VALUE_ALIAS_VALUE_FAMILY,
+    };
+
+    #[test]
+    fn extension_merge_adds_type_value_allocation_access_path_and_points_to_rows() {
+        let merged = merge_extension_type_value_alias_facts(
+            TypeValueAliasOutput::default(),
+            &[
+                accepted(
+                    TYPE_VALUE_ALIAS_TYPE_FAMILY,
+                    "type:extension",
+                    &["subject=synthetic:t", "shape=primitive:string"],
+                ),
+                accepted(
+                    TYPE_VALUE_ALIAS_VALUE_FAMILY,
+                    "value:extension",
+                    &["subject=synthetic:v", "kind=string:ok"],
+                ),
+                accepted(
+                    TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+                    "alloc:extension",
+                    &["kind=object"],
+                ),
+                accepted(
+                    TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
+                    "path:extension",
+                    &["base=place:1", "projection=property:name"],
+                ),
+                accepted(
+                    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+                    "pt:extension",
+                    &["kind=copy", "dst=pt:1", "src=pt:2"],
+                ),
+            ],
+        );
+
+        assert_eq!(merged.types.types.len(), 1);
+        assert_eq!(merged.values.values.len(), 1);
+        assert_eq!(merged.values.allocations.len(), 1);
+        assert_eq!(merged.access_paths.access_paths.len(), 1);
+        assert_eq!(merged.points_to.constraints.len(), 1);
+    }
+
+    #[test]
+    fn extension_merge_is_additive_and_preserves_native_unknown_alias() {
+        let output = TypeValueAliasOutput {
+            aliases: AliasOutput {
+                answers: vec![AliasAnswerFact {
+                    id: AliasAnswerId(0),
+                    left: AliasOperand::Place(PlaceId(1)),
+                    right: AliasOperand::Place(PlaceId(2)),
+                    status: AliasStatus::Unknown,
+                    reason: AliasReason::MissingPointsTo,
+                    evidence: vec!["native-missing".to_string()],
+                    precision: AliasPrecision::Unknown,
+                    stable_key: "alias:native:unknown".to_string(),
+                }],
+            },
+            ..TypeValueAliasOutput::default()
+        };
+
+        let merged = merge_extension_type_value_alias_facts(
+            output,
+            &[accepted_alias("alias:extension:no", "no_alias")],
+        );
+
+        assert!(
+            merged
+                .aliases
+                .answers
+                .iter()
+                .any(|answer| answer.status == AliasStatus::Unknown)
+        );
+        assert!(
+            merged
+                .aliases
+                .answers
+                .iter()
+                .any(|answer| answer.status == AliasStatus::NoAlias
+                    && answer.reason == AliasReason::ExtensionProvided)
+        );
+    }
+
+    #[test]
+    fn extension_merge_skips_conflicting_stable_key() {
+        let output = TypeValueAliasOutput {
+            aliases: AliasOutput {
+                answers: vec![AliasAnswerFact {
+                    id: AliasAnswerId(0),
+                    left: AliasOperand::Place(PlaceId(1)),
+                    right: AliasOperand::Place(PlaceId(2)),
+                    status: AliasStatus::Unknown,
+                    reason: AliasReason::MissingPointsTo,
+                    evidence: vec!["native-missing".to_string()],
+                    precision: AliasPrecision::Unknown,
+                    stable_key: "alias:shared".to_string(),
+                }],
+            },
+            ..TypeValueAliasOutput::default()
+        };
+
+        let merged = merge_extension_type_value_alias_facts(
+            output,
+            &[accepted_alias("alias:shared", "no_alias")],
+        );
+
+        assert_eq!(merged.aliases.answers.len(), 1);
+        assert_eq!(merged.aliases.answers[0].status, AliasStatus::Unknown);
+    }
+
+    fn accepted_alias(stable_key: &str, status: &str) -> AcceptedExtensionFact {
+        let mut fact = accepted(
+            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
+            stable_key,
+            &["left=place:1", "right=place:2"],
+        );
+        fact.payload_labels.push(format!("status={status}"));
+        fact
+    }
+
+    fn accepted(family: &str, stable_key: &str, payload_labels: &[&str]) -> AcceptedExtensionFact {
+        AcceptedExtensionFact {
+            extension_id: "demo".to_string(),
+            provider_id: "aliases".to_string(),
+            fact_family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            binding_refs: vec!["file:src/app.ts".to_string()],
+            precision: ExtensionFactPrecision::Heuristic,
+            confidence: ExtensionFactConfidence::Medium,
+            status: ExtensionFactStatus::Accepted,
+            evidence: vec!["reviewed".to_string()],
+            payload_labels: payload_labels
+                .iter()
+                .map(|label| (*label).to_string())
+                .collect(),
+            payload_digest: stable_key.to_string(),
+        }
+    }
+}

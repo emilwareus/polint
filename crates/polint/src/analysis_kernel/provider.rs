@@ -489,6 +489,26 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.extensions",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "entrypoints",
+            "trust_boundaries",
+            "dispatch_edges",
+            "unresolved_framework",
+            "extension.providers",
+        ],
+        outputs: &["extension_facts", "extension_rejections"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: EXTENSIONS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.type_value_alias",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -518,6 +538,8 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "trust_boundaries",
             "dispatch_edges",
             "unresolved_framework",
+            "extension_facts",
+            "extension_rejections",
         ],
         outputs: &[
             "type_facts",
@@ -532,22 +554,6 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: TYPE_VALUE_ALIAS_SCHEMA,
-        precision_ceiling: PrecisionCeiling::SetupAware,
-    },
-    ProviderManifest {
-        id: "polint.extensions",
-        kind: ProviderKind::WholeRepoDerived,
-        inputs: &[
-            "source_files",
-            "functions",
-            "symbols",
-            "references",
-            "extension.providers",
-        ],
-        outputs: &["extension_facts", "extension_rejections"],
-        language_scope: LanguageScope::MultiLanguage,
-        cache_policy: CachePolicy::InMemoryDerived,
-        schema_versions: EXTENSIONS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
@@ -600,8 +606,8 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
-                "polint.type_value_alias",
                 "polint.extensions",
+                "polint.type_value_alias",
                 "polint.metrics",
             ]
         );
@@ -624,8 +630,8 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
-                "polint.type_value_alias",
                 "polint.extensions",
+                "polint.type_value_alias",
                 "polint.metrics",
             ]
         );
@@ -675,8 +681,8 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
-                "polint.type_value_alias",
                 "polint.extensions",
+                "polint.type_value_alias",
                 "polint.metrics",
             ]
         );
@@ -970,6 +976,23 @@ mod tests {
                     ],
                 },
                 ProviderOrderRow {
+                    id: "polint.extensions",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "entrypoints",
+                        "trust_boundaries",
+                        "dispatch_edges",
+                        "unresolved_framework",
+                        "extension.providers",
+                    ],
+                    outputs: vec!["extension_facts", "extension_rejections"],
+                },
+                ProviderOrderRow {
                     id: "polint.type_value_alias",
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
@@ -1000,6 +1023,8 @@ mod tests {
                         "trust_boundaries",
                         "dispatch_edges",
                         "unresolved_framework",
+                        "extension_facts",
+                        "extension_rejections",
                     ],
                     outputs: vec![
                         "type_facts",
@@ -1011,19 +1036,6 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                     ],
-                },
-                ProviderOrderRow {
-                    id: "polint.extensions",
-                    kind: "whole_repo_derived",
-                    language_scope: "multi_language",
-                    inputs: vec![
-                        "source_files",
-                        "functions",
-                        "symbols",
-                        "references",
-                        "extension.providers",
-                    ],
-                    outputs: vec!["extension_facts", "extension_rejections"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

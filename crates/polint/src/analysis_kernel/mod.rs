@@ -386,33 +386,6 @@ impl AnalysisKernel {
                 "polint.entrypoints",
             )
         });
-        let type_value_alias =
-            crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.type_value_alias"),
-                entrypoints_semantic_mir_digest,
-                entrypoints_cfg_digest,
-                entrypoints_calls_digest,
-                abstract_domains_dependency_output_digest,
-                direct_summaries_dependency_output_digest,
-                entrypoints_dependency_output_digest,
-                entrypoints_symbol_digest,
-                entrypoints_topology_digest,
-                vec![
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-            );
-        let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
-        let type_value_alias_output_digest = type_value_alias.output_digest.clone();
-        diagnostics.extend(type_value_alias.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.type_value_alias",
-            &db,
-            polint_type_value_alias_cache_stats,
-            type_value_alias_output_digest,
-        ));
 
         let extensions =
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
@@ -428,7 +401,42 @@ impl AnalysisKernel {
             "polint.extensions",
             &db,
             polint_extensions_cache_stats,
-            extensions_output_digest,
+            extensions_output_digest.clone(),
+        ));
+        let extensions_dependency_output_digest = extensions_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.extensions",
+            )
+        });
+
+        let type_value_alias =
+            crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.type_value_alias"),
+                entrypoints_semantic_mir_digest,
+                entrypoints_cfg_digest,
+                entrypoints_calls_digest,
+                abstract_domains_dependency_output_digest,
+                direct_summaries_dependency_output_digest,
+                entrypoints_dependency_output_digest,
+                extensions_dependency_output_digest,
+                entrypoints_symbol_digest,
+                entrypoints_topology_digest,
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
+        let type_value_alias_output_digest = type_value_alias.output_digest.clone();
+        diagnostics.extend(type_value_alias.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.type_value_alias",
+            &db,
+            polint_type_value_alias_cache_stats,
+            type_value_alias_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -861,8 +869,8 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
-                "polint.type_value_alias",
                 "polint.extensions",
+                "polint.type_value_alias",
                 "polint.metrics",
             ]
         );
@@ -1609,8 +1617,8 @@ function setup() {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
-                "polint.type_value_alias",
                 "polint.extensions",
+                "polint.type_value_alias",
                 "polint.metrics",
             ]
         );
