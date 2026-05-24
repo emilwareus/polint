@@ -21,6 +21,7 @@ pub(crate) mod mir;
 pub(crate) mod places;
 pub(crate) mod points_to;
 pub(crate) mod provider;
+pub(crate) mod refined_calls;
 pub(crate) mod stable_key;
 pub(crate) mod store;
 pub(crate) mod summaries;

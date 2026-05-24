@@ -93,6 +93,9 @@ pub(crate) struct ObjectTokenId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct AliasAnswerId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct RefinedCallEdgeId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +153,7 @@ mod tests {
         assert_small_id_contract::<PtVarId>();
         assert_small_id_contract::<ObjectTokenId>();
         assert_small_id_contract::<AliasAnswerId>();
+        assert_small_id_contract::<RefinedCallEdgeId>();
     }
 
     #[test]

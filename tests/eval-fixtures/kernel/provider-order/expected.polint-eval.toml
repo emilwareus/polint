@@ -48,7 +48,10 @@ invariant = { name = "provider_order.12", value = "polint.extensions", mode = "e
 invariant = { name = "provider_order.13", value = "polint.type_value_alias", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.14", value = "polint.metrics", mode = "exact" }
+invariant = { name = "provider_order.14", value = "polint.refined_calls", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.15", value = "polint.metrics", mode = "exact" }
 
 [[expected]]
 invariant = { name = "provider_output.polint.abstract_domains.schema_version", value = "abstract-domain-facts-1:1", mode = "exact" }
