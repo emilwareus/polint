@@ -1,3 +1,7 @@
+use crate::analysis::access_paths::facts::AccessPathFact;
+use crate::analysis::access_paths::store::AccessPathStore;
+use crate::analysis::aliases::facts::{AliasAnswerFact, AliasPrecision, AliasStatus};
+use crate::analysis::aliases::store::AliasStore;
 use crate::analysis::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetFact,
     CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
@@ -27,11 +31,22 @@ use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceStatus};
+use crate::analysis::points_to::facts::{
+    PointsToConstraintFact, PointsToPrecision, PointsToSetFact, PointsToStatus,
+};
+use crate::analysis::points_to::store::PointsToStore;
 use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{
     SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
 };
 use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
+use crate::analysis::types::facts::{
+    NarrowedTypeFact, TypeConfidence, TypeFact, TypePrecision, TypeStatus,
+};
+use crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID;
+use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
+use crate::analysis::values::facts::{AllocationTokenFact, ValueFact, ValuePrecision, ValueStatus};
+use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
@@ -671,6 +686,19 @@ pub struct AnalysisDb {
     dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
     unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
     entrypoint_store: Option<EntrypointStore>,
+    type_facts: Vec<TypeFact>,
+    narrowed_type_facts: Vec<NarrowedTypeFact>,
+    value_facts: Vec<ValueFact>,
+    allocation_tokens: Vec<AllocationTokenFact>,
+    access_path_facts: Vec<AccessPathFact>,
+    points_to_constraints: Vec<PointsToConstraintFact>,
+    points_to_sets: Vec<PointsToSetFact>,
+    alias_answers: Vec<AliasAnswerFact>,
+    type_store: Option<TypeStore>,
+    value_store: Option<ValueStore>,
+    access_path_store: Option<AccessPathStore>,
+    points_to_store: Option<PointsToStore>,
+    alias_store: Option<AliasStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
 }
 
@@ -1161,6 +1189,118 @@ impl AnalysisDb {
         &self.unresolved_framework_facts
     }
 
+    pub(crate) fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        let output = output.normalized();
+        let type_store = TypeStore::from_output(output.types);
+        let value_store = ValueStore::from_output(output.values);
+        let access_path_store = AccessPathStore::from_output(output.access_paths);
+        let points_to_store = PointsToStore::from_output(output.points_to);
+        let alias_store = AliasStore::from_output(output.aliases);
+
+        self.type_facts = type_store.types().to_vec();
+        self.narrowed_type_facts = type_store.narrowed().to_vec();
+        self.value_facts = value_store.values().to_vec();
+        self.allocation_tokens = value_store.allocations().to_vec();
+        self.access_path_facts = access_path_store.access_paths().to_vec();
+        self.points_to_constraints = points_to_store.constraints().to_vec();
+        self.points_to_sets = points_to_store.sets().to_vec();
+        self.alias_answers = alias_store.answers().to_vec();
+        self.type_store = Some(type_store);
+        self.value_store = Some(value_store);
+        self.access_path_store = Some(access_path_store);
+        self.points_to_store = Some(points_to_store);
+        self.alias_store = Some(alias_store);
+        self.refresh_type_value_alias_metadata();
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn type_facts(&self) -> &[TypeFact] {
+        &self.type_facts
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn narrowed_type_facts(&self) -> &[NarrowedTypeFact] {
+        &self.narrowed_type_facts
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn value_facts(&self) -> &[ValueFact] {
+        &self.value_facts
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn allocation_tokens(&self) -> &[AllocationTokenFact] {
+        &self.allocation_tokens
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn access_path_facts(&self) -> &[AccessPathFact] {
+        &self.access_path_facts
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn points_to_constraints(&self) -> &[PointsToConstraintFact] {
+        &self.points_to_constraints
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn points_to_sets(&self) -> &[PointsToSetFact] {
+        &self.points_to_sets
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
+        )
+    )]
+    pub(crate) fn alias_answers(&self) -> &[AliasAnswerFact] {
+        &self.alias_answers
+    }
+
     #[allow(dead_code)]
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
         self.call_store
@@ -1368,6 +1508,279 @@ impl AnalysisDb {
         for (run_id, metadata) in unresolved_metadata {
             self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
         }
+    }
+
+    fn refresh_type_value_alias_metadata(&mut self) {
+        for family in [
+            FactFamily::Type,
+            FactFamily::NarrowedType,
+            FactFamily::Value,
+            FactFamily::AllocationToken,
+            FactFamily::AccessPath,
+            FactFamily::PointsToConstraint,
+            FactFamily::PointsToSet,
+            FactFamily::AliasAnswer,
+        ] {
+            self.fact_meta.remove_family(family);
+        }
+
+        let type_metadata = self
+            .type_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.type_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in type_metadata {
+            self.record_fact_meta(FactFamily::Type, run_id, metadata);
+        }
+
+        let narrowed_metadata = self
+            .narrowed_type_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.narrowed_type_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in narrowed_metadata {
+            self.record_fact_meta(FactFamily::NarrowedType, run_id, metadata);
+        }
+
+        let value_metadata = self
+            .value_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.value_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in value_metadata {
+            self.record_fact_meta(FactFamily::Value, run_id, metadata);
+        }
+
+        let allocation_metadata = self
+            .allocation_tokens
+            .iter()
+            .map(|fact| (fact.id.0, self.allocation_token_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in allocation_metadata {
+            self.record_fact_meta(FactFamily::AllocationToken, run_id, metadata);
+        }
+
+        let access_path_metadata = self
+            .access_path_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.access_path_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in access_path_metadata {
+            self.record_fact_meta(FactFamily::AccessPath, run_id, metadata);
+        }
+
+        let points_to_constraint_metadata = self
+            .points_to_constraints
+            .iter()
+            .map(|fact| (fact.id.0, self.points_to_constraint_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in points_to_constraint_metadata {
+            self.record_fact_meta(FactFamily::PointsToConstraint, run_id, metadata);
+        }
+
+        let points_to_set_metadata = self
+            .points_to_sets
+            .iter()
+            .map(|fact| (fact.id.0, self.points_to_set_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in points_to_set_metadata {
+            self.record_fact_meta(FactFamily::PointsToSet, run_id, metadata);
+        }
+
+        let alias_metadata = self
+            .alias_answers
+            .iter()
+            .map(|fact| (fact.id.0, self.alias_answer_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in alias_metadata {
+            self.record_fact_meta(FactFamily::AliasAnswer, run_id, metadata);
+        }
+    }
+
+    fn type_fact_metadata(&self, fact: &TypeFact) -> FactMeta {
+        let (precision, confidence) =
+            type_metadata_precision(fact.status, fact.precision, Some(fact.confidence));
+        fact_meta_from_stable_key(
+            FactFamily::Type,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("phase", format!("{:?}", fact.phase)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.option_source_file_key(fact.file)),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("subject", format!("{:?}", fact.subject)),
+                ("shape", format!("{:?}", fact.shape)),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn narrowed_type_metadata(&self, fact: &NarrowedTypeFact) -> FactMeta {
+        let (precision, confidence) = type_metadata_precision(fact.status, fact.precision, None);
+        fact_meta_from_stable_key(
+            FactFamily::NarrowedType,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "place_key",
+                    self.fact_stable_key(FactFamily::Place, fact.place.0),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                ("evidence", fact.evidence.clone()),
+            ]),
+        )
+    }
+
+    fn value_fact_metadata(&self, fact: &ValueFact) -> FactMeta {
+        let (precision, confidence) = value_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Value,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("subject", format!("{:?}", fact.subject)),
+                ("kind", format!("{:?}", fact.kind)),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn allocation_token_metadata(&self, fact: &AllocationTokenFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::AllocationToken,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "source_place",
+                    fact.source_place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn access_path_metadata(&self, fact: &AccessPathFact) -> FactMeta {
+        let precision = match fact.status {
+            crate::analysis::access_paths::facts::AccessPathStatus::Resolved => {
+                FactPrecision::SetupAware
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Partial => {
+                FactPrecision::Ambiguous
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Unknown => {
+                FactPrecision::Unresolved
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Unsupported => {
+                FactPrecision::Unsupported
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::BudgetExceeded => {
+                FactPrecision::Heuristic
+            }
+        };
+        fact_meta_from_stable_key(
+            FactFamily::AccessPath,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "base_key",
+                    self.fact_stable_key(FactFamily::Place, fact.base.0),
+                ),
+                ("projection_count", fact.projections.len().to_string()),
+            ]),
+        )
+    }
+
+    fn points_to_constraint_metadata(&self, fact: &PointsToConstraintFact) -> FactMeta {
+        let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::PointsToConstraint,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("kind", format!("{:?}", fact.kind)),
+            ]),
+        )
+    }
+
+    fn points_to_set_metadata(&self, fact: &PointsToSetFact) -> FactMeta {
+        let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::PointsToSet,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("budget", format!("{:?}", fact.budget)),
+                ("variable", format!("{:?}", fact.variable)),
+                ("objects", format!("{:?}", fact.objects)),
+            ]),
+        )
+    }
+
+    fn alias_answer_metadata(&self, fact: &AliasAnswerFact) -> FactMeta {
+        let (precision, confidence) = alias_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::AliasAnswer,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("reason", format!("{:?}", fact.reason)),
+                ("left", format!("{:?}", fact.left)),
+                ("right", format!("{:?}", fact.right)),
+                ("evidence", fact.evidence.join("\n")),
+            ]),
+        )
     }
 
     fn entrypoint_fact_metadata(&self, fact: &EntrypointFact) -> FactMeta {
@@ -3734,6 +4147,11 @@ impl AnalysisDb {
             .unwrap_or_else(|| self.path_for(file).replace('\\', "/"))
     }
 
+    fn option_source_file_key(&self, file: Option<FileId>) -> String {
+        file.map(|file| self.source_file_key(file))
+            .unwrap_or_else(none_value)
+    }
+
     fn function_key(&self, function: FunctionId, name: &str, span: &Span) -> String {
         self.metadata_for(FactRef::new(FactFamily::Function, function.0))
             .map(|metadata| metadata.stable_key.clone())
@@ -4290,6 +4708,98 @@ fn entrypoint_precision_metadata(
         EntrypointStatus::Unresolved
         | EntrypointStatus::SetupMissing
         | EntrypointStatus::Unsupported => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn type_metadata_precision(
+    status: TypeStatus,
+    precision: TypePrecision,
+    confidence: Option<TypeConfidence>,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        TypeStatus::SetupMissing => FactPrecision::SetupMissing,
+        TypeStatus::Unsupported => FactPrecision::Unsupported,
+        TypeStatus::Unknown => FactPrecision::Unresolved,
+        TypeStatus::BudgetExceeded => FactPrecision::Heuristic,
+        TypeStatus::Present => match precision {
+            TypePrecision::ExactLocal => FactPrecision::Exact,
+            TypePrecision::SetupAware => FactPrecision::SetupAware,
+            TypePrecision::Conservative | TypePrecision::Heuristic => FactPrecision::Heuristic,
+            TypePrecision::Unknown => FactPrecision::Unresolved,
+            TypePrecision::Unsupported => FactPrecision::Unsupported,
+        },
+    };
+    let confidence = match confidence.unwrap_or(TypeConfidence::Medium) {
+        TypeConfidence::High => FactConfidence::High,
+        TypeConfidence::Medium => FactConfidence::Medium,
+        TypeConfidence::Low => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn value_metadata_precision(
+    status: ValueStatus,
+    precision: ValuePrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        ValueStatus::SetupMissing => FactPrecision::SetupMissing,
+        ValueStatus::Unsupported => FactPrecision::Unsupported,
+        ValueStatus::Unknown => FactPrecision::Unresolved,
+        ValueStatus::BudgetExceeded => FactPrecision::Heuristic,
+        ValueStatus::Present => match precision {
+            ValuePrecision::ExactLocal => FactPrecision::Exact,
+            ValuePrecision::SetupAware => FactPrecision::SetupAware,
+            ValuePrecision::Conservative | ValuePrecision::Heuristic => FactPrecision::Heuristic,
+            ValuePrecision::Unknown => FactPrecision::Unresolved,
+            ValuePrecision::Unsupported => FactPrecision::Unsupported,
+        },
+    };
+    (fact_precision, FactConfidence::Medium)
+}
+
+fn points_to_metadata_precision(
+    status: PointsToStatus,
+    precision: PointsToPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        PointsToStatus::SetupMissing => FactPrecision::SetupMissing,
+        PointsToStatus::Unsupported => FactPrecision::Unsupported,
+        PointsToStatus::Unknown => FactPrecision::Unresolved,
+        PointsToStatus::BudgetExceeded => FactPrecision::Heuristic,
+        PointsToStatus::Present => match precision {
+            PointsToPrecision::LocalFlowSensitive => FactPrecision::SetupAware,
+            PointsToPrecision::FlowInsensitive
+            | PointsToPrecision::SummaryProjected
+            | PointsToPrecision::Heuristic => FactPrecision::Heuristic,
+            PointsToPrecision::Unknown => FactPrecision::Unresolved,
+            PointsToPrecision::Unsupported => FactPrecision::Unsupported,
+        },
+    };
+    (fact_precision, FactConfidence::Medium)
+}
+
+fn alias_metadata_precision(
+    status: AliasStatus,
+    precision: AliasPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        AliasStatus::NoAlias | AliasStatus::MustAlias => match precision {
+            AliasPrecision::ExactLocal => FactPrecision::Exact,
+            AliasPrecision::FlowInsensitive
+            | AliasPrecision::SetupAware
+            | AliasPrecision::Conservative => FactPrecision::SetupAware,
+            AliasPrecision::Heuristic => FactPrecision::Heuristic,
+            AliasPrecision::Unknown => FactPrecision::Unresolved,
+            AliasPrecision::Unsupported => FactPrecision::Unsupported,
+        },
+        AliasStatus::MayAlias | AliasStatus::PartialAlias => FactPrecision::Ambiguous,
+        AliasStatus::Unknown => FactPrecision::Unresolved,
+    };
+    let confidence = match status {
+        AliasStatus::NoAlias | AliasStatus::MustAlias => FactConfidence::High,
+        AliasStatus::MayAlias | AliasStatus::PartialAlias => FactConfidence::Medium,
+        AliasStatus::Unknown => FactConfidence::Low,
     };
     (fact_precision, confidence)
 }

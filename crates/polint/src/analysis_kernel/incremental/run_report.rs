@@ -199,6 +199,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.type_value_alias",
                 "polint.extensions",
                 "polint.metrics",
             ]

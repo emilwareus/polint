@@ -6,6 +6,8 @@
     )
 )]
 
+pub(crate) mod access_paths;
+pub(crate) mod aliases;
 pub(crate) mod cache_key;
 pub(crate) mod calls;
 pub(crate) mod cfg;
@@ -17,8 +19,11 @@ pub(crate) mod extensions;
 pub(crate) mod ids;
 pub(crate) mod mir;
 pub(crate) mod places;
+pub(crate) mod points_to;
 pub(crate) mod provider;
 pub(crate) mod stable_key;
 pub(crate) mod store;
 pub(crate) mod summaries;
+pub(crate) mod types;
 pub(crate) mod validate;
+pub(crate) mod values;

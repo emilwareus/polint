@@ -65,6 +65,19 @@ pub(crate) enum FactFamily {
     TrustBoundary,
     DispatchEdge,
     UnresolvedFramework,
+    Type,
+    NarrowedType,
+    Value,
+    AllocationToken,
+    AccessPath,
+    PointsToConstraint,
+    PointsToSet,
+    AliasAnswer,
+    #[expect(
+        dead_code,
+        reason = "Type/value alias event rows are reserved for later Phase 36 plans."
+    )]
+    TypeValueAliasEvent,
     #[expect(
         dead_code,
         reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
@@ -142,6 +155,15 @@ impl FactFamily {
             Self::TrustBoundary => "TrustBoundary",
             Self::DispatchEdge => "DispatchEdge",
             Self::UnresolvedFramework => "UnresolvedFramework",
+            Self::Type => "Type",
+            Self::NarrowedType => "NarrowedType",
+            Self::Value => "Value",
+            Self::AllocationToken => "AllocationToken",
+            Self::AccessPath => "AccessPath",
+            Self::PointsToConstraint => "PointsToConstraint",
+            Self::PointsToSet => "PointsToSet",
+            Self::AliasAnswer => "AliasAnswer",
+            Self::TypeValueAliasEvent => "TypeValueAliasEvent",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",

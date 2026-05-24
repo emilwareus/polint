@@ -318,7 +318,7 @@ impl AnalysisKernel {
                 semantic_mir_dependency_output_digest,
                 cfg_dependency_output_digest,
                 calls_dependency_output_digest,
-                abstract_domains_dependency_output_digest,
+                abstract_domains_dependency_output_digest.clone(),
                 symbol_dependency_output_digest,
                 module_topology_dependency_output_digest,
                 vec![
@@ -327,6 +327,7 @@ impl AnalysisKernel {
                 ],
             );
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
+        let direct_summaries_output_digest = direct_summaries.output_digest.clone();
         diagnostics.extend(direct_summaries.diagnostics);
 
         // SCC closure: interprocedural summary improvement over SCCs.
@@ -352,9 +353,50 @@ impl AnalysisKernel {
                 &mut db,
                 &input_snapshot,
                 Self::provider_manifest("polint.entrypoints"),
+                entrypoints_semantic_mir_digest.clone(),
+                entrypoints_cfg_digest.clone(),
+                entrypoints_calls_digest.clone(),
+                entrypoints_symbol_digest.clone(),
+                entrypoints_topology_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            );
+        let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
+        let entrypoints_output_digest = entrypoints.output_digest.clone();
+        diagnostics.extend(entrypoints.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.entrypoints",
+            &db,
+            polint_entrypoints_cache_stats,
+            entrypoints_output_digest.clone(),
+        ));
+
+        let direct_summaries_dependency_output_digest = direct_summaries_output_digest
+            .unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.direct_summaries",
+                )
+            });
+        let entrypoints_dependency_output_digest = entrypoints_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.entrypoints",
+            )
+        });
+        let type_value_alias =
+            crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.type_value_alias"),
                 entrypoints_semantic_mir_digest,
                 entrypoints_cfg_digest,
                 entrypoints_calls_digest,
+                abstract_domains_dependency_output_digest,
+                direct_summaries_dependency_output_digest,
+                entrypoints_dependency_output_digest,
                 entrypoints_symbol_digest,
                 entrypoints_topology_digest,
                 vec![
@@ -362,14 +404,14 @@ impl AnalysisKernel {
                     ts_dependency_output_digest.clone(),
                 ],
             );
-        let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
-        let entrypoints_output_digest = entrypoints.output_digest;
-        diagnostics.extend(entrypoints.diagnostics);
+        let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
+        let type_value_alias_output_digest = type_value_alias.output_digest.clone();
+        diagnostics.extend(type_value_alias.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.entrypoints",
+            "polint.type_value_alias",
             &db,
-            polint_entrypoints_cache_stats,
-            entrypoints_output_digest,
+            polint_type_value_alias_cache_stats,
+            type_value_alias_output_digest,
         ));
 
         let extensions =
@@ -819,6 +861,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.type_value_alias",
                 "polint.extensions",
                 "polint.metrics",
             ]
@@ -1566,6 +1609,7 @@ function setup() {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.type_value_alias",
                 "polint.extensions",
                 "polint.metrics",
             ]

@@ -57,6 +57,42 @@ pub(crate) struct DispatchEdgeId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct UnresolvedFrameworkId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct TypeFactId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct TypeSetId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct NarrowedTypeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct ValueFactId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct AbstractValueId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct AllocationTokenId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct AccessPathId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct PointsToConstraintId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct PointsToSetId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct PtVarId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct ObjectTokenId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct AliasAnswerId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +138,18 @@ mod tests {
         assert_small_id_contract::<TrustBoundaryId>();
         assert_small_id_contract::<DispatchEdgeId>();
         assert_small_id_contract::<UnresolvedFrameworkId>();
+        assert_small_id_contract::<TypeFactId>();
+        assert_small_id_contract::<TypeSetId>();
+        assert_small_id_contract::<NarrowedTypeId>();
+        assert_small_id_contract::<ValueFactId>();
+        assert_small_id_contract::<AbstractValueId>();
+        assert_small_id_contract::<AllocationTokenId>();
+        assert_small_id_contract::<AccessPathId>();
+        assert_small_id_contract::<PointsToConstraintId>();
+        assert_small_id_contract::<PointsToSetId>();
+        assert_small_id_contract::<PtVarId>();
+        assert_small_id_contract::<ObjectTokenId>();
+        assert_small_id_contract::<AliasAnswerId>();
     }
 
     #[test]
