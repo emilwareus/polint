@@ -1,0 +1,12 @@
+[workspace]
+include = ["*.go", "*.ts"]
+exclude = ["**/node_modules/**"]
+
+[languages.go]
+module_roots = ["."]
+package_patterns = ["./..."]
+include_tests = true
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"

@@ -782,6 +782,81 @@ pub(crate) fn run_direct_summaries_scc_closure_fixture_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<crate::eval::report::EvaluationRun> {
+    let started = std::time::Instant::now();
+    let fixture = load_native_fixture(fixture_dir)?;
+    let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
+        "symbols",
+        "references",
+        "resolved_imports",
+        "module_graph",
+    ]);
+
+    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        true,
+        &plan,
+    )?;
+    let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
+        &fixture,
+        temp.path(),
+        false,
+        &plan,
+    )?;
+
+    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
+    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
+    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
+    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
+        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+
+    let mut observed = no_cache_observed
+        .iter()
+        .filter(|item| !is_cache_comparison_observed_invariant(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deterministic {
+        observed.push(framework_entrypoints_determinism_observed_invariant());
+    }
+
+    if let Some(budget) = &fixture.manifest.budget {
+        let elapsed = started.elapsed();
+        observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
+            crate::eval::model::ObservedRuntimeBudget {
+                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
+                observed_runtime_ms: Some(saturating_millis(elapsed)),
+            },
+        ));
+    }
+
+    Ok(evaluation_run_for_fixture(&fixture, observed))
+}
+
+#[cfg(test)]
+fn framework_entrypoints_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
+    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
+        name: "framework_entrypoints.current_determinism".to_string(),
+        value: "cold_warm_no_cache_equal".to_string(),
+        mode: crate::eval::model::AssertionMode::Exact,
+        producer_id: Some("polint.eval".to_string()),
+        provenance: Some("framework_entrypoints.current_behavior".to_string()),
+        precision: Some("exact".to_string()),
+        status: Some(crate::eval::model::ObservedStatus::Present),
+    })
+}
+
+#[cfg(test)]
 fn abstract_domain_observed_with_policy(
     repo_root: &Path,
     plan: &crate::analysis_plan::AnalysisPlan,
@@ -2000,6 +2075,10 @@ mod eval_native_fixture_runner_tests {
             && fixture.manifest.case_id == "direct-summaries-scc-closure"
         {
             run_direct_summaries_scc_closure_fixture_for_test(fixture_dir)
+        } else if fixture.manifest.area == FixtureArea::FrameworkEntrypoints
+            && fixture.manifest.case_id == "framework-entrypoints-core"
+        {
+            run_framework_entrypoints_core_fixture_for_test(fixture_dir)
         } else {
             run_native_fixture_for_test(fixture_dir)
         }

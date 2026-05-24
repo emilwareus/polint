@@ -85,6 +85,8 @@ pub(crate) enum FixtureArea {
     AbstractDomains,
     #[serde(rename = "direct-summaries")]
     DirectSummaries,
+    #[serde(rename = "framework-entrypoints")]
+    FrameworkEntrypoints,
     Facts,
     Graphs,
     Paths,

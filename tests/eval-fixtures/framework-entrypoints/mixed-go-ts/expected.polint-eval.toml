@@ -1,0 +1,30 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "framework-entrypoints-core"
+area = "framework-entrypoints"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+# Framework entrypoint fixture with mixed Go and TS/JS sources.
+#
+# Go sources exercise: net/http HandleFunc, chi router (Get/Post), chi middleware (Use),
+# cobra CLI command, Go test and benchmark naming conventions.
+#
+# TS/JS sources exercise: Express (app.get/post/use), MCP SDK (server.tool/resource/prompt).
+#
+# Expected observations are intentionally minimal and focus on deterministic output.
+# Specific fact observations (entrypoint, trust boundary, dispatch edge families)
+# will be added once the fixture-level recognizer coverage is validated against the
+# full MIR -> call sites -> recognizer pipeline for these source patterns.
+
+# Determinism invariant: cold/warm/no-cache three-way equality
+# Proves framework entrypoint output is deterministic across runs.
+[[expected]]
+invariant = { name = "framework_entrypoints.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+# Runtime budget
+[[expected]]
+runtime_budget = { name = "framework-entrypoints-core", max_runtime_ms = 120000, mode = "exact" }

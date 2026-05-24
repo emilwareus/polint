@@ -627,6 +627,11 @@ pub(crate) fn direct_summary_facts_for_test(debug_json: &Value) -> Vec<ObservedI
 }
 
 #[cfg(test)]
+pub(crate) fn entrypoint_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    entrypoint_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn topology_facts_for_test(db: &AnalysisDb) -> Vec<ObservedItem> {
     topology_facts(db)
 }
@@ -946,6 +951,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
     facts.extend(direct_summary_facts(debug_json));
+    facts.extend(entrypoint_facts(debug_json));
     facts.extend(scc_and_demand_query_invariants(debug_json));
     facts
 }
@@ -1616,6 +1622,174 @@ fn direct_summary_domain_count_invariants(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+fn entrypoint_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(entrypoints) = debug_json.get("entrypoints").and_then(Value::as_object) else {
+        return facts;
+    };
+
+    // Entrypoint detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("entrypoints").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "Entrypoint") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Trust boundary detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("trust_boundaries").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "TrustBoundary") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Dispatch edge detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("dispatch_edges").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "DispatchEdge") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Unresolved detail rows -> ObservedFact
+    if let Some(rows) = entrypoints.get("unresolved").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = entrypoint_fact(row, "UnresolvedFramework") {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+
+    // Count invariants from the counts section
+    facts.extend(entrypoint_count_invariants(entrypoints));
+    facts
+}
+
+#[cfg(test)]
+fn entrypoint_fact(row: &Value, family: &str) -> Option<ObservedFact> {
+    let stable_key = row.get("stable_key")?.as_str()?.to_string();
+    let precision = row.get("precision").and_then(Value::as_str).map(|p| {
+        match p {
+            "ResolvedStatic" => "resolved_static",
+            "SetupAware" => "setup_aware",
+            "Heuristic" => "heuristic",
+            "Conservative" => "conservative",
+            "Unknown" => "unknown",
+            other => other,
+        }
+        .to_string()
+    });
+    let status = row.get("status").and_then(Value::as_str).and_then(|s| {
+        match s {
+            "Resolved" => Some(ObservedStatus::Resolved),
+            "Partial" => Some(ObservedStatus::Partial),
+            "Unresolved" => Some(ObservedStatus::Unresolved),
+            "SetupMissing" => Some(ObservedStatus::SetupMissing),
+            "Unsupported" => Some(ObservedStatus::Unsupported),
+            _ => None,
+        }
+    });
+
+    // Build compact payload fragment
+    let mut payload_parts = Vec::new();
+    if let Some(framework_id) = row.get("framework_id").and_then(Value::as_str) {
+        payload_parts.push(format!("framework={framework_id}"));
+    }
+    if let Some(kind) = row.get("kind").and_then(Value::as_str) {
+        payload_parts.push(format!("kind={kind}"));
+    }
+    if let Some(source_kind) = row.get("source_kind").and_then(Value::as_str) {
+        payload_parts.push(format!("source_kind={source_kind}"));
+    }
+    if let Some(edge_kind) = row.get("edge_kind").and_then(Value::as_str) {
+        payload_parts.push(format!("edge_kind={edge_kind}"));
+    }
+    if let Some(reason) = row.get("reason").and_then(Value::as_str) {
+        payload_parts.push(format!("reason={reason}"));
+    }
+    if let Some(trigger) = row.get("trigger_summary").and_then(Value::as_str) {
+        if trigger != "none" {
+            payload_parts.push(format!("trigger={trigger}"));
+        }
+    }
+    let payload = if payload_parts.is_empty() {
+        None
+    } else {
+        Some(payload_parts.join(";"))
+    };
+
+    Some(ObservedFact {
+        family: family.to_string(),
+        stable_key,
+        mode: AssertionMode::Partial,
+        producer_id: Some("polint.entrypoints".to_string()),
+        provenance: Some("kernel.metadata_debug_json.entrypoints".to_string()),
+        precision,
+        status: Some(status.unwrap_or(ObservedStatus::Present)),
+        payload,
+    })
+}
+
+#[cfg(test)]
+fn entrypoint_count_invariants(
+    entrypoints: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(counts) = entrypoints.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let mut invariants = Vec::new();
+
+    // Total counts
+    for field in [
+        "total_entrypoints",
+        "total_trust_boundaries",
+        "total_dispatch_edges",
+        "total_unresolved",
+    ] {
+        if let Some(value) = counts.get(field).and_then(Value::as_u64) {
+            if value > 0 {
+                invariants.push(observed_invariant(
+                    format!("framework_entrypoints.counts.{field}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.entrypoints.counts",
+                ));
+            }
+        }
+    }
+
+    // Breakdown counts
+    for group in [
+        "by_language",
+        "by_framework_id",
+        "by_kind",
+        "by_status",
+        "by_precision",
+        "trust_boundary_by_source_kind",
+        "dispatch_edge_by_edge_kind",
+        "unresolved_by_reason",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("framework_entrypoints.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.entrypoints.counts",
+                ));
+            }
+        }
+    }
+    invariants
 }
 
 #[cfg(test)]
