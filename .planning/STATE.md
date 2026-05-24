@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-24T13:58:09.586Z"
+last_updated: "2026-05-24T14:40:22.254Z"
 last_activity: 2026-05-24
 progress:
   total_phases: 22
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 100
-  completed_plans: 98
-  percent: 73
+  completed_plans: 100
+  percent: 77
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 36 — p0-type-value-place-alias-substrate
+**Current focus:** Phase 37 — refined-call-graph-providers
 
 ## Current Status
 
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 36 (p0-type-value-place-alias-substrate) — EXECUTING
-Plan: 3 of 7
+Phase: 37 (refined-call-graph-providers) — PENDING
+Plan: Not planned
 Last activity: 2026-05-24
 
 ## Phase Progress
@@ -66,7 +66,7 @@ Last activity: 2026-05-24
 | 33 | Complete | 7/7 plans complete; demand queries, summary SCC cache, extension-aware quarantine, eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-03 |
 | 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
 | 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
-| 36 | Pending | P0 type/value/place/alias substrate; requirement SAE-PREC-01 |
+| 36 | Complete | 7/7 plans complete; private type/value/place/alias substrate, validation/debug/eval fixtures, extension precision, public no-leak proof, and final verification done; requirement SAE-PREC-01 |
 | 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
 | 38 | Pending | Local plus summary-projected data flow; requirement SAE-PREC-03 |
 | 39 | Pending | Slicing, paths, and evidence bundles; requirement SAE-PREC-04 |
