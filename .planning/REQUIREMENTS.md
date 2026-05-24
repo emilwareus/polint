@@ -35,7 +35,7 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 
 ### Precision
 
-- [ ] **SAE-PREC-01**: polint has a P0 type/value/place/alias substrate with declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and explicit alias statuses.
+- [x] **SAE-PREC-01**: polint has a P0 type/value/place/alias substrate with declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and explicit alias statuses.
 - [ ] **SAE-PREC-02**: polint has opt-in refined call graph providers over direct calls, entrypoints, summaries, type/value facts, function tokens, receiver types, and bounded points-to constraints with explicit unresolved and budget-exceeded statuses.
 - [ ] **SAE-PREC-03**: polint has local and summary-projected data-flow facts, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search.
 - [ ] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering.
@@ -83,7 +83,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-INT-03 | Phase 33 | Pending |
 | SAE-INT-04 | Phase 34 | Complete |
 | SAE-INT-05 | Phase 35 | In Progress |
-| SAE-PREC-01 | Phase 36 | Pending |
+| SAE-PREC-01 | Phase 36 | Complete |
 | SAE-PREC-02 | Phase 37 | Pending |
 | SAE-PREC-03 | Phase 38 | Pending |
 | SAE-PREC-04 | Phase 39 | Pending |

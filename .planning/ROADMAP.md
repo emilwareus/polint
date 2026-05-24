@@ -38,7 +38,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 33 | 7/7 | Complete   | 2026-05-24 |
 | 34 | 6/6 | Complete   | 2026-05-23 |
 | 35 | 8/8 | Complete   | 2026-05-24 |
-| 36 | 3/7 | In Progress|  |
+| 36 | 4/7 | In Progress|  |
 | 37 | Refined Call Graph Providers | Add opt-in refined call graph providers over direct calls, summaries, entrypoints, and type/value facts. | SAE-PREC-02 |
 | 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
 | 39 | Slicing, Paths, and Evidence Bundles | Add structured evidence, slices, chops, ranked paths, summary expansion, and evidence rendering. | SAE-PREC-04 |
