@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::sinks::{ExtensionFactCandidate, ExtensionFactPrecision};
+use super::sinks::{
+    ExtensionFactCandidate, ExtensionFactPrecision, has_required_type_value_alias_payload,
+    is_type_value_alias_fact_family,
+};
 use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact};
 use crate::core::AnalysisDb;
 
@@ -18,6 +21,8 @@ pub(crate) enum ExtensionRejectionReason {
     DuplicateStableKey,
     NativeConflict,
     FrameworkPrecisionCeiling,
+    TypeValueAliasPrecisionCeiling,
+    MalformedPayload,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,12 +105,25 @@ fn rejection_reason(
     if candidate.precision.is_none() {
         return Some(ExtensionRejectionReason::MissingPrecision);
     }
+    if is_type_value_alias_fact_family(&candidate.fact_family)
+        && !has_required_type_value_alias_payload(candidate)
+    {
+        return Some(ExtensionRejectionReason::MalformedPayload);
+    }
     // Framework-specific precision ceiling: Exact is unconditionally rejected for
     // framework fact families per D-18, regardless of validation evidence.
     if is_framework_fact_family(&candidate.fact_family)
         && candidate.precision == Some(ExtensionFactPrecision::Exact)
     {
         return Some(ExtensionRejectionReason::FrameworkPrecisionCeiling);
+    }
+    if is_type_value_alias_fact_family(&candidate.fact_family)
+        && candidate.precision == Some(ExtensionFactPrecision::Exact)
+        && !input
+            .exact_validation_evidence
+            .contains(&candidate.stable_key)
+    {
+        return Some(ExtensionRejectionReason::TypeValueAliasPrecisionCeiling);
     }
     if candidate.stable_key.starts_with("synthetic:") && candidate.evidence.is_empty() {
         return Some(ExtensionRejectionReason::SyntheticIdMissingEvidence);
@@ -167,6 +185,7 @@ mod tests {
     use super::*;
     use crate::analysis::extensions::sinks::{
         ExtensionFactConfidence, ExtensionFactStatus, ExtensionSpanRef,
+        TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
     };
     use crate::core::{AnalysisDb, Language};
     use std::sync::Arc;
@@ -407,5 +426,77 @@ mod tests {
             );
             assert_eq!(output.accepted[0].precision, *precision);
         }
+    }
+
+    #[test]
+    fn type_value_alias_fact_family_accepts_well_formed_candidate_payload() {
+        let mut c = candidate("alias:extension");
+        c.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
+        c.payload_labels = vec![
+            "left=place:1".to_string(),
+            "right=place:2".to_string(),
+            "status=no_alias".to_string(),
+        ];
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert(TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 1);
+        assert_eq!(output.accepted[0].status, ExtensionFactStatus::Accepted);
+        assert_eq!(
+            output.accepted[0].fact_family,
+            TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
+        );
+        assert_eq!(
+            output.accepted[0].precision,
+            ExtensionFactPrecision::Heuristic
+        );
+        assert!(!output.accepted[0].evidence.is_empty());
+        assert!(!output.accepted[0].payload_digest.is_empty());
+    }
+
+    #[test]
+    fn type_value_alias_fact_family_rejects_malformed_payload_before_merge() {
+        let mut c = candidate("alias:malformed");
+        c.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
+        c.payload_labels = vec!["left=place:1".to_string(), "right=place:2".to_string()];
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert(TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 0);
+        assert_eq!(
+            output.rejected[0].reason,
+            ExtensionRejectionReason::MalformedPayload
+        );
+    }
+
+    #[test]
+    fn type_value_alias_exact_claims_require_validation_evidence() {
+        let mut c = candidate("alias:exact");
+        c.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
+        c.precision = Some(ExtensionFactPrecision::Exact);
+        c.payload_labels = vec![
+            "left=place:1".to_string(),
+            "right=place:2".to_string(),
+            "status=must_alias".to_string(),
+        ];
+        let mut validation_input = input(vec![c]);
+        validation_input
+            .declared_outputs
+            .insert(TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(
+            output.rejected[0].reason,
+            ExtensionRejectionReason::TypeValueAliasPrecisionCeiling
+        );
     }
 }
