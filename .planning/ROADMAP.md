@@ -396,8 +396,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 35-05-PLAN.md — Trust boundary derivation, dispatch edges, unresolved facts, and provider data pipeline
-- [ ] 35-06-PLAN.md — Framework fact validation and extension overlay merge
+- [x] 35-05-PLAN.md — Trust boundary derivation, dispatch edges, unresolved facts, and provider data pipeline
+- [x] 35-06-PLAN.md — Framework fact validation and extension overlay merge
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

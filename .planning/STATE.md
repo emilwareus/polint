@@ -9,7 +9,7 @@ progress:
   total_phases: 22
   completed_phases: 17
   total_plans: 93
-  completed_plans: 88
+  completed_plans: 89
   percent: 78
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 35 (framework-entrypoints-and-trust-boundaries) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Last activity: 2026-05-24
 
 ## Phase Progress
@@ -300,6 +300,9 @@ Last activity: 2026-05-24
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: HTTP routes produce PathParam (if path has /:id or /{id}), QueryString, RequestBody (POST/PUT/PATCH/DELETE), RequestHeader boundaries.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Dispatch edges map EntrypointKind to DispatchEdgeKind following D-04 specification.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Unresolved merge uses BTreeMap by stable key for dedup (first occurrence wins) and deterministic sort.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Entrypoint fact accessors promoted from #[cfg(test)] to production visibility for validation pipeline access.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Extension framework facts use FrameworkPrecisionCeiling rejection reason separate from MissingProvenance for Exact precision violations.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Conflicting entrypoint registrations detected by same target_function with different framework_ids produce warning diagnostics.
 
 ## Execution Metrics
 
@@ -370,12 +373,13 @@ Last activity: 2026-05-24
 | 35-framework-entrypoints-and-trust-boundaries | 03 | 5 min | 1 | 2 |
 | 35-framework-entrypoints-and-trust-boundaries | 04 | 4 min | 1 | 2 |
 | 35-framework-entrypoints-and-trust-boundaries | 05 | 6 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 06 | 8 min | 2 | 6 |
 
 ## Session
 
 - Last session: 2026-05-24
-- Last activity: 2026-05-24 - Completed 35-05-PLAN.md.
-- Stopped at: Completed 35-05; continuing Phase 35 plan 6 of 8.
+- Last activity: 2026-05-24 - Completed 35-06-PLAN.md.
+- Stopped at: Completed 35-06; continuing Phase 35 plan 7 of 8.
 
 ### Quick Tasks Completed
 
@@ -405,4 +409,4 @@ Last activity: 2026-05-24
 
 ## Next Action
 
-Continue Phase 35 plan 6 of 8 (framework entrypoints and trust boundaries).
+Continue Phase 35 plan 7 of 8 (framework entrypoints and trust boundaries).
