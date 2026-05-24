@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-24T05:31:00Z"
+last_updated: "2026-05-24T05:37:33Z"
 last_activity: 2026-05-24
 progress:
   total_phases: 22
-  completed_phases: 15
+  completed_phases: 17
   total_plans: 93
   completed_plans: 87
-  percent: 69
+  percent: 77
 ---
 
 # State: polint
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 35 (framework-entrypoints-and-trust-boundaries) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Last activity: 2026-05-24
 
 ## Phase Progress
@@ -63,8 +63,8 @@ Last activity: 2026-05-24
 | 30 | Complete | 8/8 plans complete; direct call contracts, provider/cache identity, validation/debug snapshots, MIR call-site extraction, direct targets, unresolved evidence, eval observation/fixtures, and public-boundary proof done; requirement SAE-SEM-05 |
 | 31 | Complete | 5/5 plans complete; private domain contracts, deterministic local solver, stored domain facts, provider/cache identity, validation, debug JSON, abstract-domain eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-01 |
 | 32 | Complete | 7/7 plans complete; summary kernel contracts, store, builder, provider, cache identity, validation, debug, eval fixtures, and public-boundary proof done; requirement SAE-INT-02 |
-| 33 | Pending | Demand queries and summary SCC cache; requirement SAE-INT-03 |
-| 34 | Pending | Rust extension/provider sink; requirement SAE-INT-04 |
+| 33 | Complete | 7/7 plans complete; demand queries, summary SCC cache, extension-aware quarantine, eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-03 |
+| 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
 | 35 | Pending | Framework entrypoints and trust boundaries; requirement SAE-INT-05 |
 | 36 | Pending | P0 type/value/place/alias substrate; requirement SAE-PREC-01 |
 | 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
@@ -361,12 +361,13 @@ Last activity: 2026-05-24
 | 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
 | 35-framework-entrypoints-and-trust-boundaries | 01 | 5 min | 2 | 6 |
 | 35-framework-entrypoints-and-trust-boundaries | 02 | 7 min | 2 | 8 |
+| 35-framework-entrypoints-and-trust-boundaries | 03 | 5 min | 1 | 2 |
 
 ## Session
 
 - Last session: 2026-05-24
-- Last activity: 2026-05-24 - Completed 35-02-PLAN.md.
-- Stopped at: Completed 35-02; continuing Phase 35 plan 3 of 8.
+- Last activity: 2026-05-24 - Completed 35-03-PLAN.md.
+- Stopped at: Completed 35-03; continuing Phase 35 plan 4 of 8.
 
 ### Quick Tasks Completed
 
@@ -396,4 +397,4 @@ Last activity: 2026-05-24
 
 ## Next Action
 
-Continue Phase 35 plan 3 of 8 (framework entrypoints and trust boundaries).
+Continue Phase 35 plan 4 of 8 (framework entrypoints and trust boundaries).
