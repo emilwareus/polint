@@ -37,7 +37,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 32 | 7/7 | Complete    | 2026-05-21 |
 | 33 | 7/7 | Complete   | 2026-05-24 |
 | 34 | 6/6 | Complete   | 2026-05-23 |
-| 35 | 1/8 | In Progress|  |
+| 35 | 5/8 | In Progress|  |
 | 36 | P0 Type/Value/Place/Alias Substrate | Add normalized type, value, allocation, access-path, narrowing, and alias facts. | SAE-PREC-01 |
 | 37 | Refined Call Graph Providers | Add opt-in refined call graph providers over direct calls, summaries, entrypoints, and type/value facts. | SAE-PREC-02 |
 | 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
