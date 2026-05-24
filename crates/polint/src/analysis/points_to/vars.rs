@@ -33,9 +33,21 @@ pub(crate) fn access_path_var(id: AccessPathId) -> PtVarId {
 }
 
 pub(crate) fn access_path_prefix_var(id: AccessPathId, projection_index: usize) -> PtVarId {
+    const PREFIX_COMPONENT_BITS: u64 = 30;
+    const PREFIX_COMPONENT_MAX: u64 = (1_u64 << PREFIX_COMPONENT_BITS) - 1;
+    let projection_index =
+        u64::try_from(projection_index).expect("access path projection index exceeds u64 capacity");
+    assert!(
+        id.0 <= PREFIX_COMPONENT_MAX,
+        "access path id exceeds prefix variable capacity"
+    );
+    assert!(
+        projection_index <= PREFIX_COMPONENT_MAX,
+        "access path projection index exceeds prefix variable capacity"
+    );
     tagged_var(
         ACCESS_PATH_PREFIX_VAR_TAG,
-        id.0.saturating_mul(1024) + projection_index as u64,
+        (id.0 << PREFIX_COMPONENT_BITS) | projection_index,
     )
 }
 
@@ -127,5 +139,13 @@ mod tests {
         let high = 1_u64 << 56;
 
         assert_ne!(place_var(PlaceId(0)), place_var(PlaceId(high)));
+    }
+
+    #[test]
+    fn access_path_prefix_vars_do_not_collide_at_legacy_stride_boundary() {
+        assert_ne!(
+            access_path_prefix_var(AccessPathId(1), 1024),
+            access_path_prefix_var(AccessPathId(2), 0)
+        );
     }
 }

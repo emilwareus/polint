@@ -445,6 +445,10 @@ fn allocation_kind(value: &str) -> AllocationKind {
 }
 
 fn access_path_projections(fact: &AcceptedExtensionFact) -> Vec<AccessPathProjection> {
+    let has_base_projection = fact
+        .payload_labels
+        .iter()
+        .any(|label| label == "projection=base");
     let projections = fact
         .payload_labels
         .iter()
@@ -469,9 +473,13 @@ fn access_path_projections(fact: &AcceptedExtensionFact) -> Vec<AccessPathProjec
         })
         .collect::<Vec<_>>();
     if projections.is_empty() {
-        vec![AccessPathProjection::Unknown {
-            evidence: "extension-base-only".to_string(),
-        }]
+        if has_base_projection {
+            Vec::new()
+        } else {
+            vec![AccessPathProjection::Unknown {
+                evidence: "extension-base-only".to_string(),
+            }]
+        }
     } else {
         projections
     }
@@ -531,12 +539,7 @@ fn pt_var_id(value: &str) -> Option<PtVarId> {
             .map(AllocationTokenId)
             .map(crate::analysis::points_to::vars::allocation_var)
     } else {
-        value
-            .strip_prefix("pt:")
-            .unwrap_or(value)
-            .parse()
-            .ok()
-            .map(PtVarId)
+        None
     }
 }
 
@@ -560,12 +563,7 @@ fn object_token_id(value: &str) -> Option<ObjectTokenId> {
             .map(AbstractValueId)
             .map(crate::analysis::points_to::vars::abstract_value_object)
     } else {
-        value
-            .strip_prefix("obj:")
-            .unwrap_or(value)
-            .parse()
-            .ok()
-            .map(ObjectTokenId)
+        None
     }
 }
 
@@ -573,7 +571,9 @@ fn language_label(value: Option<&str>) -> Language {
     match value {
         Some("go") => Language::Go,
         Some("javascript") => Language::JavaScript,
+        Some("jsx") => Language::Jsx,
         Some("typescript") => Language::TypeScript,
+        Some("tsx") => Language::Tsx,
         _ => Language::Unknown,
     }
 }
@@ -693,7 +693,7 @@ mod tests {
                 accepted(
                     TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
                     "pt:extension",
-                    &["kind=copy", "dst=pt:1", "src=pt:2"],
+                    &["kind=copy", "dst=place:1", "src=place:2"],
                 ),
             ],
         );

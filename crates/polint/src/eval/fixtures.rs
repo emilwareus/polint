@@ -1554,6 +1554,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/type-value-alias/go-core")
     }
 
+    fn type_value_alias_ts_js_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/ts-js-core")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1964,6 +1968,18 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_type_value_alias_ts_js_core_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_ts_js_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("type/value/alias TS/JS core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-ts-js-core");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -1974,7 +1990,7 @@ mod eval_native_fixture_runner_tests {
         );
 
         for fixture_dir in fixture_dirs {
-            if cfg!(target_os = "windows") && fixture_dir.ends_with("extension/real-sink") {
+            if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
                 continue;
             }
             let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
@@ -2027,6 +2043,11 @@ mod eval_native_fixture_runner_tests {
                 "native fixture suite must include a passing {required_area:?} fixture; found {passing_by_area:#?}"
             );
         }
+    }
+
+    fn fixture_requires_runtime_extension(fixture_dir: &Path) -> bool {
+        fixture_dir.ends_with("extension/real-sink")
+            || fixture_dir.ends_with("type-value-alias/extension-precision")
     }
 
     fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {

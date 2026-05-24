@@ -335,13 +335,14 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             fact.source_operation,
         );
         if let Some(span) = &fact.span
-            && span.start_byte > span.end_byte
+            && let Some(reason) =
+                span_failure_reason(db, &type_value_alias_ids.files, fact.file, span)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AllocationToken,
                 &fact.stable_key,
                 "span",
-                "invalid_span_range",
+                reason,
             ));
         }
     }
@@ -1484,7 +1485,7 @@ mod type_value_alias_validation {
             "duplicate_stable_key",
             "dangling_reference",
             "access_path_depth_mismatch",
-            "invalid_span_range",
+            "span file does not exist",
             "type_status_precision_mismatch",
             "value_status_precision_mismatch",
             "points_to_status_precision_mismatch",
@@ -1564,9 +1565,10 @@ mod type_value_alias_validation {
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
         assert!(
             diagnostics.iter().all(|diagnostic| {
-                !diagnostic.evidence.iter().any(|evidence| {
-                    evidence.label == "component" && evidence.value == "phase36_private"
-                })
+                !diagnostic
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.label == "component" && evidence.value == "analysis")
             }),
             "value-derived object tokens should validate: {diagnostics:#?}"
         );
@@ -4862,8 +4864,8 @@ fn type_value_alias_diagnostic(
     field: &'static str,
     reason: impl Into<String>,
 ) -> Diagnostic {
-    internal_diagnostic("Private analysis validation failed for a Phase 36 fact.")
-        .with_evidence("component", "phase36_private")
+    internal_diagnostic("Internal analysis validation failed.")
+        .with_evidence("component", "analysis")
         .with_evidence("stable_key", stable_key.to_string())
         .with_evidence("field", field)
         .with_evidence("reason", reason.into())

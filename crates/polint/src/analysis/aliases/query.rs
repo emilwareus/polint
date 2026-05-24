@@ -128,6 +128,11 @@ impl<'a> AliasQueryIndex<'a> {
 
     fn same_access_path(&self, left: AliasOperand, right: AliasOperand) -> bool {
         match (left, right) {
+            (AliasOperand::Place(place), AliasOperand::AccessPath(path))
+            | (AliasOperand::AccessPath(path), AliasOperand::Place(place)) => self
+                .access_paths
+                .get(&path)
+                .is_some_and(|path| path.base == place && path.projections.is_empty()),
             (AliasOperand::AccessPath(left), AliasOperand::AccessPath(right)) => self
                 .access_paths
                 .get(&left)
@@ -226,6 +231,31 @@ mod tests {
             assert!(answers.iter().any(|answer| answer.status == status));
         }
         assert!(answers.iter().all(|answer| !answer.evidence.is_empty()));
+    }
+
+    #[test]
+    fn zero_projection_access_path_aliases_its_base_place() {
+        let paths = vec![AccessPathFact {
+            id: AccessPathId(7),
+            base: PlaceId(3),
+            projections: Vec::new(),
+            depth: 0,
+            language: Language::TypeScript,
+            file: None,
+            function: None,
+            body: None,
+            status: AccessPathStatus::Resolved,
+            stable_key: "path:root".to_string(),
+        }];
+        let index = AliasQueryIndex::new(&paths, &[]);
+
+        let answer = index.answer(
+            AliasOperand::Place(PlaceId(3)),
+            AliasOperand::AccessPath(AccessPathId(7)),
+        );
+
+        assert_eq!(answer.status, AliasStatus::MustAlias);
+        assert_eq!(answer.reason, AliasReason::SameStablePlace);
     }
 
     fn path(id: AccessPathId, base: PlaceId, field: &str) -> AccessPathFact {

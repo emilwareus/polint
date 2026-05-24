@@ -274,10 +274,10 @@ mod tests {
     use super::*;
     use crate::analysis::extensions::sinks::{
         ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
-        TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+        TYPE_VALUE_ALIAS_ALLOCATION_FAMILY, TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
     };
     use crate::analysis::extensions::store::{AcceptedExtensionFact, ExtensionOutput};
-    use crate::analysis::ids::{ObjectTokenId, PtVarId};
+    use crate::analysis::ids::AllocationTokenId;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
@@ -357,11 +357,18 @@ export function flow(input, key) {
     fn type_value_alias_provider_solves_extension_points_to_constraints() {
         let mut db = AnalysisDb::new();
         db.replace_extension_facts(ExtensionOutput {
-            accepted: vec![accepted_extension_fact(
-                TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
-                "pt:extension:address",
-                &["kind=address_of", "dst=pt:77", "object=obj:88"],
-            )],
+            accepted: vec![
+                accepted_extension_fact(
+                    TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+                    "allocation:extension:object",
+                    &["kind=object"],
+                ),
+                accepted_extension_fact(
+                    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+                    "pt:extension:address",
+                    &["kind=address_of", "dst=allocation:0", "object=allocation:0"],
+                ),
+            ],
             rejected: Vec::new(),
             activations: Vec::new(),
         });
@@ -370,7 +377,12 @@ export function flow(input, key) {
 
         assert!(output.diagnostics.is_empty());
         assert!(db.points_to_sets().iter().any(|set| {
-            set.variable == PtVarId(77) && set.objects.contains(&ObjectTokenId(88))
+            set.variable == crate::analysis::points_to::vars::allocation_var(AllocationTokenId(0))
+                && set
+                    .objects
+                    .contains(&crate::analysis::points_to::vars::allocation_object(
+                        AllocationTokenId(0),
+                    ))
         }));
     }
 

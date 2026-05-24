@@ -95,18 +95,28 @@ pub(crate) fn has_required_type_value_alias_payload(candidate: &ExtensionFactCan
     }
     match candidate.fact_family.as_str() {
         TYPE_VALUE_ALIAS_TYPE_FAMILY => {
-            has_payload_label(candidate, "subject=") && has_payload_label(candidate, "shape=")
+            payload_label(candidate, "subject=").is_some_and(valid_type_subject)
+                && payload_label(candidate, "shape=").is_some_and(valid_type_shape)
+                && valid_optional_language(candidate)
         }
         TYPE_VALUE_ALIAS_VALUE_FAMILY => {
-            has_payload_label(candidate, "subject=") && has_payload_label(candidate, "kind=")
+            payload_label(candidate, "subject=").is_some_and(valid_value_subject)
+                && payload_label(candidate, "kind=").is_some_and(valid_value_kind)
+                && valid_optional_language(candidate)
         }
-        TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => has_payload_label(candidate, "kind="),
+        TYPE_VALUE_ALIAS_ALLOCATION_FAMILY => {
+            payload_label(candidate, "kind=").is_some_and(valid_allocation_kind)
+                && valid_optional_language(candidate)
+        }
         TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY => {
-            has_payload_label(candidate, "base=place:")
+            payload_label(candidate, "base=").is_some_and(valid_place_ref)
                 && candidate
                     .payload_labels
                     .iter()
-                    .any(|label| label == "projection=base" || label.starts_with("projection="))
+                    .filter_map(|label| label.strip_prefix("projection="))
+                    .all(valid_access_path_projection)
+                && has_payload_label(candidate, "projection=")
+                && valid_optional_language(candidate)
         }
         TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY => {
             has_type_value_alias_points_to_payload(candidate)
@@ -129,14 +139,114 @@ fn has_type_value_alias_points_to_payload(candidate: &ExtensionFactCandidate) ->
     let Some(kind) = payload_label(candidate, "kind=") else {
         return false;
     };
-    if !has_payload_label(candidate, "dst=") {
+    if !payload_label(candidate, "dst=").is_some_and(valid_points_to_var_ref) {
         return false;
     }
     match kind {
-        "address_of" => has_payload_label(candidate, "object="),
-        "copy" => has_payload_label(candidate, "src="),
+        "address_of" => payload_label(candidate, "object=").is_some_and(valid_object_token_ref),
+        "copy" => payload_label(candidate, "src=").is_some_and(valid_points_to_var_ref),
         _ => false,
     }
+}
+
+fn valid_type_subject(value: &str) -> bool {
+    valid_numeric_ref(value, "place:")
+        || valid_numeric_ref(value, "symbol:")
+        || has_nonempty_prefixed_value(value, "synthetic:")
+        || has_nonempty_prefixed_value(value, "unknown:")
+}
+
+fn valid_value_subject(value: &str) -> bool {
+    valid_numeric_ref(value, "place:")
+        || has_nonempty_prefixed_value(value, "synthetic:")
+        || has_nonempty_prefixed_value(value, "unknown:")
+}
+
+fn valid_type_shape(value: &str) -> bool {
+    matches!(value, "any" | "object" | "class")
+        || has_nonempty_prefixed_value(value, "primitive:")
+        || has_nonempty_prefixed_value(value, "literal:")
+        || has_nonempty_prefixed_value(value, "callable:")
+        || has_nonempty_prefixed_value(value, "module:")
+        || has_nonempty_prefixed_value(value, "nominal:")
+        || has_nonempty_prefixed_value(value, "structural:")
+        || has_nonempty_prefixed_value(value, "unsupported:")
+        || has_nonempty_prefixed_value(value, "unknown:")
+}
+
+fn valid_value_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "null" | "undefined" | "nil" | "function" | "class" | "module"
+    ) || has_nonempty_prefixed_value(value, "bool:")
+        || has_nonempty_prefixed_value(value, "number:")
+        || has_nonempty_prefixed_value(value, "string:")
+        || has_nonempty_prefixed_value(value, "literal:")
+        || valid_numeric_ref(value, "place_ref:")
+        || has_nonempty_prefixed_value(value, "unknown:")
+}
+
+fn valid_allocation_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "object"
+            | "array"
+            | "composite"
+            | "function"
+            | "class"
+            | "module"
+            | "closure"
+            | "synthetic_framework"
+            | "extension"
+            | "unknown"
+    )
+}
+
+fn valid_access_path_projection(value: &str) -> bool {
+    value == "base"
+        || value == "deref"
+        || value == "await"
+        || has_nonempty_prefixed_value(value, "field:")
+        || has_nonempty_prefixed_value(value, "property:")
+        || has_nonempty_prefixed_value(value, "index:")
+        || has_nonempty_prefixed_value(value, "unknown:")
+}
+
+fn valid_optional_language(candidate: &ExtensionFactCandidate) -> bool {
+    payload_label(candidate, "language=").is_none_or(|language| {
+        matches!(
+            language,
+            "go" | "javascript" | "jsx" | "typescript" | "tsx" | "unknown"
+        )
+    })
+}
+
+fn valid_place_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "place:")
+}
+
+fn valid_points_to_var_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "place:")
+        || valid_numeric_ref(value, "access_path:")
+        || valid_numeric_ref(value, "allocation:")
+}
+
+fn valid_object_token_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "allocation:")
+        || valid_numeric_ref(value, "value:")
+        || valid_numeric_ref(value, "abstract_value:")
+}
+
+fn valid_numeric_ref(value: &str, prefix: &str) -> bool {
+    value
+        .strip_prefix(prefix)
+        .is_some_and(|id| !id.is_empty() && id.parse::<u64>().is_ok())
+}
+
+fn has_nonempty_prefixed_value(value: &str, prefix: &str) -> bool {
+    value
+        .strip_prefix(prefix)
+        .is_some_and(|suffix| !suffix.is_empty())
 }
 
 fn payload_label<'a>(candidate: &'a ExtensionFactCandidate, prefix: &str) -> Option<&'a str> {
@@ -213,6 +323,40 @@ mod tests {
 
         candidate.payload_labels.pop();
 
+        assert!(!has_required_type_value_alias_payload(&candidate));
+    }
+
+    #[test]
+    fn type_value_alias_payload_rejects_unknown_enums_and_raw_points_to_refs() {
+        let mut candidate = ExtensionFactCandidate {
+            extension_id: "demo".to_string(),
+            provider_id: "types".to_string(),
+            fact_family: TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY.to_string(),
+            stable_key: "pt:extension".to_string(),
+            binding_refs: vec!["file:src/app.ts".to_string()],
+            span: None,
+            precision: Some(ExtensionFactPrecision::Heuristic),
+            confidence: ExtensionFactConfidence::Medium,
+            status: ExtensionFactStatus::Candidate,
+            evidence: vec!["extension-evidence".to_string()],
+            payload_labels: vec![
+                "kind=address_of".to_string(),
+                "dst=place:1".to_string(),
+                "object=allocation:2".to_string(),
+            ],
+        };
+
+        assert!(has_required_type_value_alias_payload(&candidate));
+
+        candidate.payload_labels = vec![
+            "kind=address_of".to_string(),
+            "dst=pt:1".to_string(),
+            "object=obj:2".to_string(),
+        ];
+        assert!(!has_required_type_value_alias_payload(&candidate));
+
+        candidate.fact_family = TYPE_VALUE_ALIAS_TYPE_FAMILY.to_string();
+        candidate.payload_labels = vec!["subject=place:1".to_string(), "shape=typo".to_string()];
         assert!(!has_required_type_value_alias_payload(&candidate));
     }
 }
