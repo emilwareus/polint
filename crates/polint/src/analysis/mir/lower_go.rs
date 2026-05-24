@@ -489,6 +489,8 @@ impl<'source> FunctionLowering<'source> {
             | "int_literal"
             | "float_literal"
             | "rune_literal"
+            | "composite_literal"
+            | "func_literal"
             | "true"
             | "false"
             | "nil" => Some(ValueDraft::Literal {

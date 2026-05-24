@@ -131,6 +131,9 @@ pub(crate) fn type_value_alias_provider_parameter_digest_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_kernel::incremental::{
+        GoLifecycleSnapshot, InputComponentStatus, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    };
 
     #[test]
     fn provider_parameter_digest_changes_for_behavior_inputs() {
@@ -181,6 +184,82 @@ mod tests {
             ),
         ] {
             assert_ne!(baseline, changed);
+        }
+    }
+
+    #[test]
+    fn snapshot_digest_changes_for_go_lifecycle_tool_and_upstream_inputs() {
+        let baseline_snapshot = snapshot("go-base", "tool-base");
+        let changed_go = snapshot("go-changed", "tool-base");
+        let changed_tool = snapshot("go-base", "tool-changed");
+        let upstream_base = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "semantic_mir",
+            &["base"],
+        )];
+        let upstream_changed = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "semantic_mir",
+            &["changed"],
+        )];
+
+        let baseline = type_value_alias_provider_parameter_digest_for_snapshot(
+            &baseline_snapshot,
+            &upstream_base,
+        );
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_go, &upstream_base)
+        );
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_tool, &upstream_base)
+        );
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(
+                &baseline_snapshot,
+                &upstream_changed
+            )
+        );
+    }
+
+    fn snapshot(go_suffix: &str, tool_suffix: &str) -> InputSnapshot {
+        let go_component = component(
+            "go.tool_invocation",
+            Digest::from_parts(DigestKind::GoLifecycle, "go", &[go_suffix]),
+        );
+        let tool_component = component(
+            "go.tool_invocation",
+            Digest::from_parts(DigestKind::ToolInvocation, "go", &[tool_suffix]),
+        );
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: component(
+                "config",
+                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            ),
+            go_lifecycle: GoLifecycleSnapshot {
+                components: vec![go_component],
+            },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: vec![tool_component],
+            provider_schemas: Vec::<ProviderSchemaSnapshot>::new(),
+        }
+    }
+
+    fn component(name: &str, digest: Digest) -> InputComponent {
+        InputComponent {
+            name: name.to_string(),
+            status: InputComponentStatus::Present,
+            digest,
+            detail: Vec::new(),
         }
     }
 }

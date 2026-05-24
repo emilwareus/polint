@@ -37,7 +37,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> TypeValueAliasProviderOutput {
     debug_assert_eq!(manifest.id, TYPE_VALUE_ALIAS_PROVIDER_ID);
-    let output = TypeValueAliasOutput::default().normalized();
+    let output = super::go::derive_go_type_value_alias(db).normalized();
     let output_digest = type_value_alias_output_digest(
         manifest,
         input_snapshot,
