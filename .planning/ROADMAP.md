@@ -380,7 +380,7 @@ Plans:
 **Goal:** Model entrypoints, routes, handlers, callbacks, jobs, CLIs, MCP tools/resources/prompts, tests, dispatch, and trust boundaries.
 **Requirements:** SAE-INT-05
 **Research:** `research/framework-entrypoints/FINAL-REPORT.md`, `research/framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`, `research/framework-entrypoints/VALIDATION.md`
-**Plans:** 1/8 plans executed
+**Plans:** 2/8 plans executed
 
 Plans:
 **Wave 1**
@@ -389,7 +389,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 35-02-PLAN.md — Provider manifest, cache key, output digest, and kernel run-sequence wiring
+- [x] 35-02-PLAN.md — Provider manifest, cache key, output digest, and kernel run-sequence wiring
 - [ ] 35-03-PLAN.md — Go framework recognizers (net/http, chi, testing, cobra)
 - [ ] 35-04-PLAN.md — TS/JS framework recognizers (Express, MCP SDK, test, CLI)
 

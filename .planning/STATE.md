@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-23T19:47:18.931Z"
-last_activity: 2026-05-23
+last_updated: "2026-05-24T05:31:00Z"
+last_activity: 2026-05-24
 progress:
   total_phases: 22
   completed_phases: 15
   total_plans: 93
-  completed_plans: 86
-  percent: 68
+  completed_plans: 87
+  percent: 69
 ---
 
 # State: polint
@@ -43,8 +43,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
 Phase: 35 (framework-entrypoints-and-trust-boundaries) — EXECUTING
-Plan: 2 of 8
-Last activity: 2026-05-23
+Plan: 3 of 8
+Last activity: 2026-05-24
 
 ## Phase Progress
 
@@ -291,6 +291,9 @@ Last activity: 2026-05-23
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: EntrypointStore validates referential integrity: trust boundaries and dispatch edges must reference existing entrypoint stable keys via from_output.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Four new FactFamily variants placed after ExtensionFact: Entrypoint, TrustBoundary, DispatchEdge, UnresolvedFramework.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: TriggerMetadata is a struct with optional fields (method, path, tool_name, event_name, test_name) rather than an enum.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: polint.entrypoints runs after polint.direct_summaries and SCC closure, before polint.extensions in the kernel run sequence.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Direct summaries provider output uses provider-computed digest via provider_output_for_with_optional_digest, not metadata fallback.
+- [Phase 35-framework-entrypoints-and-trust-boundaries]: Upstream dependency digests are cloned before direct_summaries consumes them so entrypoints can reuse them.
 
 ## Execution Metrics
 
@@ -357,12 +360,13 @@ Last activity: 2026-05-23
 | 32-summary-kernel-and-direct-summaries | 06 | 10 min | 2 | 11 |
 | 32-summary-kernel-and-direct-summaries | 07 | 10 min | 3 | 1 |
 | 35-framework-entrypoints-and-trust-boundaries | 01 | 5 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 02 | 7 min | 2 | 8 |
 
 ## Session
 
-- Last session: 2026-05-23
-- Last activity: 2026-05-23 - Completed 35-01-PLAN.md.
-- Stopped at: Completed 35-01; continuing Phase 35 plan 2 of 8.
+- Last session: 2026-05-24
+- Last activity: 2026-05-24 - Completed 35-02-PLAN.md.
+- Stopped at: Completed 35-02; continuing Phase 35 plan 3 of 8.
 
 ### Quick Tasks Completed
 
@@ -392,4 +396,4 @@ Last activity: 2026-05-23
 
 ## Next Action
 
-Continue Phase 35 plan 2 of 8 (framework entrypoints and trust boundaries).
+Continue Phase 35 plan 3 of 8 (framework entrypoints and trust boundaries).
