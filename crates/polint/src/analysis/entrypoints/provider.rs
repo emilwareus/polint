@@ -1,9 +1,10 @@
 use crate::analysis::entrypoints::cache_key::entrypoints_provider_parameter_digest;
+use crate::analysis::entrypoints::extract::extract_entrypoints;
 use crate::analysis::entrypoints::store::EntrypointOutput;
+use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::ProviderManifest;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 
@@ -28,8 +29,9 @@ pub(crate) fn derive_entrypoints_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> EntrypointsProviderOutput {
-    // For now the provider produces empty output; recognizers are added in Plans 03-04.
-    let output = EntrypointOutput::empty().normalized();
+    debug_assert_eq!(manifest.id, ENTRYPOINTS_PROVIDER_ID);
+    // Run Go and TS/JS recognizers, derive trust boundaries, dispatch edges, merge unresolved
+    let output = extract_entrypoints(db).normalized();
     let output_digest = entrypoints_output_digest(
         db,
         manifest,
@@ -76,10 +78,7 @@ fn entrypoints_output_digest(
         format!("provider_id={}", manifest.id),
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
-        format!(
-            "parameters={}",
-            entrypoints_provider_parameter_digest()
-        ),
+        format!("parameters={}", entrypoints_provider_parameter_digest()),
         format!("config={}", input_snapshot.config.digest),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
@@ -123,10 +122,7 @@ fn entrypoints_output_digest(
     parts.extend(output.trust_boundaries.iter().map(|tb| {
         format!(
             "trust_boundary={} entrypoint={} source_kind={:?} precision={:?}",
-            tb.stable_key,
-            tb.entrypoint_stable_key,
-            tb.source_kind,
-            tb.precision,
+            tb.stable_key, tb.entrypoint_stable_key, tb.source_kind, tb.precision,
         )
     }));
     parts.extend(output.dispatch_edges.iter().map(|de| {
@@ -217,6 +213,244 @@ mod entrypoints_provider {
         assert!(first_db.trust_boundary_facts().is_empty());
         assert!(first_db.dispatch_edge_facts().is_empty());
         assert!(first_db.unresolved_framework_facts().is_empty());
+    }
+
+    #[test]
+    fn populated_output_produces_non_absent_digest() {
+        use crate::analysis::entrypoints::store::EntrypointOutput;
+        use crate::analysis::entrypoints::facts::{
+            EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
+            EntrypointProvenance, EntrypointStatus, TriggerMetadata,
+        };
+        use crate::analysis::ids::EntrypointId;
+        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_plan::AnalysisPlan;
+        use crate::config::load_config;
+        use crate::core::{FileId, FunctionId, Language, Span};
+
+        let mut db = crate::core::AnalysisDb::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|m| m.id == "polint.entrypoints")
+            .expect("manifest");
+
+        // Create a populated output directly and compute its digest
+        let output = EntrypointOutput {
+            entrypoints: vec![EntrypointFact {
+                id: EntrypointId(0),
+                language: Language::Go,
+                framework_id: "go.net_http".to_string(),
+                kind: EntrypointKind::HttpRoute,
+                target_function: FunctionId(1),
+                target_symbol: None,
+                registration_span: Span::point(FileId(1), 1, 1),
+                registration_file: FileId(1),
+                trigger_metadata: TriggerMetadata {
+                    method: Some("GET".to_string()),
+                    path: Some("/api/users".to_string()),
+                    tool_name: None,
+                    event_name: None,
+                    test_name: None,
+                },
+                trust_boundary_link: None,
+                precision: EntrypointPrecision::Heuristic,
+                provenance: EntrypointProvenance::NativeRecognizer,
+                confidence: EntrypointConfidence::High,
+                status: EntrypointStatus::Resolved,
+                provider_id: "polint.entrypoints".to_string(),
+                stable_key: "ep-test".to_string(),
+            }],
+            trust_boundaries: Vec::new(),
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        }.normalized();
+
+        let digest = super::entrypoints_output_digest(
+            &db,
+            manifest,
+            &snapshot,
+            &Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "cfg", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "calls", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]),
+            &Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]),
+            &[],
+            &output,
+        );
+
+        assert!(!digest.value.is_empty(), "populated output should produce non-empty digest");
+    }
+
+    #[test]
+    fn output_digest_changes_when_entrypoints_added() {
+        use crate::analysis::entrypoints::store::EntrypointOutput;
+        use crate::analysis::entrypoints::facts::{
+            EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
+            EntrypointProvenance, EntrypointStatus, TriggerMetadata,
+        };
+        use crate::analysis::ids::EntrypointId;
+        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_plan::AnalysisPlan;
+        use crate::config::load_config;
+        use crate::core::{FileId, FunctionId, Language, Span};
+
+        let db = crate::core::AnalysisDb::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|m| m.id == "polint.entrypoints")
+            .expect("manifest");
+
+        let upstream_mir = Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]);
+        let upstream_cfg = Digest::from_parts(DigestKind::ProviderOutput, "cfg", &["a"]);
+        let upstream_calls = Digest::from_parts(DigestKind::ProviderOutput, "calls", &["a"]);
+        let upstream_symbol = Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]);
+        let upstream_topology = Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]);
+
+        let empty_output = EntrypointOutput::empty().normalized();
+        let empty_digest = super::entrypoints_output_digest(
+            &db, manifest, &snapshot,
+            &upstream_mir, &upstream_cfg, &upstream_calls,
+            &upstream_symbol, &upstream_topology, &[], &empty_output,
+        );
+
+        let populated_output = EntrypointOutput {
+            entrypoints: vec![EntrypointFact {
+                id: EntrypointId(0),
+                language: Language::Go,
+                framework_id: "go.net_http".to_string(),
+                kind: EntrypointKind::HttpRoute,
+                target_function: FunctionId(1),
+                target_symbol: None,
+                registration_span: Span::point(FileId(1), 1, 1),
+                registration_file: FileId(1),
+                trigger_metadata: TriggerMetadata::empty(),
+                trust_boundary_link: None,
+                precision: EntrypointPrecision::Heuristic,
+                provenance: EntrypointProvenance::NativeRecognizer,
+                confidence: EntrypointConfidence::High,
+                status: EntrypointStatus::Resolved,
+                provider_id: "polint.entrypoints".to_string(),
+                stable_key: "ep-test".to_string(),
+            }],
+            trust_boundaries: Vec::new(),
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        }.normalized();
+        let populated_digest = super::entrypoints_output_digest(
+            &db, manifest, &snapshot,
+            &upstream_mir, &upstream_cfg, &upstream_calls,
+            &upstream_symbol, &upstream_topology, &[], &populated_output,
+        );
+
+        assert_ne!(
+            empty_digest.value, populated_digest.value,
+            "output digest should change when entrypoints are added"
+        );
+    }
+
+    #[test]
+    fn output_digest_is_deterministic_for_same_input() {
+        use crate::analysis::entrypoints::store::EntrypointOutput;
+        use crate::analysis::entrypoints::facts::{
+            EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
+            EntrypointProvenance, EntrypointStatus, TriggerMetadata,
+        };
+        use crate::analysis::ids::EntrypointId;
+        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
+        use crate::analysis_plan::AnalysisPlan;
+        use crate::config::load_config;
+        use crate::core::{FileId, FunctionId, Language, Span};
+
+        let db = crate::core::AnalysisDb::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|m| m.id == "polint.entrypoints")
+            .expect("manifest");
+
+        let make_output = || EntrypointOutput {
+            entrypoints: vec![EntrypointFact {
+                id: EntrypointId(0),
+                language: Language::Go,
+                framework_id: "go.net_http".to_string(),
+                kind: EntrypointKind::HttpRoute,
+                target_function: FunctionId(1),
+                target_symbol: None,
+                registration_span: Span::point(FileId(1), 1, 1),
+                registration_file: FileId(1),
+                trigger_metadata: TriggerMetadata {
+                    method: Some("GET".to_string()),
+                    path: Some("/api/users".to_string()),
+                    tool_name: None,
+                    event_name: None,
+                    test_name: None,
+                },
+                trust_boundary_link: None,
+                precision: EntrypointPrecision::Heuristic,
+                provenance: EntrypointProvenance::NativeRecognizer,
+                confidence: EntrypointConfidence::High,
+                status: EntrypointStatus::Resolved,
+                provider_id: "polint.entrypoints".to_string(),
+                stable_key: "ep-test".to_string(),
+            }],
+            trust_boundaries: Vec::new(),
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        }.normalized();
+
+        let upstream_mir = Digest::from_parts(DigestKind::ProviderOutput, "semantic_mir", &["a"]);
+        let upstream_cfg = Digest::from_parts(DigestKind::ProviderOutput, "cfg", &["a"]);
+        let upstream_calls = Digest::from_parts(DigestKind::ProviderOutput, "calls", &["a"]);
+        let upstream_symbol = Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["a"]);
+        let upstream_topology = Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["a"]);
+
+        let first = super::entrypoints_output_digest(
+            &db, manifest, &snapshot,
+            &upstream_mir, &upstream_cfg, &upstream_calls,
+            &upstream_symbol, &upstream_topology, &[], &make_output(),
+        );
+        let second = super::entrypoints_output_digest(
+            &db, manifest, &snapshot,
+            &upstream_mir, &upstream_cfg, &upstream_calls,
+            &upstream_symbol, &upstream_topology, &[], &make_output(),
+        );
+
+        assert_eq!(
+            first.value, second.value,
+            "output digest should be deterministic for the same input"
+        );
     }
 
     fn derive_for_test(db: &mut crate::core::AnalysisDb) -> super::EntrypointsProviderOutput {
