@@ -38,8 +38,9 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> TypeValueAliasProviderOutput {
     debug_assert_eq!(manifest.id, TYPE_VALUE_ALIAS_PROVIDER_ID);
-    let mut output = super::go::derive_go_type_value_alias(db).normalized();
-    let ts_js_output = super::ts_js::derive_ts_js_type_value_alias(db).normalized();
+    let mut diagnostics = Vec::new();
+    let mut output = super::go::derive_go_type_value_alias(db);
+    let ts_js_output = super::ts_js::derive_ts_js_type_value_alias(db);
     output.types.types.extend(ts_js_output.types.types);
     output.types.narrowed.extend(ts_js_output.types.narrowed);
     output.values.values.extend(ts_js_output.values.values);
@@ -51,7 +52,17 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         .access_paths
         .access_paths
         .extend(ts_js_output.access_paths.access_paths);
-    output = super::validate::merge_extension_type_value_alias_facts(output, db.extension_facts());
+    output = output.normalized();
+    let base_merge =
+        super::validate::merge_extension_type_value_alias_base_facts(output, db.extension_facts());
+    output = base_merge.output.normalized();
+    diagnostics.extend(base_merge.diagnostics);
+    let relation_merge = super::validate::merge_extension_type_value_alias_relation_facts(
+        output,
+        db.extension_facts(),
+    );
+    output = relation_merge.output;
+    diagnostics.extend(relation_merge.diagnostics);
     let mut points_to_constraints =
         crate::analysis::points_to::constraints::derive_points_to_constraints(&output);
     points_to_constraints.extend(std::mem::take(&mut output.points_to.constraints));
@@ -89,7 +100,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
 
     db.replace_type_value_alias_facts(output);
     TypeValueAliasProviderOutput {
-        diagnostics: Vec::new(),
+        diagnostics,
         cache_stats,
         output_digest: Some(output_digest),
     }

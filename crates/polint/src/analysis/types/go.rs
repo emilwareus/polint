@@ -5,7 +5,7 @@ use crate::analysis::access_paths::facts::{
 };
 use crate::analysis::access_paths::store::AccessPathOutput;
 use crate::analysis::ids::{
-    AbstractValueId, AccessPathId, AllocationTokenId, TypeFactId, TypeSetId, ValueFactId,
+    AbstractValueId, AccessPathId, AllocationTokenId, PlaceId, TypeFactId, TypeSetId, ValueFactId,
 };
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedPrecision};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
@@ -21,7 +21,9 @@ use crate::analysis::values::facts::{
 };
 use crate::analysis::values::store::ValueOutput;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, Language};
+use crate::core::{AnalysisDb, FileId, FunctionId, Language};
+
+type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
 
 pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutput {
     let body_by_id = db
@@ -34,6 +36,7 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
         .iter()
         .map(|place| (place.id, place))
         .collect::<BTreeMap<_, _>>();
+    let root_place_by_key = root_place_by_key(db, Language::Go);
 
     let mut types = Vec::new();
     let mut access_paths = Vec::new();
@@ -50,7 +53,11 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
             .body()
             .and_then(|body| body_by_id.get(&body).copied());
         types.push(type_fact_for_place(types.len() as u64, place, body));
-        access_paths.push(access_path_for_place(access_paths.len() as u64, place));
+        access_paths.push(access_path_for_place(
+            access_paths.len() as u64,
+            place,
+            &root_place_by_key,
+        ));
     }
 
     for operation in db.mir_operations().iter().filter(|operation| {
@@ -202,7 +209,11 @@ fn type_shape_for_place(place: &PlaceFact) -> TypeShape {
     }
 }
 
-fn access_path_for_place(id: u64, place: &PlaceFact) -> AccessPathFact {
+fn access_path_for_place(
+    id: u64,
+    place: &PlaceFact,
+    root_place_by_key: &BTreeMap<RootPlaceKey, PlaceId>,
+) -> AccessPathFact {
     let projections = place
         .projections
         .iter()
@@ -216,7 +227,7 @@ fn access_path_for_place(id: u64, place: &PlaceFact) -> AccessPathFact {
     };
     AccessPathFact {
         id: AccessPathId(id),
-        base: place.id,
+        base: root_place_id(place, root_place_by_key),
         depth: projections.len() as u32,
         projections,
         language: Language::Go,
@@ -233,6 +244,28 @@ fn access_path_for_place(id: u64, place: &PlaceFact) -> AccessPathFact {
             ],
         ),
     }
+}
+
+fn root_place_by_key(db: &AnalysisDb, language: Language) -> BTreeMap<RootPlaceKey, PlaceId> {
+    db.mir_places()
+        .iter()
+        .filter(|place| place.language == language && place.projections.is_empty())
+        .map(|place| (root_place_key(place), place.id))
+        .collect()
+}
+
+fn root_place_id(
+    place: &PlaceFact,
+    root_place_by_key: &BTreeMap<RootPlaceKey, PlaceId>,
+) -> PlaceId {
+    root_place_by_key
+        .get(&root_place_key(place))
+        .copied()
+        .unwrap_or(place.id)
+}
+
+fn root_place_key(place: &PlaceFact) -> RootPlaceKey {
+    (place.root.clone(), place.file, place.function)
 }
 
 fn access_path_projection(projection: &PlaceProjection) -> AccessPathProjection {

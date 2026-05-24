@@ -26,6 +26,8 @@ use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, FunctionId, Language, SourceFile, Span};
 use crate::symbol_graph::semantic::SemanticImportKind;
 
+type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
+
 pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutput {
     let body_by_id = db
         .mir_bodies()
@@ -47,6 +49,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
         .iter()
         .map(|file| (file.id, file))
         .collect::<BTreeMap<_, _>>();
+    let root_place_by_key = root_place_by_key(db);
 
     let mut types = Vec::new();
     let mut narrowed = Vec::new();
@@ -65,6 +68,7 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
             access_paths.len() as u64,
             place,
             body,
+            &root_place_by_key,
         ));
     }
 
@@ -248,7 +252,12 @@ fn type_shape_for_place(place: &PlaceFact) -> TypeShape {
     }
 }
 
-fn access_path_for_place(id: u64, place: &PlaceFact, body: Option<&MirBody>) -> AccessPathFact {
+fn access_path_for_place(
+    id: u64,
+    place: &PlaceFact,
+    body: Option<&MirBody>,
+    root_place_by_key: &BTreeMap<RootPlaceKey, PlaceId>,
+) -> AccessPathFact {
     let projections = place
         .projections
         .iter()
@@ -262,7 +271,7 @@ fn access_path_for_place(id: u64, place: &PlaceFact, body: Option<&MirBody>) -> 
     };
     AccessPathFact {
         id: AccessPathId(id),
-        base: place.id,
+        base: root_place_id(place, root_place_by_key),
         depth: projections.len() as u32,
         projections,
         language: place.language,
@@ -279,6 +288,28 @@ fn access_path_for_place(id: u64, place: &PlaceFact, body: Option<&MirBody>) -> 
             ],
         ),
     }
+}
+
+fn root_place_by_key(db: &AnalysisDb) -> BTreeMap<RootPlaceKey, PlaceId> {
+    db.mir_places()
+        .iter()
+        .filter(|place| place.language.is_ts_family() && place.projections.is_empty())
+        .map(|place| (root_place_key(place), place.id))
+        .collect()
+}
+
+fn root_place_id(
+    place: &PlaceFact,
+    root_place_by_key: &BTreeMap<RootPlaceKey, PlaceId>,
+) -> PlaceId {
+    root_place_by_key
+        .get(&root_place_key(place))
+        .copied()
+        .unwrap_or(place.id)
+}
+
+fn root_place_key(place: &PlaceFact) -> RootPlaceKey {
+    (place.root.clone(), place.file, place.function)
 }
 
 fn access_path_projection(projection: &PlaceProjection) -> AccessPathProjection {
@@ -369,22 +400,31 @@ fn push_value_for_mir_value(
     let source = file_by_id
         .get(&operation.span.file)
         .and_then(|file| source_text(file.source.as_ref(), &operation.span));
+    let operation_language = body_by_id
+        .get(&operation.body)
+        .map_or(Language::Unknown, |body| body.language);
     let (kind, status, precision) = match value {
-        MirValue::Literal { value } => literal_value_kind(value, operation, allocations),
-        MirValue::Place(place_ref) => inferred_value_from_source(source, operation, allocations)
-            .unwrap_or((
-                ValueKind::PlaceRef(*place_ref),
-                ValueStatus::Present,
-                ValuePrecision::SetupAware,
-            )),
-        MirValue::Temporary(_) => inferred_value_from_source(source, operation, allocations)
-            .unwrap_or((
-                ValueKind::Unknown {
-                    evidence: "ts/js temporary".to_string(),
-                },
-                ValueStatus::Unknown,
-                ValuePrecision::Unknown,
-            )),
+        MirValue::Literal { value } => {
+            literal_value_kind(value, operation, operation_language, allocations)
+        }
+        MirValue::Place(place_ref) => {
+            inferred_value_from_source(source, operation, operation_language, allocations)
+                .unwrap_or((
+                    ValueKind::PlaceRef(*place_ref),
+                    ValueStatus::Present,
+                    ValuePrecision::SetupAware,
+                ))
+        }
+        MirValue::Temporary(_) => {
+            inferred_value_from_source(source, operation, operation_language, allocations)
+                .unwrap_or((
+                    ValueKind::Unknown {
+                        evidence: "ts/js temporary".to_string(),
+                    },
+                    ValueStatus::Unknown,
+                    ValuePrecision::Unknown,
+                ))
+        }
         MirValue::CallReturn(call) => (
             ValueKind::Unknown {
                 evidence: format!("call:{}", call.0),
@@ -430,6 +470,7 @@ fn push_value_for_mir_value(
 fn literal_value_kind(
     value: &str,
     operation: &MirOperation,
+    language: Language,
     allocations: &mut Vec<AllocationTokenFact>,
 ) -> (ValueKind, ValueStatus, ValuePrecision) {
     let trimmed = value.trim();
@@ -476,6 +517,7 @@ fn literal_value_kind(
             operation,
             AllocationKind::FunctionObject,
             "function_object",
+            language,
             allocations,
         );
         return (
@@ -489,6 +531,7 @@ fn literal_value_kind(
             operation,
             AllocationKind::ClassObject,
             "class_object",
+            language,
             allocations,
         );
         return (
@@ -507,6 +550,7 @@ fn literal_value_kind(
 fn inferred_value_from_source(
     source: Option<&str>,
     operation: &MirOperation,
+    language: Language,
     allocations: &mut Vec<AllocationTokenFact>,
 ) -> Option<(ValueKind, ValueStatus, ValuePrecision)> {
     let source = source?.trim();
@@ -515,6 +559,7 @@ fn inferred_value_from_source(
             operation,
             AllocationKind::FunctionObject,
             "function_object",
+            language,
             allocations,
         );
         return Some((
@@ -528,6 +573,7 @@ fn inferred_value_from_source(
             operation,
             AllocationKind::ClassObject,
             "class_object",
+            language,
             allocations,
         );
         return Some((
@@ -541,6 +587,7 @@ fn inferred_value_from_source(
             operation,
             AllocationKind::ObjectLiteral,
             "object_literal",
+            language,
             allocations,
         );
         return Some((
@@ -554,6 +601,7 @@ fn inferred_value_from_source(
             operation,
             AllocationKind::ArrayLiteral,
             "array_literal",
+            language,
             allocations,
         );
         return Some((
@@ -809,13 +857,14 @@ fn push_allocation(
     operation: &MirOperation,
     kind: AllocationKind,
     label: &str,
+    language: Language,
     allocations: &mut Vec<AllocationTokenFact>,
 ) -> AllocationTokenId {
     let id = AllocationTokenId(allocations.len() as u64);
     allocations.push(AllocationTokenFact {
         id,
         kind,
-        language: Language::TypeScript,
+        language,
         file: Some(operation.span.file),
         function: None,
         body: Some(operation.body),
@@ -826,7 +875,7 @@ fn push_allocation(
         stable_key: stable_key(
             FactFamily::AllocationToken,
             [
-                ("language", "ts-js".to_string()),
+                ("language", language_label(language).to_string()),
                 ("operation", operation.stable_key.clone()),
                 ("kind", label.to_string()),
             ],
@@ -905,7 +954,7 @@ fn unsupported_value_fact(
         file: Some(unsupported.file),
         function: body.map(|body| body.function),
         body: unsupported.body,
-        precision: ValuePrecision::Unknown,
+        precision: ValuePrecision::Unsupported,
         status: ValueStatus::Unsupported,
         provenance: ValueProvenance::Native,
         stable_key: stable_key(

@@ -109,15 +109,41 @@ pub(crate) fn has_required_type_value_alias_payload(candidate: &ExtensionFactCan
                     .any(|label| label == "projection=base" || label.starts_with("projection="))
         }
         TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY => {
-            has_payload_label(candidate, "kind=") && has_payload_label(candidate, "dst=pt:")
+            has_type_value_alias_points_to_payload(candidate)
         }
         TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => {
             has_payload_label(candidate, "left=")
                 && has_payload_label(candidate, "right=")
-                && has_payload_label(candidate, "status=")
+                && payload_label(candidate, "status=").is_some_and(|status| {
+                    matches!(
+                        status,
+                        "no_alias" | "may_alias" | "must_alias" | "partial_alias" | "unknown"
+                    )
+                })
         }
         _ => true,
     }
+}
+
+fn has_type_value_alias_points_to_payload(candidate: &ExtensionFactCandidate) -> bool {
+    let Some(kind) = payload_label(candidate, "kind=") else {
+        return false;
+    };
+    if !has_payload_label(candidate, "dst=") {
+        return false;
+    }
+    match kind {
+        "address_of" => has_payload_label(candidate, "object="),
+        "copy" => has_payload_label(candidate, "src="),
+        _ => false,
+    }
+}
+
+fn payload_label<'a>(candidate: &'a ExtensionFactCandidate, prefix: &str) -> Option<&'a str> {
+    candidate
+        .payload_labels
+        .iter()
+        .find_map(|label| label.strip_prefix(prefix))
 }
 
 fn has_payload_label(candidate: &ExtensionFactCandidate, prefix: &str) -> bool {

@@ -88,9 +88,13 @@ impl ConstraintBuilder {
 
     fn collect_access_paths(&mut self, paths: &[AccessPathFact]) {
         for path in paths {
-            let dst = access_path_var(path);
-            let base = vars::place_var(path.base);
-            for projection in &path.projections {
+            let mut base = vars::place_var(path.base);
+            for (index, projection) in path.projections.iter().enumerate() {
+                let dst = if index + 1 == path.projections.len() {
+                    access_path_var(path)
+                } else {
+                    vars::access_path_prefix_var(path.id, index)
+                };
                 match projection {
                     AccessPathProjection::Field(field) | AccessPathProjection::Property(field) => {
                         self.push(PointsToConstraintKind::FieldLoad {
@@ -144,6 +148,7 @@ impl ConstraintBuilder {
                     }
                     AccessPathProjection::AwaitResult | AccessPathProjection::Unknown { .. } => {}
                 }
+                base = dst;
             }
         }
     }

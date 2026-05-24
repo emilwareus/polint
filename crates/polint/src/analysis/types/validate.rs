@@ -30,14 +30,62 @@ use crate::analysis::values::facts::{
     ValueStatus, ValueSubject,
 };
 use crate::core::Language;
+use crate::diagnostics::{Diagnostic, TextRange};
+
+pub(crate) struct ExtensionTypeValueAliasMerge {
+    pub(crate) output: TypeValueAliasOutput,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+}
 
 pub(crate) fn merge_extension_type_value_alias_facts(
-    mut output: TypeValueAliasOutput,
+    output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
 ) -> TypeValueAliasOutput {
+    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |_| true)
+        .output
+        .normalized()
+}
+
+pub(crate) fn merge_extension_type_value_alias_base_facts(
+    output: TypeValueAliasOutput,
+    extension_facts: &[AcceptedExtensionFact],
+) -> ExtensionTypeValueAliasMerge {
+    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |family| {
+        matches!(
+            family,
+            TYPE_VALUE_ALIAS_TYPE_FAMILY
+                | TYPE_VALUE_ALIAS_VALUE_FAMILY
+                | TYPE_VALUE_ALIAS_ALLOCATION_FAMILY
+                | TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY
+        )
+    })
+}
+
+pub(crate) fn merge_extension_type_value_alias_relation_facts(
+    output: TypeValueAliasOutput,
+    extension_facts: &[AcceptedExtensionFact],
+) -> ExtensionTypeValueAliasMerge {
+    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |family| {
+        matches!(
+            family,
+            TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY | TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
+        )
+    })
+}
+
+fn merge_extension_type_value_alias_facts_with_filter(
+    mut output: TypeValueAliasOutput,
+    extension_facts: &[AcceptedExtensionFact],
+    include_family: impl Fn(&str) -> bool,
+) -> ExtensionTypeValueAliasMerge {
+    let mut diagnostics = Vec::new();
     let mut stable_keys = native_stable_keys(&output);
     for fact in extension_facts {
+        if !include_family(fact.fact_family.as_str()) {
+            continue;
+        }
         if stable_keys.contains(&fact.stable_key) {
+            diagnostics.push(extension_merge_diagnostic(fact, "stable_key_conflict"));
             continue;
         }
         let inserted = match fact.fact_family.as_str() {
@@ -53,9 +101,14 @@ pub(crate) fn merge_extension_type_value_alias_facts(
         };
         if inserted {
             stable_keys.insert(fact.stable_key.clone());
+        } else {
+            diagnostics.push(extension_merge_diagnostic(fact, "malformed_payload"));
         }
     }
-    output.normalized()
+    ExtensionTypeValueAliasMerge {
+        output: output.normalized(),
+        diagnostics,
+    }
 }
 
 fn native_stable_keys(output: &TypeValueAliasOutput) -> BTreeSet<String> {
@@ -584,6 +637,20 @@ fn extension_evidence(fact: &AcceptedExtensionFact) -> Vec<String> {
     evidence.sort();
     evidence.dedup();
     evidence
+}
+
+fn extension_merge_diagnostic(fact: &AcceptedExtensionFact, reason: &'static str) -> Diagnostic {
+    Diagnostic::error(
+        "polint/extension",
+        "<workspace>",
+        TextRange::point(1, 1),
+        "Accepted extension type/value/alias fact could not be merged.",
+    )
+    .with_evidence("extension_id", fact.extension_id.clone())
+    .with_evidence("provider_id", fact.provider_id.clone())
+    .with_evidence("fact_family", fact.fact_family.clone())
+    .with_evidence("stable_key", fact.stable_key.clone())
+    .with_evidence("reason", reason)
 }
 
 #[cfg(test)]

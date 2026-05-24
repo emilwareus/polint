@@ -6,7 +6,7 @@ use crate::analysis::ids::AliasAnswerId;
 use crate::analysis::points_to::facts::PointsToSetFact;
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
-const MAX_PROVIDER_STACK_PAIRS: usize = 64;
+pub(crate) const MAX_PROVIDER_STACK_PAIRS: usize = 64;
 
 pub(crate) fn derive_alias_answers(
     access_paths: &[AccessPathFact],

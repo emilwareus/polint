@@ -418,6 +418,14 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     }
 
     for fact in db.points_to_sets() {
+        validate_points_to_var(
+            diagnostics,
+            &type_value_alias_ids,
+            FactFamily::PointsToSet,
+            &fact.stable_key,
+            "variable",
+            fact.variable,
+        );
         if fact.status == PointsToStatus::BudgetExceeded
             && fact.budget != PointsToBudgetStatus::BudgetExceeded
         {
@@ -491,6 +499,7 @@ struct TypeValueAliasIdSets {
     value_facts: BTreeSet<ValueFactId>,
     allocations: BTreeSet<crate::analysis::ids::AllocationTokenId>,
     access_paths: BTreeSet<crate::analysis::ids::AccessPathId>,
+    pt_vars: BTreeSet<crate::analysis::ids::PtVarId>,
     object_tokens: BTreeSet<crate::analysis::ids::ObjectTokenId>,
 }
 
@@ -509,8 +518,29 @@ impl TypeValueAliasIdSets {
             value_facts: db.value_facts().iter().map(|fact| fact.id).collect(),
             allocations: db.allocation_tokens().iter().map(|fact| fact.id).collect(),
             access_paths: db.access_path_facts().iter().map(|fact| fact.id).collect(),
+            pt_vars: BTreeSet::new(),
             object_tokens: BTreeSet::new(),
         };
+        ids.pt_vars.extend(
+            ids.places
+                .iter()
+                .map(|place| crate::analysis::points_to::vars::place_var(*place)),
+        );
+        ids.pt_vars.extend(
+            ids.operations
+                .iter()
+                .map(|operation| crate::analysis::points_to::vars::operation_var(*operation)),
+        );
+        ids.pt_vars.extend(
+            ids.allocations
+                .iter()
+                .map(|allocation| crate::analysis::points_to::vars::allocation_var(*allocation)),
+        );
+        ids.pt_vars.extend(
+            ids.access_paths
+                .iter()
+                .map(|path| crate::analysis::points_to::vars::access_path_var(*path)),
+        );
         ids.object_tokens.extend(
             ids.allocations
                 .iter()
@@ -781,31 +811,157 @@ fn validate_points_to_constraint_kind(
     kind: &PointsToConstraintKind,
 ) {
     match kind {
-        PointsToConstraintKind::AddressOf { object, .. } => validate_type_value_alias_ref(
-            diagnostics,
-            &ids.object_tokens,
-            FactFamily::PointsToConstraint,
-            stable_key,
-            "kind.object",
-            *object,
-        ),
-        PointsToConstraintKind::CallReturn { value, .. } => validate_type_value_alias_ref(
-            diagnostics,
-            &ids.value_facts,
-            FactFamily::PointsToConstraint,
-            stable_key,
-            "kind.value",
-            *value,
-        ),
-        PointsToConstraintKind::Copy { .. }
-        | PointsToConstraintKind::Load { .. }
-        | PointsToConstraintKind::Store { .. }
-        | PointsToConstraintKind::FieldLoad { .. }
-        | PointsToConstraintKind::FieldStore { .. }
-        | PointsToConstraintKind::ElementLoad { .. }
-        | PointsToConstraintKind::ElementStore { .. }
-        | PointsToConstraintKind::SummaryFlow { .. } => {}
+        PointsToConstraintKind::AddressOf { dst, object } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_type_value_alias_ref(
+                diagnostics,
+                &ids.object_tokens,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.object",
+                *object,
+            );
+        }
+        PointsToConstraintKind::CallReturn { dst, value } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_type_value_alias_ref(
+                diagnostics,
+                &ids.value_facts,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.value",
+                *value,
+            );
+        }
+        PointsToConstraintKind::Copy { dst, src }
+        | PointsToConstraintKind::SummaryFlow { dst, src, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
+        PointsToConstraintKind::Load { dst, pointer } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.pointer",
+                *pointer,
+            );
+        }
+        PointsToConstraintKind::Store { pointer, src } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.pointer",
+                *pointer,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
+        PointsToConstraintKind::FieldLoad { dst, base, .. }
+        | PointsToConstraintKind::ElementLoad { dst, base, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.base",
+                *base,
+            );
+        }
+        PointsToConstraintKind::FieldStore { base, src, .. }
+        | PointsToConstraintKind::ElementStore { base, src, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.base",
+                *base,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
     }
+}
+
+fn validate_points_to_var(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: crate::analysis::ids::PtVarId,
+) {
+    if ids.pt_vars.contains(&value)
+        || crate::analysis::points_to::vars::is_solver_dynamic_var(value)
+    {
+        return;
+    }
+    diagnostics.push(type_value_alias_diagnostic(
+        family,
+        stable_key,
+        field,
+        "dangling_reference",
+    ));
 }
 
 fn validate_points_to_status_precision(
@@ -1392,7 +1548,7 @@ mod type_value_alias_validation {
                 constraints: Vec::new(),
                 sets: vec![PointsToSetFact {
                     id: PointsToSetId(0),
-                    variable: PtVarId(0),
+                    variable: crate::analysis::points_to::vars::dynamic_var(0),
                     objects: vec![crate::analysis::points_to::vars::value_fact_object(
                         ValueFactId(0),
                     )],
