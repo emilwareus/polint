@@ -105,12 +105,13 @@ struct UnresolvedDetailRow {
 // ---------------------------------------------------------------------------
 
 fn entrypoint_counts(db: &AnalysisDb) -> EntrypointDebugCounts {
-    let mut counts = EntrypointDebugCounts::default();
-
-    counts.total_entrypoints = db.entrypoint_facts().len();
-    counts.total_trust_boundaries = db.trust_boundary_facts().len();
-    counts.total_dispatch_edges = db.dispatch_edge_facts().len();
-    counts.total_unresolved = db.unresolved_framework_facts().len();
+    let mut counts = EntrypointDebugCounts {
+        total_entrypoints: db.entrypoint_facts().len(),
+        total_trust_boundaries: db.trust_boundary_facts().len(),
+        total_dispatch_edges: db.dispatch_edge_facts().len(),
+        total_unresolved: db.unresolved_framework_facts().len(),
+        ..Default::default()
+    };
 
     for ep in db.entrypoint_facts() {
         increment(&mut counts.by_language, language_label(ep.language));

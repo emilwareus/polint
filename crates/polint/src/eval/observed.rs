@@ -1725,10 +1725,10 @@ fn entrypoint_fact(row: &Value, family: &str) -> Option<ObservedFact> {
     if let Some(reason) = row.get("reason").and_then(Value::as_str) {
         payload_parts.push(format!("reason={reason}"));
     }
-    if let Some(trigger) = row.get("trigger_summary").and_then(Value::as_str) {
-        if trigger != "none" {
-            payload_parts.push(format!("trigger={trigger}"));
-        }
+    if let Some(trigger) = row.get("trigger_summary").and_then(Value::as_str)
+        && trigger != "none"
+    {
+        payload_parts.push(format!("trigger={trigger}"));
     }
     let payload = if payload_parts.is_empty() {
         None
@@ -1799,14 +1799,14 @@ fn entrypoint_count_invariants(entrypoints: &serde_json::Map<String, Value>) -> 
         "total_dispatch_edges",
         "total_unresolved",
     ] {
-        if let Some(value) = counts.get(field).and_then(Value::as_u64) {
-            if value > 0 {
-                invariants.push(observed_invariant(
-                    format!("framework_entrypoints.counts.{field}.nonzero"),
-                    "true",
-                    "kernel.metadata_debug_json.entrypoints.counts",
-                ));
-            }
+        if let Some(value) = counts.get(field).and_then(Value::as_u64)
+            && value > 0
+        {
+            invariants.push(observed_invariant(
+                format!("framework_entrypoints.counts.{field}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.entrypoints.counts",
+            ));
         }
     }
 

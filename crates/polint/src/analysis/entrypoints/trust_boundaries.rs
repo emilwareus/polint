@@ -291,9 +291,12 @@ mod tests {
 
         let boundaries = derive_trust_boundaries(&db, &[ep]);
 
-        let source_kinds: Vec<_> = boundaries.iter().map(|tb| tb.source_kind).collect();
         // No method means all methods -> body is possible
-        assert!(source_kinds.contains(&TrustBoundarySourceKind::RequestBody));
+        assert!(
+            boundaries
+                .iter()
+                .any(|tb| tb.source_kind == TrustBoundarySourceKind::RequestBody)
+        );
     }
 
     #[test]
