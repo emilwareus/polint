@@ -8,12 +8,12 @@ use super::sinks::{
     ExtensionFactCandidate, ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
     ExtensionSpanRef,
 };
-use super::store::{ExtensionActivationRow, ExtensionOutput};
+use super::store::{AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::core::AnalysisDb;
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, Severity, TextRange};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExtensionProviderOutput {
@@ -45,10 +45,14 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
     let mut activations = Vec::new();
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
+    let mut accepted_stable_keys = BTreeSet::new();
 
     for extension in discovered {
         let handshake = match host.handshake(&extension) {
             Ok(response) => {
+                diagnostics.extend(response.diagnostics.iter().map(|diagnostic| {
+                    protocol_diagnostic(&extension.extension_id, None, diagnostic)
+                }));
                 activations.push(ExtensionActivationRow {
                     extension_id: extension.extension_id.clone(),
                     provider_id: None,
@@ -57,6 +61,9 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                     output_digest_inputs: Vec::new(),
                     diagnostic_digest: protocol_diagnostic_digest(&response.diagnostics),
                 });
+                if response.activation_status != ExtensionActivationStatus::HandshakeOk {
+                    continue;
+                }
                 response
             }
             Err(error) => {
@@ -88,36 +95,58 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
             );
             match run {
                 Ok(response) => {
+                    diagnostics.extend(response.diagnostics.iter().map(|diagnostic| {
+                        protocol_diagnostic(
+                            &response.extension_id,
+                            Some(&response.provider_id),
+                            diagnostic,
+                        )
+                    }));
                     let diagnostic_digest = protocol_diagnostic_digest(&response.diagnostics);
                     let output_digest_inputs = response.output_digest_inputs.clone();
-                    let candidates = response
-                        .facts
-                        .into_iter()
-                        .map(|fact| {
-                            extension_candidate_from_wire(
-                                &response.extension_id,
-                                &response.provider_id,
-                                fact,
+                    let validation =
+                        if response.activation_status == ExtensionActivationStatus::Active {
+                            let candidates = response
+                                .facts
+                                .into_iter()
+                                .map(|fact| {
+                                    extension_candidate_from_wire(
+                                        &response.extension_id,
+                                        &response.provider_id,
+                                        fact,
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            validate_extension_output(
+                                db,
+                                ExtensionValidationInput {
+                                    declared_outputs: provider
+                                        .declared_outputs
+                                        .iter()
+                                        .map(|label| label.as_str().to_string())
+                                        .collect::<BTreeSet<_>>(),
+                                    native_stable_keys: native_stable_keys(db),
+                                    exact_validation_evidence: BTreeSet::new(),
+                                    candidates,
+                                },
                             )
-                        })
-                        .collect::<Vec<_>>();
-                    let validation = validate_extension_output(
-                        db,
-                        ExtensionValidationInput {
-                            declared_outputs: provider
-                                .declared_outputs
-                                .iter()
-                                .map(|label| label.as_str().to_string())
-                                .collect::<BTreeSet<_>>(),
-                            native_stable_keys: native_stable_keys(db),
-                            exact_validation_evidence: BTreeSet::new(),
-                            candidates,
-                        },
+                        } else {
+                            ExtensionOutput::default()
+                        };
+                    let mut provider_rejected = validation.rejected;
+                    let provider_accepted = deduplicate_provider_accepted(
+                        validation.accepted,
+                        &mut accepted_stable_keys,
+                        &mut provider_rejected,
                     );
+                    diagnostics
+                        .extend(provider_rejected.iter().map(extension_rejection_diagnostic));
                     activations.push(ExtensionActivationRow {
                         extension_id: response.extension_id,
                         provider_id: Some(response.provider_id),
-                        status: if validation.rejected.is_empty() {
+                        status: if response.activation_status != ExtensionActivationStatus::Active {
+                            response.activation_status
+                        } else if provider_rejected.is_empty() {
                             ExtensionActivationStatus::Active
                         } else {
                             ExtensionActivationStatus::ValidationFailed
@@ -126,8 +155,8 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                         output_digest_inputs,
                         diagnostic_digest,
                     });
-                    accepted.extend(validation.accepted);
-                    rejected.extend(validation.rejected);
+                    accepted.extend(provider_accepted);
+                    rejected.extend(provider_rejected);
                 }
                 Err(error) => {
                     diagnostics.push(error.diagnostic());
@@ -197,14 +226,91 @@ fn extension_output_digest(
         )
     }));
     parts.extend(db.rejected_extension_facts().iter().map(|fact| {
+        let mut evidence = fact
+            .evidence
+            .iter()
+            .map(|evidence| format!("evidence={evidence}"))
+            .collect::<Vec<_>>();
+        evidence.sort();
+        let evidence_refs = evidence.iter().map(String::as_str).collect::<Vec<_>>();
+        let evidence_digest = crate::cache::stable_hash(&evidence_refs);
         format!(
-            "rejected={}:{}:{}:{:?}",
-            fact.extension_id, fact.provider_id, fact.stable_key, fact.reason
+            "rejected={}:{}:{}:{}:{:?}:{}",
+            fact.extension_id,
+            fact.provider_id,
+            fact.fact_family,
+            fact.stable_key,
+            fact.reason,
+            evidence_digest
         )
     }));
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "extension_output", &refs)
+}
+
+fn deduplicate_provider_accepted(
+    accepted: Vec<AcceptedExtensionFact>,
+    accepted_stable_keys: &mut BTreeSet<String>,
+    rejected: &mut Vec<super::store::RejectedExtensionFact>,
+) -> Vec<AcceptedExtensionFact> {
+    let mut deduped = Vec::new();
+    for fact in accepted {
+        if accepted_stable_keys.insert(fact.stable_key.clone()) {
+            deduped.push(fact);
+        } else {
+            rejected.push(super::store::RejectedExtensionFact {
+                extension_id: fact.extension_id,
+                provider_id: fact.provider_id,
+                fact_family: fact.fact_family,
+                stable_key: fact.stable_key,
+                reason: super::validate::ExtensionRejectionReason::DuplicateStableKey,
+                evidence: fact.evidence,
+            });
+        }
+    }
+    deduped
+}
+
+fn protocol_diagnostic(
+    extension_id: &str,
+    provider_id: Option<&str>,
+    diagnostic: &ExtensionProtocolDiagnostic,
+) -> Diagnostic {
+    let severity = match diagnostic.severity.as_str() {
+        "error" => Severity::Error,
+        "info" => Severity::Info,
+        _ => Severity::Warn,
+    };
+    let mut output = Diagnostic::new(
+        diagnostic.rule_id.clone(),
+        severity,
+        "<workspace>",
+        TextRange::point(1, 1),
+        diagnostic.message.clone(),
+    )
+    .with_evidence("extension_id", extension_id.to_string());
+    if let Some(provider_id) = provider_id {
+        output = output.with_evidence("provider_id", provider_id.to_string());
+    }
+    for evidence in &diagnostic.evidence {
+        output = output.with_evidence(evidence.label.clone(), evidence.value.clone());
+    }
+    output
+}
+
+fn extension_rejection_diagnostic(fact: &super::store::RejectedExtensionFact) -> Diagnostic {
+    Diagnostic::error(
+        "polint/extension",
+        "<workspace>",
+        TextRange::point(1, 1),
+        "Extension fact failed validation.",
+    )
+    .with_evidence("extension_id", fact.extension_id.clone())
+    .with_evidence("provider_id", fact.provider_id.clone())
+    .with_evidence("fact_family", fact.fact_family.clone())
+    .with_evidence("stable_key", fact.stable_key.clone())
+    .with_evidence("reason", format!("{:?}", fact.reason))
 }
 
 fn protocol_diagnostic_digest(diagnostics: &[ExtensionProtocolDiagnostic]) -> String {

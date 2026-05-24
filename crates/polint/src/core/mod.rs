@@ -1213,90 +1213,37 @@ impl AnalysisDb {
         self.refresh_type_value_alias_metadata();
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
     pub(crate) fn type_facts(&self) -> &[TypeFact] {
         &self.type_facts
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
+    #[allow(dead_code)]
     pub(crate) fn narrowed_type_facts(&self) -> &[NarrowedTypeFact] {
         &self.narrowed_type_facts
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
     pub(crate) fn value_facts(&self) -> &[ValueFact] {
         &self.value_facts
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
+    #[allow(dead_code)]
     pub(crate) fn allocation_tokens(&self) -> &[AllocationTokenFact] {
         &self.allocation_tokens
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
     pub(crate) fn access_path_facts(&self) -> &[AccessPathFact] {
         &self.access_path_facts
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
+    #[allow(dead_code)]
     pub(crate) fn points_to_constraints(&self) -> &[PointsToConstraintFact] {
         &self.points_to_constraints
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
     pub(crate) fn points_to_sets(&self) -> &[PointsToSetFact] {
         &self.points_to_sets
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Type/value alias fact accessors are wired ahead of public consumers in Phase 36."
-        )
-    )]
     pub(crate) fn alias_answers(&self) -> &[AliasAnswerFact] {
         &self.alias_answers
     }
@@ -4785,8 +4732,8 @@ fn alias_metadata_precision(
 ) -> (FactPrecision, FactConfidence) {
     let fact_precision = match status {
         AliasStatus::NoAlias | AliasStatus::MustAlias => match precision {
-            AliasPrecision::ExactLocal => FactPrecision::Exact,
-            AliasPrecision::FlowInsensitive
+            AliasPrecision::ExactLocal
+            | AliasPrecision::FlowInsensitive
             | AliasPrecision::SetupAware
             | AliasPrecision::Conservative => FactPrecision::SetupAware,
             AliasPrecision::Heuristic => FactPrecision::Heuristic,

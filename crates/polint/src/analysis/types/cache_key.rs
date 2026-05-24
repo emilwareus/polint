@@ -6,7 +6,9 @@ pub(crate) const TYPE_VALUE_ALIAS_SCHEMA_LABEL: &str = "type-value-alias-facts-1
 pub(crate) struct TypeValueAliasProviderParameters {
     pub(crate) precision_tier: &'static str,
     pub(crate) alias_budget: u32,
-    pub(crate) points_to_budget: u32,
+    pub(crate) points_to_max_steps: u32,
+    pub(crate) points_to_max_objects_per_var: u32,
+    pub(crate) points_to_max_dynamic_vars: u32,
     pub(crate) extension_slot: &'static str,
     pub(crate) model_slot: &'static str,
     pub(crate) tool_slot: &'static str,
@@ -14,10 +16,13 @@ pub(crate) struct TypeValueAliasProviderParameters {
 
 impl TypeValueAliasProviderParameters {
     pub(crate) fn deterministic_default() -> Self {
+        let points_to_budget = crate::analysis::points_to::solver::PointsToBudget::default();
         Self {
             precision_tier: "setup-aware",
-            alias_budget: 0,
-            points_to_budget: 0,
+            alias_budget: crate::analysis::aliases::provider_stack::MAX_PROVIDER_STACK_PAIRS as u32,
+            points_to_max_steps: points_to_budget.max_steps as u32,
+            points_to_max_objects_per_var: points_to_budget.max_objects_per_var as u32,
+            points_to_max_dynamic_vars: points_to_budget.max_dynamic_vars as u32,
             extension_slot: "absent",
             model_slot: "absent",
             tool_slot: "absent",
@@ -89,7 +94,15 @@ fn parameter_parts(settings: &TypeValueAliasProviderParameters) -> Vec<String> {
         "output=alias_answers".to_string(),
         format!("precision_tier={}", settings.precision_tier),
         format!("alias_budget={}", settings.alias_budget),
-        format!("points_to_budget={}", settings.points_to_budget),
+        format!("points_to_max_steps={}", settings.points_to_max_steps),
+        format!(
+            "points_to_max_objects_per_var={}",
+            settings.points_to_max_objects_per_var
+        ),
+        format!(
+            "points_to_max_dynamic_vars={}",
+            settings.points_to_max_dynamic_vars
+        ),
         format!("extension_slot={}", settings.extension_slot),
         format!("model_slot={}", settings.model_slot),
         format!("tool_slot={}", settings.tool_slot),
@@ -121,7 +134,11 @@ pub(crate) fn type_value_alias_provider_parameter_digest_for_test(
     type_value_alias_provider_parameter_digest_for_settings(&TypeValueAliasProviderParameters {
         precision_tier,
         alias_budget,
-        points_to_budget,
+        points_to_max_steps: points_to_budget,
+        points_to_max_objects_per_var: TypeValueAliasProviderParameters::deterministic_default()
+            .points_to_max_objects_per_var,
+        points_to_max_dynamic_vars: TypeValueAliasProviderParameters::deterministic_default()
+            .points_to_max_dynamic_vars,
         extension_slot,
         model_slot,
         tool_slot,
@@ -224,6 +241,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_digest_changes_for_ts_js_lifecycle_inputs() {
+        let baseline_snapshot = snapshot_with_ts_js("tsconfig-base", "package-base");
+        let changed_tsconfig = snapshot_with_ts_js("tsconfig-changed", "package-base");
+        let changed_package = snapshot_with_ts_js("tsconfig-base", "package-changed");
+        let upstream = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "semantic_mir",
+            &["base"],
+        )];
+
+        let baseline =
+            type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream);
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_tsconfig, &upstream)
+        );
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_package, &upstream)
+        );
+    }
+
+    #[test]
+    fn snapshot_digest_changes_for_extension_inputs() {
+        let mut baseline_snapshot = snapshot("go-base", "tool-base");
+        let mut changed_extension = baseline_snapshot.clone();
+        baseline_snapshot.extensions = vec![component(
+            "extension.type_precision",
+            Digest::from_parts(DigestKind::ExtensionCode, "extension", &["base"]),
+        )];
+        changed_extension.extensions = vec![component(
+            "extension.type_precision",
+            Digest::from_parts(DigestKind::ExtensionCode, "extension", &["changed"]),
+        )];
+        let upstream = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "polint.extensions",
+            &["accepted=alias:extension:no_alias"],
+        )];
+
+        let baseline =
+            type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream);
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_extension, &upstream)
+        );
+    }
+
     fn snapshot(go_suffix: &str, tool_suffix: &str) -> InputSnapshot {
         let go_component = component(
             "go.tool_invocation",
@@ -252,6 +318,23 @@ mod tests {
             tool_invocations: vec![tool_component],
             provider_schemas: Vec::<ProviderSchemaSnapshot>::new(),
         }
+    }
+
+    fn snapshot_with_ts_js(tsconfig_suffix: &str, package_suffix: &str) -> InputSnapshot {
+        let mut snapshot = snapshot("go-base", "tool-base");
+        snapshot.ts_js_lifecycle = TsJsLifecycleSnapshot {
+            components: vec![
+                component(
+                    "ts_js.config_files",
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "tsconfig", &[tsconfig_suffix]),
+                ),
+                component(
+                    "ts_js.package_manifests",
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "package", &[package_suffix]),
+                ),
+            ],
+        };
+        snapshot
     }
 
     fn component(name: &str, digest: Digest) -> InputComponent {

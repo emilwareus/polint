@@ -7,6 +7,8 @@ use serde_json::Value;
 
 use crate::analysis::aliases::facts::AliasStatus;
 use crate::analysis::points_to::facts::PointsToBudgetStatus;
+use crate::analysis::types::facts::TypeShape;
+use crate::analysis::values::facts::ValueKind;
 use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn type_value_alias_debug_json_for_test(db: &AnalysisDb) -> Value {
@@ -40,6 +42,9 @@ struct TypeValueAliasDebugCounts {
     by_value_precision: BTreeMap<String, usize>,
     by_alias_status: BTreeMap<String, usize>,
     by_points_to_budget: BTreeMap<String, usize>,
+    by_provenance: BTreeMap<String, usize>,
+    by_fact_family: BTreeMap<String, usize>,
+    by_unknown_or_unsupported_reason: BTreeMap<String, usize>,
 }
 
 fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
@@ -55,6 +60,43 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
         ..Default::default()
     };
 
+    increment_by(&mut counts.by_fact_family, "Type", counts.total_type_facts);
+    increment_by(
+        &mut counts.by_fact_family,
+        "NarrowedType",
+        counts.total_narrowed_type_facts,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "Value",
+        counts.total_value_facts,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "AllocationToken",
+        counts.total_allocation_tokens,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "AccessPath",
+        counts.total_access_paths,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "PointsToConstraint",
+        counts.total_points_to_constraints,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "PointsToSet",
+        counts.total_points_to_sets,
+    );
+    increment_by(
+        &mut counts.by_fact_family,
+        "AliasAnswer",
+        counts.total_alias_answers,
+    );
+
     for fact in db.type_facts() {
         increment(&mut counts.by_language, language_label(fact.language));
         increment(&mut counts.by_type_status, &format!("{:?}", fact.status));
@@ -62,6 +104,10 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
             &mut counts.by_type_precision,
             &format!("{:?}", fact.precision),
         );
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
+        if let TypeShape::Unknown { reason } | TypeShape::Unsupported { reason } = &fact.shape {
+            increment(&mut counts.by_unknown_or_unsupported_reason, reason);
+        }
     }
     for fact in db.value_facts() {
         increment(&mut counts.by_language, language_label(fact.language));
@@ -70,6 +116,13 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
             &mut counts.by_value_precision,
             &format!("{:?}", fact.precision),
         );
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
+        if let ValueKind::Unknown { evidence } = &fact.kind {
+            increment(&mut counts.by_unknown_or_unsupported_reason, evidence);
+        }
+    }
+    for fact in db.allocation_tokens() {
+        increment(&mut counts.by_provenance, &format!("{:?}", fact.provenance));
     }
     for fact in db.alias_answers() {
         increment(&mut counts.by_alias_status, alias_status_label(fact.status));
@@ -131,6 +184,13 @@ fn increment(counts: &mut BTreeMap<String, usize>, key: &str) {
     *counts.entry(key.to_string()).or_default() += 1;
 }
 
+fn increment_by(counts: &mut BTreeMap<String, usize>, key: &str, amount: usize) {
+    if amount == 0 {
+        return;
+    }
+    *counts.entry(key.to_string()).or_default() += amount;
+}
+
 fn language_label(language: Language) -> &'static str {
     match language {
         Language::Go => "go",
@@ -163,6 +223,27 @@ fn budget_label(status: PointsToBudgetStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::access_paths::facts::{AccessPathFact, AccessPathStatus};
+    use crate::analysis::access_paths::store::AccessPathOutput;
+    use crate::analysis::aliases::facts::{
+        AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason,
+    };
+    use crate::analysis::aliases::store::AliasOutput;
+    use crate::analysis::ids::{
+        AccessPathId, AliasAnswerId, AllocationTokenId, ObjectTokenId, PlaceId, PointsToSetId,
+        PtVarId, TypeFactId, TypeSetId, ValueFactId,
+    };
+    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToSetFact, PointsToStatus};
+    use crate::analysis::points_to::store::PointsToOutput;
+    use crate::analysis::types::facts::{
+        TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance, TypeStatus, TypeSubject,
+    };
+    use crate::analysis::types::store::{TypeOutput, TypeValueAliasOutput};
+    use crate::analysis::values::facts::{
+        AllocationKind, AllocationTokenFact, ValueFact, ValuePrecision, ValueProvenance,
+        ValueStatus, ValueSubject,
+    };
+    use crate::analysis::values::store::ValueOutput;
 
     #[test]
     fn empty_type_value_alias_debug_is_deterministic_and_path_free() {
@@ -175,5 +256,163 @@ mod tests {
         assert!(!text.contains("/Users/"));
         assert!(!text.contains("parser_id"));
         assert!(!text.contains("timestamp"));
+    }
+
+    #[test]
+    fn type_value_alias_debug_counts_alias_statuses_deterministically() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            aliases: AliasOutput {
+                answers: vec![
+                    alias(AliasStatus::NoAlias, "alias:no"),
+                    alias(AliasStatus::MayAlias, "alias:may"),
+                    alias(AliasStatus::MustAlias, "alias:must"),
+                    alias(AliasStatus::PartialAlias, "alias:partial"),
+                    alias(AliasStatus::Unknown, "alias:unknown"),
+                ],
+            },
+            ..TypeValueAliasOutput::default()
+        });
+
+        let debug = type_value_alias_debug_json_for_test(&db);
+        let counts = &debug["counts"]["by_alias_status"];
+
+        for status in [
+            "NoAlias",
+            "MayAlias",
+            "MustAlias",
+            "PartialAlias",
+            "Unknown",
+        ] {
+            assert_eq!(counts[status], 1);
+        }
+    }
+
+    #[test]
+    fn populated_type_value_alias_debug_counts_all_families_and_reasons() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            types: TypeOutput {
+                types: vec![TypeFact {
+                    id: TypeFactId(0),
+                    subject: TypeSubject::Synthetic("fixture".to_string()),
+                    type_set: TypeSetId(0),
+                    shape: TypeShape::Unknown {
+                        reason: "dynamic".to_string(),
+                    },
+                    phase: TypePhase::Unknown,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    place: None,
+                    cfg_block: None,
+                    operation: None,
+                    precision: TypePrecision::Unknown,
+                    confidence: TypeConfidence::Low,
+                    status: TypeStatus::Unknown,
+                    provenance: TypeProvenance::Native,
+                    stable_key: "type:fixture".to_string(),
+                }],
+                narrowed: Vec::new(),
+            },
+            values: ValueOutput {
+                values: vec![ValueFact {
+                    id: ValueFactId(0),
+                    subject: ValueSubject::Synthetic("fixture".to_string()),
+                    value: crate::analysis::ids::AbstractValueId(0),
+                    kind: ValueKind::Unknown {
+                        evidence: "unknown-value".to_string(),
+                    },
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    precision: ValuePrecision::Unknown,
+                    status: ValueStatus::Unknown,
+                    provenance: ValueProvenance::Generated,
+                    stable_key: "value:fixture".to_string(),
+                }],
+                allocations: vec![AllocationTokenFact {
+                    id: AllocationTokenId(0),
+                    kind: AllocationKind::ObjectLiteral,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    source_place: None,
+                    source_operation: None,
+                    span: None,
+                    provenance: ValueProvenance::Native,
+                    stable_key: "allocation:fixture".to_string(),
+                }],
+            },
+            access_paths: AccessPathOutput {
+                access_paths: vec![AccessPathFact {
+                    id: AccessPathId(0),
+                    base: PlaceId(0),
+                    projections: Vec::new(),
+                    depth: 0,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    status: AccessPathStatus::Unknown,
+                    stable_key: "path:fixture".to_string(),
+                }],
+            },
+            points_to: PointsToOutput {
+                constraints: Vec::new(),
+                sets: vec![PointsToSetFact {
+                    id: PointsToSetId(0),
+                    variable: PtVarId(0),
+                    objects: vec![ObjectTokenId(0)],
+                    status: PointsToStatus::Present,
+                    precision: PointsToPrecision::FlowInsensitive,
+                    budget: PointsToBudgetStatus::WithinBudget,
+                    stable_key: "points-to:fixture".to_string(),
+                }],
+            },
+            aliases: AliasOutput {
+                answers: vec![alias(AliasStatus::Unknown, "alias:fixture")],
+            },
+        });
+
+        let debug = type_value_alias_debug_json_for_test(&db);
+        let text = serde_json::to_string(&debug).expect("json");
+
+        for family in [
+            "Type",
+            "Value",
+            "AllocationToken",
+            "AccessPath",
+            "PointsToSet",
+            "AliasAnswer",
+        ] {
+            assert_eq!(debug["counts"]["by_fact_family"][family], 1);
+        }
+        assert_eq!(
+            debug["counts"]["by_unknown_or_unsupported_reason"]["dynamic"],
+            1
+        );
+        assert_eq!(
+            debug["counts"]["by_unknown_or_unsupported_reason"]["unknown-value"],
+            1
+        );
+        assert!(!text.contains("/Users/"));
+        assert!(!text.contains("timestamp"));
+    }
+
+    fn alias(status: AliasStatus, stable_key: &str) -> AliasAnswerFact {
+        AliasAnswerFact {
+            id: AliasAnswerId(0),
+            left: AliasOperand::Place(PlaceId(1)),
+            right: AliasOperand::Place(PlaceId(2)),
+            status,
+            reason: AliasReason::ExtensionProvided,
+            evidence: vec![stable_key.to_string()],
+            precision: AliasPrecision::Heuristic,
+            stable_key: stable_key.to_string(),
+        }
     }
 }

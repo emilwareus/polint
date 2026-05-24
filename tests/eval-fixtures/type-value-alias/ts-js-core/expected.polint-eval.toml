@@ -1,0 +1,39 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "type-value-alias-ts-js-core"
+area = "facts"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "Type", stable_key = "language=10:typescript", mode = "partial", producer_id = "polint.type_value_alias", status = "unknown" }
+
+[[expected]]
+fact = { family = "NarrowedType", stable_key = "NarrowedType", mode = "partial", producer_id = "polint.type_value_alias" }
+
+[[expected]]
+fact = { family = "Value", stable_key = "language=10:typescript", mode = "partial", producer_id = "polint.type_value_alias", status = "present" }
+
+[[expected]]
+fact = { family = "AllocationToken", stable_key = "language=10:typescript", mode = "partial", producer_id = "polint.type_value_alias", status = "present" }
+
+[[expected]]
+fact = { family = "AccessPath", stable_key = "language=10:typescript", mode = "partial", producer_id = "polint.type_value_alias" }
+
+[[expected]]
+fact = { family = "PointsToConstraint", stable_key = "PointsToConstraint", mode = "partial", producer_id = "polint.type_value_alias", status = "present" }
+
+[[expected]]
+fact = { family = "PointsToSet", stable_key = "PointsToSet", mode = "partial", producer_id = "polint.type_value_alias", status = "present" }
+
+[[expected]]
+fact = { family = "AliasAnswer", stable_key = "AliasAnswer", mode = "partial", producer_id = "polint.type_value_alias" }
+
+[[expected]]
+invariant = { name = "provider_order.13", value = "polint.type_value_alias", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "type_value_alias_ts_js_core", max_runtime_ms = 10000, mode = "exact" }

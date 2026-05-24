@@ -5,8 +5,10 @@ area = "extension"
 [repo]
 path = "repo"
 
+# Runtime-extension fixtures compile a repo-local extension on cold CI workers;
+# keep this above observed cold-start cost while still catching regressions.
 [budget]
-max_runtime_ms = 10000
+max_runtime_ms = 30000
 
 [[expected]]
 fact = { family = "extension.routes", stable_key = "extension.route./ok", mode = "exact", producer_id = "polint.extension.demo.routes", precision = "heuristic", status = "accepted" }
@@ -27,4 +29,4 @@ invariant = { name = "provider_output.polint.extensions.present", value = "true"
 invariant = { name = "snapshot.extension.providers.present", value = "true", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "extension.real_sink", max_runtime_ms = 10000, mode = "exact" }
+runtime_budget = { name = "extension.real_sink", max_runtime_ms = 30000, mode = "exact" }

@@ -3,12 +3,20 @@ use std::fmt::Debug;
 
 use serde::Serialize;
 
+use crate::analysis::access_paths::facts::AccessPathProjection;
+use crate::analysis::aliases::facts::{AliasOperand, AliasPrecision, AliasStatus};
 use crate::analysis::calls::validate::validate_calls;
 use crate::analysis::cfg::validate::validate_cfg;
 use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::entrypoints::validate::validate_entrypoints;
+use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, ValueFactId};
+use crate::analysis::points_to::facts::{
+    PointsToBudgetStatus, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
+};
 use crate::analysis::summaries::validate::validate_summaries;
+use crate::analysis::types::facts::{TypePrecision, TypeShape, TypeStatus, TypeSubject};
 use crate::analysis::validate::validate_semantic_mir;
+use crate::analysis::values::facts::{ValueKind, ValuePrecision, ValueStatus, ValueSubject};
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
@@ -49,11 +57,985 @@ pub(crate) fn validate_fact_metadata(
     validate_abstract_domains(db, &mut diagnostics);
     validate_summaries(db, &mut diagnostics);
     validate_entrypoints(db, &mut diagnostics);
+    validate_type_value_alias(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let type_value_alias_ids = TypeValueAliasIdSets::from_db(db);
+
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::Type,
+        db.type_facts().iter().map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::Value,
+        db.value_facts().iter().map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::NarrowedType,
+        db.narrowed_type_facts()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::AllocationToken,
+        db.allocation_tokens()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::AccessPath,
+        db.access_path_facts()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::AliasAnswer,
+        db.alias_answers()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::PointsToConstraint,
+        db.points_to_constraints()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+    check_type_value_alias_stable_keys(
+        diagnostics,
+        FactFamily::PointsToSet,
+        db.points_to_sets()
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    );
+
+    for fact in db.type_facts() {
+        validate_type_subject(
+            diagnostics,
+            &type_value_alias_ids,
+            &fact.stable_key,
+            &fact.subject,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.files,
+            FactFamily::Type,
+            &fact.stable_key,
+            "file",
+            fact.file,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.functions,
+            FactFamily::Type,
+            &fact.stable_key,
+            "function",
+            fact.function,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.bodies,
+            FactFamily::Type,
+            &fact.stable_key,
+            "body",
+            fact.body,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.places,
+            FactFamily::Type,
+            &fact.stable_key,
+            "place",
+            fact.place,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.cfg_blocks,
+            FactFamily::Type,
+            &fact.stable_key,
+            "cfg_block",
+            fact.cfg_block,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.operations,
+            FactFamily::Type,
+            &fact.stable_key,
+            "operation",
+            fact.operation,
+        );
+        validate_type_shape_refs(
+            diagnostics,
+            &type_value_alias_ids,
+            &fact.stable_key,
+            &fact.shape,
+        );
+        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+    }
+
+    for fact in db.narrowed_type_facts() {
+        validate_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.places,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "place",
+            fact.place,
+        );
+        validate_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.type_sets,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "type_set",
+            fact.type_set,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.cfg_blocks,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "cfg_block",
+            fact.cfg_block,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.operations,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "operation",
+            fact.operation,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.places,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "predicate",
+            fact.predicate,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.files,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "file",
+            fact.file,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.functions,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "function",
+            fact.function,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.bodies,
+            FactFamily::NarrowedType,
+            &fact.stable_key,
+            "body",
+            fact.body,
+        );
+        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+    }
+
+    for fact in db.value_facts() {
+        validate_value_subject(
+            diagnostics,
+            &type_value_alias_ids,
+            &fact.stable_key,
+            &fact.subject,
+        );
+        validate_value_kind(
+            diagnostics,
+            &type_value_alias_ids,
+            &fact.stable_key,
+            &fact.kind,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.files,
+            FactFamily::Value,
+            &fact.stable_key,
+            "file",
+            fact.file,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.functions,
+            FactFamily::Value,
+            &fact.stable_key,
+            "function",
+            fact.function,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.bodies,
+            FactFamily::Value,
+            &fact.stable_key,
+            "body",
+            fact.body,
+        );
+        validate_value_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+    }
+
+    for fact in db.allocation_tokens() {
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.files,
+            FactFamily::AllocationToken,
+            &fact.stable_key,
+            "file",
+            fact.file,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.functions,
+            FactFamily::AllocationToken,
+            &fact.stable_key,
+            "function",
+            fact.function,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.bodies,
+            FactFamily::AllocationToken,
+            &fact.stable_key,
+            "body",
+            fact.body,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.places,
+            FactFamily::AllocationToken,
+            &fact.stable_key,
+            "source_place",
+            fact.source_place,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.operations,
+            FactFamily::AllocationToken,
+            &fact.stable_key,
+            "source_operation",
+            fact.source_operation,
+        );
+        if let Some(span) = &fact.span
+            && let Some(reason) =
+                span_failure_reason(db, &type_value_alias_ids.files, fact.file, span)
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AllocationToken,
+                &fact.stable_key,
+                "span",
+                reason,
+            ));
+        }
+    }
+
+    for fact in db.access_path_facts() {
+        validate_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.places,
+            FactFamily::AccessPath,
+            &fact.stable_key,
+            "base",
+            fact.base,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.files,
+            FactFamily::AccessPath,
+            &fact.stable_key,
+            "file",
+            fact.file,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.functions,
+            FactFamily::AccessPath,
+            &fact.stable_key,
+            "function",
+            fact.function,
+        );
+        validate_optional_type_value_alias_ref(
+            diagnostics,
+            &type_value_alias_ids.bodies,
+            FactFamily::AccessPath,
+            &fact.stable_key,
+            "body",
+            fact.body,
+        );
+        if fact.depth != fact.projections.len() as u32 {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AccessPath,
+                &fact.stable_key,
+                "depth",
+                "access_path_depth_mismatch",
+            ));
+        }
+        for projection in &fact.projections {
+            if let AccessPathProjection::CallReturn(call) = projection {
+                validate_type_value_alias_ref(
+                    diagnostics,
+                    &type_value_alias_ids.call_sites,
+                    FactFamily::AccessPath,
+                    &fact.stable_key,
+                    "projection.call_return",
+                    *call,
+                );
+            }
+        }
+    }
+
+    for fact in db.points_to_constraints() {
+        validate_points_to_constraint_kind(
+            diagnostics,
+            &type_value_alias_ids,
+            &fact.stable_key,
+            &fact.kind,
+        );
+        validate_points_to_status_precision(
+            diagnostics,
+            FactFamily::PointsToConstraint,
+            &fact.stable_key,
+            fact.status,
+            fact.precision,
+        );
+    }
+
+    for fact in db.points_to_sets() {
+        validate_points_to_var(
+            diagnostics,
+            &type_value_alias_ids,
+            FactFamily::PointsToSet,
+            &fact.stable_key,
+            "variable",
+            fact.variable,
+        );
+        if fact.status == PointsToStatus::BudgetExceeded
+            && fact.budget != PointsToBudgetStatus::BudgetExceeded
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::PointsToSet,
+                &fact.stable_key,
+                "budget",
+                "budget_status_mismatch",
+            ));
+        }
+        for object in &fact.objects {
+            validate_type_value_alias_ref(
+                diagnostics,
+                &type_value_alias_ids.object_tokens,
+                FactFamily::PointsToSet,
+                &fact.stable_key,
+                "object",
+                *object,
+            );
+        }
+        validate_points_to_status_precision(
+            diagnostics,
+            FactFamily::PointsToSet,
+            &fact.stable_key,
+            fact.status,
+            fact.precision,
+        );
+    }
+
+    for fact in db.alias_answers() {
+        validate_alias_operand(
+            db,
+            diagnostics,
+            &type_value_alias_ids.places,
+            &type_value_alias_ids.access_paths,
+            fact.stable_key.as_str(),
+            fact.left,
+        );
+        validate_alias_operand(
+            db,
+            diagnostics,
+            &type_value_alias_ids.places,
+            &type_value_alias_ids.access_paths,
+            fact.stable_key.as_str(),
+            fact.right,
+        );
+        if matches!(fact.status, AliasStatus::MustAlias | AliasStatus::NoAlias)
+            && (fact.evidence.is_empty() || fact.precision == AliasPrecision::Unknown)
+        {
+            diagnostics.push(type_value_alias_diagnostic(
+                FactFamily::AliasAnswer,
+                &fact.stable_key,
+                "evidence",
+                "overconfident_alias_answer",
+            ));
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TypeValueAliasIdSets {
+    files: BTreeSet<FileId>,
+    functions: BTreeSet<FunctionId>,
+    bodies: BTreeSet<MirBodyId>,
+    operations: BTreeSet<MirOpId>,
+    places: BTreeSet<PlaceId>,
+    cfg_blocks: BTreeSet<crate::analysis::cfg::ids::BasicBlockId>,
+    call_sites: BTreeSet<crate::analysis::ids::CallSiteId>,
+    symbols: BTreeSet<SymbolId>,
+    type_sets: BTreeSet<crate::analysis::ids::TypeSetId>,
+    value_facts: BTreeSet<ValueFactId>,
+    allocations: BTreeSet<crate::analysis::ids::AllocationTokenId>,
+    access_paths: BTreeSet<crate::analysis::ids::AccessPathId>,
+    pt_vars: BTreeSet<crate::analysis::ids::PtVarId>,
+    object_tokens: BTreeSet<crate::analysis::ids::ObjectTokenId>,
+}
+
+impl TypeValueAliasIdSets {
+    fn from_db(db: &AnalysisDb) -> Self {
+        let mut ids = Self {
+            files: db.files().iter().map(|fact| fact.id).collect(),
+            functions: db.functions().iter().map(|fact| fact.id).collect(),
+            bodies: db.mir_bodies().iter().map(|fact| fact.id).collect(),
+            operations: db.mir_operations().iter().map(|fact| fact.id).collect(),
+            places: db.mir_places().iter().map(|fact| fact.id).collect(),
+            cfg_blocks: db.cfg_blocks().iter().map(|fact| fact.id).collect(),
+            call_sites: db.call_sites().iter().map(|fact| fact.id).collect(),
+            symbols: db.symbols().iter().map(|fact| fact.id).collect(),
+            type_sets: db.type_facts().iter().map(|fact| fact.type_set).collect(),
+            value_facts: db.value_facts().iter().map(|fact| fact.id).collect(),
+            allocations: db.allocation_tokens().iter().map(|fact| fact.id).collect(),
+            access_paths: db.access_path_facts().iter().map(|fact| fact.id).collect(),
+            pt_vars: BTreeSet::new(),
+            object_tokens: BTreeSet::new(),
+        };
+        ids.pt_vars.extend(
+            ids.places
+                .iter()
+                .map(|place| crate::analysis::points_to::vars::place_var(*place)),
+        );
+        ids.pt_vars.extend(
+            ids.operations
+                .iter()
+                .map(|operation| crate::analysis::points_to::vars::operation_var(*operation)),
+        );
+        ids.pt_vars.extend(
+            ids.allocations
+                .iter()
+                .map(|allocation| crate::analysis::points_to::vars::allocation_var(*allocation)),
+        );
+        ids.pt_vars.extend(
+            ids.access_paths
+                .iter()
+                .map(|path| crate::analysis::points_to::vars::access_path_var(*path)),
+        );
+        ids.object_tokens.extend(
+            ids.allocations
+                .iter()
+                .map(|allocation| crate::analysis::points_to::vars::allocation_object(*allocation)),
+        );
+        ids.object_tokens
+            .extend(db.value_facts().iter().filter_map(|fact| {
+                matches!(
+                    fact.kind,
+                    ValueKind::FunctionObject | ValueKind::ClassObject | ValueKind::ModuleObject
+                )
+                .then_some(
+                    crate::analysis::points_to::vars::abstract_value_object(fact.value),
+                )
+            }));
+        ids.object_tokens.extend(
+            ids.value_facts
+                .iter()
+                .map(|value| crate::analysis::points_to::vars::value_fact_object(*value)),
+        );
+        ids
+    }
+}
+
+fn check_type_value_alias_stable_keys<'a>(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    keys: impl Iterator<Item = &'a str>,
+) {
+    let mut seen = BTreeSet::new();
+    for key in keys {
+        if !seen.insert(key) {
+            diagnostics.push(type_value_alias_diagnostic(
+                family,
+                key,
+                "stable_key",
+                "duplicate_stable_key",
+            ));
+        }
+    }
+}
+
+fn validate_alias_operand(
+    _db: &AnalysisDb,
+    diagnostics: &mut Vec<Diagnostic>,
+    places: &BTreeSet<crate::analysis::ids::PlaceId>,
+    access_paths: &BTreeSet<crate::analysis::ids::AccessPathId>,
+    stable_key: &str,
+    operand: AliasOperand,
+) {
+    let valid = match operand {
+        AliasOperand::Place(place) => places.contains(&place),
+        AliasOperand::AccessPath(path) => access_paths.contains(&path),
+    };
+    if !valid {
+        diagnostics.push(type_value_alias_diagnostic(
+            FactFamily::AliasAnswer,
+            stable_key,
+            "operand",
+            "dangling_alias_operand",
+        ));
+    }
+}
+
+fn validate_type_subject(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    stable_key: &str,
+    subject: &TypeSubject,
+) {
+    match subject {
+        TypeSubject::Symbol(symbol) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::Type,
+            stable_key,
+            "subject.symbol",
+            *symbol,
+        ),
+        TypeSubject::Place(place) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.places,
+            FactFamily::Type,
+            stable_key,
+            "subject.place",
+            *place,
+        ),
+        TypeSubject::Operation(operation) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.operations,
+            FactFamily::Type,
+            stable_key,
+            "subject.operation",
+            *operation,
+        ),
+        TypeSubject::Function(function) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::Type,
+            stable_key,
+            "subject.function",
+            *function,
+        ),
+        TypeSubject::Synthetic(_) | TypeSubject::Unknown(_) => {}
+    }
+}
+
+fn validate_type_shape_refs(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    stable_key: &str,
+    shape: &TypeShape,
+) {
+    if let TypeShape::Union(type_sets) | TypeShape::Intersection(type_sets) = shape {
+        for type_set in type_sets {
+            validate_type_value_alias_ref(
+                diagnostics,
+                &ids.type_sets,
+                FactFamily::Type,
+                stable_key,
+                "shape.type_set",
+                *type_set,
+            );
+        }
+    }
+}
+
+fn validate_type_status_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    stable_key: &str,
+    status: TypeStatus,
+    precision: TypePrecision,
+) {
+    let invalid = match status {
+        TypeStatus::Present => matches!(
+            precision,
+            TypePrecision::Unknown | TypePrecision::Unsupported
+        ),
+        TypeStatus::Unknown | TypeStatus::BudgetExceeded => {
+            matches!(
+                precision,
+                TypePrecision::ExactLocal | TypePrecision::Unsupported
+            )
+        }
+        TypeStatus::Unsupported => precision != TypePrecision::Unsupported,
+        TypeStatus::SetupMissing => matches!(precision, TypePrecision::ExactLocal),
+    };
+    if invalid {
+        diagnostics.push(type_value_alias_diagnostic(
+            FactFamily::Type,
+            stable_key,
+            "status_precision",
+            "type_status_precision_mismatch",
+        ));
+    }
+}
+
+fn validate_value_subject(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    stable_key: &str,
+    subject: &ValueSubject,
+) {
+    match subject {
+        ValueSubject::Place(place) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.places,
+            FactFamily::Value,
+            stable_key,
+            "subject.place",
+            *place,
+        ),
+        ValueSubject::Operation(operation) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.operations,
+            FactFamily::Value,
+            stable_key,
+            "subject.operation",
+            *operation,
+        ),
+        ValueSubject::Allocation(allocation) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.allocations,
+            FactFamily::Value,
+            stable_key,
+            "subject.allocation",
+            *allocation,
+        ),
+        ValueSubject::Synthetic(_) | ValueSubject::Unknown(_) => {}
+    }
+}
+
+fn validate_value_kind(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    stable_key: &str,
+    kind: &ValueKind,
+) {
+    match kind {
+        ValueKind::PlaceRef(place) | ValueKind::CallReturn(place) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.places,
+            FactFamily::Value,
+            stable_key,
+            "kind.place",
+            *place,
+        ),
+        ValueKind::Object(allocation)
+        | ValueKind::Array(allocation)
+        | ValueKind::CompositeLiteral(allocation) => validate_type_value_alias_ref(
+            diagnostics,
+            &ids.allocations,
+            FactFamily::Value,
+            stable_key,
+            "kind.allocation",
+            *allocation,
+        ),
+        ValueKind::Null
+        | ValueKind::Undefined
+        | ValueKind::Nil
+        | ValueKind::Bool(_)
+        | ValueKind::Number(_)
+        | ValueKind::String(_)
+        | ValueKind::Literal(_)
+        | ValueKind::FunctionObject
+        | ValueKind::ClassObject
+        | ValueKind::ModuleObject
+        | ValueKind::Unknown { .. } => {}
+    }
+}
+
+fn validate_value_status_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    stable_key: &str,
+    status: ValueStatus,
+    precision: ValuePrecision,
+) {
+    let invalid = match status {
+        ValueStatus::Present => {
+            matches!(
+                precision,
+                ValuePrecision::Unknown | ValuePrecision::Unsupported
+            )
+        }
+        ValueStatus::Unknown | ValueStatus::BudgetExceeded => {
+            matches!(
+                precision,
+                ValuePrecision::ExactLocal | ValuePrecision::Unsupported
+            )
+        }
+        ValueStatus::Unsupported => precision != ValuePrecision::Unsupported,
+        ValueStatus::SetupMissing => matches!(precision, ValuePrecision::ExactLocal),
+    };
+    if invalid {
+        diagnostics.push(type_value_alias_diagnostic(
+            FactFamily::Value,
+            stable_key,
+            "status_precision",
+            "value_status_precision_mismatch",
+        ));
+    }
+}
+
+fn validate_points_to_constraint_kind(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    stable_key: &str,
+    kind: &PointsToConstraintKind,
+) {
+    match kind {
+        PointsToConstraintKind::AddressOf { dst, object } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_type_value_alias_ref(
+                diagnostics,
+                &ids.object_tokens,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.object",
+                *object,
+            );
+        }
+        PointsToConstraintKind::CallReturn { dst, value } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_type_value_alias_ref(
+                diagnostics,
+                &ids.value_facts,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.value",
+                *value,
+            );
+        }
+        PointsToConstraintKind::Copy { dst, src }
+        | PointsToConstraintKind::SummaryFlow { dst, src, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
+        PointsToConstraintKind::Load { dst, pointer } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.pointer",
+                *pointer,
+            );
+        }
+        PointsToConstraintKind::Store { pointer, src } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.pointer",
+                *pointer,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
+        PointsToConstraintKind::FieldLoad { dst, base, .. }
+        | PointsToConstraintKind::ElementLoad { dst, base, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.dst",
+                *dst,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.base",
+                *base,
+            );
+        }
+        PointsToConstraintKind::FieldStore { base, src, .. }
+        | PointsToConstraintKind::ElementStore { base, src, .. } => {
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.base",
+                *base,
+            );
+            validate_points_to_var(
+                diagnostics,
+                ids,
+                FactFamily::PointsToConstraint,
+                stable_key,
+                "kind.src",
+                *src,
+            );
+        }
+    }
+}
+
+fn validate_points_to_var(
+    diagnostics: &mut Vec<Diagnostic>,
+    ids: &TypeValueAliasIdSets,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: crate::analysis::ids::PtVarId,
+) {
+    if ids.pt_vars.contains(&value)
+        || crate::analysis::points_to::vars::is_solver_dynamic_var(value)
+    {
+        return;
+    }
+    diagnostics.push(type_value_alias_diagnostic(
+        family,
+        stable_key,
+        field,
+        "dangling_reference",
+    ));
+}
+
+fn validate_points_to_status_precision(
+    diagnostics: &mut Vec<Diagnostic>,
+    family: FactFamily,
+    stable_key: &str,
+    status: PointsToStatus,
+    precision: PointsToPrecision,
+) {
+    let invalid = match status {
+        PointsToStatus::Present => {
+            matches!(
+                precision,
+                PointsToPrecision::Unknown | PointsToPrecision::Unsupported
+            )
+        }
+        PointsToStatus::Unknown | PointsToStatus::BudgetExceeded => {
+            matches!(
+                precision,
+                PointsToPrecision::FlowInsensitive
+                    | PointsToPrecision::LocalFlowSensitive
+                    | PointsToPrecision::SummaryProjected
+                    | PointsToPrecision::Unsupported
+            )
+        }
+        PointsToStatus::Unsupported => precision != PointsToPrecision::Unsupported,
+        PointsToStatus::SetupMissing => !matches!(precision, PointsToPrecision::Unknown),
+    };
+    if invalid {
+        diagnostics.push(type_value_alias_diagnostic(
+            family,
+            stable_key,
+            "status_precision",
+            "points_to_status_precision_mismatch",
+        ));
+    }
+}
+
+fn validate_type_value_alias_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: T,
+) where
+    T: Copy + Debug + Ord,
+{
+    if valid_ids.contains(&value) {
+        return;
+    }
+    diagnostics.push(type_value_alias_diagnostic(
+        family,
+        stable_key,
+        field,
+        "dangling_reference",
+    ));
+}
+
+fn validate_optional_type_value_alias_ref<T>(
+    diagnostics: &mut Vec<Diagnostic>,
+    valid_ids: &BTreeSet<T>,
+    family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    value: Option<T>,
+) where
+    T: Copy + Debug + Ord,
+{
+    let Some(value) = value else {
+        return;
+    };
+    validate_type_value_alias_ref(diagnostics, valid_ids, family, stable_key, field, value);
 }
 
 #[cfg(test)]
@@ -325,6 +1307,299 @@ mod abstract_domains {
             .iter()
             .filter(|diagnostic| diagnostic.message == "Internal analysis validation failed.")
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod type_value_alias_validation {
+    use super::validate_fact_metadata;
+    use crate::analysis::access_paths::facts::{
+        AccessPathFact, AccessPathProjection, AccessPathStatus,
+    };
+    use crate::analysis::access_paths::store::AccessPathOutput;
+    use crate::analysis::aliases::facts::{
+        AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus,
+    };
+    use crate::analysis::aliases::store::AliasOutput;
+    use crate::analysis::ids::{
+        AbstractValueId, AccessPathId, AliasAnswerId, AllocationTokenId, MirOpId, ObjectTokenId,
+        PlaceId, PointsToConstraintId, PointsToSetId, PtVarId, TypeFactId, TypeSetId, ValueFactId,
+    };
+    use crate::analysis::points_to::facts::{
+        PointsToBudgetStatus, PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision,
+        PointsToSetFact, PointsToStatus,
+    };
+    use crate::analysis::points_to::store::PointsToOutput;
+    use crate::analysis::types::facts::{
+        NarrowedTypeFact, TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance,
+        TypeShape, TypeStatus, TypeSubject,
+    };
+    use crate::analysis::types::store::{TypeOutput, TypeValueAliasOutput};
+    use crate::analysis::values::facts::{
+        AllocationKind, AllocationTokenFact, ValueFact, ValueKind, ValuePrecision, ValueProvenance,
+        ValueStatus, ValueSubject,
+    };
+    use crate::analysis::values::store::ValueOutput;
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::core::{AnalysisDb, Language, Span};
+
+    #[test]
+    fn type_value_alias_validation_reports_malformed_rows_deterministically() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            types: TypeOutput {
+                types: vec![
+                    TypeFact {
+                        shape: TypeShape::Union(vec![TypeSetId(99)]),
+                        precision: TypePrecision::Unsupported,
+                        ..type_fact(0, "type:dup", Some(PlaceId(99)))
+                    },
+                    type_fact(1, "type:dup", None),
+                ],
+                narrowed: vec![NarrowedTypeFact {
+                    id: crate::analysis::ids::NarrowedTypeId(0),
+                    place: PlaceId(77),
+                    type_set: TypeSetId(88),
+                    cfg_block: None,
+                    operation: Some(MirOpId(99)),
+                    predicate: Some(PlaceId(100)),
+                    evidence: "bad".to_string(),
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    precision: TypePrecision::ExactLocal,
+                    status: TypeStatus::Unsupported,
+                    stable_key: "narrowed:bad".to_string(),
+                }],
+            },
+            values: ValueOutput {
+                values: vec![ValueFact {
+                    id: ValueFactId(0),
+                    subject: ValueSubject::Operation(MirOpId(77)),
+                    value: AbstractValueId(0),
+                    kind: ValueKind::Object(AllocationTokenId(99)),
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    precision: ValuePrecision::Unknown,
+                    status: ValueStatus::Present,
+                    provenance: ValueProvenance::Native,
+                    stable_key: "value:bad".to_string(),
+                }],
+                allocations: vec![AllocationTokenFact {
+                    id: AllocationTokenId(0),
+                    kind: AllocationKind::ObjectLiteral,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    source_place: Some(PlaceId(55)),
+                    source_operation: Some(MirOpId(56)),
+                    span: Some(Span {
+                        file: crate::core::FileId(0),
+                        start_byte: 10,
+                        end_byte: 2,
+                        start_line: 2,
+                        start_col: 1,
+                        end_line: 1,
+                        end_col: 1,
+                    }),
+                    provenance: ValueProvenance::Native,
+                    stable_key: "allocation:bad".to_string(),
+                }],
+            },
+            access_paths: AccessPathOutput {
+                access_paths: vec![AccessPathFact {
+                    id: AccessPathId(0),
+                    base: PlaceId(42),
+                    projections: vec![AccessPathProjection::CallReturn(
+                        crate::analysis::ids::CallSiteId(99),
+                    )],
+                    depth: 2,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    status: AccessPathStatus::Resolved,
+                    stable_key: "path:bad".to_string(),
+                }],
+            },
+            points_to: PointsToOutput {
+                constraints: vec![
+                    PointsToConstraintFact {
+                        id: PointsToConstraintId(0),
+                        kind: PointsToConstraintKind::AddressOf {
+                            dst: PtVarId(1),
+                            object: ObjectTokenId(99),
+                        },
+                        status: PointsToStatus::Present,
+                        precision: PointsToPrecision::Unknown,
+                        stable_key: "pt:constraint:object".to_string(),
+                    },
+                    PointsToConstraintFact {
+                        id: PointsToConstraintId(1),
+                        kind: PointsToConstraintKind::CallReturn {
+                            dst: PtVarId(1),
+                            value: ValueFactId(99),
+                        },
+                        status: PointsToStatus::Present,
+                        precision: PointsToPrecision::Unknown,
+                        stable_key: "pt:constraint:value".to_string(),
+                    },
+                ],
+                sets: vec![PointsToSetFact {
+                    id: PointsToSetId(0),
+                    variable: PtVarId(1),
+                    objects: vec![ObjectTokenId(1)],
+                    status: PointsToStatus::BudgetExceeded,
+                    precision: PointsToPrecision::Unknown,
+                    budget: PointsToBudgetStatus::WithinBudget,
+                    stable_key: "pt:budget".to_string(),
+                }],
+            },
+            aliases: AliasOutput {
+                answers: vec![AliasAnswerFact {
+                    id: AliasAnswerId(0),
+                    left: AliasOperand::Place(PlaceId(1)),
+                    right: AliasOperand::AccessPath(AccessPathId(99)),
+                    status: AliasStatus::MustAlias,
+                    reason: AliasReason::ExtensionProvided,
+                    evidence: Vec::new(),
+                    precision: AliasPrecision::Unknown,
+                    stable_key: "alias:bad".to_string(),
+                }],
+            },
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let reasons = diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.evidence.iter())
+            .filter(|evidence| evidence.label == "reason")
+            .map(|evidence| evidence.value.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for expected in [
+            "duplicate_stable_key",
+            "dangling_reference",
+            "access_path_depth_mismatch",
+            "span file does not exist",
+            "type_status_precision_mismatch",
+            "value_status_precision_mismatch",
+            "points_to_status_precision_mismatch",
+            "budget_status_mismatch",
+            "dangling_alias_operand",
+            "overconfident_alias_answer",
+        ] {
+            assert!(
+                reasons.contains(expected),
+                "missing {expected}: {diagnostics:#?}"
+            );
+        }
+        let rendered = format!("{diagnostics:#?}");
+        for marker in [
+            "polint.type_value_alias",
+            "TypeFact",
+            "NarrowedTypeFact",
+            "ValueFact",
+            "AllocationTokenFact",
+            "AccessPathFact",
+            "PointsToConstraintFact",
+            "AliasAnswerFact",
+            "PointsToSetFact",
+            "Types<'_>",
+            "Values<'_>",
+            "Aliases<'_>",
+            "points-to",
+            "type_value_alias",
+        ] {
+            assert!(
+                !rendered.contains(marker),
+                "validation diagnostics should not leak `{marker}`: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn type_value_alias_validation_accepts_value_derived_points_to_objects() {
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            values: ValueOutput {
+                values: vec![ValueFact {
+                    id: ValueFactId(0),
+                    subject: ValueSubject::Synthetic("call-result".to_string()),
+                    value: AbstractValueId(0),
+                    kind: ValueKind::Unknown {
+                        evidence: "call return object token".to_string(),
+                    },
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    precision: ValuePrecision::Unknown,
+                    status: ValueStatus::Unknown,
+                    provenance: ValueProvenance::Generated,
+                    stable_key: "value:call-result".to_string(),
+                }],
+                allocations: Vec::new(),
+            },
+            points_to: PointsToOutput {
+                constraints: Vec::new(),
+                sets: vec![PointsToSetFact {
+                    id: PointsToSetId(0),
+                    variable: crate::analysis::points_to::vars::dynamic_var(0),
+                    objects: vec![crate::analysis::points_to::vars::value_fact_object(
+                        ValueFactId(0),
+                    )],
+                    status: PointsToStatus::Present,
+                    precision: PointsToPrecision::FlowInsensitive,
+                    budget: PointsToBudgetStatus::WithinBudget,
+                    stable_key: "points-to:value-object".to_string(),
+                }],
+            },
+            ..TypeValueAliasOutput::default()
+        });
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        assert!(
+            diagnostics.iter().all(|diagnostic| {
+                !diagnostic
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.label == "component" && evidence.value == "analysis")
+            }),
+            "value-derived object tokens should validate: {diagnostics:#?}"
+        );
+    }
+
+    fn type_fact(id: u64, stable_key: &str, place: Option<PlaceId>) -> TypeFact {
+        TypeFact {
+            id: TypeFactId(id),
+            subject: place
+                .map(TypeSubject::Place)
+                .unwrap_or_else(|| TypeSubject::Synthetic(stable_key.to_string())),
+            type_set: TypeSetId(id),
+            shape: TypeShape::Unknown {
+                reason: "fixture".to_string(),
+            },
+            phase: TypePhase::ExtensionProvided,
+            language: Language::TypeScript,
+            file: None,
+            function: None,
+            body: None,
+            place,
+            cfg_block: None,
+            operation: None,
+            precision: TypePrecision::Heuristic,
+            confidence: TypeConfidence::Medium,
+            status: TypeStatus::Present,
+            provenance: TypeProvenance::Extension {
+                extension_id: "fixture".to_string(),
+            },
+            stable_key: stable_key.to_string(),
+        }
     }
 }
 
@@ -3581,6 +4856,19 @@ fn topology_diagnostic(
     .with_evidence("stable_key", stable_key.to_string())
     .with_evidence("field", field)
     .with_evidence("reason", reason.into())
+}
+
+fn type_value_alias_diagnostic(
+    _family: FactFamily,
+    stable_key: &str,
+    field: &'static str,
+    reason: impl Into<String>,
+) -> Diagnostic {
+    internal_diagnostic("Internal analysis validation failed.")
+        .with_evidence("component", "analysis")
+        .with_evidence("stable_key", stable_key.to_string())
+        .with_evidence("field", field)
+        .with_evidence("reason", reason.into())
 }
 
 fn is_semantic_fact_family(family: FactFamily) -> bool {

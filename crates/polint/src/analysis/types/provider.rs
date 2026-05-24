@@ -32,12 +32,54 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     abstract_domains_output_digest: Digest,
     direct_summaries_output_digest: Digest,
     entrypoints_output_digest: Digest,
+    extensions_output_digest: Digest,
     symbol_graph_output_digest: Digest,
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> TypeValueAliasProviderOutput {
     debug_assert_eq!(manifest.id, TYPE_VALUE_ALIAS_PROVIDER_ID);
-    let output = super::go::derive_go_type_value_alias(db).normalized();
+    let mut diagnostics = Vec::new();
+    let mut output = super::go::derive_go_type_value_alias(db);
+    let ts_js_output = super::ts_js::derive_ts_js_type_value_alias(db);
+    output.types.types.extend(ts_js_output.types.types);
+    output.types.narrowed.extend(ts_js_output.types.narrowed);
+    output.values.values.extend(ts_js_output.values.values);
+    output
+        .values
+        .allocations
+        .extend(ts_js_output.values.allocations);
+    output
+        .access_paths
+        .access_paths
+        .extend(ts_js_output.access_paths.access_paths);
+    output = output.normalized();
+    let base_merge =
+        super::validate::merge_extension_type_value_alias_base_facts(output, db.extension_facts());
+    output = base_merge.output.normalized();
+    diagnostics.extend(base_merge.diagnostics);
+    let relation_merge = super::validate::merge_extension_type_value_alias_relation_facts(
+        output,
+        db.extension_facts(),
+    );
+    output = relation_merge.output;
+    diagnostics.extend(relation_merge.diagnostics);
+    let mut points_to_constraints =
+        crate::analysis::points_to::constraints::derive_points_to_constraints(&output);
+    points_to_constraints.extend(std::mem::take(&mut output.points_to.constraints));
+    let points_to_output = crate::analysis::points_to::solver::output_with_solved_sets(
+        points_to_constraints,
+        crate::analysis::points_to::solver::PointsToBudget::default(),
+    );
+    let mut alias_output = crate::analysis::aliases::provider_stack::derive_alias_answers(
+        &output.access_paths.access_paths,
+        &points_to_output.sets,
+    );
+    alias_output
+        .answers
+        .extend(std::mem::take(&mut output.aliases.answers));
+    output.points_to = points_to_output;
+    output.aliases = alias_output;
+    output = output.normalized();
     let output_digest = type_value_alias_output_digest(
         manifest,
         input_snapshot,
@@ -47,6 +89,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         &abstract_domains_output_digest,
         &direct_summaries_output_digest,
         &entrypoints_output_digest,
+        &extensions_output_digest,
         &symbol_graph_output_digest,
         &module_topology_output_digest,
         &upstream_syntax_output_digests,
@@ -57,7 +100,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
 
     db.replace_type_value_alias_facts(output);
     TypeValueAliasProviderOutput {
-        diagnostics: Vec::new(),
+        diagnostics,
         cache_stats,
         output_digest: Some(output_digest),
     }
@@ -73,6 +116,7 @@ fn type_value_alias_output_digest(
     abstract_domains_output_digest: &Digest,
     direct_summaries_output_digest: &Digest,
     entrypoints_output_digest: &Digest,
+    extensions_output_digest: &Digest,
     symbol_graph_output_digest: &Digest,
     module_topology_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
@@ -85,6 +129,7 @@ fn type_value_alias_output_digest(
         abstract_domains_output_digest.clone(),
         direct_summaries_output_digest.clone(),
         entrypoints_output_digest.clone(),
+        extensions_output_digest.clone(),
         symbol_graph_output_digest.clone(),
         module_topology_output_digest.clone(),
     ];
@@ -109,6 +154,7 @@ fn type_value_alias_output_digest(
         format!("abstract_domains={abstract_domains_output_digest}"),
         format!("direct_summaries={direct_summaries_output_digest}"),
         format!("entrypoints={entrypoints_output_digest}"),
+        format!("extensions={extensions_output_digest}"),
         format!("symbol_graph={symbol_graph_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
     ];
@@ -226,6 +272,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::extensions::sinks::{
+        ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
+        TYPE_VALUE_ALIAS_ALLOCATION_FAMILY, TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+    };
+    use crate::analysis::extensions::store::{AcceptedExtensionFact, ExtensionOutput};
+    use crate::analysis::ids::AllocationTokenId;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
@@ -269,6 +321,69 @@ mod tests {
         ] {
             assert!(manifest.outputs.contains(&output));
         }
+    }
+
+    #[test]
+    fn type_value_alias_provider_stores_points_to_and_alias_answers_for_ts_js_facts() {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            "src/app.ts".into(),
+            "src/app.ts".to_string(),
+            r#"
+export function flow(input, key) {
+  const obj = { name: input };
+  const same = obj;
+  const field = obj[key];
+  return same.name ?? field;
+}
+"#
+            .to_string(),
+        );
+        let diagnostics = crate::ts::analyze(&mut db);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("semantic MIR replacement");
+
+        let output = derive_for_test(&mut db);
+
+        assert!(output.diagnostics.is_empty());
+        assert!(!db.points_to_constraints().is_empty());
+        assert!(!db.points_to_sets().is_empty());
+        assert!(!db.alias_answers().is_empty());
+    }
+
+    #[test]
+    fn type_value_alias_provider_solves_extension_points_to_constraints() {
+        let mut db = AnalysisDb::new();
+        db.replace_extension_facts(ExtensionOutput {
+            accepted: vec![
+                accepted_extension_fact(
+                    TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
+                    "allocation:extension:object",
+                    &["kind=object"],
+                ),
+                accepted_extension_fact(
+                    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+                    "pt:extension:address",
+                    &["kind=address_of", "dst=allocation:0", "object=allocation:0"],
+                ),
+            ],
+            rejected: Vec::new(),
+            activations: Vec::new(),
+        });
+
+        let output = derive_for_test(&mut db);
+
+        assert!(output.diagnostics.is_empty());
+        assert!(db.points_to_sets().iter().any(|set| {
+            set.variable == crate::analysis::points_to::vars::allocation_var(AllocationTokenId(0))
+                && set
+                    .objects
+                    .contains(&crate::analysis::points_to::vars::allocation_object(
+                        AllocationTokenId(0),
+                    ))
+        }));
     }
 
     #[test]
@@ -345,9 +460,33 @@ mod tests {
             absent("abstract_domains"),
             absent("direct_summaries"),
             absent("entrypoints"),
+            absent("extensions"),
             absent("symbol_graph"),
             absent("module_topology"),
             Vec::new(),
         )
+    }
+
+    fn accepted_extension_fact(
+        family: &str,
+        stable_key: &str,
+        payload_labels: &[&str],
+    ) -> AcceptedExtensionFact {
+        AcceptedExtensionFact {
+            extension_id: "demo".to_string(),
+            provider_id: "precision".to_string(),
+            fact_family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            binding_refs: vec!["file:src/app.ts".to_string()],
+            precision: ExtensionFactPrecision::Heuristic,
+            confidence: ExtensionFactConfidence::Medium,
+            status: ExtensionFactStatus::Accepted,
+            evidence: vec!["reviewed".to_string()],
+            payload_labels: payload_labels
+                .iter()
+                .map(|label| (*label).to_string())
+                .collect(),
+            payload_digest: format!("payload:{stable_key}"),
+        }
     }
 }

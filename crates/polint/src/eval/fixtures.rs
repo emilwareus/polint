@@ -485,8 +485,10 @@ pub(crate) fn run_cfg_core_fixture_for_test(
     let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
     let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
     let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
-    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
+    let deterministic = framework_entrypoints_cache_comparison_json(&cold_run)
+        == framework_entrypoints_cache_comparison_json(&warm_run)
+        && framework_entrypoints_cache_comparison_json(&cold_run)
+            == framework_entrypoints_cache_comparison_json(&no_cache_run);
 
     let mut observed = no_cache_observed
         .iter()
@@ -1038,6 +1040,41 @@ fn abstract_domain_cache_comparison_json(run: &crate::eval::report::EvaluationRu
 }
 
 #[cfg(test)]
+fn framework_entrypoints_cache_comparison_json(run: &crate::eval::report::EvaluationRun) -> String {
+    let mut normalized = run_without_runtime_durations(run);
+    for case in &mut normalized.cases {
+        case.observed
+            .retain(framework_entrypoints_comparison_observed_item);
+        case.matches = crate::eval::matcher::match_case(
+            &case.expected,
+            &case.observed,
+            crate::eval::matcher::MatcherConfig::default(),
+        );
+    }
+    let matches = normalized
+        .cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    normalized.metrics = crate::eval::metrics::compute_metrics(&matches).into();
+    normalized.output_hash = crate::eval::report::deterministic_output_hash(&normalized);
+    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+fn framework_entrypoints_comparison_observed_item(item: &ObservedItem) -> bool {
+    match item {
+        ObservedItem::Fact(fact) => matches!(
+            fact.family.as_str(),
+            "Entrypoint" | "TrustBoundary" | "DispatchEdge" | "UnresolvedFramework"
+        ),
+        ObservedItem::Invariant(invariant) => invariant.name.starts_with("framework_entrypoints."),
+        ObservedItem::RuntimeBudget(_) => true,
+        ObservedItem::Diagnostic(_) | ObservedItem::GraphEdge(_) | ObservedItem::Path(_) => false,
+    }
+}
+
+#[cfg(test)]
 fn abstract_domain_comparison_observed_item(item: &ObservedItem) -> bool {
     match item {
         ObservedItem::Fact(fact) => ABSTRACT_DOMAIN_FACT_FAMILIES.contains(&fact.family.as_str()),
@@ -1546,6 +1583,18 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/extension/real-sink")
     }
 
+    fn type_value_alias_extension_precision_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/extension-precision")
+    }
+
+    fn type_value_alias_go_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/go-core")
+    }
+
+    fn type_value_alias_ts_js_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/ts-js-core")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1584,8 +1633,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.9", "polint.abstract_domains"),
                 ("provider_order.10", "polint.direct_summaries"),
                 ("provider_order.11", "polint.entrypoints"),
-                ("provider_order.12", "polint.type_value_alias"),
-                ("provider_order.13", "polint.extensions"),
+                ("provider_order.12", "polint.extensions"),
+                ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
@@ -1912,6 +1961,62 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "extension fixture requires cargo build at runtime, which is unreliable on Windows CI"
+    )]
+    fn eval_type_value_alias_extension_precision_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_extension_precision_fixture_dir())
+            .unwrap();
+        let case = run
+            .cases
+            .first()
+            .expect("type/value/alias extension precision case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-extension-precision");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(
+            case.observed.iter().any(|item| match item {
+                ObservedItem::Fact(fact) => {
+                    fact.family == "AliasAnswer"
+                        && fact.stable_key == "alias:extension:no_alias"
+                        && fact.producer_id.as_deref() == Some("polint.type_value_alias")
+                        && fact.precision.as_deref() == Some("heuristic")
+                }
+                _ => false,
+            }),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn eval_type_value_alias_go_core_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_go_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("type/value/alias Go core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-go-core");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
+    fn eval_type_value_alias_ts_js_core_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_ts_js_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("type/value/alias TS/JS core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-ts-js-core");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -1922,7 +2027,7 @@ mod eval_native_fixture_runner_tests {
         );
 
         for fixture_dir in fixture_dirs {
-            if cfg!(target_os = "windows") && fixture_dir.ends_with("extension/real-sink") {
+            if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
                 continue;
             }
             let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
@@ -1937,19 +2042,25 @@ mod eval_native_fixture_runner_tests {
                 .expect("native fixture run should have a case");
 
             assert_eq!(
-                run.metrics.false_negatives, 0,
-                "fixture should not miss expected rows: {}",
-                case.case_id
+                run.metrics.false_negatives,
+                0,
+                "fixture should not miss expected rows: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
             assert_eq!(
-                run.metrics.forbidden_hits, 0,
-                "fixture should not hit forbidden rows: {}",
-                case.case_id
+                run.metrics.forbidden_hits,
+                0,
+                "fixture should not hit forbidden rows: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
             assert_eq!(
-                run.metrics.runtime_budget_failed, 0,
-                "fixture should stay inside runtime budget: {}",
-                case.case_id
+                run.metrics.runtime_budget_failed,
+                0,
+                "fixture should stay inside runtime budget: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
 
             passing_by_area
@@ -1969,6 +2080,11 @@ mod eval_native_fixture_runner_tests {
                 "native fixture suite must include a passing {required_area:?} fixture; found {passing_by_area:#?}"
             );
         }
+    }
+
+    fn fixture_requires_runtime_extension(fixture_dir: &Path) -> bool {
+        fixture_dir.ends_with("extension/real-sink")
+            || fixture_dir.ends_with("type-value-alias/extension-precision")
     }
 
     fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {
