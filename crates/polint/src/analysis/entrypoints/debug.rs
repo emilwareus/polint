@@ -9,7 +9,6 @@ use crate::analysis::entrypoints::facts::{
     DispatchEdgeKind, EntrypointKind, EntrypointPrecision, EntrypointProvenance, EntrypointStatus,
     TrustBoundarySourceKind, UnresolvedFrameworkReason,
 };
-use crate::analysis_kernel::{FactFamily, FactRef};
 use crate::core::{AnalysisDb, FileId, Language};
 
 /// Produces a debug JSON snapshot of all framework entrypoint facts in the db.
@@ -247,9 +246,7 @@ fn relative_path_for(db: &AnalysisDb, file: FileId) -> String {
         .unwrap_or_else(|| "<unknown-file>".to_string())
 }
 
-fn trigger_summary(
-    metadata: &crate::analysis::entrypoints::facts::TriggerMetadata,
-) -> String {
+fn trigger_summary(metadata: &crate::analysis::entrypoints::facts::TriggerMetadata) -> String {
     let mut parts = Vec::new();
     if let Some(method) = &metadata.method {
         parts.push(format!("method={method}"));
@@ -378,12 +375,14 @@ fn unresolved_reason_label(reason: UnresolvedFrameworkReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::analysis::entrypoints::facts::{
-        EntrypointConfidence, EntrypointFact, FrameworkDispatchEdgeFact, TrustBoundaryFact,
-        TriggerMetadata, UnresolvedFrameworkFact,
+        EntrypointConfidence, EntrypointFact, FrameworkDispatchEdgeFact, TriggerMetadata,
+        TrustBoundaryFact, UnresolvedFrameworkFact,
     };
     use crate::analysis::entrypoints::store::EntrypointOutput;
-    use crate::analysis::ids::{DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId};
-    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span, SymbolId};
+    use crate::analysis::ids::{
+        DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId,
+    };
+    use crate::core::{FunctionFact, FunctionId, Language, Span, SymbolId};
     use std::path::PathBuf;
 
     fn test_db_empty() -> AnalysisDb {
@@ -555,11 +554,18 @@ mod tests {
         assert_eq!(ep["precision"], "ResolvedStatic");
         assert_eq!(ep["status"], "Resolved");
         assert_eq!(ep["stable_key"], "entrypoint:express:get:/api/users");
-        assert!(ep["trigger_summary"].as_str().unwrap().contains("method=GET"));
-        assert!(ep["trigger_summary"]
-            .as_str()
-            .unwrap()
-            .contains("path=/api/users"));
+        assert!(
+            ep["trigger_summary"]
+                .as_str()
+                .unwrap()
+                .contains("method=GET")
+        );
+        assert!(
+            ep["trigger_summary"]
+                .as_str()
+                .unwrap()
+                .contains("path=/api/users")
+        );
     }
 
     #[test]

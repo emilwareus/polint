@@ -37,7 +37,7 @@ func main() {
 	// chi router entrypoints
 	r := chi.NewRouter()
 	r.Use(loggingMiddleware)
-	r.Get("/api/users", getUsersHandler)
+	r.Get("/api/users/{id}", getUsersHandler)
 	r.Post("/api/users", createUserHandler)
 
 	// cobra CLI entrypoint

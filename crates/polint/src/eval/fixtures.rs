@@ -2086,6 +2086,42 @@ mod eval_native_fixture_runner_tests {
 }
 
 #[cfg(test)]
+mod framework_entrypoints_core {
+    use std::path::{Path, PathBuf};
+
+    use crate::eval::model::FixtureArea;
+    use crate::eval::report::to_deterministic_json_pretty;
+
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("polint crate should live under crates/")
+            .to_path_buf()
+    }
+
+    fn fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/framework-entrypoints/mixed-go-ts")
+    }
+
+    #[test]
+    fn eval_framework_entrypoints_core_fixture_passes() {
+        let run = run_framework_entrypoints_core_fixture_for_test(&fixture_dir()).unwrap();
+        let case = run.cases.first().expect("framework-entrypoints core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "framework-entrypoints-core");
+        assert_eq!(case.area, FixtureArea::FrameworkEntrypoints);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+    }
+}
+
+#[cfg(test)]
 mod semantic_index_core {
     use std::path::{Path, PathBuf};
 

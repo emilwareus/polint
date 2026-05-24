@@ -23,11 +23,8 @@ pub(crate) fn derive_trust_boundaries(
         let source_kinds = source_kinds_for_entrypoint(entrypoint);
 
         for source_kind in source_kinds {
-            let stable_key = trust_boundary_stable_key(
-                &entrypoint.stable_key,
-                source_kind,
-                entrypoint.language,
-            );
+            let stable_key =
+                trust_boundary_stable_key(&entrypoint.stable_key, source_kind, entrypoint.language);
 
             boundaries.push(TrustBoundaryFact {
                 id: TrustBoundaryId(0), // Reassigned during normalization
@@ -69,10 +66,10 @@ fn source_kinds_for_entrypoint(entrypoint: &EntrypointFact) -> Vec<TrustBoundary
             let mut kinds = Vec::new();
 
             // PathParam if trigger_metadata.path contains parameter placeholders
-            if let Some(path) = &entrypoint.trigger_metadata.path {
-                if path_has_parameters(path) {
-                    kinds.push(TrustBoundarySourceKind::PathParam);
-                }
+            if let Some(path) = &entrypoint.trigger_metadata.path
+                && path_has_parameters(path)
+            {
+                kinds.push(TrustBoundarySourceKind::PathParam);
             }
 
             // HTTP routes always accept query strings
@@ -443,10 +440,7 @@ mod tests {
         let boundaries = derive_trust_boundaries(&db, &[ep]);
 
         assert_eq!(boundaries.len(), 1);
-        assert_eq!(
-            boundaries[0].source_kind,
-            TrustBoundarySourceKind::Unknown
-        );
+        assert_eq!(boundaries[0].source_kind, TrustBoundarySourceKind::Unknown);
     }
 
     #[test]

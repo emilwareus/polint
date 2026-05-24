@@ -4,7 +4,7 @@
 )]
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -405,23 +405,28 @@ fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
         });
     }
 
+    let stdout_limit = spec.stdout_limit;
+    let stderr_limit = spec.stderr_limit;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|stdout| thread::spawn(move || read_limited(stdout, stdout_limit)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|stderr| thread::spawn(move || read_limited(stderr, stderr_limit)));
+
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if started.elapsed() >= spec.timeout => {
                 terminate_child_process_tree(&mut child);
-                let output = child.wait_with_output().ok();
+                let status = child.wait().ok();
                 return ExtensionCommandOutcome {
-                    status: output.as_ref().and_then(|output| output.status.code()),
-                    stdout: output
-                        .as_ref()
-                        .map(|output| truncate_bytes(&output.stdout, spec.stdout_limit))
-                        .unwrap_or_default(),
-                    stderr: output
-                        .as_ref()
-                        .map(|output| truncate_bytes(&output.stderr, spec.stderr_limit))
-                        .unwrap_or_default(),
+                    status: status.and_then(|status| status.code()),
+                    stdout: join_reader(stdout_reader),
+                    stderr: join_reader(stderr_reader),
                     timed_out: true,
                     spawn_error: None,
                 };
@@ -439,11 +444,11 @@ fn run_std_command(spec: &ExtensionCommandSpec) -> ExtensionCommandOutcome {
         }
     }
 
-    match child.wait_with_output() {
-        Ok(output) => ExtensionCommandOutcome {
-            status: output.status.code(),
-            stdout: truncate_bytes(&output.stdout, spec.stdout_limit),
-            stderr: truncate_bytes(&output.stderr, spec.stderr_limit),
+    match child.wait() {
+        Ok(status) => ExtensionCommandOutcome {
+            status: status.code(),
+            stdout: join_reader(stdout_reader),
+            stderr: join_reader(stderr_reader),
             timed_out: false,
             spawn_error: None,
         },
@@ -537,6 +542,27 @@ fn sanitize_summary(summary: &str) -> String {
 
 fn truncate_bytes(bytes: &[u8], limit: usize) -> Vec<u8> {
     bytes[..bytes.len().min(limit)].to_vec()
+}
+
+fn read_limited(mut reader: impl Read, limit: usize) -> Vec<u8> {
+    let mut output = Vec::with_capacity(limit.min(8192));
+    let mut buffer = [0_u8; 8192];
+    while let Ok(read) = reader.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        if output.len() < limit {
+            let remaining = limit - output.len();
+            output.extend_from_slice(&buffer[..read.min(remaining)]);
+        }
+    }
+    output
+}
+
+fn join_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -751,6 +777,29 @@ mod tests {
         {
             assert_process_exits(pid);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_stdout_is_drained_while_child_runs() {
+        let spec = ExtensionCommandSpec {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "i=0; while [ $i -lt 5000 ]; do printf 0123456789abcdef0123456789abcdef; i=$((i + 1)); done".to_string(),
+            ],
+            env: BTreeMap::new(),
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(2),
+            stdout_limit: 1024,
+            stderr_limit: DEFAULT_STDERR_LIMIT,
+        };
+
+        let outcome = run_std_command(&spec);
+
+        assert!(!outcome.timed_out);
+        assert_eq!(outcome.status, Some(0));
+        assert_eq!(outcome.stdout.len(), 1024);
     }
 
     #[cfg(unix)]

@@ -20,13 +20,10 @@ pub(crate) fn derive_dispatch_edges(
     let mut edges = Vec::new();
 
     for entrypoint in entrypoints {
-        // Build synthetic dispatch root key from framework_id + kind
-        let from_source = format!("{}:{:?}", entrypoint.framework_id, entrypoint.kind);
-
         let edge_kind = edge_kind_for_entrypoint(entrypoint.kind);
 
         let stable_key = dispatch_edge_stable_key(
-            &from_source,
+            &entrypoint.stable_key,
             &format!("{}", entrypoint.target_function.0),
             edge_kind,
             entrypoint.language,
@@ -34,7 +31,7 @@ pub(crate) fn derive_dispatch_edges(
 
         edges.push(FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(0), // Reassigned during normalization
-            from_source,
+            from_source: entrypoint.stable_key.clone(),
             to_target: entrypoint.target_function,
             to_symbol: entrypoint.target_symbol,
             edge_kind,
@@ -147,7 +144,7 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].edge_kind, DispatchEdgeKind::RouteDispatch);
         assert_eq!(edges[0].to_target, FunctionId(42));
-        assert!(edges[0].from_source.contains("go.net_http"));
+        assert_eq!(edges[0].from_source, "ep-HttpRoute");
     }
 
     #[test]
@@ -256,6 +253,21 @@ mod tests {
         let keys: Vec<&str> = edges.iter().map(|e| e.stable_key.as_str()).collect();
         let mut sorted = keys.clone();
         sorted.sort();
-        assert_eq!(keys, sorted, "dispatch edges should be sorted by stable key");
+        assert_eq!(
+            keys, sorted,
+            "dispatch edges should be sorted by stable key"
+        );
+    }
+
+    #[test]
+    fn dispatch_edge_from_source_references_entrypoint_stable_key() {
+        let db = AnalysisDb::new();
+        let ep = make_entrypoint(EntrypointKind::Test, "go.testing");
+        let entrypoint_key = ep.stable_key.clone();
+
+        let edges = derive_dispatch_edges(&db, &[ep]);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from_source, entrypoint_key);
     }
 }

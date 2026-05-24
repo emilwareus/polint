@@ -8,6 +8,7 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::{EntrypointId, UnresolvedFrameworkId};
+use crate::analysis::places::PlaceRoot;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::{FactFamily, FactRef};
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
@@ -36,13 +37,9 @@ enum GoFramework {
 fn classify_import(path: &str, file_path: &str) -> Option<(&'static str, GoFramework)> {
     match path {
         "net/http" => Some(("go.net_http", GoFramework::NetHttp)),
-        "github.com/go-chi/chi" | "github.com/go-chi/chi/v5" => {
-            Some(("go.chi", GoFramework::Chi))
-        }
+        "github.com/go-chi/chi" | "github.com/go-chi/chi/v5" => Some(("go.chi", GoFramework::Chi)),
         "github.com/spf13/cobra" => Some(("go.cobra", GoFramework::Cobra)),
-        "testing" if file_path.ends_with("_test.go") => {
-            Some(("go.testing", GoFramework::Testing))
-        }
+        "testing" if file_path.ends_with("_test.go") => Some(("go.testing", GoFramework::Testing)),
         _ => None,
     }
 }
@@ -98,10 +95,11 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
             .map(|f| f.relative_path.as_str())
             .unwrap_or("");
         if let Some((framework_id, framework)) = classify_import(&import.path, file_path) {
-            file_frameworks
-                .entry(import.file)
-                .or_default()
-                .push((framework_id, framework, import.span.clone()));
+            file_frameworks.entry(import.file).or_default().push((
+                framework_id,
+                framework,
+                import.span.clone(),
+            ));
         } else if is_unrecognized_framework_import(&import.path) {
             unrecognized_imports.push((import.file, import.path.clone(), import.span.clone()));
         }
@@ -168,12 +166,7 @@ pub(crate) fn recognize_go_entrypoints(db: &AnalysisDb) -> GoRecognizerOutput {
     }
 
     // 5. Check for chi imports without matching registration patterns (D-10)
-    emit_unresolved_for_unused_frameworks(
-        db,
-        &file_frameworks,
-        &entrypoints,
-        &mut unresolved,
-    );
+    emit_unresolved_for_unused_frameworks(db, &file_frameworks, &entrypoints, &mut unresolved);
 
     // Sort output by stable key
     entrypoints.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -226,7 +219,10 @@ fn recognize_http_entrypoints(
             CallCallee::Member { property, .. }
                 if has_net_http
                     && (property == "HandleFunc" || property == "Handle")
-                    && matches!(site.kind, CallSyntaxKind::Member | CallSyntaxKind::StaticMember) =>
+                    && matches!(
+                        site.kind,
+                        CallSyntaxKind::Member | CallSyntaxKind::StaticMember
+                    ) =>
             {
                 let route_path = extract_first_arg_literal(db, site);
                 let handler_function = resolve_handler_function(db, functions_by_id, site);
@@ -296,7 +292,10 @@ fn recognize_http_entrypoints(
             CallCallee::Member { property, .. }
                 if has_chi
                     && CHI_METHODS.contains(&property.as_str())
-                    && matches!(site.kind, CallSyntaxKind::Member | CallSyntaxKind::StaticMember) =>
+                    && matches!(
+                        site.kind,
+                        CallSyntaxKind::Member | CallSyntaxKind::StaticMember
+                    ) =>
             {
                 let route_path = extract_first_arg_literal(db, site);
                 let handler_function = resolve_handler_function(db, functions_by_id, site);
@@ -366,7 +365,10 @@ fn recognize_http_entrypoints(
             CallCallee::Member { property, .. }
                 if has_chi
                     && property == "Use"
-                    && matches!(site.kind, CallSyntaxKind::Member | CallSyntaxKind::StaticMember) =>
+                    && matches!(
+                        site.kind,
+                        CallSyntaxKind::Member | CallSyntaxKind::StaticMember
+                    ) =>
             {
                 let handler_function = resolve_handler_function(db, functions_by_id, site);
                 let file_key = file_stable_key(db, site.file);
@@ -405,7 +407,10 @@ fn recognize_http_entrypoints(
             CallCallee::Member { property, .. }
                 if has_chi
                     && property == "Route"
-                    && matches!(site.kind, CallSyntaxKind::Member | CallSyntaxKind::StaticMember) =>
+                    && matches!(
+                        site.kind,
+                        CallSyntaxKind::Member | CallSyntaxKind::StaticMember
+                    ) =>
             {
                 let route_path = extract_first_arg_literal(db, site);
                 let handler_function = resolve_handler_function(db, functions_by_id, site);
@@ -485,7 +490,9 @@ fn recognize_cobra_entrypoints(
         let is_cobra_pattern = match &site.callee {
             CallCallee::Member { property, .. } if property == "AddCommand" => true,
             CallCallee::Identifier { name, .. } if name.contains("Command") => true,
-            CallCallee::Constructor { name: Some(name), .. } if name.contains("Command") => true,
+            CallCallee::Constructor {
+                name: Some(name), ..
+            } if name.contains("Command") => true,
             _ => false,
         };
 
@@ -567,11 +574,7 @@ fn recognize_test_entrypoints(
         };
 
         for function in functions {
-            let is_test_func = GO_TEST_PREFIXES
-                .iter()
-                .any(|prefix| function.name.starts_with(prefix));
-
-            if !is_test_func {
+            if !function.is_test {
                 continue;
             }
 
@@ -601,7 +604,7 @@ fn recognize_test_entrypoints(
                     test_name: Some(function.name.clone()),
                 },
                 trust_boundary_link: None,
-                precision: EntrypointPrecision::ResolvedStatic, // Naming convention is deterministic
+                precision: EntrypointPrecision::ResolvedStatic,
                 provenance: EntrypointProvenance::NativeRecognizer,
                 confidence: EntrypointConfidence::High,
                 status: EntrypointStatus::Resolved,
@@ -687,14 +690,36 @@ fn emit_unresolved_for_unused_frameworks(
 /// with 2+ arguments, the handler is typically the last argument (for
 /// HandleFunc) or the second argument (for chi).
 fn resolve_handler_function(
-    _db: &AnalysisDb,
+    db: &AnalysisDb,
     functions_by_id: &BTreeMap<FunctionId, &FunctionFact>,
     site: &CallSiteFact,
 ) -> Option<FunctionId> {
-    // First try: look for the caller function since in many Go patterns the
-    // handler is defined in the same function scope. Use the caller as a
-    // fallback target when we cannot resolve deeper.
-    if functions_by_id.contains_key(&site.caller) {
+    let functions_in_file = functions_by_id
+        .values()
+        .copied()
+        .filter(|function| function.file == site.file)
+        .collect::<Vec<_>>();
+
+    for name in handler_argument_names(db, site) {
+        if let Some(function) = find_function_by_name(&functions_in_file, &name) {
+            return Some(function.id);
+        }
+    }
+
+    for argument in site.arguments.iter().rev() {
+        let Some(place) = db.mir_places().iter().find(|place| place.id == *argument) else {
+            continue;
+        };
+        if let PlaceRoot::Temporary { ordinal, .. } = place.root
+            && let Some(function) = functions_in_file
+                .iter()
+                .find(|function| function.span.start_byte == ordinal)
+        {
+            return Some(function.id);
+        }
+    }
+
+    if site.arguments.is_empty() && functions_by_id.contains_key(&site.caller) {
         return Some(site.caller);
     }
     None
@@ -704,21 +729,185 @@ fn resolve_handler_function(
 /// This is used for route paths in http.HandleFunc("/path", handler) and
 /// chi r.Get("/path", handler) calls.
 fn extract_first_arg_literal(db: &AnalysisDb, site: &CallSiteFact) -> Option<String> {
-    if site.arguments.is_empty() {
-        return None;
+    if let Some(first_arg) = site.arguments.first()
+        && let Some(place) = db.mir_places().iter().find(|p| p.id == *first_arg)
+        && let PlaceRoot::Unknown { evidence } = &place.root
+        && let Some(value) = unquote_literal(evidence)
+    {
+        return Some(value);
     }
-    let first_arg = site.arguments[0];
-    // Look up the place fact for the first argument
-    let place = db.mir_places().iter().find(|p| p.id == first_arg)?;
-    // Check if it has a literal value through the root
-    match &place.root {
-        crate::analysis::places::PlaceRoot::Unknown { evidence }
-            if evidence.starts_with('"') && evidence.ends_with('"') =>
-        {
-            Some(evidence[1..evidence.len() - 1].to_string())
+
+    call_argument_texts(db, site)
+        .first()
+        .and_then(|argument| unquote_literal(argument))
+}
+
+fn handler_argument_names(db: &AnalysisDb, site: &CallSiteFact) -> Vec<String> {
+    let mut names = Vec::new();
+
+    for argument in site.arguments.iter().rev() {
+        let Some(place) = db.mir_places().iter().find(|place| place.id == *argument) else {
+            continue;
+        };
+        if let Some(name) = handler_name_from_place_root(&place.root) {
+            names.push(name);
         }
+    }
+
+    for argument in call_argument_texts(db, site).into_iter().rev() {
+        if let Some(name) = handler_name_from_argument_text(&argument) {
+            names.push(name);
+        }
+    }
+
+    names
+}
+
+fn handler_name_from_place_root(root: &PlaceRoot) -> Option<String> {
+    match root {
+        PlaceRoot::Local { name, .. }
+        | PlaceRoot::Global { name, .. }
+        | PlaceRoot::Unknown { evidence: name } => handler_name_from_argument_text(name),
         _ => None,
     }
+}
+
+fn find_function_by_name<'a>(
+    functions: &'a [&'a FunctionFact],
+    candidate: &str,
+) -> Option<&'a FunctionFact> {
+    functions
+        .iter()
+        .copied()
+        .find(|function| function.name == candidate)
+        .or_else(|| {
+            functions
+                .iter()
+                .copied()
+                .find(|function| function.name.rsplit('.').next() == Some(candidate))
+        })
+}
+
+fn handler_name_from_argument_text(argument: &str) -> Option<String> {
+    let mut candidate = argument.trim();
+    if unquote_literal(candidate).is_some() {
+        return None;
+    }
+    if candidate.contains("=>") || candidate.starts_with("func(") || candidate.starts_with("func ")
+    {
+        return None;
+    }
+    if let Some(inner) = single_call_argument(candidate) {
+        candidate = inner;
+    }
+    candidate = candidate.trim_start_matches('&').trim();
+    let candidate = candidate
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(candidate)
+        .trim();
+    if is_identifier(candidate) {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+fn single_call_argument(argument: &str) -> Option<&str> {
+    let open = argument.find('(')?;
+    if !argument.ends_with(')') {
+        return None;
+    }
+    let inner = &argument[open + 1..argument.len() - 1];
+    let args = split_top_level_arguments(inner);
+    if args.len() == 1 {
+        Some(args[0].trim())
+    } else {
+        None
+    }
+}
+
+fn call_argument_texts(db: &AnalysisDb, site: &CallSiteFact) -> Vec<String> {
+    let Some(call_text) = call_source_text(db, site) else {
+        return Vec::new();
+    };
+    let Some(open) = call_text.find('(') else {
+        return Vec::new();
+    };
+    let Some(close) = call_text.rfind(')') else {
+        return Vec::new();
+    };
+    if close <= open {
+        return Vec::new();
+    }
+    split_top_level_arguments(&call_text[open + 1..close])
+        .into_iter()
+        .map(str::trim)
+        .filter(|argument| !argument.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn call_source_text<'a>(db: &'a AnalysisDb, site: &CallSiteFact) -> Option<&'a str> {
+    let file = db.files().iter().find(|file| file.id == site.file)?;
+    file.source
+        .get(site.span.start_byte as usize..site.span.end_byte as usize)
+}
+
+fn split_top_level_arguments(input: &str) -> Vec<&str> {
+    let mut args = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_i32;
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, ch) in input.char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(&input[start..index]);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    args.push(&input[start..]);
+    args
+}
+
+fn unquote_literal(value: &str) -> Option<String> {
+    let value = value.trim();
+    let mut chars = value.chars();
+    let first = chars.next()?;
+    let last = value.chars().last()?;
+    if matches!(first, '"' | '\'' | '`') && first == last && value.len() >= 2 {
+        Some(value[first.len_utf8()..value.len() - last.len_utf8()].to_string())
+    } else {
+        None
+    }
+}
+
+fn is_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn file_stable_key(db: &AnalysisDb, file: FileId) -> String {
@@ -766,12 +955,7 @@ fn entrypoint_stable_key(
     .into_string()
 }
 
-fn unresolved_stable_key(
-    file_key: &str,
-    framework_id: &str,
-    reason: &str,
-    span: &str,
-) -> String {
+fn unresolved_stable_key(file_key: &str, framework_id: &str, reason: &str, span: &str) -> String {
     semantic_stable_key(
         FactFamily::UnresolvedFramework,
         &[
@@ -797,7 +981,9 @@ mod tests {
     };
     use crate::analysis::calls::store::CallOutput;
     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, ImportFact, ImportId, Language, Span};
+    use crate::core::{
+        AnalysisDb, FileId, FunctionFact, FunctionId, ImportFact, ImportId, Language, Span,
+    };
     use std::path::PathBuf;
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
@@ -812,12 +998,35 @@ mod tests {
         }
     }
 
+    fn span_for_needle(file: FileId, source: &str, needle: &str) -> Span {
+        let start = source.find(needle).expect("needle in source") as u32;
+        Span {
+            file,
+            start_byte: start,
+            end_byte: start + needle.len() as u32,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 1 + needle.len() as u32,
+        }
+    }
+
     fn add_go_file(db: &mut AnalysisDb, path: &str) -> FileId {
         db.add_source_file(
             PathBuf::from(path),
             path.to_string(),
             Language::Go,
             "".into(),
+            "content".to_string(),
+        )
+    }
+
+    fn add_go_file_with_source(db: &mut AnalysisDb, path: &str, source: &str) -> FileId {
+        db.add_source_file(
+            PathBuf::from(path),
+            path.to_string(),
+            Language::Go,
+            source.into(),
             "content".to_string(),
         )
     }
@@ -829,7 +1038,9 @@ mod tests {
             name: name.to_string(),
             span: span(file, line, line * 10),
             language: Language::Go,
-            is_test: name.starts_with("Test"),
+            is_test: GO_TEST_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix)),
             is_exported: true,
             cyclomatic_complexity: 1,
             calls: Vec::new(),
@@ -916,6 +1127,56 @@ mod tests {
     }
 
     #[test]
+    fn net_http_handlefunc_resolves_handler_argument_and_source_path() {
+        let mut db = AnalysisDb::new();
+        let source = r#"
+package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {}
+
+func setup() {
+	http.HandleFunc("/api/users/{id}", handler)
+}
+"#;
+        let file = add_go_file_with_source(&mut db, "main.go", source);
+        let handler = add_function(&mut db, file, "handler", 5);
+        let setup = add_function(&mut db, file, "setup", 7);
+        add_import(&mut db, file, "net/http", 1);
+
+        let needle = r#"http.HandleFunc("/api/users/{id}", handler)"#;
+        let mut site = make_call_site(
+            1,
+            file,
+            setup,
+            CallCallee::Member {
+                base: PlaceId(0),
+                property: "HandleFunc".to_string(),
+            },
+            CallSyntaxKind::Member,
+            8,
+        );
+        site.span = span_for_needle(file, source, needle);
+        site.arguments = vec![PlaceId(404)];
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call facts should store");
+
+        let output = recognize_go_entrypoints(&db);
+
+        assert_eq!(output.entrypoints.len(), 1);
+        assert_eq!(output.entrypoints[0].target_function, handler);
+        assert_eq!(
+            output.entrypoints[0].trigger_metadata.path,
+            Some("/api/users/{id}".to_string())
+        );
+    }
+
+    #[test]
     fn net_http_handle_produces_http_route_entrypoint() {
         let mut db = AnalysisDb::new();
         let file = add_go_file(&mut db, "main.go");
@@ -978,10 +1239,7 @@ mod tests {
         let ep = &output.entrypoints[0];
         assert_eq!(ep.kind, EntrypointKind::HttpRoute);
         assert_eq!(ep.framework_id, "go.chi");
-        assert_eq!(
-            ep.trigger_metadata.method,
-            Some("GET".to_string())
-        );
+        assert_eq!(ep.trigger_metadata.method, Some("GET".to_string()));
     }
 
     #[test]
@@ -1037,10 +1295,10 @@ mod tests {
     fn go_test_functions_produce_test_entrypoints() {
         let mut db = AnalysisDb::new();
         let file = add_go_file(&mut db, "handler_test.go");
-        let test_func = add_function(&mut db, file, "TestHandler", 5);
-        let benchmark_func = add_function(&mut db, file, "BenchmarkHandler", 15);
-        let example_func = add_function(&mut db, file, "ExampleHandler", 25);
-        let fuzz_func = add_function(&mut db, file, "FuzzHandler", 35);
+        let _test_func = add_function(&mut db, file, "TestHandler", 5);
+        let _benchmark_func = add_function(&mut db, file, "BenchmarkHandler", 15);
+        let _example_func = add_function(&mut db, file, "ExampleHandler", 25);
+        let _fuzz_func = add_function(&mut db, file, "FuzzHandler", 35);
         let _helper = add_function(&mut db, file, "helperFunc", 45); // should be ignored
         add_import(&mut db, file, "testing", 1);
 
@@ -1062,6 +1320,34 @@ mod tests {
         assert!(names.contains(&"BenchmarkHandler"));
         assert!(names.contains(&"ExampleHandler"));
         assert!(names.contains(&"FuzzHandler"));
+    }
+
+    #[test]
+    fn go_test_entrypoints_use_adapter_test_classification() {
+        let mut db = AnalysisDb::new();
+        let file = add_go_file(&mut db, "handler_test.go");
+        add_function(&mut db, file, "TestReal", 5);
+        let helper = db.push_function(FunctionFact {
+            id: FunctionId(999),
+            file,
+            name: "TestHelper".to_string(),
+            span: span(file, 15, 150),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        add_import(&mut db, file, "testing", 1);
+
+        let output = recognize_go_entrypoints(&db);
+
+        assert_eq!(output.entrypoints.len(), 1);
+        assert_ne!(output.entrypoints[0].target_function, helper);
+        assert_eq!(
+            output.entrypoints[0].precision,
+            EntrypointPrecision::ResolvedStatic
+        );
     }
 
     #[test]
@@ -1122,10 +1408,16 @@ mod tests {
 
         let output = recognize_go_entrypoints(&db);
 
-        assert!(!output.unresolved.is_empty(), "should produce unresolved fact");
+        assert!(
+            !output.unresolved.is_empty(),
+            "should produce unresolved fact"
+        );
         let ur = &output.unresolved[0];
         assert_eq!(ur.language, Language::Go);
-        assert_eq!(ur.reason, UnresolvedFrameworkReason::UnsupportedFrameworkVersion);
+        assert_eq!(
+            ur.reason,
+            UnresolvedFrameworkReason::UnsupportedFrameworkVersion
+        );
         assert!(ur.evidence.contains("gin"));
         assert!(ur.framework_id.contains("gin"));
     }
@@ -1167,9 +1459,18 @@ mod tests {
 
         assert_eq!(output.entrypoints.len(), 1);
         let key = &output.entrypoints[0].stable_key;
-        assert!(key.contains("10:Entrypoint"), "key should contain FactFamily::Entrypoint");
-        assert!(key.contains("8:language=2:Go"), "key should contain language=Go");
-        assert!(key.contains("12:framework_id=10:go.testing"), "key should contain framework_id");
+        assert!(
+            key.contains("10:Entrypoint"),
+            "key should contain FactFamily::Entrypoint"
+        );
+        assert!(
+            key.contains("8:language=2:Go"),
+            "key should contain language=Go"
+        );
+        assert!(
+            key.contains("12:framework_id=10:go.testing"),
+            "key should contain framework_id"
+        );
     }
 
     #[test]

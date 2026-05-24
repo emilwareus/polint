@@ -37,7 +37,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 32 | 7/7 | Complete    | 2026-05-21 |
 | 33 | 7/7 | Complete   | 2026-05-24 |
 | 34 | 6/6 | Complete   | 2026-05-23 |
-| 35 | 5/8 | In Progress|  |
+| 35 | 8/8 | Complete   | 2026-05-24 |
 | 36 | P0 Type/Value/Place/Alias Substrate | Add normalized type, value, allocation, access-path, narrowing, and alias facts. | SAE-PREC-01 |
 | 37 | Refined Call Graph Providers | Add opt-in refined call graph providers over direct calls, summaries, entrypoints, and type/value facts. | SAE-PREC-02 |
 | 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
@@ -381,7 +381,7 @@ Plans:
 **Goal:** Model entrypoints, routes, handlers, callbacks, jobs, CLIs, MCP tools/resources/prompts, tests, dispatch, and trust boundaries.
 **Requirements:** SAE-INT-05
 **Research:** `research/framework-entrypoints/FINAL-REPORT.md`, `research/framework-entrypoints/RECOMMENDED_IMPLEMENTATION.md`, `research/framework-entrypoints/VALIDATION.md`
-**Plans:** 4/8 plans executed
+**Plans:** 8/8 plans complete
 
 Plans:
 **Wave 1**
@@ -401,11 +401,11 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 35-07-PLAN.md — Debug snapshots and deterministic eval fixtures
+- [x] 35-07-PLAN.md — Debug snapshots and deterministic eval fixtures
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 35-08-PLAN.md — Public no-leak boundary proof
+- [x] 35-08-PLAN.md — Public no-leak boundary proof
 
 **Success criteria:**
 

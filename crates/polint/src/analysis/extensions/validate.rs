@@ -327,9 +327,7 @@ mod tests {
             c.fact_family = family.to_string();
             c.precision = Some(ExtensionFactPrecision::Exact);
             let mut validation_input = input(vec![c]);
-            validation_input
-                .declared_outputs
-                .insert(family.to_string());
+            validation_input.declared_outputs.insert(family.to_string());
 
             let output = validate_extension_output(&db(), validation_input);
 

@@ -19,7 +19,7 @@ function corsMiddleware(
   next();
 }
 
-app.get("/api/items", getItems);
+app.get("/api/items/:id", getItems);
 app.post("/api/items", createItem);
 app.use(corsMiddleware);
 

@@ -627,6 +627,7 @@ pub(crate) fn direct_summary_facts_for_test(debug_json: &Value) -> Vec<ObservedI
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn entrypoint_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     entrypoint_facts(debug_json)
 }
@@ -1637,11 +1638,17 @@ fn entrypoint_facts(debug_json: &Value) -> Vec<ObservedItem> {
             if let Some(fact) = entrypoint_fact(row, "Entrypoint") {
                 facts.push(ObservedItem::Fact(fact));
             }
+            if let Some(invariant) = entrypoint_detail_invariant(row) {
+                facts.push(invariant);
+            }
         }
     }
 
     // Trust boundary detail rows -> ObservedFact
-    if let Some(rows) = entrypoints.get("trust_boundaries").and_then(Value::as_array) {
+    if let Some(rows) = entrypoints
+        .get("trust_boundaries")
+        .and_then(Value::as_array)
+    {
         for row in rows {
             if let Some(fact) = entrypoint_fact(row, "TrustBoundary") {
                 facts.push(ObservedItem::Fact(fact));
@@ -1686,21 +1693,25 @@ fn entrypoint_fact(row: &Value, family: &str) -> Option<ObservedFact> {
         }
         .to_string()
     });
-    let status = row.get("status").and_then(Value::as_str).and_then(|s| {
-        match s {
+    let status = row
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(|s| match s {
             "Resolved" => Some(ObservedStatus::Resolved),
             "Partial" => Some(ObservedStatus::Partial),
             "Unresolved" => Some(ObservedStatus::Unresolved),
             "SetupMissing" => Some(ObservedStatus::SetupMissing),
             "Unsupported" => Some(ObservedStatus::Unsupported),
             _ => None,
-        }
-    });
+        });
 
     // Build compact payload fragment
     let mut payload_parts = Vec::new();
     if let Some(framework_id) = row.get("framework_id").and_then(Value::as_str) {
         payload_parts.push(format!("framework={framework_id}"));
+    }
+    if let Some(function_name) = row.get("function_name").and_then(Value::as_str) {
+        payload_parts.push(format!("function={function_name}"));
     }
     if let Some(kind) = row.get("kind").and_then(Value::as_str) {
         payload_parts.push(format!("kind={kind}"));
@@ -1738,9 +1749,43 @@ fn entrypoint_fact(row: &Value, family: &str) -> Option<ObservedFact> {
 }
 
 #[cfg(test)]
-fn entrypoint_count_invariants(
-    entrypoints: &serde_json::Map<String, Value>,
-) -> Vec<ObservedItem> {
+fn entrypoint_detail_invariant(row: &Value) -> Option<ObservedItem> {
+    let framework_id = row.get("framework_id")?.as_str()?;
+    let kind = row.get("kind")?.as_str()?;
+    let function_name = row.get("function_name")?.as_str()?;
+    let trigger = row
+        .get("trigger_summary")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+
+    Some(observed_invariant(
+        format!(
+            "framework_entrypoints.entrypoint.{}.{}.{}",
+            invariant_label_part(framework_id),
+            invariant_label_part(kind),
+            invariant_label_part(function_name)
+        ),
+        trigger,
+        "kernel.metadata_debug_json.entrypoints.entrypoints",
+    ))
+}
+
+#[cfg(test)]
+fn invariant_label_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch == '.' || ch == '_' || ch == '-' || ch.is_ascii_alphanumeric() {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn entrypoint_count_invariants(entrypoints: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
     let Some(counts) = entrypoints.get("counts").and_then(Value::as_object) else {
         return Vec::new();
     };

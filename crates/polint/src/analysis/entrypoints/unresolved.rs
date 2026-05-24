@@ -11,7 +11,7 @@ pub(crate) fn merge_unresolved(
     let mut by_key: BTreeMap<String, UnresolvedFrameworkFact> = BTreeMap::new();
 
     // Insert Go facts first, then TS/JS facts; first occurrence wins per dedup rule
-    for fact in go.into_iter().chain(ts.into_iter()) {
+    for fact in go.into_iter().chain(ts) {
         by_key.entry(fact.stable_key.clone()).or_insert(fact);
     }
 
@@ -21,9 +21,7 @@ pub(crate) fn merge_unresolved(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::entrypoints::facts::{
-        EntrypointPrecision, UnresolvedFrameworkReason,
-    };
+    use crate::analysis::entrypoints::facts::{EntrypointPrecision, UnresolvedFrameworkReason};
     use crate::analysis::ids::UnresolvedFrameworkId;
     use crate::core::{FileId, Language, Span};
 

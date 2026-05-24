@@ -22,7 +22,9 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
     check_duplicate_stable_keys(
         diagnostics,
         "Entrypoint",
-        db.entrypoint_facts().iter().map(|row| row.stable_key.as_str()),
+        db.entrypoint_facts()
+            .iter()
+            .map(|row| row.stable_key.as_str()),
     );
     check_duplicate_stable_keys(
         diagnostics,
@@ -234,7 +236,7 @@ pub(crate) fn validate_entrypoints(db: &AnalysisDb, diagnostics: &mut Vec<Diagno
     // 7. Conflicting entrypoint registrations: multiple entrypoints for the same target_function
     // with different framework_ids
     let entrypoints = db.entrypoint_facts();
-    for (_function_id, keys) in &entrypoints_by_target {
+    for keys in entrypoints_by_target.values() {
         if keys.len() > 1 {
             // Check if they have different framework_ids
             let framework_ids: BTreeSet<&str> = keys
@@ -338,7 +340,6 @@ mod tests {
         SymbolKind, SymbolNamespace, SymbolPrecision,
     };
     use crate::diagnostics::Diagnostic;
-    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     #[test]
@@ -440,10 +441,7 @@ mod tests {
         // Actually, EntrypointOutput.normalized() does NOT deduplicate -- it only sorts.
         // So two facts with the same stable_key will both survive normalization.
         db.replace_entrypoint_facts(EntrypointOutput {
-            entrypoints: vec![
-                entrypoint(0, "ep:duplicate"),
-                entrypoint(1, "ep:duplicate"),
-            ],
+            entrypoints: vec![entrypoint(0, "ep:duplicate"), entrypoint(1, "ep:duplicate")],
             trust_boundaries: Vec::new(),
             dispatch_edges: Vec::new(),
             unresolved: Vec::new(),
@@ -612,9 +610,9 @@ mod tests {
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
 
         assert!(
-            diagnostics.iter().any(|d| d
-                .message
-                .starts_with("Entrypoints validation failed")),
+            diagnostics
+                .iter()
+                .any(|d| d.message.starts_with("Entrypoints validation failed")),
             "expected entrypoints validation diagnostics from kernel validation: {diagnostics:#?}"
         );
     }
@@ -717,11 +715,7 @@ mod tests {
         }
     }
 
-    fn dispatch_edge(
-        id: u64,
-        from_source: &str,
-        stable_key: &str,
-    ) -> FrameworkDispatchEdgeFact {
+    fn dispatch_edge(id: u64, from_source: &str, stable_key: &str) -> FrameworkDispatchEdgeFact {
         FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(id),
             from_source: from_source.to_string(),
@@ -768,8 +762,9 @@ mod tests {
     }
 
     fn has_evidence(diagnostic: &Diagnostic, label: &str, value_contains: &str) -> bool {
-        diagnostic.evidence.iter().any(|evidence| {
-            evidence.label == label && evidence.value.contains(value_contains)
-        })
+        diagnostic
+            .evidence
+            .iter()
+            .any(|evidence| evidence.label == label && evidence.value.contains(value_contains))
     }
 }

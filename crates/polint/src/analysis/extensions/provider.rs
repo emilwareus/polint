@@ -6,6 +6,7 @@ use super::manifest::ExtensionActivationStatus;
 use super::protocol::ExtensionProtocolDiagnostic;
 use super::sinks::{
     ExtensionFactCandidate, ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
+    ExtensionSpanRef,
 };
 use super::store::{ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
@@ -92,18 +93,12 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                     let candidates = response
                         .facts
                         .into_iter()
-                        .map(|fact| ExtensionFactCandidate {
-                            extension_id: response.extension_id.clone(),
-                            provider_id: response.provider_id.clone(),
-                            fact_family: fact.fact_family,
-                            stable_key: fact.stable_key,
-                            binding_refs: fact.binding_refs,
-                            span: None,
-                            precision: parse_precision(&fact.precision),
-                            confidence: parse_confidence(&fact.confidence),
-                            status: ExtensionFactStatus::Candidate,
-                            evidence: fact.evidence,
-                            payload_labels: fact.payload_labels,
+                        .map(|fact| {
+                            extension_candidate_from_wire(
+                                &response.extension_id,
+                                &response.provider_id,
+                                fact,
+                            )
                         })
                         .collect::<Vec<_>>();
                     let validation = validate_extension_output(
@@ -250,6 +245,32 @@ fn native_stable_keys(db: &AnalysisDb) -> BTreeSet<String> {
         .collect()
 }
 
+fn extension_candidate_from_wire(
+    extension_id: &str,
+    provider_id: &str,
+    fact: super::protocol::ExtensionFactCandidateWire,
+) -> ExtensionFactCandidate {
+    let span = fact.span.map(|span| ExtensionSpanRef {
+        relative_path: span.relative_path,
+        start_byte: span.start_byte,
+        end_byte: span.end_byte,
+    });
+
+    ExtensionFactCandidate {
+        extension_id: extension_id.to_string(),
+        provider_id: provider_id.to_string(),
+        fact_family: fact.fact_family,
+        stable_key: fact.stable_key,
+        binding_refs: fact.binding_refs,
+        span,
+        precision: parse_precision(&fact.precision),
+        confidence: parse_confidence(&fact.confidence),
+        status: ExtensionFactStatus::Candidate,
+        evidence: fact.evidence,
+        payload_labels: fact.payload_labels,
+    }
+}
+
 fn parse_precision(value: &str) -> Option<ExtensionFactPrecision> {
     match value {
         "exact" => Some(ExtensionFactPrecision::Exact),
@@ -272,7 +293,8 @@ fn parse_confidence(value: &str) -> ExtensionFactConfidence {
 mod tests {
     use super::*;
     use crate::analysis::extensions::protocol::{
-        ExtensionProtocolDiagnostic, ExtensionProtocolEvidence,
+        ExtensionFactCandidateWire, ExtensionProtocolDiagnostic, ExtensionProtocolEvidence,
+        ExtensionSpanWire,
     };
     use crate::analysis::extensions::sinks::ExtensionFactStatus;
     use crate::analysis::extensions::store::AcceptedExtensionFact;
@@ -391,6 +413,37 @@ mod tests {
         assert_ne!(
             protocol_diagnostic_digest(&first),
             protocol_diagnostic_digest(&second)
+        );
+    }
+
+    #[test]
+    fn wire_fact_span_is_preserved_for_sink_validation() {
+        let candidate = extension_candidate_from_wire(
+            "demo",
+            "routes",
+            ExtensionFactCandidateWire {
+                fact_family: "extension.routes".to_string(),
+                stable_key: "route:/a".to_string(),
+                binding_refs: Vec::new(),
+                span: Some(ExtensionSpanWire {
+                    relative_path: "src/app.ts".to_string(),
+                    start_byte: 10,
+                    end_byte: 20,
+                }),
+                precision: "heuristic".to_string(),
+                confidence: "high".to_string(),
+                evidence: vec!["route literal".to_string()],
+                payload_labels: vec!["method=GET".to_string()],
+            },
+        );
+
+        assert_eq!(
+            candidate.span,
+            Some(ExtensionSpanRef {
+                relative_path: "src/app.ts".to_string(),
+                start_byte: 10,
+                end_byte: 20,
+            })
         );
     }
 

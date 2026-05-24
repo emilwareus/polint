@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-24T05:48:28Z"
+last_updated: "2026-05-24T07:17:38Z"
 last_activity: 2026-05-24
 progress:
   total_phases: 22
-  completed_phases: 17
+  completed_phases: 16
   total_plans: 93
-  completed_plans: 89
-  percent: 78
+  completed_plans: 93
+  percent: 73
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 35 — framework-entrypoints-and-trust-boundaries
+**Current focus:** Phase 36 — p0-type-value-place-alias-substrate
 
 ## Current Status
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 35 (framework-entrypoints-and-trust-boundaries) — EXECUTING
-Plan: 7 of 8
+Status: Ready to discuss/plan
+Phase: 36 (p0-type-value-place-alias-substrate) — NOT STARTED
+Plan: 0 of unknown
 Last activity: 2026-05-24
 
 ## Phase Progress
@@ -65,7 +65,7 @@ Last activity: 2026-05-24
 | 32 | Complete | 7/7 plans complete; summary kernel contracts, store, builder, provider, cache identity, validation, debug, eval fixtures, and public-boundary proof done; requirement SAE-INT-02 |
 | 33 | Complete | 7/7 plans complete; demand queries, summary SCC cache, extension-aware quarantine, eval fixtures, public-boundary proof, review fixes, and final verification done; requirement SAE-INT-03 |
 | 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
-| 35 | Pending | Framework entrypoints and trust boundaries; requirement SAE-INT-05 |
+| 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
 | 36 | Pending | P0 type/value/place/alias substrate; requirement SAE-PREC-01 |
 | 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
 | 38 | Pending | Local plus summary-projected data flow; requirement SAE-PREC-03 |
@@ -374,17 +374,20 @@ Last activity: 2026-05-24
 | 35-framework-entrypoints-and-trust-boundaries | 04 | 4 min | 1 | 2 |
 | 35-framework-entrypoints-and-trust-boundaries | 05 | 6 min | 2 | 6 |
 | 35-framework-entrypoints-and-trust-boundaries | 06 | 8 min | 2 | 6 |
+| 35-framework-entrypoints-and-trust-boundaries | 07 | recorded | 2 | recorded |
+| 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
 
 ## Session
 
 - Last session: 2026-05-24
-- Last activity: 2026-05-24 - Completed 35-06-PLAN.md.
-- Stopped at: Completed 35-06; continuing Phase 35 plan 7 of 8.
+- Last activity: 2026-05-24 - Completed Phase 35 plan 8 of 8 and public no-leak proof.
+- Stopped at: Phase 35 complete; ready to start Phase 36.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260524 | Fix deep review entrypoint issues | 2026-05-24 | implemented | [260524-fix-deep-review-entrypoint-issues](./quick/260524-fix-deep-review-entrypoint-issues/) |
 | 260522-n3q | Fix Phase 33 review findings with TDD tests | 2026-05-22 | implemented | [260522-n3q-fix-phase-33-review-findings-with-tdd-te](./quick/260522-n3q-fix-phase-33-review-findings-with-tdd-te/) |
 | 260521-nem | Add realistic structured coverage for direct calls and abstract domains | 2026-05-21 | implemented | [260521-nem-add-realistic-structured-coverage-for-di](./quick/260521-nem-add-realistic-structured-coverage-for-di/) |
 | 260521-m9k | Fix critical PR review findings for direct calls and abstract domains | 2026-05-21 | implemented | [260521-m9k-fix-critical-pr-review-findings-for-dire](./quick/260521-m9k-fix-critical-pr-review-findings-for-dire/) |
@@ -409,4 +412,4 @@ Last activity: 2026-05-24
 
 ## Next Action
 
-Continue Phase 35 plan 7 of 8 (framework entrypoints and trust boundaries).
+Start Phase 36 (p0-type-value-place-alias-substrate) when ready.

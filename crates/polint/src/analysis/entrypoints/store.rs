@@ -50,16 +50,11 @@ impl EntrypointOutput {
 
         // Sort dispatch_edges by (from_source, stable_key, id)
         self.dispatch_edges.sort_by(|left, right| {
-            (
-                left.from_source.as_str(),
-                left.stable_key.as_str(),
-                left.id,
-            )
-                .cmp(&(
-                    right.from_source.as_str(),
-                    right.stable_key.as_str(),
-                    right.id,
-                ))
+            (left.from_source.as_str(), left.stable_key.as_str(), left.id).cmp(&(
+                right.from_source.as_str(),
+                right.stable_key.as_str(),
+                right.id,
+            ))
         });
         for (index, edge) in self.dispatch_edges.iter_mut().enumerate() {
             edge.id = DispatchEdgeId(index as u64);
@@ -202,7 +197,7 @@ mod tests {
     use super::*;
     use crate::analysis::entrypoints::facts::{
         DispatchEdgeKind, EntrypointConfidence, EntrypointPrecision, EntrypointProvenance,
-        EntrypointStatus, TrustBoundarySourceKind, TriggerMetadata,
+        EntrypointStatus, TriggerMetadata, TrustBoundarySourceKind,
     };
     use crate::analysis::ids::{
         DispatchEdgeId, EntrypointId, TrustBoundaryId, UnresolvedFrameworkId,
@@ -234,11 +229,7 @@ mod tests {
         }
     }
 
-    fn trust_boundary(
-        id: u64,
-        entrypoint_key: &str,
-        stable_key: &str,
-    ) -> TrustBoundaryFact {
+    fn trust_boundary(id: u64, entrypoint_key: &str, stable_key: &str) -> TrustBoundaryFact {
         TrustBoundaryFact {
             id: TrustBoundaryId(id),
             entrypoint_stable_key: entrypoint_key.to_string(),
@@ -256,11 +247,7 @@ mod tests {
         }
     }
 
-    fn dispatch_edge(
-        id: u64,
-        from_source: &str,
-        stable_key: &str,
-    ) -> FrameworkDispatchEdgeFact {
+    fn dispatch_edge(id: u64, from_source: &str, stable_key: &str) -> FrameworkDispatchEdgeFact {
         FrameworkDispatchEdgeFact {
             id: DispatchEdgeId(id),
             from_source: from_source.to_string(),
@@ -278,7 +265,11 @@ mod tests {
         }
     }
 
-    fn unresolved(id: u64, reason: UnresolvedFrameworkReason, stable_key: &str) -> UnresolvedFrameworkFact {
+    fn unresolved(
+        id: u64,
+        reason: UnresolvedFrameworkReason,
+        stable_key: &str,
+    ) -> UnresolvedFrameworkFact {
         UnresolvedFrameworkFact {
             id: UnresolvedFrameworkId(id),
             language: Language::TypeScript,
@@ -352,16 +343,13 @@ mod tests {
     #[test]
     fn from_output_builds_deterministic_entrypoint_indexes() {
         let store = EntrypointStore::from_output(EntrypointOutput {
-            entrypoints: vec![
-                entrypoint(2, "ep-b"),
-                {
-                    let mut ep = entrypoint(1, "ep-a");
-                    ep.kind = EntrypointKind::McpTool;
-                    ep.registration_file = FileId(2);
-                    ep.framework_id = "mcp-sdk".to_string();
-                    ep
-                },
-            ],
+            entrypoints: vec![entrypoint(2, "ep-b"), {
+                let mut ep = entrypoint(1, "ep-a");
+                ep.kind = EntrypointKind::McpTool;
+                ep.registration_file = FileId(2);
+                ep.framework_id = "mcp-sdk".to_string();
+                ep
+            }],
             trust_boundaries: vec![
                 trust_boundary(1, "ep-a", "tb-a"),
                 trust_boundary(2, "ep-b", "tb-b"),
@@ -426,9 +414,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("dangling entrypoint stable key"));
+        assert!(error.to_string().contains("dangling entrypoint stable key"));
         assert!(error.to_string().contains("ep-nonexistent"));
     }
 
@@ -442,9 +428,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("dangling entrypoint stable key"));
+        assert!(error.to_string().contains("dangling entrypoint stable key"));
         assert!(error.to_string().contains("ep-nonexistent"));
     }
 

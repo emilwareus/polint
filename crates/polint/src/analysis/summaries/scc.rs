@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
 use serde::Serialize;
 
 use crate::analysis::calls::facts::CallTargetStatus;
@@ -216,6 +217,8 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
         });
     }
 
+    let sccs = sorted_sccs_by_rank_and_stable_key(&graph, &sccs);
+
     SccSchedule {
         total_sccs: sccs.len(),
         sccs,
@@ -223,6 +226,49 @@ pub(crate) fn compute_scc_schedule(db: &AnalysisDb) -> SccSchedule {
         recursive_scc_count,
         max_scc_size,
     }
+}
+
+fn sorted_sccs_by_rank_and_stable_key(graph: &DiGraph<FunctionId, ()>, sccs: &[Scc]) -> Vec<Scc> {
+    let mut scc_by_function = BTreeMap::new();
+    for (index, scc) in sccs.iter().enumerate() {
+        for function in &scc.members {
+            scc_by_function.insert(*function, index);
+        }
+    }
+
+    let mut ranks = vec![0_usize; sccs.len()];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for edge in graph.edge_references() {
+            let caller = graph[edge.source()];
+            let callee = graph[edge.target()];
+            let Some(&caller_scc) = scc_by_function.get(&caller) else {
+                continue;
+            };
+            let Some(&callee_scc) = scc_by_function.get(&callee) else {
+                continue;
+            };
+            if caller_scc == callee_scc {
+                continue;
+            }
+
+            let required_rank = ranks[callee_scc] + 1;
+            if ranks[caller_scc] < required_rank {
+                ranks[caller_scc] = required_rank;
+                changed = true;
+            }
+        }
+    }
+
+    let mut ordered = sccs
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, scc)| (ranks[index], scc.member_stable_keys.clone(), scc))
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    ordered.into_iter().map(|(_, _, scc)| scc).collect()
 }
 
 #[cfg(test)]
@@ -438,38 +484,16 @@ mod tests {
         assert_eq!(schedule.total_functions, 3);
         assert_eq!(schedule.recursive_scc_count, 0);
 
-        // Independent SCCs should be in deterministic order.
-        // Since Tarjan's with petgraph processes in node addition order and
-        // we add nodes from a BTreeMap (sorted by FunctionId), the order
-        // depends on petgraph's internal traversal. However, each SCC has
-        // exactly one member, and the member_stable_keys are deterministic.
-        // Collect all stable keys in schedule order to verify determinism.
         let keys: Vec<&str> = schedule
             .sccs
             .iter()
             .map(|scc| scc.member_stable_keys[0].as_str())
             .collect();
 
-        // Run twice to confirm determinism.
-        let db2 = build_db(
-            vec![
-                summary_fact(3, "func::zebra"),
-                summary_fact(1, "func::alpha"),
-                summary_fact(2, "func::middle"),
-            ],
-            Vec::new(),
-            Vec::new(),
-        );
-        let schedule2 = compute_scc_schedule(&db2);
-        let keys2: Vec<&str> = schedule2
-            .sccs
-            .iter()
-            .map(|scc| scc.member_stable_keys[0].as_str())
-            .collect();
-
         assert_eq!(
-            keys, keys2,
-            "SCC schedule must be deterministic across runs"
+            keys,
+            vec!["func::alpha", "func::middle", "func::zebra"],
+            "independent SCCs must be sorted by stable key"
         );
     }
 
