@@ -19,7 +19,7 @@ use super::protocol::{
 };
 use crate::diagnostics::{Diagnostic, extension_setup_diagnostic};
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_STDOUT_LIMIT: usize = 1_048_576;
 const DEFAULT_STDERR_LIMIT: usize = 16_384;
 
@@ -644,6 +644,7 @@ mod tests {
         assert!(spec[0].args.contains(&"--manifest-path".to_string()));
         assert!(spec[0].args.contains(&"handshake".to_string()));
         assert!(spec[0].env.contains_key("CARGO_TARGET_DIR"));
+        assert_eq!(spec[0].timeout, Duration::from_secs(30));
     }
 
     #[test]

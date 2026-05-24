@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use super::facts::{NarrowedTypeFact, TypeFact, TypePrecision, TypeStatus};
+use super::facts::{NarrowedTypeFact, TypeFact, TypePrecision, TypeShape, TypeStatus};
 use crate::analysis::access_paths::store::AccessPathOutput;
 use crate::analysis::aliases::store::AliasOutput;
-use crate::analysis::ids::{NarrowedTypeId, PlaceId, TypeFactId};
+use crate::analysis::ids::{NarrowedTypeId, PlaceId, TypeFactId, TypeSetId};
 use crate::analysis::points_to::store::PointsToOutput;
 use crate::analysis::values::store::ValueOutput;
 use crate::core::{FunctionId, Language};
@@ -43,13 +43,39 @@ impl TypeOutput {
         self.narrowed.sort_by(|left, right| {
             (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
         });
+        let mut type_set_remap = BTreeMap::new();
+        for (index, row) in self.types.iter().enumerate() {
+            type_set_remap
+                .entry(row.type_set)
+                .or_insert(TypeSetId(index as u64));
+        }
         for (index, row) in self.types.iter_mut().enumerate() {
             row.id = TypeFactId(index as u64);
+            if let Some(remapped_set) = type_set_remap.get(&row.type_set) {
+                row.type_set = *remapped_set;
+            }
+            remap_type_shape_sets(&mut row.shape, &type_set_remap);
         }
         for (index, row) in self.narrowed.iter_mut().enumerate() {
             row.id = NarrowedTypeId(index as u64);
+            if let Some(remapped_set) = type_set_remap.get(&row.type_set) {
+                row.type_set = *remapped_set;
+            }
         }
         self
+    }
+}
+
+fn remap_type_shape_sets(shape: &mut TypeShape, type_set_remap: &BTreeMap<TypeSetId, TypeSetId>) {
+    match shape {
+        TypeShape::Union(sets) | TypeShape::Intersection(sets) => {
+            for set in sets {
+                if let Some(remapped) = type_set_remap.get(set) {
+                    *set = *remapped;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -104,7 +130,6 @@ impl TypeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::TypeSetId;
     use crate::analysis::types::facts::{
         TypeConfidence, TypePhase, TypeProvenance, TypeShape, TypeSubject,
     };
@@ -142,6 +167,44 @@ mod tests {
 
         assert_eq!(output.types[0].stable_key, "type:a");
         assert_eq!(output.types[0].id, TypeFactId(0));
+        assert_eq!(output.types[0].type_set, TypeSetId(0));
         assert_eq!(output.types[1].id, TypeFactId(1));
+        assert_eq!(output.types[1].type_set, TypeSetId(1));
+    }
+
+    #[test]
+    fn type_output_remaps_type_set_references_after_sorting() {
+        let output = TypeOutput {
+            types: vec![
+                TypeFact {
+                    shape: TypeShape::Union(vec![TypeSetId(7), TypeSetId(3)]),
+                    ..type_fact(7, "type:z")
+                },
+                type_fact(3, "type:a"),
+            ],
+            narrowed: vec![NarrowedTypeFact {
+                id: NarrowedTypeId(9),
+                place: PlaceId(1),
+                type_set: TypeSetId(7),
+                cfg_block: None,
+                operation: None,
+                predicate: None,
+                evidence: "narrowed".to_string(),
+                language: Language::Go,
+                file: None,
+                function: None,
+                body: None,
+                precision: TypePrecision::Conservative,
+                status: TypeStatus::Present,
+                stable_key: "narrowed:z".to_string(),
+            }],
+        }
+        .normalized();
+
+        assert_eq!(output.narrowed[0].type_set, TypeSetId(1));
+        assert_eq!(
+            output.types[1].shape,
+            TypeShape::Union(vec![TypeSetId(1), TypeSetId(0)])
+        );
     }
 }

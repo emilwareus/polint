@@ -13,6 +13,8 @@ workflow: gsd-quick
 - Changed access-path call-return projections to carry `CallSiteId` rather than crossing into the `PlaceId` domain.
 - Added `ValueKind::PlaceRef` for ordinary place copies and kept its precision inside the type/value alias provider ceiling.
 - Remapped allocation-token references during value output normalization, including value subjects and object/array/composite value kinds.
+- Remapped type-set references during type output normalization, including narrowed rows and union/intersection shapes.
+- Increased the local extension host timeout so full parallel test runs do not drop real extension fixture rows under nested `cargo run` contention.
 - Preserved file/body/function/operation/place provenance for unsupported Go type facts.
 - Updated provider-order eval expectations to include `polint.type_value_alias`.
 - Added regression tests for every reviewed failure mode.
@@ -22,6 +24,7 @@ workflow: gsd-quick
 - `cargo fmt --all --check`
 - `cargo test -p polint --lib analysis::values::store --locked`
 - `cargo test -p polint --lib analysis::types::go --locked`
+- `cargo test -p polint --lib analysis::types::store --locked`
 - `cargo test -p polint --lib analysis::mir::lower_go --locked`
 - `cargo test -p polint --lib provider_outputs_are_constructed_in_manifest_order --locked`
 - `cargo test -p polint --lib eval_observed_kernel_collects_provider_order_invariants_from_real_kernel --locked`
