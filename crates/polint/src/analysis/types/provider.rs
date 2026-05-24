@@ -50,6 +50,18 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         .access_paths
         .access_paths
         .extend(ts_js_output.access_paths.access_paths);
+    let points_to_constraints =
+        crate::analysis::points_to::constraints::derive_points_to_constraints(&output);
+    let points_to_output = crate::analysis::points_to::solver::output_with_solved_sets(
+        points_to_constraints,
+        crate::analysis::points_to::solver::PointsToBudget::default(),
+    );
+    let alias_output = crate::analysis::aliases::provider_stack::derive_alias_answers(
+        &output.access_paths.access_paths,
+        &points_to_output.sets,
+    );
+    output.points_to = points_to_output;
+    output.aliases = alias_output;
     output = output.normalized();
     let output_digest = type_value_alias_output_digest(
         manifest,
@@ -282,6 +294,36 @@ mod tests {
         ] {
             assert!(manifest.outputs.contains(&output));
         }
+    }
+
+    #[test]
+    fn type_value_alias_provider_stores_points_to_and_alias_answers_for_ts_js_facts() {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            "src/app.ts".into(),
+            "src/app.ts".to_string(),
+            r#"
+export function flow(input, key) {
+  const obj = { name: input };
+  const same = obj;
+  const field = obj[key];
+  return same.name ?? field;
+}
+"#
+            .to_string(),
+        );
+        let diagnostics = crate::ts::analyze(&mut db);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("semantic MIR replacement");
+
+        let output = derive_for_test(&mut db);
+
+        assert!(output.diagnostics.is_empty());
+        assert!(!db.points_to_constraints().is_empty());
+        assert!(!db.points_to_sets().is_empty());
+        assert!(!db.alias_answers().is_empty());
     }
 
     #[test]
