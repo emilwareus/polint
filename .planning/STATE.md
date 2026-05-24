@@ -387,6 +387,7 @@ Last activity: 2026-05-24 -- Phase 36 planning complete
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260524-jtj | Fix Phase 36 review findings and add regressions | 2026-05-24 | implemented | [260524-jtj-fix-phase-36-review-findings-add-regress](./quick/260524-jtj-fix-phase-36-review-findings-add-regress/) |
 | 260524 | Fix PR 41 Ubuntu clippy failures | 2026-05-24 | implemented | [260524-fix-pr41-ubuntu-clippy](./quick/260524-fix-pr41-ubuntu-clippy/) |
 | 260524 | Fix deep review entrypoint issues | 2026-05-24 | implemented | [260524-fix-deep-review-entrypoint-issues](./quick/260524-fix-deep-review-entrypoint-issues/) |
 | 260522-n3q | Fix Phase 33 review findings with TDD tests | 2026-05-22 | implemented | [260522-n3q-fix-phase-33-review-findings-with-tdd-te](./quick/260522-n3q-fix-phase-33-review-findings-with-tdd-te/) |

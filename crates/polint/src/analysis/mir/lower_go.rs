@@ -489,13 +489,17 @@ impl<'source> FunctionLowering<'source> {
             | "int_literal"
             | "float_literal"
             | "rune_literal"
-            | "composite_literal"
-            | "func_literal"
             | "true"
             | "false"
             | "nil" => Some(ValueDraft::Literal {
                 value: node_text(self.source, node).unwrap_or_default().to_string(),
             }),
+            "composite_literal" | "func_literal" => {
+                self.lower_expression_children(node, places, operations, unsupported, false);
+                Some(ValueDraft::Literal {
+                    value: node_text(self.source, node).unwrap_or_default().to_string(),
+                })
+            }
             "call_expression" => self
                 .lower_call(node, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
@@ -546,25 +550,40 @@ impl<'source> FunctionLowering<'source> {
             | "int_literal"
             | "float_literal"
             | "rune_literal" => None,
-            _ => {
-                let mut last = None;
-                for index in 0..node.named_child_count() as u32 {
-                    let Some(child) = node.named_child(index) else {
-                        continue;
-                    };
-                    last = self
-                        .lower_expression(
-                            child,
-                            places,
-                            operations,
-                            unsupported,
-                            assignment_destination,
-                        )
-                        .or(last);
-                }
-                last
-            }
+            _ => self.lower_expression_children(
+                node,
+                places,
+                operations,
+                unsupported,
+                assignment_destination,
+            ),
         }
+    }
+
+    fn lower_expression_children(
+        &mut self,
+        node: Node<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+        assignment_destination: bool,
+    ) -> Option<PlaceShape> {
+        let mut last = None;
+        for index in 0..node.named_child_count() as u32 {
+            let Some(child) = node.named_child(index) else {
+                continue;
+            };
+            last = self
+                .lower_expression(
+                    child,
+                    places,
+                    operations,
+                    unsupported,
+                    assignment_destination,
+                )
+                .or(last);
+        }
+        last
     }
 
     fn lower_identifier(
@@ -1566,6 +1585,34 @@ func authorize(user User, index int) bool {
             PlaceRoot::Global { name, .. } if name == "global"
         )));
         assert!(first.places.iter().any(|place| {
+            matches!(&place.root, PlaceRoot::Parameter { name: Some(name), .. } if name == "user")
+                && place
+                    .projections
+                    .contains(&PlaceProjection::Field("Tokens".to_string()))
+                && place.projections.iter().any(|projection| {
+                    matches!(projection, PlaceProjection::IndexUnknown { evidence } if evidence == "index")
+                })
+            }));
+    }
+
+    #[test]
+    fn go_literal_values_still_traverse_nested_expression_places() {
+        let output = lower(
+            r#"
+package auth
+
+type User struct { Tokens []string }
+
+func authorize(user User, index int) func() string {
+    wrapped := User{Token: user.Tokens[index]}
+    callback := func() string { return user.Tokens[index] }
+    _ = wrapped
+    return callback
+}
+"#,
+        );
+
+        assert!(output.places.iter().any(|place| {
             matches!(&place.root, PlaceRoot::Parameter { name: Some(name), .. } if name == "user")
                 && place
                     .projections

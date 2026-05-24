@@ -66,22 +66,25 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
         .iter()
         .filter(|row| row.language == Language::Go)
     {
+        let body = unsupported
+            .body
+            .and_then(|body| body_by_id.get(&body).copied());
         if unsupported.affected_places.is_empty() {
             types.push(unsupported_type_fact(
                 types.len() as u64,
                 TypeSubject::Unknown(unsupported.construct.clone()),
-                unsupported.stable_key.clone(),
-                unsupported.precision,
-                unsupported.source_evidence.clone(),
+                unsupported,
+                body,
+                None,
             ));
         } else {
             for place in &unsupported.affected_places {
                 types.push(unsupported_type_fact(
                     types.len() as u64,
                     TypeSubject::Place(*place),
-                    unsupported.stable_key.clone(),
-                    unsupported.precision,
-                    unsupported.source_evidence.clone(),
+                    unsupported,
+                    body,
+                    Some(*place),
                 ));
             }
         }
@@ -242,9 +245,7 @@ fn access_path_projection(projection: &PlaceProjection) -> AccessPathProjection 
         },
         PlaceProjection::Deref => AccessPathProjection::Deref,
         PlaceProjection::AwaitResult => AccessPathProjection::AwaitResult,
-        PlaceProjection::CallReturn(call) => {
-            AccessPathProjection::CallReturn(crate::analysis::ids::PlaceId(call.0))
-        }
+        PlaceProjection::CallReturn(call) => AccessPathProjection::CallReturn(*call),
         PlaceProjection::Unknown { evidence } => AccessPathProjection::Unknown {
             evidence: evidence.clone(),
         },
@@ -307,9 +308,9 @@ fn push_value_for_mir_value(
     let (kind, status, precision) = match value {
         MirValue::Literal { value } => literal_value_kind(value, operation, allocations),
         MirValue::Place(place) => (
-            ValueKind::CallReturn(*place),
-            ValueStatus::Unknown,
-            ValuePrecision::Conservative,
+            ValueKind::PlaceRef(*place),
+            ValueStatus::Present,
+            ValuePrecision::SetupAware,
         ),
         MirValue::Temporary(_) => (
             ValueKind::Unknown {
@@ -485,22 +486,26 @@ fn push_allocation(
 fn unsupported_type_fact(
     id: u64,
     subject: TypeSubject,
-    unsupported_key: String,
-    precision: UnsupportedPrecision,
-    evidence: String,
+    unsupported: &crate::analysis::mir::op::UnsupportedSemanticFact,
+    body: Option<&crate::analysis::mir::body::MirBody>,
+    place: Option<crate::analysis::ids::PlaceId>,
 ) -> TypeFact {
-    let (status, phase, precision, shape) = match precision {
+    let (status, phase, precision, shape) = match unsupported.precision {
         UnsupportedPrecision::Partial | UnsupportedPrecision::Unknown => (
             TypeStatus::Unknown,
             TypePhase::Unknown,
             TypePrecision::Unknown,
-            TypeShape::Unknown { reason: evidence },
+            TypeShape::Unknown {
+                reason: unsupported.source_evidence.clone(),
+            },
         ),
         UnsupportedPrecision::Unsupported => (
             TypeStatus::Unsupported,
             TypePhase::Unsupported,
             TypePrecision::Unsupported,
-            TypeShape::Unsupported { reason: evidence },
+            TypeShape::Unsupported {
+                reason: unsupported.source_evidence.clone(),
+            },
         ),
     };
     TypeFact {
@@ -510,12 +515,12 @@ fn unsupported_type_fact(
         shape,
         phase,
         language: Language::Go,
-        file: None,
-        function: None,
-        body: None,
-        place: None,
+        file: Some(unsupported.file),
+        function: body.map(|body| body.function),
+        body: unsupported.body,
+        place,
         cfg_block: None,
-        operation: None,
+        operation: unsupported.operation,
         precision,
         confidence: TypeConfidence::Low,
         status,
@@ -524,7 +529,7 @@ fn unsupported_type_fact(
             FactFamily::Type,
             [
                 ("language", "go".to_string()),
-                ("unsupported", unsupported_key),
+                ("unsupported", unsupported.stable_key.clone()),
                 ("ordinal", id.to_string()),
             ],
         ),
@@ -551,7 +556,7 @@ impl PlaceRootBody for PlaceRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, ConservativeAction, UnsupportedDomain};
     use crate::analysis::places::PlaceProjection;
@@ -590,6 +595,17 @@ mod tests {
     }
 
     #[test]
+    fn go_call_return_access_path_projection_keeps_call_site_domain() {
+        let db = db_with_go_mir();
+        let output = derive_go_type_value_alias(&db);
+
+        assert!(output.access_paths.access_paths.iter().any(|row| {
+            row.projections
+                .contains(&AccessPathProjection::CallReturn(CallSiteId(42)))
+        }));
+    }
+
+    #[test]
     fn go_composite_and_function_values_create_value_and_allocation_rows() {
         let db = db_with_go_mir();
         let output = derive_go_type_value_alias(&db);
@@ -611,6 +627,22 @@ mod tests {
     }
 
     #[test]
+    fn go_place_values_are_not_classified_as_call_returns() {
+        let db = db_with_go_mir();
+        let output = derive_go_type_value_alias(&db);
+
+        assert!(output.values.values.iter().any(|row| {
+            row.kind == ValueKind::PlaceRef(PlaceId(1))
+                && row.status == ValueStatus::Present
+                && row.precision == ValuePrecision::SetupAware
+        }));
+        assert!(!output.values.values.iter().any(|row| {
+            row.subject == ValueSubject::Place(PlaceId(0))
+                && row.kind == ValueKind::CallReturn(PlaceId(1))
+        }));
+    }
+
+    #[test]
     fn go_unsupported_rows_stay_unknown_or_unsupported() {
         let db = db_with_go_mir();
         let output = derive_go_type_value_alias(&db);
@@ -623,6 +655,14 @@ mod tests {
             row.stable_key.contains("unsupported")
                 && row.status == TypeStatus::Present
                 && row.precision == TypePrecision::ExactLocal
+        }));
+        assert!(output.types.types.iter().any(|row| {
+            row.status == TypeStatus::Unsupported
+                && row.file == Some(FileId(0))
+                && row.function == Some(FunctionId(0))
+                && row.body == Some(MirBodyId(0))
+                && row.operation == Some(MirOpId(2))
+                && row.place == Some(PlaceId(1))
         }));
     }
 
@@ -681,6 +721,12 @@ mod tests {
             stable_key: "go:place:svc.Tokens[index]".to_string(),
             ..receiver.clone()
         };
+        let call_projection = PlaceFact {
+            id: PlaceId(2),
+            projections: vec![PlaceProjection::CallReturn(CallSiteId(42))],
+            stable_key: "go:place:svc.call_return".to_string(),
+            ..receiver.clone()
+        };
         let nil_op = operation(
             MirOpId(0),
             body.id,
@@ -715,10 +761,20 @@ mod tests {
                 },
             },
         );
+        let place_copy_op = operation(
+            MirOpId(3),
+            body.id,
+            file,
+            MirOperationKind::Assign {
+                place: receiver.id,
+                value: MirValue::Place(selector.id),
+                mode: AssignMode::Overwrite,
+            },
+        );
         db.replace_semantic_mir(MirOutput {
             bodies: vec![body],
-            places: vec![receiver, selector],
-            operations: vec![nil_op, composite_op, function_op],
+            places: vec![receiver, selector, call_projection],
+            operations: vec![nil_op, composite_op, function_op, place_copy_op],
             unsupported: vec![crate::analysis::mir::op::UnsupportedSemanticFact {
                 id: crate::analysis::ids::UnsupportedId(0),
                 body: Some(MirBodyId(0)),

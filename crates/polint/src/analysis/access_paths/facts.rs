@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{AccessPathId, MirBodyId, PlaceId};
+use crate::analysis::ids::{AccessPathId, CallSiteId, MirBodyId, PlaceId};
 use crate::core::{FileId, FunctionId, Language};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub(crate) enum AccessPathProjection {
     IndexUnknown { evidence: String },
     Deref,
     AwaitResult,
-    CallReturn(PlaceId),
+    CallReturn(CallSiteId),
     Unknown { evidence: String },
 }
 

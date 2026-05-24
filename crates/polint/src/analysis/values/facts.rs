@@ -57,6 +57,7 @@ pub(crate) enum ValueKind {
     FunctionObject,
     ClassObject,
     ModuleObject,
+    PlaceRef(PlaceId),
     Object(AllocationTokenId),
     Array(AllocationTokenId),
     CompositeLiteral(AllocationTokenId),

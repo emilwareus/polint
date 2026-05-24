@@ -73,6 +73,10 @@ pub(crate) enum FactFamily {
     PointsToConstraint,
     PointsToSet,
     AliasAnswer,
+    #[expect(
+        dead_code,
+        reason = "Type/value alias event rows are reserved for later Phase 36 plans."
+    )]
     TypeValueAliasEvent,
     #[expect(
         dead_code,
