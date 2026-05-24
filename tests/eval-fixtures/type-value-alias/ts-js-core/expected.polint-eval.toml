@@ -1,0 +1,15 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "type-value-alias-ts-js-core"
+area = "facts"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+invariant = { name = "provider_order.13", value = "polint.type_value_alias", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "type_value_alias_ts_js_core", max_runtime_ms = 10000, mode = "exact" }

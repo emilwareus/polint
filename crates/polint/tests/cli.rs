@@ -1470,6 +1470,38 @@ fn cfg_public_no_leak() {
 }
 
 #[test]
+fn type_value_alias_public_no_leak() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function app(): number { return 1; }\n",
+    );
+
+    let check_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let _report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
+        .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
+
+    assert_type_value_alias_public_output_is_private(&check_json);
+    assert_type_value_alias_public_surfaces_are_private();
+    assert_type_value_alias_cli_help_is_private();
+}
+
+#[test]
 fn direct_calls_internals_stay_private() {
     let temp = tempfile::tempdir().unwrap();
     write_direct_calls_public_rule_repo(temp.path());
@@ -1635,6 +1667,15 @@ fn abstract_domain_internals_stay_private() {
     assert_abstract_domains_public_rule_source(&source);
 }
 
+fn assert_type_value_alias_public_output_is_private(output: &str) {
+    for marker in TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !output.contains(marker),
+            "public output must not leak type/value/alias internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
 fn assert_direct_calls_public_output_is_private(output: &str) {
     for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
         assert!(
@@ -1649,6 +1690,33 @@ fn assert_abstract_domains_public_output_is_private(output: &str) {
         assert!(
             !output.contains(marker),
             "public output must not leak abstract-domain internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
+fn assert_type_value_alias_public_surfaces_are_private() {
+    let root = repo_root();
+    let lib_rs = fs::read_to_string(root.join("crates/polint/src/lib.rs")).unwrap();
+    let public_lib_rs = lib_rs
+        .split("pub(crate) mod analysis;")
+        .next()
+        .unwrap_or(&lib_rs);
+    let mut public_surface = public_lib_rs.to_string();
+    for path in [
+        root.join("README.md"),
+        root.join("docs/API-VISIBILITY-PLAN.md"),
+        root.join("docs/facts"),
+        root.join("crates/polint/src/sdk"),
+        root.join("crates/polint/src/runner"),
+        root.join("crates/polint/src/cli"),
+    ] {
+        public_surface.push_str(&public_surface_text(&path));
+    }
+
+    for marker in TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS {
+        assert!(
+            !public_surface.contains(marker),
+            "public README/docs/facts/CLI/SDK/runner/crate-root source must not expose type/value/alias marker `{marker}`"
         );
     }
 }
@@ -1679,6 +1747,30 @@ fn assert_abstract_domains_public_surfaces_are_private() {
     }
 }
 
+fn assert_type_value_alias_cli_help_is_private() {
+    let help_outputs = [
+        stdout_string(polint_cmd().arg("--help").assert().success()),
+        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
+        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
+        stdout_string(
+            polint_cmd()
+                .args(["inspect", "rule", "--help"])
+                .assert()
+                .success(),
+        ),
+        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
+    ];
+
+    for help in help_outputs {
+        for marker in TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS {
+            assert!(
+                !help.contains(marker),
+                "public CLI help must not expose type/value/alias marker `{marker}`:\n{help}"
+            );
+        }
+    }
+}
+
 fn assert_abstract_domains_cli_help_is_private() {
     let help_outputs = [
         stdout_string(polint_cmd().arg("--help").assert().success()),
@@ -1702,6 +1794,24 @@ fn assert_abstract_domains_cli_help_is_private() {
         }
     }
 }
+
+const TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
+    "polint.type_value_alias",
+    "type-value-alias-facts",
+    "TypeFact",
+    "NarrowedTypeFact",
+    "ValueFact",
+    "AllocationTokenFact",
+    "AccessPathFact",
+    "PointsToConstraintFact",
+    "AliasAnswerFact",
+    "PointsToSetFact",
+    "Types<'_>",
+    "Values<'_>",
+    "Aliases<'_>",
+    "points-to",
+    "type_value_alias",
+];
 
 const ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "polint.abstract_domains",
