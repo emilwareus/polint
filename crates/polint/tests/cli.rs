@@ -1472,19 +1472,7 @@ fn cfg_public_no_leak() {
 #[test]
 fn type_value_alias_public_no_leak() {
     let temp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("src")).unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["src/**"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("src/app.ts"),
-        "export function app(): number { return 1; }\n",
-    );
+    write_type_value_alias_public_rule_repo(temp.path());
 
     let check_json = stdout_string(
         polint_cmd()
@@ -1496,7 +1484,34 @@ exclude = []
     let _report: polint::sdk::prelude::PolintReport = serde_json::from_str(&check_json)
         .unwrap_or_else(|error| panic!("stdout was not public check JSON: {error}\n{check_json}"));
 
-    assert_type_value_alias_public_output_is_private(&check_json);
+    let inspect_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let inspect: serde_json::Value = serde_json::from_str(&inspect_json)
+        .unwrap_or_else(|error| panic!("stdout was not inspect JSON: {error}\n{inspect_json}"));
+    assert_eq!(
+        inspect["rules"][0]["rule_id"],
+        "local/type-value-alias-public-probe"
+    );
+
+    let test_json = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let test_report: serde_json::Value = serde_json::from_str(&test_json)
+        .unwrap_or_else(|error| panic!("stdout was not test JSON: {error}\n{test_json}"));
+    assert_eq!(test_report["summary"]["failed"], 0);
+
+    for output in [&check_json, &inspect_json, &test_json] {
+        assert_type_value_alias_public_output_is_private(output);
+    }
     assert_type_value_alias_public_surfaces_are_private();
     assert_type_value_alias_cli_help_is_private();
 }
@@ -1812,6 +1827,114 @@ const TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "points-to",
     "type_value_alias",
 ];
+
+fn write_type_value_alias_public_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        TYPE_VALUE_ALIAS_PUBLIC_RULE_SOURCE,
+    );
+    write_type_value_alias_public_fixture_files(root);
+
+    let case_root = root.join(".polint/tests/rules/type_value_alias_public/basic");
+    write_file(
+        &case_root.join("polint-test.toml"),
+        r#"
+rule = "local/type-value-alias-public-probe"
+paths = ["src/**"]
+
+[[expect.diagnostic]]
+rule_id = "local/type-value-alias-public-probe"
+file = "<workspace>"
+severity = "warn"
+message_contains = "public facts remain compatible while private analysis stays private"
+"#,
+    );
+    write_type_value_alias_public_fixture_files(&case_root);
+}
+
+const TYPE_VALUE_ALIAS_PUBLIC_RULE_SOURCE: &str = r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/type-value-alias-public-probe",
+    description = "Reads supported public facts while private analysis facts stay private.",
+    severity = "warn"
+)]
+fn type_value_alias_public_probe(
+    ctx: &mut RuleCtx<'_>,
+    imports: Imports<'_>,
+    file_metrics: FileMetrics<'_>,
+) -> RuleResult {
+    let import_count = imports.iter().count();
+    let file_metric_count = file_metrics.iter().count();
+    let public_count = import_count + file_metric_count;
+    if public_count == 0 {
+        return Ok(());
+    }
+
+    ctx.report(
+        Diagnostic::warning(
+            ctx.rule_id(),
+            "<workspace>",
+            DiagnosticRange::point(1, 1),
+            "public facts remain compatible while private analysis stays private",
+        )
+        .with_evidence("imports", import_count.to_string())
+        .with_evidence("file_metrics", file_metric_count.to_string()),
+    );
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![type_value_alias_public_probe()])
+}
+"#;
+
+fn write_type_value_alias_public_fixture_files(root: &Path) {
+    write_file(
+        &root.join("src/app.ts"),
+        r#"import { value } from "./value";
+
+export function app(): number {
+  const box = { value };
+  return box.value;
+}
+"#,
+    );
+    write_file(&root.join("src/value.ts"), "export const value = 1;\n");
+}
 
 const ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "polint.abstract_domains",

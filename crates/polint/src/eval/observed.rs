@@ -394,26 +394,140 @@ fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
 
 #[cfg(test)]
 fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
-    db.alias_answers()
-        .iter()
-        .map(|fact| {
-            ObservedItem::Fact(ObservedFact {
-                family: "AliasAnswer".to_string(),
-                stable_key: fact.stable_key.clone(),
-                mode: AssertionMode::Exact,
-                producer_id: Some("polint.type_value_alias".to_string()),
-                provenance: Some("type_value_alias.alias_answer".to_string()),
-                precision: Some(alias_precision_label(fact.precision).to_string()),
-                status: Some(ObservedStatus::Present),
-                payload: Some(format!(
-                    "status={:?};reason={:?};evidence={}",
-                    fact.status,
-                    fact.reason,
-                    fact.evidence.join(",")
-                )),
-            })
+    let mut facts = Vec::new();
+    facts.extend(db.type_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "Type".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some(format!("type_value_alias.type.{:?}", fact.provenance)),
+            precision: Some(type_precision_label(fact.precision).to_string()),
+            status: Some(type_status(fact.status)),
+            payload: Some(format!(
+                "phase={:?};shape={:?};subject={:?}",
+                fact.phase, fact.shape, fact.subject
+            )),
         })
-        .collect()
+    }));
+    facts.extend(db.narrowed_type_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "NarrowedType".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.narrowed_type".to_string()),
+            precision: Some(type_precision_label(fact.precision).to_string()),
+            status: Some(type_status(fact.status)),
+            payload: Some(format!(
+                "place={:?};type_set={:?};evidence={}",
+                fact.place, fact.type_set, fact.evidence
+            )),
+        })
+    }));
+    facts.extend(db.value_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "Value".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some(format!("type_value_alias.value.{:?}", fact.provenance)),
+            precision: Some(value_precision_label(fact.precision).to_string()),
+            status: Some(value_status(fact.status)),
+            payload: Some(format!("subject={:?};kind={:?}", fact.subject, fact.kind)),
+        })
+    }));
+    facts.extend(db.allocation_tokens().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "AllocationToken".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some(format!("type_value_alias.allocation.{:?}", fact.provenance)),
+            precision: Some("setup_aware".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(format!(
+                "kind={:?};source_place={:?}",
+                fact.kind, fact.source_place
+            )),
+        })
+    }));
+    facts.extend(db.access_path_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "AccessPath".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.access_path".to_string()),
+            precision: Some("setup_aware".to_string()),
+            status: Some(access_path_status(fact.status)),
+            payload: Some(format!(
+                "base={:?};depth={};projections={:?}",
+                fact.base, fact.depth, fact.projections
+            )),
+        })
+    }));
+    facts.extend(db.points_to_constraints().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "PointsToConstraint".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.points_to_constraint".to_string()),
+            precision: Some(points_to_precision_label(fact.precision).to_string()),
+            status: Some(points_to_status(fact.status)),
+            payload: Some(format!("kind={:?}", fact.kind)),
+        })
+    }));
+    facts.extend(db.points_to_sets().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "PointsToSet".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.points_to_set".to_string()),
+            precision: Some(points_to_precision_label(fact.precision).to_string()),
+            status: Some(points_to_status(fact.status)),
+            payload: Some(format!(
+                "variable={:?};objects={:?};budget={:?}",
+                fact.variable, fact.objects, fact.budget
+            )),
+        })
+    }));
+    facts.extend(db.alias_answers().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "AliasAnswer".to_string(),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.alias_answer".to_string()),
+            precision: Some(alias_precision_label(fact.precision).to_string()),
+            status: Some(alias_status(fact.status)),
+            payload: Some(format!(
+                "status={:?};reason={:?};evidence={}",
+                fact.status,
+                fact.reason,
+                fact.evidence.join(",")
+            )),
+        })
+    }));
+    facts.extend(db.alias_answers().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: format!("AliasAnswer.{:?}", fact.status),
+            stable_key: fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.type_value_alias".to_string()),
+            provenance: Some("type_value_alias.alias_answer.status".to_string()),
+            precision: Some(alias_precision_label(fact.precision).to_string()),
+            status: Some(alias_status(fact.status)),
+            payload: Some(format!(
+                "reason={:?};evidence={}",
+                fact.reason,
+                fact.evidence.join(",")
+            )),
+        })
+    }));
+    facts
 }
 
 #[cfg(test)]
@@ -428,6 +542,121 @@ fn alias_precision_label(
         crate::analysis::aliases::facts::AliasPrecision::Heuristic => "heuristic",
         crate::analysis::aliases::facts::AliasPrecision::Unknown => "unknown",
         crate::analysis::aliases::facts::AliasPrecision::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(test)]
+fn type_precision_label(precision: crate::analysis::types::facts::TypePrecision) -> &'static str {
+    match precision {
+        crate::analysis::types::facts::TypePrecision::ExactLocal => "exact_local",
+        crate::analysis::types::facts::TypePrecision::SetupAware => "setup_aware",
+        crate::analysis::types::facts::TypePrecision::Conservative => "conservative",
+        crate::analysis::types::facts::TypePrecision::Heuristic => "heuristic",
+        crate::analysis::types::facts::TypePrecision::Unknown => "unknown",
+        crate::analysis::types::facts::TypePrecision::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(test)]
+fn value_precision_label(
+    precision: crate::analysis::values::facts::ValuePrecision,
+) -> &'static str {
+    match precision {
+        crate::analysis::values::facts::ValuePrecision::ExactLocal => "exact_local",
+        crate::analysis::values::facts::ValuePrecision::SetupAware => "setup_aware",
+        crate::analysis::values::facts::ValuePrecision::Conservative => "conservative",
+        crate::analysis::values::facts::ValuePrecision::Heuristic => "heuristic",
+        crate::analysis::values::facts::ValuePrecision::Unknown => "unknown",
+        crate::analysis::values::facts::ValuePrecision::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(test)]
+fn points_to_precision_label(
+    precision: crate::analysis::points_to::facts::PointsToPrecision,
+) -> &'static str {
+    match precision {
+        crate::analysis::points_to::facts::PointsToPrecision::FlowInsensitive => "flow_insensitive",
+        crate::analysis::points_to::facts::PointsToPrecision::LocalFlowSensitive => {
+            "local_flow_sensitive"
+        }
+        crate::analysis::points_to::facts::PointsToPrecision::SummaryProjected => {
+            "summary_projected"
+        }
+        crate::analysis::points_to::facts::PointsToPrecision::Heuristic => "heuristic",
+        crate::analysis::points_to::facts::PointsToPrecision::Unknown => "unknown",
+        crate::analysis::points_to::facts::PointsToPrecision::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(test)]
+fn type_status(status: crate::analysis::types::facts::TypeStatus) -> ObservedStatus {
+    match status {
+        crate::analysis::types::facts::TypeStatus::Present => ObservedStatus::Present,
+        crate::analysis::types::facts::TypeStatus::Unknown => ObservedStatus::Unknown,
+        crate::analysis::types::facts::TypeStatus::Unsupported => ObservedStatus::Unsupported,
+        crate::analysis::types::facts::TypeStatus::SetupMissing => ObservedStatus::SetupMissing,
+        crate::analysis::types::facts::TypeStatus::BudgetExceeded => ObservedStatus::BudgetExceeded,
+    }
+}
+
+#[cfg(test)]
+fn value_status(status: crate::analysis::values::facts::ValueStatus) -> ObservedStatus {
+    match status {
+        crate::analysis::values::facts::ValueStatus::Present => ObservedStatus::Present,
+        crate::analysis::values::facts::ValueStatus::Unknown => ObservedStatus::Unknown,
+        crate::analysis::values::facts::ValueStatus::Unsupported => ObservedStatus::Unsupported,
+        crate::analysis::values::facts::ValueStatus::SetupMissing => ObservedStatus::SetupMissing,
+        crate::analysis::values::facts::ValueStatus::BudgetExceeded => {
+            ObservedStatus::BudgetExceeded
+        }
+    }
+}
+
+#[cfg(test)]
+fn access_path_status(
+    status: crate::analysis::access_paths::facts::AccessPathStatus,
+) -> ObservedStatus {
+    match status {
+        crate::analysis::access_paths::facts::AccessPathStatus::Resolved => {
+            ObservedStatus::Resolved
+        }
+        crate::analysis::access_paths::facts::AccessPathStatus::Partial => ObservedStatus::Partial,
+        crate::analysis::access_paths::facts::AccessPathStatus::Unknown => ObservedStatus::Unknown,
+        crate::analysis::access_paths::facts::AccessPathStatus::Unsupported => {
+            ObservedStatus::Unsupported
+        }
+        crate::analysis::access_paths::facts::AccessPathStatus::BudgetExceeded => {
+            ObservedStatus::BudgetExceeded
+        }
+    }
+}
+
+#[cfg(test)]
+fn points_to_status(status: crate::analysis::points_to::facts::PointsToStatus) -> ObservedStatus {
+    match status {
+        crate::analysis::points_to::facts::PointsToStatus::Present => ObservedStatus::Present,
+        crate::analysis::points_to::facts::PointsToStatus::Unknown => ObservedStatus::Unknown,
+        crate::analysis::points_to::facts::PointsToStatus::Unsupported => {
+            ObservedStatus::Unsupported
+        }
+        crate::analysis::points_to::facts::PointsToStatus::SetupMissing => {
+            ObservedStatus::SetupMissing
+        }
+        crate::analysis::points_to::facts::PointsToStatus::BudgetExceeded => {
+            ObservedStatus::BudgetExceeded
+        }
+    }
+}
+
+#[cfg(test)]
+fn alias_status(status: crate::analysis::aliases::facts::AliasStatus) -> ObservedStatus {
+    match status {
+        crate::analysis::aliases::facts::AliasStatus::NoAlias
+        | crate::analysis::aliases::facts::AliasStatus::MustAlias => ObservedStatus::Present,
+        crate::analysis::aliases::facts::AliasStatus::MayAlias
+        | crate::analysis::aliases::facts::AliasStatus::PartialAlias => ObservedStatus::Ambiguous,
+        crate::analysis::aliases::facts::AliasStatus::Unknown => ObservedStatus::Unknown,
     }
 }
 
@@ -2204,6 +2433,59 @@ path = "repo"
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn eval_observed_type_value_alias_emits_status_specific_alias_rows() {
+        use crate::analysis::aliases::facts::{
+            AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus,
+        };
+        use crate::analysis::aliases::store::AliasOutput;
+        use crate::analysis::ids::{AliasAnswerId, PlaceId};
+        use crate::analysis::types::store::TypeValueAliasOutput;
+
+        let mut db = AnalysisDb::new();
+        db.replace_type_value_alias_facts(TypeValueAliasOutput {
+            aliases: AliasOutput {
+                answers: [
+                    AliasStatus::NoAlias,
+                    AliasStatus::MayAlias,
+                    AliasStatus::MustAlias,
+                    AliasStatus::PartialAlias,
+                    AliasStatus::Unknown,
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, status)| AliasAnswerFact {
+                    id: AliasAnswerId(index as u64),
+                    left: AliasOperand::Place(PlaceId(index as u64)),
+                    right: AliasOperand::Place(PlaceId(index as u64 + 1)),
+                    status,
+                    reason: AliasReason::ExtensionProvided,
+                    evidence: vec!["eval".to_string()],
+                    precision: AliasPrecision::Heuristic,
+                    stable_key: format!("alias:{status:?}"),
+                })
+                .collect(),
+            },
+            ..TypeValueAliasOutput::default()
+        });
+
+        let observed = type_value_alias_facts(&db);
+        for status in [
+            "NoAlias",
+            "MayAlias",
+            "MustAlias",
+            "PartialAlias",
+            "Unknown",
+        ] {
+            assert!(observed.iter().any(|item| match item {
+                ObservedItem::Fact(fact) =>
+                    fact.family == format!("AliasAnswer.{status}")
+                        && fact.producer_id.as_deref() == Some("polint.type_value_alias"),
+                _ => false,
+            }));
+        }
     }
 
     fn native_fixture(source: &str, budget: Option<u64>) -> (tempfile::TempDir, NativeFixture) {

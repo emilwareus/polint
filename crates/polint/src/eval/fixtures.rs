@@ -1550,6 +1550,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/type-value-alias/extension-precision")
     }
 
+    fn type_value_alias_go_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/go-core")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1948,6 +1952,18 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_type_value_alias_go_core_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_go_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("type/value/alias Go core case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-go-core");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -1973,19 +1989,25 @@ mod eval_native_fixture_runner_tests {
                 .expect("native fixture run should have a case");
 
             assert_eq!(
-                run.metrics.false_negatives, 0,
-                "fixture should not miss expected rows: {}",
-                case.case_id
+                run.metrics.false_negatives,
+                0,
+                "fixture should not miss expected rows: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
             assert_eq!(
-                run.metrics.forbidden_hits, 0,
-                "fixture should not hit forbidden rows: {}",
-                case.case_id
+                run.metrics.forbidden_hits,
+                0,
+                "fixture should not hit forbidden rows: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
             assert_eq!(
-                run.metrics.runtime_budget_failed, 0,
-                "fixture should stay inside runtime budget: {}",
-                case.case_id
+                run.metrics.runtime_budget_failed,
+                0,
+                "fixture should stay inside runtime budget: {}\n{}",
+                case.case_id,
+                to_deterministic_json_pretty(&run)
             );
 
             passing_by_area

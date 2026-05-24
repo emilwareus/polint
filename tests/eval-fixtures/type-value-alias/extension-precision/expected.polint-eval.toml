@@ -15,6 +15,21 @@ fact = { family = "type_value_alias.alias_answer", stable_key = "alias:extension
 fact = { family = "AliasAnswer", stable_key = "alias:extension:no_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "present" }
 
 [[expected]]
+fact = { family = "AliasAnswer.NoAlias", stable_key = "alias:extension:no_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "AliasAnswer.MayAlias", stable_key = "alias:extension:may_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "ambiguous" }
+
+[[expected]]
+fact = { family = "AliasAnswer.MustAlias", stable_key = "alias:extension:must_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "AliasAnswer.PartialAlias", stable_key = "alias:extension:partial_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "ambiguous" }
+
+[[expected]]
+fact = { family = "AliasAnswer.Unknown", stable_key = "alias:extension:unknown", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "unknown" }
+
+[[expected]]
 invariant = { name = "provider_order.12", value = "polint.extensions", mode = "exact" }
 
 [[expected]]

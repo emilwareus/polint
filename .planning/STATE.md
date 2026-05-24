@@ -380,13 +380,14 @@ Last activity: 2026-05-24
 ## Session
 
 - Last session: 2026-05-24
-- Last activity: 2026-05-24 - Completed Phase 35 plan 8 of 8 and public no-leak proof.
-- Stopped at: Phase 35 complete; ready to start Phase 36.
+- Last activity: 2026-05-24 - Fixed Phase 36 closeout review proof gaps and reran full package validation.
+- Stopped at: Phase 36 complete; ready to start Phase 37.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260524 | Fix Phase 36 closeout review proof gaps | 2026-05-24 | implemented | [260524-fix-phase36-closeout-review-proof](./quick/260524-fix-phase36-closeout-review-proof/) |
 | 260524-jtj | Fix Phase 36 review findings and add regressions | 2026-05-24 | implemented | [260524-jtj-fix-phase-36-review-findings-add-regress](./quick/260524-jtj-fix-phase-36-review-findings-add-regress/) |
 | 260524 | Fix PR 41 Ubuntu clippy failures | 2026-05-24 | implemented | [260524-fix-pr41-ubuntu-clippy](./quick/260524-fix-pr41-ubuntu-clippy/) |
 | 260524 | Fix deep review entrypoint issues | 2026-05-24 | implemented | [260524-fix-deep-review-entrypoint-issues](./quick/260524-fix-deep-review-entrypoint-issues/) |
@@ -414,4 +415,4 @@ Last activity: 2026-05-24
 
 ## Next Action
 
-Start Phase 36 (p0-type-value-place-alias-substrate) when ready.
+Start Phase 37 (refined-call-graph-providers) when ready.
