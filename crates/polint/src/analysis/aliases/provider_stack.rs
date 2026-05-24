@@ -1,8 +1,10 @@
-use super::facts::AliasOperand;
+use super::facts::{AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, AliasStatus};
 use super::query::AliasQueryIndex;
 use super::store::AliasOutput;
 use crate::analysis::access_paths::facts::AccessPathFact;
+use crate::analysis::ids::AliasAnswerId;
 use crate::analysis::points_to::facts::PointsToSetFact;
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 const MAX_PROVIDER_STACK_PAIRS: usize = 64;
 
@@ -24,15 +26,41 @@ pub(crate) fn derive_alias_answers(
     operands.dedup();
 
     let mut answers = Vec::new();
+    let mut budget_reported = false;
     for (left_index, left) in operands.iter().enumerate() {
         for right in operands.iter().skip(left_index) {
             if answers.len() >= MAX_PROVIDER_STACK_PAIRS {
+                if !budget_reported {
+                    answers.push(budget_exceeded_answer(*left, *right));
+                    budget_reported = true;
+                }
                 break;
             }
             answers.push(index.answer(*left, *right));
         }
     }
     AliasOutput { answers }.normalized()
+}
+
+fn budget_exceeded_answer(left: AliasOperand, right: AliasOperand) -> AliasAnswerFact {
+    AliasAnswerFact {
+        id: AliasAnswerId(0),
+        left,
+        right,
+        status: AliasStatus::Unknown,
+        reason: AliasReason::BudgetExceeded,
+        evidence: vec!["provider-stack alias pair budget exceeded".to_string()],
+        precision: AliasPrecision::Unknown,
+        stable_key: stable_key_from_parts(
+            FactFamily::AliasAnswer,
+            &[
+                ("left", format!("{left:?}")),
+                ("right", format!("{right:?}")),
+                ("status", format!("{:?}", AliasStatus::Unknown)),
+                ("reason", format!("{:?}", AliasReason::BudgetExceeded)),
+            ],
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -43,6 +71,7 @@ mod tests {
     use crate::analysis::points_to::facts::{
         PointsToBudgetStatus, PointsToPrecision, PointsToStatus,
     };
+    use crate::analysis::points_to::vars;
     use crate::core::Language;
 
     #[test]
@@ -53,10 +82,16 @@ mod tests {
             path(AccessPathId(2), PlaceId(2), "a"),
         ];
         let sets = vec![
-            set(PtVarId(1), &[ObjectTokenId(1)]),
-            set(PtVarId(2), &[ObjectTokenId(2)]),
-            set(PtVarId(200_000), &[ObjectTokenId(1), ObjectTokenId(2)]),
-            set(PtVarId(200_001), &[ObjectTokenId(1), ObjectTokenId(3)]),
+            set(vars::place_var(PlaceId(1)), &[ObjectTokenId(1)]),
+            set(vars::place_var(PlaceId(2)), &[ObjectTokenId(2)]),
+            set(
+                vars::access_path_var(AccessPathId(0)),
+                &[ObjectTokenId(1), ObjectTokenId(2)],
+            ),
+            set(
+                vars::access_path_var(AccessPathId(1)),
+                &[ObjectTokenId(1), ObjectTokenId(3)],
+            ),
         ];
         let output = derive_alias_answers(&paths, &sets);
 
@@ -69,6 +104,19 @@ mod tests {
         );
         assert!(output.answers.iter().any(|answer| {
             answer.status == crate::analysis::aliases::facts::AliasStatus::PartialAlias
+        }));
+    }
+
+    #[test]
+    fn provider_stack_reports_budget_exhaustion_instead_of_silent_truncation() {
+        let paths = (0..20)
+            .map(|id| path(AccessPathId(id), PlaceId(id + 1), "field"))
+            .collect::<Vec<_>>();
+
+        let output = derive_alias_answers(&paths, &[]);
+
+        assert!(output.answers.iter().any(|answer| {
+            answer.status == AliasStatus::Unknown && answer.reason == AliasReason::BudgetExceeded
         }));
     }
 

@@ -5,6 +5,7 @@ use super::facts::{
     PointsToSetFact, PointsToStatus,
 };
 use super::store::PointsToOutput;
+use super::vars;
 use crate::analysis::ids::{ObjectTokenId, PointsToSetId, PtVarId};
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
@@ -48,6 +49,7 @@ struct Solver<'a> {
     stores: BTreeMap<PtVarId, BTreeSet<PtVarId>>,
     field_loads: BTreeMap<PtVarId, BTreeSet<(String, PtVarId)>>,
     field_stores: BTreeMap<PtVarId, BTreeSet<(String, PtVarId)>>,
+    object_slots: BTreeMap<(ObjectTokenId, String), PtVarId>,
     queue: VecDeque<(PtVarId, BTreeSet<ObjectTokenId>)>,
     dynamic_vars: BTreeSet<PtVarId>,
     steps: usize,
@@ -65,6 +67,7 @@ impl<'a> Solver<'a> {
             stores: BTreeMap::new(),
             field_loads: BTreeMap::new(),
             field_stores: BTreeMap::new(),
+            object_slots: BTreeMap::new(),
             queue: VecDeque::new(),
             dynamic_vars: BTreeSet::new(),
             steps: 0,
@@ -128,7 +131,7 @@ impl<'a> Solver<'a> {
                         .insert((format!("[{index}]"), *src));
                 }
                 PointsToConstraintKind::CallReturn { dst, value } => {
-                    self.add_object(*dst, ObjectTokenId(value.0));
+                    self.add_object(*dst, vars::value_fact_object(*value));
                 }
             }
         }
@@ -226,12 +229,12 @@ impl<'a> Solver<'a> {
     }
 
     fn object_slot(&mut self, object: ObjectTokenId, slot: &str) -> PtVarId {
-        let mut hash = 1469598103934665603_u64;
-        for byte in slot.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(1099511628211);
+        let key = (object, slot.to_string());
+        if let Some(var) = self.object_slots.get(&key) {
+            return *var;
         }
-        let var = PtVarId(1_000_000 + object.0.saturating_mul(257) + (hash % 251));
+        let var = vars::dynamic_var(self.object_slots.len());
+        self.object_slots.insert(key, var);
         self.dynamic_vars.insert(var);
         if self.dynamic_vars.len() > self.budget.max_dynamic_vars {
             self.budget_exceeded = true;
@@ -305,7 +308,7 @@ pub(crate) fn output_with_solved_sets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::PointsToConstraintId;
+    use crate::analysis::ids::{PointsToConstraintId, ValueFactId};
 
     #[test]
     fn solver_handles_core_constraint_vocabulary_deterministically() {
@@ -396,11 +399,12 @@ mod tests {
                 set.variable == PtVarId(2) && set.objects.contains(&ObjectTokenId(10))
             })
         );
-        assert!(
-            first.sets.iter().any(|set| {
-                set.variable == PtVarId(6) && set.objects.contains(&ObjectTokenId(42))
-            })
-        );
+        assert!(first.sets.iter().any(|set| {
+            set.variable == PtVarId(6)
+                && set
+                    .objects
+                    .contains(&vars::value_fact_object(ValueFactId(42)))
+        }));
     }
 
     #[test]

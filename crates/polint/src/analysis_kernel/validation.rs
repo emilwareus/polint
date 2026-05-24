@@ -514,7 +514,7 @@ impl TypeValueAliasIdSets {
         ids.object_tokens.extend(
             ids.allocations
                 .iter()
-                .map(|allocation| crate::analysis::ids::ObjectTokenId(allocation.0)),
+                .map(|allocation| crate::analysis::points_to::vars::allocation_object(*allocation)),
         );
         ids.object_tokens
             .extend(db.value_facts().iter().filter_map(|fact| {
@@ -522,12 +522,14 @@ impl TypeValueAliasIdSets {
                     fact.kind,
                     ValueKind::FunctionObject | ValueKind::ClassObject | ValueKind::ModuleObject
                 )
-                .then_some(crate::analysis::ids::ObjectTokenId(fact.value.0))
+                .then_some(
+                    crate::analysis::points_to::vars::abstract_value_object(fact.value),
+                )
             }));
         ids.object_tokens.extend(
             ids.value_facts
                 .iter()
-                .map(|value| crate::analysis::ids::ObjectTokenId(value.0)),
+                .map(|value| crate::analysis::points_to::vars::value_fact_object(*value)),
         );
         ids
     }
@@ -1312,7 +1314,6 @@ mod type_value_alias_validation {
                     stable_key: "alias:bad".to_string(),
                 }],
             },
-            ..TypeValueAliasOutput::default()
         });
 
         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
@@ -1392,7 +1393,9 @@ mod type_value_alias_validation {
                 sets: vec![PointsToSetFact {
                     id: PointsToSetId(0),
                     variable: PtVarId(0),
-                    objects: vec![ObjectTokenId(0)],
+                    objects: vec![crate::analysis::points_to::vars::value_fact_object(
+                        ValueFactId(0),
+                    )],
                     status: PointsToStatus::Present,
                     precision: PointsToPrecision::FlowInsensitive,
                     budget: PointsToBudgetStatus::WithinBudget,

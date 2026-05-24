@@ -4,6 +4,7 @@ use super::facts::{AliasAnswerFact, AliasOperand, AliasPrecision, AliasReason, A
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::ids::{AliasAnswerId, ObjectTokenId, PtVarId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
+use crate::analysis::points_to::vars;
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Default)]
@@ -153,8 +154,8 @@ impl<'a> AliasQueryIndex<'a> {
 
     fn objects_for(&self, operand: AliasOperand) -> Option<BTreeSet<ObjectTokenId>> {
         let variable = match operand {
-            AliasOperand::Place(place) => PtVarId(place.0),
-            AliasOperand::AccessPath(path) => PtVarId(200_000 + path.0),
+            AliasOperand::Place(place) => vars::place_var(place),
+            AliasOperand::AccessPath(path) => vars::access_path_var(path),
         };
         let set = self.points_to.get(&variable)?;
         if set.status == PointsToStatus::BudgetExceeded {
@@ -170,6 +171,7 @@ mod tests {
     use crate::analysis::access_paths::facts::{AccessPathProjection, AccessPathStatus};
     use crate::analysis::ids::{AccessPathId, PlaceId, PointsToSetId};
     use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::analysis::points_to::vars;
     use crate::core::Language;
 
     #[test]
@@ -179,10 +181,16 @@ mod tests {
             path(AccessPathId(1), PlaceId(1), "b"),
         ];
         let sets = vec![
-            set(PtVarId(1), &[ObjectTokenId(1)]),
-            set(PtVarId(2), &[ObjectTokenId(2)]),
-            set(PtVarId(3), &[ObjectTokenId(1), ObjectTokenId(2)]),
-            set(PtVarId(4), &[ObjectTokenId(1), ObjectTokenId(3)]),
+            set(vars::place_var(PlaceId(1)), &[ObjectTokenId(1)]),
+            set(vars::place_var(PlaceId(2)), &[ObjectTokenId(2)]),
+            set(
+                vars::place_var(PlaceId(3)),
+                &[ObjectTokenId(1), ObjectTokenId(2)],
+            ),
+            set(
+                vars::place_var(PlaceId(4)),
+                &[ObjectTokenId(1), ObjectTokenId(3)],
+            ),
         ];
         let index = AliasQueryIndex::new(&paths, &sets);
 

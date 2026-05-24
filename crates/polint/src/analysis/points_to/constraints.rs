@@ -2,9 +2,12 @@ use super::facts::{
     PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
 };
 use crate::analysis::access_paths::facts::{AccessPathFact, AccessPathProjection};
-use crate::analysis::ids::{ObjectTokenId, PointsToConstraintId, PtVarId};
+use crate::analysis::ids::{PointsToConstraintId, PtVarId};
+use crate::analysis::points_to::vars;
 use crate::analysis::types::store::TypeValueAliasOutput;
-use crate::analysis::values::facts::{AllocationTokenFact, ValueFact, ValueKind, ValueSubject};
+use crate::analysis::values::facts::{
+    AllocationTokenFact, ValueFact, ValueKind, ValueStatus, ValueSubject,
+};
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 pub(crate) fn derive_points_to_constraints(
@@ -34,29 +37,30 @@ impl ConstraintBuilder {
                 | ValueKind::CompositeLiteral(object) => {
                     self.push(PointsToConstraintKind::AddressOf {
                         dst,
-                        object: ObjectTokenId(object.0),
+                        object: vars::allocation_object(*object),
                     });
                 }
                 ValueKind::PlaceRef(src) => {
                     self.push(PointsToConstraintKind::Copy {
                         dst,
-                        src: PtVarId(src.0),
+                        src: vars::place_var(*src),
                     });
                 }
-                ValueKind::CallReturn(place) => {
+                ValueKind::CallReturn(place) if value.status == ValueStatus::Present => {
                     self.push(PointsToConstraintKind::CallReturn {
                         dst,
                         value: value.id,
                     });
                     self.push(PointsToConstraintKind::Copy {
                         dst,
-                        src: PtVarId(place.0),
+                        src: vars::place_var(*place),
                     });
                 }
+                ValueKind::CallReturn(_) => {}
                 ValueKind::FunctionObject | ValueKind::ClassObject | ValueKind::ModuleObject => {
                     self.push(PointsToConstraintKind::AddressOf {
                         dst,
-                        object: ObjectTokenId(value.value.0),
+                        object: vars::abstract_value_object(value.value),
                     });
                 }
                 ValueKind::Unknown { .. }
@@ -75,8 +79,8 @@ impl ConstraintBuilder {
         for allocation in allocations {
             if let Some(place) = allocation.source_place {
                 self.push(PointsToConstraintKind::AddressOf {
-                    dst: PtVarId(place.0),
-                    object: ObjectTokenId(allocation.id.0),
+                    dst: vars::place_var(place),
+                    object: vars::allocation_object(allocation.id),
                 });
             }
         }
@@ -85,7 +89,7 @@ impl ConstraintBuilder {
     fn collect_access_paths(&mut self, paths: &[AccessPathFact]) {
         for path in paths {
             let dst = access_path_var(path);
-            let base = PtVarId(path.base.0);
+            let base = vars::place_var(path.base);
             for projection in &path.projections {
                 match projection {
                     AccessPathProjection::Field(field) | AccessPathProjection::Property(field) => {
@@ -169,15 +173,15 @@ impl ConstraintBuilder {
 
 fn subject_var(subject: &ValueSubject) -> Option<PtVarId> {
     match subject {
-        ValueSubject::Place(place) => Some(PtVarId(place.0)),
-        ValueSubject::Operation(operation) => Some(PtVarId(500_000 + operation.0)),
-        ValueSubject::Allocation(allocation) => Some(PtVarId(700_000 + allocation.0)),
+        ValueSubject::Place(place) => Some(vars::place_var(*place)),
+        ValueSubject::Operation(operation) => Some(vars::operation_var(*operation)),
+        ValueSubject::Allocation(allocation) => Some(vars::allocation_var(*allocation)),
         ValueSubject::Synthetic(_) | ValueSubject::Unknown(_) => None,
     }
 }
 
 fn access_path_var(path: &AccessPathFact) -> PtVarId {
-    PtVarId(200_000 + path.id.0)
+    vars::access_path_var(path.id)
 }
 
 fn constraint_stable_key(kind: &PointsToConstraintKind) -> String {
@@ -296,7 +300,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn unknown_call_returns_do_not_create_fresh_points_to_objects() {
+        let output = TypeValueAliasOutput {
+            values: ValueOutput {
+                values: vec![value_with_status(
+                    ValueFactId(0),
+                    ValueSubject::Place(crate::analysis::ids::PlaceId(3)),
+                    ValueKind::CallReturn(crate::analysis::ids::PlaceId(3)),
+                    ValueStatus::Unknown,
+                )],
+                allocations: Vec::new(),
+            },
+            ..TypeValueAliasOutput::default()
+        };
+
+        let constraints = derive_points_to_constraints(&output);
+
+        assert!(
+            !constraints
+                .iter()
+                .any(|row| matches!(row.kind, PointsToConstraintKind::CallReturn { .. }))
+        );
+    }
+
     fn value(id: ValueFactId, subject: ValueSubject, kind: ValueKind) -> ValueFact {
+        value_with_status(id, subject, kind, ValueStatus::Present)
+    }
+
+    fn value_with_status(
+        id: ValueFactId,
+        subject: ValueSubject,
+        kind: ValueKind,
+        status: ValueStatus,
+    ) -> ValueFact {
         ValueFact {
             id,
             subject,
@@ -307,7 +344,7 @@ mod tests {
             function: None,
             body: Some(MirBodyId(0)),
             precision: ValuePrecision::Heuristic,
-            status: ValueStatus::Present,
+            status,
             provenance: ValueProvenance::Native,
             stable_key: format!("value:{}", id.0),
         }

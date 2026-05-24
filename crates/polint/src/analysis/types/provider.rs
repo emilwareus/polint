@@ -51,19 +51,23 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         .access_paths
         .access_paths
         .extend(ts_js_output.access_paths.access_paths);
-    let points_to_constraints =
+    output = super::validate::merge_extension_type_value_alias_facts(output, db.extension_facts());
+    let mut points_to_constraints =
         crate::analysis::points_to::constraints::derive_points_to_constraints(&output);
+    points_to_constraints.extend(std::mem::take(&mut output.points_to.constraints));
     let points_to_output = crate::analysis::points_to::solver::output_with_solved_sets(
         points_to_constraints,
         crate::analysis::points_to::solver::PointsToBudget::default(),
     );
-    let alias_output = crate::analysis::aliases::provider_stack::derive_alias_answers(
+    let mut alias_output = crate::analysis::aliases::provider_stack::derive_alias_answers(
         &output.access_paths.access_paths,
         &points_to_output.sets,
     );
+    alias_output
+        .answers
+        .extend(std::mem::take(&mut output.aliases.answers));
     output.points_to = points_to_output;
     output.aliases = alias_output;
-    output = super::validate::merge_extension_type_value_alias_facts(output, db.extension_facts());
     output = output.normalized();
     let output_digest = type_value_alias_output_digest(
         manifest,
@@ -257,6 +261,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::extensions::sinks::{
+        ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
+        TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+    };
+    use crate::analysis::extensions::store::{AcceptedExtensionFact, ExtensionOutput};
+    use crate::analysis::ids::{ObjectTokenId, PtVarId};
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
@@ -330,6 +340,27 @@ export function flow(input, key) {
         assert!(!db.points_to_constraints().is_empty());
         assert!(!db.points_to_sets().is_empty());
         assert!(!db.alias_answers().is_empty());
+    }
+
+    #[test]
+    fn type_value_alias_provider_solves_extension_points_to_constraints() {
+        let mut db = AnalysisDb::new();
+        db.replace_extension_facts(ExtensionOutput {
+            accepted: vec![accepted_extension_fact(
+                TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+                "pt:extension:address",
+                &["kind=address_of", "dst=pt:77", "object=obj:88"],
+            )],
+            rejected: Vec::new(),
+            activations: Vec::new(),
+        });
+
+        let output = derive_for_test(&mut db);
+
+        assert!(output.diagnostics.is_empty());
+        assert!(db.points_to_sets().iter().any(|set| {
+            set.variable == PtVarId(77) && set.objects.contains(&ObjectTokenId(88))
+        }));
     }
 
     #[test]
@@ -411,5 +442,28 @@ export function flow(input, key) {
             absent("module_topology"),
             Vec::new(),
         )
+    }
+
+    fn accepted_extension_fact(
+        family: &str,
+        stable_key: &str,
+        payload_labels: &[&str],
+    ) -> AcceptedExtensionFact {
+        AcceptedExtensionFact {
+            extension_id: "demo".to_string(),
+            provider_id: "precision".to_string(),
+            fact_family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            binding_refs: vec!["file:src/app.ts".to_string()],
+            precision: ExtensionFactPrecision::Heuristic,
+            confidence: ExtensionFactConfidence::Medium,
+            status: ExtensionFactStatus::Accepted,
+            evidence: vec!["reviewed".to_string()],
+            payload_labels: payload_labels
+                .iter()
+                .map(|label| (*label).to_string())
+                .collect(),
+            payload_digest: format!("payload:{stable_key}"),
+        }
     }
 }

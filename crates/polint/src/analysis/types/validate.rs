@@ -460,21 +460,60 @@ fn place_id(value: &str) -> Option<PlaceId> {
 }
 
 fn pt_var_id(value: &str) -> Option<PtVarId> {
-    value
-        .strip_prefix("pt:")
-        .unwrap_or(value)
-        .parse()
-        .ok()
-        .map(PtVarId)
+    if let Some(place) = value.strip_prefix("place:") {
+        place
+            .parse()
+            .ok()
+            .map(PlaceId)
+            .map(crate::analysis::points_to::vars::place_var)
+    } else if let Some(path) = value.strip_prefix("access_path:") {
+        path.parse()
+            .ok()
+            .map(AccessPathId)
+            .map(crate::analysis::points_to::vars::access_path_var)
+    } else if let Some(allocation) = value.strip_prefix("allocation:") {
+        allocation
+            .parse()
+            .ok()
+            .map(AllocationTokenId)
+            .map(crate::analysis::points_to::vars::allocation_var)
+    } else {
+        value
+            .strip_prefix("pt:")
+            .unwrap_or(value)
+            .parse()
+            .ok()
+            .map(PtVarId)
+    }
 }
 
 fn object_token_id(value: &str) -> Option<ObjectTokenId> {
-    value
-        .strip_prefix("obj:")
-        .unwrap_or(value)
-        .parse()
-        .ok()
-        .map(ObjectTokenId)
+    if let Some(allocation) = value.strip_prefix("allocation:") {
+        allocation
+            .parse()
+            .ok()
+            .map(AllocationTokenId)
+            .map(crate::analysis::points_to::vars::allocation_object)
+    } else if let Some(value_fact) = value.strip_prefix("value:") {
+        value_fact
+            .parse()
+            .ok()
+            .map(ValueFactId)
+            .map(crate::analysis::points_to::vars::value_fact_object)
+    } else if let Some(abstract_value) = value.strip_prefix("abstract_value:") {
+        abstract_value
+            .parse()
+            .ok()
+            .map(AbstractValueId)
+            .map(crate::analysis::points_to::vars::abstract_value_object)
+    } else {
+        value
+            .strip_prefix("obj:")
+            .unwrap_or(value)
+            .parse()
+            .ok()
+            .map(ObjectTokenId)
+    }
 }
 
 fn language_label(value: Option<&str>) -> Language {
