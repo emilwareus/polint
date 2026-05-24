@@ -1,8 +1,33 @@
 use std::collections::BTreeMap;
 
 use super::facts::{NarrowedTypeFact, TypeFact, TypePrecision, TypeStatus};
+use crate::analysis::access_paths::store::AccessPathOutput;
+use crate::analysis::aliases::store::AliasOutput;
 use crate::analysis::ids::{NarrowedTypeId, PlaceId, TypeFactId};
+use crate::analysis::points_to::store::PointsToOutput;
+use crate::analysis::values::store::ValueOutput;
 use crate::core::{FunctionId, Language};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TypeValueAliasOutput {
+    pub(crate) types: TypeOutput,
+    pub(crate) values: ValueOutput,
+    pub(crate) access_paths: AccessPathOutput,
+    pub(crate) points_to: PointsToOutput,
+    pub(crate) aliases: AliasOutput,
+}
+
+impl TypeValueAliasOutput {
+    pub(crate) fn normalized(self) -> Self {
+        Self {
+            types: self.types.normalized(),
+            values: self.values.normalized(),
+            access_paths: self.access_paths.normalized(),
+            points_to: self.points_to.normalized(),
+            aliases: self.aliases.normalized(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TypeOutput {

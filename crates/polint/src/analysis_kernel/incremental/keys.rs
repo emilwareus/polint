@@ -51,6 +51,7 @@ pub(crate) enum LayerKind {
     Calls,
     AbstractDomains,
     DirectSummaries,
+    TypeValueAlias,
     DemandQuery,
     Metrics,
     Extension,
