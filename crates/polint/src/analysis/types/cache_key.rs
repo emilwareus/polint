@@ -224,6 +224,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_digest_changes_for_ts_js_lifecycle_inputs() {
+        let baseline_snapshot = snapshot_with_ts_js("tsconfig-base", "package-base");
+        let changed_tsconfig = snapshot_with_ts_js("tsconfig-changed", "package-base");
+        let changed_package = snapshot_with_ts_js("tsconfig-base", "package-changed");
+        let upstream = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "semantic_mir",
+            &["base"],
+        )];
+
+        let baseline =
+            type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream);
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_tsconfig, &upstream)
+        );
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_package, &upstream)
+        );
+    }
+
     fn snapshot(go_suffix: &str, tool_suffix: &str) -> InputSnapshot {
         let go_component = component(
             "go.tool_invocation",
@@ -252,6 +275,23 @@ mod tests {
             tool_invocations: vec![tool_component],
             provider_schemas: Vec::<ProviderSchemaSnapshot>::new(),
         }
+    }
+
+    fn snapshot_with_ts_js(tsconfig_suffix: &str, package_suffix: &str) -> InputSnapshot {
+        let mut snapshot = snapshot("go-base", "tool-base");
+        snapshot.ts_js_lifecycle = TsJsLifecycleSnapshot {
+            components: vec![
+                component(
+                    "ts_js.config_files",
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "tsconfig", &[tsconfig_suffix]),
+                ),
+                component(
+                    "ts_js.package_manifests",
+                    Digest::from_parts(DigestKind::TsJsLifecycle, "package", &[package_suffix]),
+                ),
+            ],
+        };
+        snapshot
     }
 
     fn component(name: &str, digest: Digest) -> InputComponent {
