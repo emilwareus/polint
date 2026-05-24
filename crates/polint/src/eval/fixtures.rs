@@ -1546,6 +1546,10 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/extension/real-sink")
     }
 
+    fn type_value_alias_extension_precision_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/type-value-alias/extension-precision")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1584,8 +1588,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.9", "polint.abstract_domains"),
                 ("provider_order.10", "polint.direct_summaries"),
                 ("provider_order.11", "polint.entrypoints"),
-                ("provider_order.12", "polint.type_value_alias"),
-                ("provider_order.13", "polint.extensions"),
+                ("provider_order.12", "polint.extensions"),
+                ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
@@ -1909,6 +1913,38 @@ mod eval_native_fixture_runner_tests {
             }
             _ => false,
         }));
+    }
+
+    #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "extension fixture requires cargo build at runtime, which is unreliable on Windows CI"
+    )]
+    fn eval_type_value_alias_extension_precision_fixture_passes() {
+        let run = run_native_fixture_for_test(&type_value_alias_extension_precision_fixture_dir())
+            .unwrap();
+        let case = run
+            .cases
+            .first()
+            .expect("type/value/alias extension precision case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.case_id, "type-value-alias-extension-precision");
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+        assert!(
+            case.observed.iter().any(|item| match item {
+                ObservedItem::Fact(fact) => {
+                    fact.family == "AliasAnswer"
+                        && fact.stable_key == "alias:extension:no_alias"
+                        && fact.producer_id.as_deref() == Some("polint.type_value_alias")
+                        && fact.precision.as_deref() == Some("heuristic")
+                }
+                _ => false,
+            }),
+            "{rendered}"
+        );
     }
 
     #[test]

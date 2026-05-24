@@ -110,6 +110,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(layer_key_invariants(&output.run_report));
     observed.extend(provider_output_invariants(&output.run_report));
     observed.extend(layer_cache_invariants(&output.run_report));
+    observed.extend(type_value_alias_facts(&output.db));
     observed.extend(extension_facts(&output.db));
     observed.extend(extension_invariants(&output.db));
     if let Some(budget) = &fixture.manifest.budget {
@@ -389,6 +390,45 @@ fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     }));
 
     facts
+}
+
+#[cfg(test)]
+fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
+    db.alias_answers()
+        .iter()
+        .map(|fact| {
+            ObservedItem::Fact(ObservedFact {
+                family: "AliasAnswer".to_string(),
+                stable_key: fact.stable_key.clone(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.type_value_alias".to_string()),
+                provenance: Some("type_value_alias.alias_answer".to_string()),
+                precision: Some(alias_precision_label(fact.precision).to_string()),
+                status: Some(ObservedStatus::Present),
+                payload: Some(format!(
+                    "status={:?};reason={:?};evidence={}",
+                    fact.status,
+                    fact.reason,
+                    fact.evidence.join(",")
+                )),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn alias_precision_label(
+    precision: crate::analysis::aliases::facts::AliasPrecision,
+) -> &'static str {
+    match precision {
+        crate::analysis::aliases::facts::AliasPrecision::ExactLocal => "exact_local",
+        crate::analysis::aliases::facts::AliasPrecision::FlowInsensitive => "flow_insensitive",
+        crate::analysis::aliases::facts::AliasPrecision::SetupAware => "setup_aware",
+        crate::analysis::aliases::facts::AliasPrecision::Conservative => "conservative",
+        crate::analysis::aliases::facts::AliasPrecision::Heuristic => "heuristic",
+        crate::analysis::aliases::facts::AliasPrecision::Unknown => "unknown",
+        crate::analysis::aliases::facts::AliasPrecision::Unsupported => "unsupported",
+    }
 }
 
 #[cfg(test)]

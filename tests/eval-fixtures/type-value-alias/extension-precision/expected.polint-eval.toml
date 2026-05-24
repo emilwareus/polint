@@ -1,0 +1,27 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "type-value-alias-extension-precision"
+area = "facts"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "type_value_alias.alias_answer", stable_key = "alias:extension:no_alias", mode = "exact", producer_id = "polint.extension.type_precision.aliases", precision = "heuristic", status = "accepted" }
+
+[[expected]]
+fact = { family = "AliasAnswer", stable_key = "alias:extension:no_alias", mode = "exact", producer_id = "polint.type_value_alias", precision = "heuristic", status = "present" }
+
+[[expected]]
+invariant = { name = "provider_order.12", value = "polint.extensions", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.13", value = "polint.type_value_alias", mode = "exact" }
+
+[[expected]]
+invariant = { name = "extension.real_sink_active", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "type_value_alias_extension_precision", max_runtime_ms = 10000, mode = "exact" }

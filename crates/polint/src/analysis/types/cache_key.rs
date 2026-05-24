@@ -247,6 +247,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_digest_changes_for_extension_inputs() {
+        let mut baseline_snapshot = snapshot("go-base", "tool-base");
+        let mut changed_extension = baseline_snapshot.clone();
+        baseline_snapshot.extensions = vec![component(
+            "extension.type_precision",
+            Digest::from_parts(DigestKind::ExtensionCode, "extension", &["base"]),
+        )];
+        changed_extension.extensions = vec![component(
+            "extension.type_precision",
+            Digest::from_parts(DigestKind::ExtensionCode, "extension", &["changed"]),
+        )];
+        let upstream = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "polint.extensions",
+            &["accepted=alias:extension:no_alias"],
+        )];
+
+        let baseline =
+            type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream);
+        assert_ne!(
+            baseline,
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_extension, &upstream)
+        );
+    }
+
     fn snapshot(go_suffix: &str, tool_suffix: &str) -> InputSnapshot {
         let go_component = component(
             "go.tool_invocation",

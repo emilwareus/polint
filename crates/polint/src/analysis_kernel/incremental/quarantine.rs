@@ -304,6 +304,26 @@ mod tests {
         ))
     }
 
+    fn type_value_alias_layer_node(ext_label: &str) -> CacheNode {
+        CacheNode::Layer(LayerKey::new(
+            LayerKind::TypeValueAlias,
+            "polint.type_value_alias",
+            "1",
+            "type-value-alias-facts-1:1",
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::TsJsLifecycle, "none"),
+            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::ToolInvocation, "none"),
+            vec![Digest::from_parts(DigestKind::SourceText, "a", &["a"])],
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.extensions",
+                &["accepted=alias:extension:no_alias"],
+            )],
+            vec![ext_digest(ext_label)],
+        ))
+    }
+
     // (a) Quarantine a Summary node, verify is_quarantined returns true.
     #[test]
     fn quarantine_summary_node_is_quarantined() {
@@ -457,6 +477,22 @@ mod tests {
     fn layer_with_real_extension_digest_is_not_native() {
         let node = extension_layer_node("ext-provider", "ext-v1");
         assert!(!is_native_only_node(&node));
+    }
+
+    #[test]
+    fn type_value_alias_layer_with_extension_digest_is_quarantinable() {
+        let mut store = QuarantineStore::default();
+        let node = type_value_alias_layer_node("type-value-alias-ext-v1");
+
+        let accepted = store.quarantine(
+            node.clone(),
+            QuarantineReason::ExtensionChanged,
+            ext_digest("type-value-alias-ext-v1"),
+            1,
+        );
+
+        assert!(accepted);
+        assert!(store.is_quarantined(&node));
     }
 
     #[test]
