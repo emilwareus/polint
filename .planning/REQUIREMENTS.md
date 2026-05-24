@@ -84,7 +84,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-INT-04 | Phase 34 | Complete |
 | SAE-INT-05 | Phase 35 | In Progress |
 | SAE-PREC-01 | Phase 36 | Complete |
-| SAE-PREC-02 | Phase 37 | Pending |
+| SAE-PREC-02 | Phase 37 | In Progress |
 | SAE-PREC-03 | Phase 38 | Pending |
 | SAE-PREC-04 | Phase 39 | Pending |
 | SAE-PROM-01 | Phase 40 | Pending |
