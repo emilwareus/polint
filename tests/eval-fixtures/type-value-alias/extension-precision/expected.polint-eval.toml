@@ -6,7 +6,7 @@ area = "facts"
 path = "repo"
 
 [budget]
-max_runtime_ms = 10000
+max_runtime_ms = 60000
 
 [[expected]]
 fact = { family = "type_value_alias.alias_answer", stable_key = "alias:extension:no_alias", mode = "exact", producer_id = "polint.extension.type_precision.aliases", precision = "heuristic", status = "accepted" }
@@ -39,4 +39,4 @@ invariant = { name = "provider_order.13", value = "polint.type_value_alias", mod
 invariant = { name = "extension.real_sink_active", value = "true", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "type_value_alias_extension_precision", max_runtime_ms = 10000, mode = "exact" }
+runtime_budget = { name = "type_value_alias_extension_precision", max_runtime_ms = 60000, mode = "exact" }

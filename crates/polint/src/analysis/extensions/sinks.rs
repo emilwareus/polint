@@ -122,8 +122,8 @@ pub(crate) fn has_required_type_value_alias_payload(candidate: &ExtensionFactCan
             has_type_value_alias_points_to_payload(candidate)
         }
         TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY => {
-            has_payload_label(candidate, "left=")
-                && has_payload_label(candidate, "right=")
+            payload_label(candidate, "left=").is_some_and(valid_alias_operand_ref)
+                && payload_label(candidate, "right=").is_some_and(valid_alias_operand_ref)
                 && payload_label(candidate, "status=").is_some_and(|status| {
                     matches!(
                         status,
@@ -235,6 +235,10 @@ fn valid_object_token_ref(value: &str) -> bool {
     valid_numeric_ref(value, "allocation:")
         || valid_numeric_ref(value, "value:")
         || valid_numeric_ref(value, "abstract_value:")
+}
+
+fn valid_alias_operand_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "place:") || valid_numeric_ref(value, "access_path:")
 }
 
 fn valid_numeric_ref(value: &str, prefix: &str) -> bool {
@@ -357,6 +361,14 @@ mod tests {
 
         candidate.fact_family = TYPE_VALUE_ALIAS_TYPE_FAMILY.to_string();
         candidate.payload_labels = vec!["subject=place:1".to_string(), "shape=typo".to_string()];
+        assert!(!has_required_type_value_alias_payload(&candidate));
+
+        candidate.fact_family = TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string();
+        candidate.payload_labels = vec![
+            "left=garbage".to_string(),
+            "right=place:1".to_string(),
+            "status=no_alias".to_string(),
+        ];
         assert!(!has_required_type_value_alias_payload(&candidate));
     }
 }
