@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: verifying
-last_updated: "2026-05-25T09:46:03.289Z"
+status: gaps_found
+last_updated: "2026-05-25T11:29:42Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 22
@@ -41,8 +41,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase complete — ready for verification
-Phase: 38 (Local Plus Summary-Projected Data Flow) — VERIFYING
+Status: Phase verification gaps found — gap-closure needed
+Phase: 38 (Local Plus Summary-Projected Data Flow) — GAPS FOUND
 Plan: 7 of 7
 Last activity: 2026-05-25
 
@@ -68,7 +68,7 @@ Last activity: 2026-05-25
 | 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
 | 36 | Complete | 7/7 plans complete; private type/value/place/alias substrate, validation/debug/eval fixtures, extension precision, public no-leak proof, and final verification done; requirement SAE-PREC-01 |
 | 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
-| 38 | Verifying | 7/7 plans complete; private data-flow contracts/store, provider/cache/kernel wiring, local place nodes, refined-call projection, trust-boundary/extension models, budgeted query search, validation hook, eval order updates, docs, and full library verification passing; requirement SAE-PREC-03 |
+| 38 | Gaps Found | 7/7 plans complete, but verification found SAE-PREC-03 gaps: local flow is node-only, summary projection is identity-only, stored budget/unknown facts are missing, data-flow eval fixtures are absent, and data-flow no-leak proof is incomplete |
 | 39 | Pending | Slicing, paths, and evidence bundles; requirement SAE-PREC-04 |
 | 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |
 | 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
@@ -418,4 +418,4 @@ Last activity: 2026-05-25
 
 ## Next Action
 
-Run `/gsd-verify-work 38` to close out Phase 38, then proceed to Phase 39 if verification passes.
+Run a Phase 38 gap-closure plan from `.planning/phases/38-local-plus-summary-projected-data-flow/38-VERIFICATION.md`, then rerun `/gsd-verify-work 38`. Do not proceed to Phase 39 until SAE-PREC-03 passes verification.
