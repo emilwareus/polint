@@ -95,9 +95,18 @@ pub struct Diagnostic {
     pub labels: Vec<Label>,
     pub help: Option<String>,
     pub evidence: Vec<Evidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) evidence_v1: Option<serde_json::Value>,
+    #[serde(skip)]
+    pub(crate) evidence_bundle: Option<EvidenceBundleRef>,
     pub suggestions: Vec<Suggestion>,
     pub fix: Option<Fix>,
     pub stable_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EvidenceBundleRef {
+    pub(crate) id: crate::analysis::ids::EvidenceBundleId,
 }
 
 #[derive(Deserialize)]
@@ -113,6 +122,8 @@ struct DiagnosticWire {
     help: Option<String>,
     #[serde(default)]
     evidence: Vec<Evidence>,
+    #[serde(default)]
+    evidence_v1: Option<serde_json::Value>,
     #[serde(default)]
     suggestions: Vec<Suggestion>,
     #[serde(default)]
@@ -142,6 +153,8 @@ impl<'de> Deserialize<'de> for Diagnostic {
             labels: wire.labels,
             help: wire.help,
             evidence: wire.evidence,
+            evidence_v1: wire.evidence_v1,
+            evidence_bundle: None,
             suggestions: wire.suggestions,
             fix: wire.fix,
             stable_fingerprint,
@@ -170,6 +183,8 @@ impl Diagnostic {
             labels: Vec::new(),
             help: None,
             evidence: Vec::new(),
+            evidence_v1: None,
+            evidence_bundle: None,
             suggestions: Vec::new(),
             fix: None,
             stable_fingerprint,
@@ -222,6 +237,35 @@ impl Diagnostic {
             value: value.into(),
         });
         self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Internal bundle refs are attached by Phase 39 render plumbing; tests verify fingerprint compatibility before rule-facing APIs exist."
+    )]
+    pub(crate) fn with_evidence_bundle_ref(
+        mut self,
+        id: crate::analysis::ids::EvidenceBundleId,
+    ) -> Self {
+        self.evidence_bundle = Some(EvidenceBundleRef { id });
+        self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Structured evidence attachment is wired for Phase 39 renderers and exercised through diagnostics tests before production call sites attach bundles."
+    )]
+    pub(crate) fn with_structured_evidence_v1(mut self, value: serde_json::Value) -> Self {
+        self.evidence_v1 = Some(value);
+        self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Internal bundle refs are read by Phase 39 render plumbing; tests verify the side-table bridge without making it public SDK."
+    )]
+    pub(crate) fn evidence_bundle_ref(&self) -> Option<EvidenceBundleRef> {
+        self.evidence_bundle
     }
 
     pub fn with_suggestion(mut self, message: impl Into<String>) -> Self {
@@ -1284,6 +1328,8 @@ pub(crate) fn render_sarif(
         locations: Vec<SarifLocation>,
         #[serde(rename = "relatedLocations", skip_serializing_if = "Vec::is_empty")]
         related_locations: Vec<SarifRelatedLocation>,
+        #[serde(rename = "codeFlows", skip_serializing_if = "Vec::is_empty")]
+        code_flows: Vec<SarifCodeFlow>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fixes: Option<Vec<SarifFix>>,
     }
@@ -1307,6 +1353,29 @@ pub(crate) fn render_sarif(
 
     #[derive(Serialize)]
     struct SarifRelatedLocation {
+        #[serde(rename = "physicalLocation")]
+        physical_location: SarifPhysicalLocation,
+        message: SarifMessage,
+    }
+
+    #[derive(Serialize)]
+    struct SarifCodeFlow {
+        #[serde(rename = "threadFlows")]
+        thread_flows: Vec<SarifThreadFlow>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifThreadFlow {
+        locations: Vec<SarifThreadFlowLocation>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifThreadFlowLocation {
+        location: SarifLocationWithMessage,
+    }
+
+    #[derive(Serialize)]
+    struct SarifLocationWithMessage {
         #[serde(rename = "physicalLocation")]
         physical_location: SarifPhysicalLocation,
         message: SarifMessage,
@@ -1438,6 +1507,28 @@ pub(crate) fn render_sarif(
                     }]
                 })
             });
+            let code_flows = diagnostic
+                .evidence_v1
+                .as_ref()
+                .map_or_else(Vec::new, |value| {
+                    let locations =
+                        crate::analysis::evidence::render::sarif_thread_flow_messages(value)
+                            .into_iter()
+                            .map(|message| SarifThreadFlowLocation {
+                                location: SarifLocationWithMessage {
+                                    physical_location: physical(uri, diagnostic.range),
+                                    message: SarifMessage { text: message },
+                                },
+                            })
+                            .collect::<Vec<_>>();
+                    if locations.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![SarifCodeFlow {
+                            thread_flows: vec![SarifThreadFlow { locations }],
+                        }]
+                    }
+                });
 
             SarifResult {
                 rule_id: diagnostic.rule_id.clone(),
@@ -1456,6 +1547,7 @@ pub(crate) fn render_sarif(
                     physical_location: physical(uri, diagnostic.range),
                 }],
                 related_locations,
+                code_flows,
                 fixes,
             }
         })
@@ -1542,6 +1634,43 @@ mod tests {
 
         assert_eq!(diagnostics[0].file, "a.go");
         assert_eq!(diagnostics[1].file, "b.go");
+    }
+
+    #[test]
+    fn diagnostic_can_carry_internal_bundle_without_fingerprint_change() {
+        let base = Diagnostic::warning("rule", "src/lib.rs", TextRange::point(1, 1), "message");
+        let fingerprint = base.stable_fingerprint.clone();
+
+        let diagnostic = base.with_evidence_bundle_ref(crate::analysis::ids::EvidenceBundleId(42));
+
+        assert_eq!(diagnostic.stable_fingerprint, fingerprint);
+        assert_eq!(
+            diagnostic.evidence_bundle_ref().expect("bundle").id,
+            crate::analysis::ids::EvidenceBundleId(42)
+        );
+    }
+
+    #[test]
+    fn structured_evidence_serializes_without_breaking_scalar_evidence() {
+        let diagnostic =
+            Diagnostic::warning("rule", "src/lib.rs", TextRange::point(1, 1), "message")
+                .with_evidence("symbol", "unsafe_api")
+                .with_structured_evidence_v1(serde_json::json!({
+                    "version": 1,
+                    "bundle": {"status": "Partial", "precision": "SetupAware"},
+                    "paths": [],
+                    "unknowns": [],
+                    "omitted_regions": []
+                }));
+
+        let value = serde_json::to_value(&diagnostic).expect("diagnostic serializes");
+
+        assert_eq!(value["evidence"][0]["label"], "symbol");
+        assert_eq!(value["evidence_v1"]["version"], 1);
+        assert_eq!(
+            diagnostic.stable_fingerprint,
+            diagnostic_fingerprint("rule", "src/lib.rs", TextRange::point(1, 1), "message")
+        );
     }
 
     fn contract_diagnostic() -> Diagnostic {
@@ -1918,6 +2047,40 @@ mod tests {
             "polint"
         );
         assert!(parsed.pointer("/runs/0/tool/driver/rules/0/tags").is_none());
+    }
+
+    #[test]
+    fn render_sarif_projects_structured_evidence_to_code_flows() {
+        let diagnostic = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange::point(7, 3),
+            "policy failed",
+        )
+        .with_structured_evidence_v1(serde_json::json!({
+            "version": 1,
+            "bundle": {"status": "Partial", "precision": "SetupAware"},
+            "paths": [{
+                "edges": [{
+                    "kind": "Summary",
+                    "status": "Partial",
+                    "precision": "SetupAware",
+                    "expansion": {"state": "opaque", "reason": "summary_status=Unknown"}
+                }]
+            }],
+            "unknowns": [{"reason": "OpaqueSummary"}],
+            "omitted_regions": [{"reason": "CompactRendering"}]
+        }));
+
+        let rendered = render_sarif(&[diagnostic], None);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let code_flows = &parsed["runs"][0]["results"][0]["codeFlows"];
+
+        assert_eq!(code_flows.as_array().expect("code flows").len(), 1);
+        let text = serde_json::to_string(code_flows).unwrap();
+        assert!(text.contains("Partial"));
+        assert!(text.contains("unknown"));
+        assert!(text.contains("omitted"));
     }
 
     #[test]

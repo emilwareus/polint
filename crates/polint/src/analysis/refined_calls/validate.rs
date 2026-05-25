@@ -183,6 +183,8 @@ fn invalid_refined_call_diagnostic(stable_key: &str, reason: String) -> Diagnost
         labels: Vec::new(),
         help: None,
         evidence: Vec::new(),
+        evidence_v1: None,
+        evidence_bundle: None,
         suggestions: Vec::new(),
         fix: None,
         stable_fingerprint: fingerprint(&["polint.refined_calls.validate", stable_key, &reason]),
