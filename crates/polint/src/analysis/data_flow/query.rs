@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use super::facts::{DataFlowEdgeFact, DataFlowStatus};
-use super::store::DataFlowStore;
+use super::facts::{DataFlowBudgetReason, DataFlowEdgeFact, DataFlowStatus};
+use super::store::{DataFlowOutput, DataFlowStore};
 use crate::analysis::ids::{DataFlowEdgeId, DataFlowNodeId, DataFlowPathId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +120,33 @@ pub(crate) fn find_paths(
     paths
 }
 
+pub(crate) fn store_budget_observations_for_paths(
+    paths: &[DataFlowPath],
+    context: &str,
+    output: &mut DataFlowOutput,
+) {
+    for path in paths {
+        if path.status != DataFlowPathStatus::BudgetExceeded {
+            continue;
+        }
+        let (reason, limit, observed) =
+            if path.budget.max_depth == 0 || path.edges.len() >= path.budget.max_depth {
+                (
+                    DataFlowBudgetReason::PathDepth,
+                    path.budget.max_depth as u64,
+                    path.edges.len() as u64 + 1,
+                )
+            } else {
+                (
+                    DataFlowBudgetReason::PathCount,
+                    path.budget.max_paths as u64,
+                    path.budget.max_paths as u64 + 1,
+                )
+            };
+        super::local::budget_fact(reason, limit, observed, context, output);
+    }
+}
+
 fn status_path(
     id: DataFlowPathId,
     source: DataFlowNodeId,
@@ -234,6 +261,32 @@ mod tests {
             paths.last().map(|path| path.status),
             Some(DataFlowPathStatus::BudgetExceeded)
         );
+    }
+
+    #[test]
+    fn budget_exceeded_paths_convert_to_stored_budget_rows() {
+        let mut output = DataFlowOutput {
+            nodes: vec![node(0), node(1), node(2)],
+            edges: vec![edge(0, 0, 1), edge(1, 1, 2)],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        };
+        let store = DataFlowStore::from_output(output.clone()).expect("valid store");
+        let paths = find_paths(
+            &store,
+            DataFlowNodeId(0),
+            DataFlowNodeId(2),
+            DataFlowSearchBudget {
+                max_depth: 1,
+                max_paths: 4,
+            },
+        );
+
+        store_budget_observations_for_paths(&paths, "test-query", &mut output);
+
+        assert_eq!(output.budgets.len(), 1);
+        assert_eq!(output.budgets[0].status, DataFlowStatus::BudgetExceeded);
+        assert!(output.budgets[0].stable_key.contains("test-query"));
     }
 
     fn node(id: u64) -> DataFlowNodeFact {

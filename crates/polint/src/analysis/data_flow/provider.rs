@@ -5,19 +5,14 @@ use super::cache_key::{
     data_flow_provider_parameter_digest, data_flow_provider_parameter_digest_for_snapshot,
 };
 use super::facts::{
-    DataFlowAlgorithm, DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowModelFact,
-    DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance,
-    DataFlowStatus, DataFlowValidation,
+    DataFlowConfidence, DataFlowModelFact, DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind,
+    DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
 };
-use super::store::{
-    DataFlowOutput, next_data_flow_edge_id, next_data_flow_model_id, next_data_flow_node_id,
-};
-use crate::analysis::ids::DataFlowNodeId;
-use crate::analysis::places::PlaceFact;
+use super::store::{DataFlowOutput, next_data_flow_model_id, next_data_flow_node_id};
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest, stable_key_from_parts};
+use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -47,7 +42,9 @@ pub(crate) fn derive_data_flow_with_cache_stats(
     debug_assert_eq!(manifest.id, DATA_FLOW_PROVIDER_ID);
     let mut output = DataFlowOutput::empty();
     derive_local_place_nodes(db, &mut output);
-    derive_refined_call_edges(db, &mut output);
+    super::local::derive_local_value_flow(db, &mut output);
+    super::direct_calls::derive_direct_call_edges(db, &mut output);
+    super::summary_edges::derive_summary_projected_edges(db, &mut output);
     derive_source_models(db, &mut output);
     derive_extension_models(db, &mut output);
     output = output.normalized();
@@ -84,54 +81,9 @@ pub(crate) fn derive_data_flow_with_cache_stats(
 
 fn derive_local_place_nodes(db: &AnalysisDb, output: &mut DataFlowOutput) {
     for place in db.mir_places() {
-        output.nodes.push(node_from_place(output, place, db));
-    }
-}
-
-fn derive_refined_call_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
-    for edge in db.refined_call_edges() {
-        if edge.status != crate::analysis::calls::facts::CallTargetStatus::Resolved {
-            continue;
-        }
-        let from = push_call_node(
-            output,
-            DataFlowNodeKind::CallArgument,
-            edge.site.0,
-            format!("site:{}:arg", edge.site.0),
-        );
-        let to = push_call_node(
-            output,
-            DataFlowNodeKind::CallReturn,
-            edge.site.0,
-            format!("site:{}:return", edge.site.0),
-        );
-        let id = next_data_flow_edge_id(&output.edges);
-        output.edges.push(DataFlowEdgeFact {
-            id,
-            from,
-            to,
-            kind: DataFlowEdgeKind::CallArgumentToReturn,
-            algorithm: DataFlowAlgorithm::DirectCall,
-            status: DataFlowStatus::Present,
-            precision: DataFlowPrecision::SetupAware,
-            validation: DataFlowValidation::ReferentiallyValidated,
-            confidence: DataFlowConfidence::High,
-            provenance: DataFlowProvenance::Native,
-            call_site: Some(edge.site),
-            call_target: edge.base_target,
-            refined_call: Some(edge.id),
-            model: None,
-            budget: None,
-            evidence: vec!["refined_call_edge".to_string()],
-            input_stable_keys: vec![edge.stable_key.clone()],
-            stable_key: stable_key_from_parts(
-                FactFamily::DataFlowEdge,
-                &[
-                    ("kind", "call_argument_to_return".to_string()),
-                    ("refined_call", edge.stable_key.clone()),
-                ],
-            ),
-        });
+        output
+            .nodes
+            .push(super::local::node_from_place(output, place, db));
     }
 }
 
@@ -222,43 +174,6 @@ fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
     }
 }
 
-fn node_from_place(
-    output: &DataFlowOutput,
-    place: &PlaceFact,
-    db: &AnalysisDb,
-) -> DataFlowNodeFact {
-    DataFlowNodeFact {
-        id: next_data_flow_node_id(&output.nodes),
-        kind: DataFlowNodeKind::Place,
-        language: place.language,
-        file: place.file,
-        function: place.function,
-        body: None,
-        operation: None,
-        cfg_node: None,
-        place: Some(place.id),
-        symbol: None,
-        reference: None,
-        call_site: None,
-        model: None,
-        span: None,
-        stable_key: db
-            .metadata_for(FactRef::new(FactFamily::Place, place.id.0))
-            .map(|metadata| {
-                stable_key_from_parts(
-                    FactFamily::DataFlowNode,
-                    &[("place", metadata.stable_key.clone())],
-                )
-            })
-            .unwrap_or_else(|| {
-                stable_key_from_parts(
-                    FactFamily::DataFlowNode,
-                    &[("place_id", place.id.0.to_string())],
-                )
-            }),
-    }
-}
-
 fn extension_precision(
     precision: crate::analysis::extensions::sinks::ExtensionFactPrecision,
 ) -> DataFlowPrecision {
@@ -290,45 +205,6 @@ fn extension_confidence(
         }
         crate::analysis::extensions::sinks::ExtensionFactConfidence::Low => DataFlowConfidence::Low,
     }
-}
-
-fn push_call_node(
-    output: &mut DataFlowOutput,
-    kind: DataFlowNodeKind,
-    site_id: u64,
-    suffix: String,
-) -> DataFlowNodeId {
-    let stable_key = stable_key_from_parts(
-        FactFamily::DataFlowNode,
-        &[("call_node", suffix), ("kind", format!("{kind:?}"))],
-    );
-    if let Some(existing) = output
-        .nodes
-        .iter()
-        .find(|node| node.stable_key == stable_key)
-        .map(|node| node.id)
-    {
-        return existing;
-    }
-    let id = next_data_flow_node_id(&output.nodes);
-    output.nodes.push(DataFlowNodeFact {
-        id,
-        kind,
-        language: crate::core::Language::Unknown,
-        file: None,
-        function: None,
-        body: None,
-        operation: None,
-        cfg_node: None,
-        place: None,
-        symbol: None,
-        reference: None,
-        call_site: Some(crate::analysis::ids::CallSiteId(site_id)),
-        model: None,
-        span: None,
-        stable_key,
-    });
-    id
 }
 
 #[allow(clippy::too_many_arguments)]

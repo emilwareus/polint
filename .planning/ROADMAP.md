@@ -40,7 +40,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 35 | 8/8 | Complete   | 2026-05-24 |
 | 36 | 7/7 | Complete   | 2026-05-24 |
 | 37 | 6/6 | Complete   | 2026-05-25 |
-| 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
+| 38 | 10/10 | Complete   | 2026-05-25 |
 | 39 | Slicing, Paths, and Evidence Bundles | Add structured evidence, slices, chops, ranked paths, summary expansion, and evidence rendering. | SAE-PREC-04 |
 | 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
@@ -445,7 +445,7 @@ Plans:
 **Goal:** Add local value-flow graph, direct-call interprocedural edges, summary-projected edges, model sinks, budgets, unknowns, and query-scoped path search.
 **Requirements:** SAE-PREC-03
 **Research:** `research/data-flow/FINAL-REPORT.md`, `research/data-flow/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`
-**Plans:** 7/10 plans complete; 3 gap-closure plans ready
+**Plans:** 10/10 plans complete
 
 Plans:
 
@@ -479,15 +479,15 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 38-08-PLAN.md - Local value-flow edges and stored uncertainty
+- [x] 38-08-PLAN.md - Local value-flow edges and stored uncertainty
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 38-09-PLAN.md - Summary-projected and interprocedural data-flow closure
+- [x] 38-09-PLAN.md - Summary-projected and interprocedural data-flow closure
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 38-10-PLAN.md - Data-flow eval fixtures, debug, and public boundary proof
+- [x] 38-10-PLAN.md - Data-flow eval fixtures, debug, and public boundary proof
 
 **Success criteria:**
 

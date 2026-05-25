@@ -1,0 +1,387 @@
+use super::facts::{
+    DataFlowAlgorithm, DataFlowBudgetReason, DataFlowConfidence, DataFlowEdgeFact,
+    DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance,
+    DataFlowStatus, DataFlowValidation,
+};
+use super::local::budget_fact;
+use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
+use crate::analysis::ids::DataFlowNodeId;
+use crate::analysis::summaries::facts::{
+    SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
+};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+use crate::core::{AnalysisDb, Language};
+
+pub(crate) fn derive_summary_projected_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
+    for fact in db.summary_facts() {
+        if fact.domain != SummaryDomainKind::DataFlowTito {
+            continue;
+        }
+        if fact.status == SummaryStatus::Present {
+            project_present_tito(output, fact);
+        } else {
+            project_summary_status(output, fact);
+        }
+    }
+    for event in db.summary_events() {
+        if event.domain == SummaryDomainKind::DataFlowTito || event.status != SummaryStatus::Present
+        {
+            project_summary_event(output, event);
+        }
+    }
+}
+
+fn project_present_tito(output: &mut DataFlowOutput, fact: &SummaryFact) {
+    let input = summary_node(output, fact, DataFlowNodeKind::SummaryInput, "input");
+    let output_node = summary_node(output, fact, DataFlowNodeKind::SummaryOutput, "output");
+    push_edge(
+        output,
+        SummaryEdgeDraft {
+            from: input,
+            to: output_node,
+            kind: DataFlowEdgeKind::SummaryTito,
+            status: DataFlowStatus::Present,
+            precision: precision(fact.precision),
+            validation: DataFlowValidation::ReferentiallyValidated,
+            confidence: DataFlowConfidence::Medium,
+            budget: None,
+            evidence: vec![
+                "summary_data_flow_tito".to_string(),
+                format!("payload_digest={}", fact.payload_digest),
+            ],
+            input_stable_keys: vec![fact.stable_key.clone(), fact.callable_stable_key.clone()],
+            stable_anchor: fact.stable_key.clone(),
+        },
+    );
+}
+
+fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
+    let source = summary_node(
+        output,
+        fact,
+        DataFlowNodeKind::SummaryInput,
+        "uncertain-input",
+    );
+    let sink = summary_node(
+        output,
+        fact,
+        DataFlowNodeKind::Synthetic,
+        "uncertain-output",
+    );
+    let status = status(fact.status);
+    let budget = (status == DataFlowStatus::BudgetExceeded).then(|| {
+        budget_fact(
+            DataFlowBudgetReason::PathCount,
+            1,
+            1,
+            &fact.stable_key,
+            output,
+        )
+    });
+    push_edge(
+        output,
+        SummaryEdgeDraft {
+            from: source,
+            to: sink,
+            kind: if status == DataFlowStatus::BudgetExceeded {
+                DataFlowEdgeKind::BudgetTruncated
+            } else {
+                DataFlowEdgeKind::UnknownFlow
+            },
+            status,
+            precision: DataFlowPrecision::Unknown,
+            validation: if budget.is_some() {
+                DataFlowValidation::BudgetValidated
+            } else {
+                DataFlowValidation::Native
+            },
+            confidence: DataFlowConfidence::Low,
+            budget,
+            evidence: vec![
+                "summary_uncertainty".to_string(),
+                format!("domain={}", fact.domain.as_str()),
+                format!("status={}", fact.status.as_str()),
+            ],
+            input_stable_keys: vec![fact.stable_key.clone()],
+            stable_anchor: fact.stable_key.clone(),
+        },
+    );
+}
+
+fn project_summary_event(output: &mut DataFlowOutput, event: &SummaryEventFact) {
+    let source = event_node(output, event, DataFlowNodeKind::SummaryInput, "event-input");
+    let sink = event_node(output, event, DataFlowNodeKind::Synthetic, "event-output");
+    let status = status(event.status);
+    let budget = (status == DataFlowStatus::BudgetExceeded).then(|| {
+        budget_fact(
+            DataFlowBudgetReason::PathCount,
+            1,
+            1,
+            &event.stable_key,
+            output,
+        )
+    });
+    push_edge(
+        output,
+        SummaryEdgeDraft {
+            from: source,
+            to: sink,
+            kind: if status == DataFlowStatus::BudgetExceeded {
+                DataFlowEdgeKind::BudgetTruncated
+            } else if status == DataFlowStatus::Unsupported {
+                DataFlowEdgeKind::HavocFlow
+            } else {
+                DataFlowEdgeKind::UnknownFlow
+            },
+            status,
+            precision: DataFlowPrecision::Unknown,
+            validation: if budget.is_some() {
+                DataFlowValidation::BudgetValidated
+            } else {
+                DataFlowValidation::Native
+            },
+            confidence: DataFlowConfidence::Low,
+            budget,
+            evidence: vec![
+                "summary_event_uncertainty".to_string(),
+                format!("domain={}", event.domain.as_str()),
+                format!("event_kind={}", event.event_kind),
+                format!("reason={}", event.reason),
+            ],
+            input_stable_keys: vec![event.stable_key.clone()],
+            stable_anchor: event.stable_key.clone(),
+        },
+    );
+}
+
+struct SummaryEdgeDraft {
+    from: DataFlowNodeId,
+    to: DataFlowNodeId,
+    kind: DataFlowEdgeKind,
+    status: DataFlowStatus,
+    precision: DataFlowPrecision,
+    validation: DataFlowValidation,
+    confidence: DataFlowConfidence,
+    budget: Option<crate::analysis::ids::DataFlowBudgetId>,
+    evidence: Vec<String>,
+    input_stable_keys: Vec<String>,
+    stable_anchor: String,
+}
+
+fn push_edge(output: &mut DataFlowOutput, draft: SummaryEdgeDraft) {
+    let stable_key = stable_key_from_parts(
+        FactFamily::DataFlowEdge,
+        &[
+            ("kind", format!("{:?}", draft.kind)),
+            ("summary", draft.stable_anchor.clone()),
+            ("status", format!("{:?}", draft.status)),
+        ],
+    );
+    if output
+        .edges
+        .iter()
+        .any(|edge| edge.stable_key == stable_key)
+    {
+        return;
+    }
+    output.edges.push(DataFlowEdgeFact {
+        id: next_data_flow_edge_id(&output.edges),
+        from: draft.from,
+        to: draft.to,
+        kind: draft.kind,
+        algorithm: DataFlowAlgorithm::SummaryProjection,
+        status: draft.status,
+        precision: draft.precision,
+        validation: draft.validation,
+        confidence: draft.confidence,
+        provenance: DataFlowProvenance::Summary,
+        call_site: None,
+        call_target: None,
+        refined_call: None,
+        model: None,
+        budget: draft.budget,
+        evidence: draft.evidence,
+        input_stable_keys: draft.input_stable_keys,
+        stable_key,
+    });
+}
+
+fn summary_node(
+    output: &mut DataFlowOutput,
+    fact: &SummaryFact,
+    kind: DataFlowNodeKind,
+    role: &str,
+) -> DataFlowNodeId {
+    let stable_key = stable_key_from_parts(
+        FactFamily::DataFlowNode,
+        &[
+            ("kind", format!("{kind:?}")),
+            ("summary", fact.stable_key.clone()),
+            ("role", role.to_string()),
+        ],
+    );
+    if let Some(existing) = output
+        .nodes
+        .iter()
+        .find(|node| node.stable_key == stable_key)
+        .map(|node| node.id)
+    {
+        return existing;
+    }
+    let id = next_data_flow_node_id(&output.nodes);
+    output.nodes.push(DataFlowNodeFact {
+        id,
+        kind,
+        language: Language::Unknown,
+        file: None,
+        function: Some(fact.function),
+        body: None,
+        operation: None,
+        cfg_node: None,
+        place: None,
+        symbol: None,
+        reference: None,
+        call_site: None,
+        model: None,
+        span: None,
+        stable_key,
+    });
+    id
+}
+
+fn event_node(
+    output: &mut DataFlowOutput,
+    event: &SummaryEventFact,
+    kind: DataFlowNodeKind,
+    role: &str,
+) -> DataFlowNodeId {
+    let stable_key = stable_key_from_parts(
+        FactFamily::DataFlowNode,
+        &[
+            ("kind", format!("{kind:?}")),
+            ("summary_event", event.stable_key.clone()),
+            ("role", role.to_string()),
+        ],
+    );
+    if let Some(existing) = output
+        .nodes
+        .iter()
+        .find(|node| node.stable_key == stable_key)
+        .map(|node| node.id)
+    {
+        return existing;
+    }
+    let id = next_data_flow_node_id(&output.nodes);
+    output.nodes.push(DataFlowNodeFact {
+        id,
+        kind,
+        language: Language::Unknown,
+        file: None,
+        function: Some(event.function),
+        body: None,
+        operation: None,
+        cfg_node: None,
+        place: None,
+        symbol: None,
+        reference: None,
+        call_site: None,
+        model: None,
+        span: None,
+        stable_key,
+    });
+    id
+}
+
+fn status(status: SummaryStatus) -> DataFlowStatus {
+    match status {
+        SummaryStatus::Present => DataFlowStatus::Present,
+        SummaryStatus::Unknown => DataFlowStatus::Unknown,
+        SummaryStatus::Unsupported => DataFlowStatus::Unsupported,
+        SummaryStatus::SetupMissing => DataFlowStatus::SetupMissing,
+        SummaryStatus::BudgetExceeded => DataFlowStatus::BudgetExceeded,
+    }
+}
+
+fn precision(precision: SummaryPrecision) -> DataFlowPrecision {
+    match precision {
+        SummaryPrecision::Local => DataFlowPrecision::Syntax,
+        SummaryPrecision::SetupAware => DataFlowPrecision::SetupAware,
+        SummaryPrecision::Heuristic => DataFlowPrecision::Heuristic,
+        SummaryPrecision::UnknownTop => DataFlowPrecision::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::ids::{SummaryEventId, SummaryId};
+    use crate::analysis::summaries::facts::SummaryProvenance;
+    use crate::core::FunctionId;
+
+    #[test]
+    fn data_flow_tito_summary_produces_projected_edge() {
+        let mut output = DataFlowOutput::empty();
+        project_present_tito(&mut output, &summary(SummaryStatus::Present));
+
+        assert!(
+            output
+                .edges
+                .iter()
+                .any(|edge| edge.kind == DataFlowEdgeKind::SummaryTito)
+        );
+        assert!(
+            output.edges[0]
+                .input_stable_keys
+                .iter()
+                .any(|key| key == "summary:tito")
+        );
+    }
+
+    #[test]
+    fn summary_uncertainty_statuses_map_to_visible_rows() {
+        for summary_status in [
+            SummaryStatus::Unknown,
+            SummaryStatus::Unsupported,
+            SummaryStatus::SetupMissing,
+            SummaryStatus::BudgetExceeded,
+        ] {
+            let mut output = DataFlowOutput::empty();
+            project_summary_status(&mut output, &summary(summary_status));
+            assert_eq!(output.edges.len(), 1);
+            assert_eq!(output.edges[0].status, status(summary_status));
+            if summary_status == SummaryStatus::BudgetExceeded {
+                assert_eq!(output.budgets.len(), 1);
+                assert!(output.edges[0].budget.is_some());
+            }
+        }
+    }
+
+    fn summary(status: SummaryStatus) -> SummaryFact {
+        SummaryFact {
+            id: SummaryId(1),
+            callable_stable_key: "callable:identity".to_string(),
+            function: FunctionId(1),
+            domain: SummaryDomainKind::DataFlowTito,
+            status,
+            precision: SummaryPrecision::Local,
+            provenance: SummaryProvenance::NativeLocal,
+            payload_digest: "1234567890abcdef".to_string(),
+            stable_key: "summary:tito".to_string(),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn event(status: SummaryStatus) -> SummaryEventFact {
+        SummaryEventFact {
+            id: SummaryEventId(1),
+            callable_stable_key: "callable:identity".to_string(),
+            function: FunctionId(1),
+            domain: SummaryDomainKind::DataFlowTito,
+            event_kind: "missing_summary".to_string(),
+            reason: "test".to_string(),
+            status,
+            precision: SummaryPrecision::UnknownTop,
+            stable_key: "summary-event:tito".to_string(),
+        }
+    }
+}

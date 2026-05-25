@@ -1477,6 +1477,51 @@ mod tests {
     }
 
     #[test]
+    fn data_flow_public_no_leak() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let markers = data_flow_internal_markers();
+
+        let rendered = crate::diagnostics::render(
+            crate::diagnostics::OutputFormat::Json,
+            &[],
+            crate::diagnostics::RenderOpts {
+                json: crate::diagnostics::JsonReportMeta {
+                    tool_name: "polint",
+                    tool_version: "test",
+                },
+                color: crate::diagnostics::ColorChoice::Never,
+                sources: None,
+            },
+        );
+        assert_no_data_flow_markers("polint check --format json", &rendered, &markers);
+
+        let mut public_surfaces = Vec::new();
+        collect_files_with_extensions(&crate_root.join("src/sdk"), &["rs"], &mut public_surfaces);
+        public_surfaces.extend([
+            crate_root.join("src/runner/mod.rs"),
+            crate_root.join("src/cli/mod.rs"),
+            crate_root.join("src/lib.rs"),
+            repo_root.join("README.md"),
+        ]);
+        collect_files_with_extensions(&repo_root.join("docs/facts"), &["md"], &mut public_surfaces);
+        public_surfaces.sort();
+        public_surfaces.dedup();
+
+        for source_path in public_surfaces {
+            if !source_path.exists() {
+                continue;
+            }
+            let source = std::fs::read_to_string(&source_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+            assert_no_data_flow_markers(&source_path.display().to_string(), &source, &markers);
+        }
+    }
+
+    #[test]
     fn typescript_framework_entrypoints_from_real_source_include_handler_and_path() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -1660,6 +1705,18 @@ function setup() {
         ]
     }
 
+    fn data_flow_internal_markers() -> [&'static str; 7] {
+        [
+            "polint.data_flow",
+            "DataFlowNodeFact",
+            "DataFlowEdgeFact",
+            "DataFlowModelFact",
+            "DataFlowBudgetFact",
+            "summary_projected",
+            "query path search",
+        ]
+    }
+
     fn assert_no_refined_call_markers(label: &str, source: &str, markers: &[&str]) {
         for marker in markers {
             assert!(
@@ -1674,6 +1731,15 @@ function setup() {
             assert!(
                 !source.contains(marker),
                 "{label} leaked Phase 35 framework internal marker `{marker}`"
+            );
+        }
+    }
+
+    fn assert_no_data_flow_markers(label: &str, source: &str, markers: &[&str]) {
+        for marker in markers {
+            assert!(
+                !source.contains(marker),
+                "{label} leaked Phase 38 data-flow internal marker `{marker}`"
             );
         }
     }

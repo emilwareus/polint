@@ -49,6 +49,18 @@ pub(crate) const DIRECT_SUMMARY_FACT_FAMILIES: &[&str] = &[
     "summary_event",
 ];
 
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "Data-flow eval fact families document the internal fixture vocabulary."
+)]
+pub(crate) const DATA_FLOW_FACT_FAMILIES: &[&str] = &[
+    "DataFlowNode",
+    "DataFlowEdge",
+    "DataFlowModel",
+    "DataFlowBudget",
+];
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct EvaluationSuite {
@@ -91,6 +103,8 @@ pub(crate) enum FixtureArea {
     DirectSummaries,
     #[serde(rename = "framework-entrypoints")]
     FrameworkEntrypoints,
+    #[serde(rename = "data-flow")]
+    DataFlow,
     Facts,
     Graphs,
     Paths,

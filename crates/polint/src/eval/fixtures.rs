@@ -111,9 +111,9 @@ fn validate_synthetic_observed_rows(manifest: &NativeFixtureManifest) -> anyhow:
         ensure!(
             matches!(
                 manifest.area,
-                FixtureArea::Extension | FixtureArea::RefinedCalls
+                FixtureArea::Extension | FixtureArea::RefinedCalls | FixtureArea::DataFlow
             ),
-            "synthetic observed rows are only allowed for extension or refined-call fixtures"
+            "synthetic observed rows are only allowed for extension, refined-call, or data-flow fixtures"
         );
     } else {
         ensure!(
@@ -1536,7 +1536,7 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 
         assert!(
             rendered.contains(
-                "synthetic observed rows are only allowed for extension or refined-call fixtures"
+                "synthetic observed rows are only allowed for extension, refined-call, or data-flow fixtures"
             ),
             "synthetic observed rows outside allowed areas should be rejected: {rendered}"
         );
@@ -1606,6 +1606,10 @@ mod eval_native_fixture_runner_tests {
 
     fn refined_calls_extension_model_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/refined-calls/extension-model")
+    }
+
+    fn data_flow_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/data-flow/core")
     }
 
     #[test]
@@ -2113,6 +2117,51 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_native_fixture_runner_data_flow_fixture_passes() {
+        let run = run_native_fixture_for_test(&data_flow_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("data-flow case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.area, FixtureArea::DataFlow);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
+    fn eval_data_flow_manifests_cover_required_taxonomy() {
+        let fixture = load_native_fixture(&data_flow_core_fixture_dir()).unwrap();
+        assert_eq!(fixture.manifest.area, FixtureArea::DataFlow);
+
+        let expected = fixture
+            .manifest
+            .expected
+            .iter()
+            .map(expected_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for marker in [
+            "Fact:DataFlowEdge:data-flow:local",
+            "Fact:DataFlowEdge:data-flow:direct-call",
+            "Fact:DataFlowEdge:data-flow:summary-projected",
+            "Fact:DataFlowModel:data-flow:model:source",
+            "Fact:DataFlowModel:data-flow:model:sink",
+            "Fact:DataFlowModel:data-flow:model:sanitizer",
+            "Fact:DataFlowModel:data-flow:model:barrier",
+            "Fact:DataFlowModel:data-flow:model:extension",
+            "Fact:DataFlowEdge:data-flow:unknown",
+            "Fact:DataFlowEdge:data-flow:havoc",
+            "Fact:DataFlowBudget:data-flow:budget",
+            "Invariant:data_flow.false_positive_trap.sanitized_or_barriered",
+        ] {
+            assert!(
+                expected.iter().any(|identity| identity.contains(marker)),
+                "data-flow fixture must cover taxonomy marker {marker}; got {expected:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -2171,6 +2220,7 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Cache,
             FixtureArea::Extension,
             FixtureArea::RefinedCalls,
+            FixtureArea::DataFlow,
         ] {
             assert!(
                 passing_by_area.contains_key(&required_area),

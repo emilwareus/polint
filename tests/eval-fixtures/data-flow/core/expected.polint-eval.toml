@@ -1,0 +1,100 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "data-flow-core"
+area = "data-flow"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:local:param-local-return", mode = "partial", producer_id = "polint.data_flow", precision = "syntax", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:direct-call:argument-return", mode = "partial", producer_id = "polint.data_flow", precision = "setup_aware", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:summary-projected:tito", mode = "partial", producer_id = "polint.data_flow", precision = "syntax", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:source:trust-boundary", mode = "partial", producer_id = "polint.data_flow", precision = "setup_aware", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:sink:repo", mode = "partial", producer_id = "polint.data_flow", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:sanitizer:repo", mode = "partial", producer_id = "polint.data_flow", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:barrier:repo", mode = "partial", producer_id = "polint.data_flow", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:extension:additional-step", mode = "partial", producer_id = "polint.data_flow", precision = "heuristic", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:unknown:missing-summary", mode = "partial", producer_id = "polint.data_flow", precision = "unknown", status = "unknown" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:havoc:unsupported-write", mode = "partial", producer_id = "polint.data_flow", precision = "unknown", status = "unsupported" }
+
+[[expected]]
+fact = { family = "DataFlowBudget", stable_key = "data-flow:budget:path-depth", mode = "partial", producer_id = "polint.data_flow", precision = "unknown", status = "budget_exceeded" }
+
+[[expected]]
+invariant = { name = "data_flow.false_positive_trap.sanitized_or_barriered", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "data_flow.counts.local_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "data_flow.counts.summary_projected_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "data_flow.core", max_runtime_ms = 10000, mode = "exact" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:local:param-local-return", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "syntax", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:direct-call:argument-return", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "setup_aware", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:summary-projected:tito", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "syntax", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:source:trust-boundary", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "setup_aware", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:sink:repo", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:sanitizer:repo", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:barrier:repo", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowModel", stable_key = "data-flow:model:extension:additional-step", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:unknown:missing-summary", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "unknown", status = "unknown" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:havoc:unsupported-write", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "unknown", status = "unsupported" }
+
+[[observed]]
+fact = { family = "DataFlowBudget", stable_key = "data-flow:budget:path-depth", mode = "partial", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "unknown", status = "budget_exceeded" }
+
+[[observed]]
+invariant = { name = "data_flow.false_positive_trap.sanitized_or_barriered", value = "true", mode = "exact", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+invariant = { name = "data_flow.counts.local_edges.nonzero", value = "true", mode = "exact", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "syntax", status = "present" }
+
+[[observed]]
+invariant = { name = "data_flow.counts.summary_projected_edges.nonzero", value = "true", mode = "exact", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "syntax", status = "present" }
+
+[[observed]]
+runtime_budget = { name = "data_flow.core", budget_passed = true, observed_runtime_ms = 1 }

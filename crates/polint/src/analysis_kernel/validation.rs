@@ -7,6 +7,7 @@ use crate::analysis::access_paths::facts::AccessPathProjection;
 use crate::analysis::aliases::facts::{AliasOperand, AliasPrecision, AliasStatus};
 use crate::analysis::calls::validate::validate_calls;
 use crate::analysis::cfg::validate::validate_cfg;
+use crate::analysis::data_flow::validate::validate_output as validate_data_flow_output;
 use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::entrypoints::validate::validate_entrypoints;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, ValueFactId};
@@ -60,11 +61,27 @@ pub(crate) fn validate_fact_metadata(
     validate_entrypoints(db, &mut diagnostics);
     validate_type_value_alias(db, &mut diagnostics);
     validate_refined_calls(db, &mut diagnostics);
+    validate_data_flow(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let output = crate::analysis::data_flow::store::DataFlowOutput {
+        nodes: db.data_flow_nodes().to_vec(),
+        edges: db.data_flow_edges().to_vec(),
+        models: db.data_flow_models().to_vec(),
+        budgets: db.data_flow_budgets().to_vec(),
+    };
+    for issue in validate_data_flow_output(&output) {
+        diagnostics.push(internal_diagnostic(format!(
+            "Data-flow validation issue for `{}`: {}",
+            issue.stable_key, issue.reason
+        )));
+    }
 }
 
 fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {

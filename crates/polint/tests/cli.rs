@@ -1428,7 +1428,6 @@ const SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "Places<'_>",
     "Cfg<'_>",
     "CallGraph<'_>",
-    "DataFlow<'_>",
     "polint mir",
     "polint facts",
     "polint explain",
@@ -1947,7 +1946,6 @@ const ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "StringValues<'_>",
     "Initializedness<'_>",
     "AbstractDomains<'_>",
-    "DataFlow<'_>",
 ];
 
 fn assert_direct_calls_public_surfaces_are_private() {
