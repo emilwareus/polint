@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-25T00:00:00.000Z"
-last_activity: 2026-05-25 -- Phase 37 review fixes complete
+status: "Phase 37 shipped -- PR #45"
+last_updated: "2026-05-25T06:30:11.814Z"
+last_activity: 2026-05-25
 progress:
   total_phases: 22
   completed_phases: 17
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Phase 37 implementation complete; review fixes verified
+Status: Phase 37 shipped -- PR #45
 Phase: 37 (refined-call-graph-providers) — COMPLETE
 Plan: 6/6 plans complete
-Last activity: 2026-05-25 -- Phase 37 review fixes complete
+Last activity: 2026-05-25
 
 ## Phase Progress
 
