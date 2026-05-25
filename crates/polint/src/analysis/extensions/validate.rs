@@ -10,6 +10,7 @@ use super::sinks::{
     has_required_type_value_alias_payload, is_type_value_alias_fact_family,
 };
 use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact};
+use crate::analysis::calls::facts::CallCallee;
 use crate::core::AnalysisDb;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -235,6 +236,9 @@ fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
         || value
             .strip_prefix("file_span:")
             .is_some_and(|file_span| resolve_call_site_file_span_ref(db, file_span))
+        || value
+            .strip_prefix("file_callee:")
+            .is_some_and(|file_callee| resolve_call_site_file_callee_ref(db, file_callee))
 }
 
 fn resolve_call_site_file_span_ref(db: &AnalysisDb, value: &str) -> bool {
@@ -250,6 +254,30 @@ fn resolve_call_site_file_span_ref(db: &AnalysisDb, value: &str) -> bool {
                 .file(site.file)
                 .is_some_and(|file| file.relative_path == relative_path)
     })
+}
+
+fn resolve_call_site_file_callee_ref(db: &AnalysisDb, value: &str) -> bool {
+    let Some((relative_path, callee)) = value.rsplit_once(':') else {
+        return false;
+    };
+    db.call_sites()
+        .iter()
+        .filter(|site| {
+            db.file(site.file)
+                .is_some_and(|file| file.relative_path == relative_path)
+                && call_site_callee_label(&site.callee) == Some(callee)
+        })
+        .count()
+        == 1
+}
+
+fn call_site_callee_label(callee: &CallCallee) -> Option<&str> {
+    match callee {
+        CallCallee::Identifier { name, .. } => Some(name.as_str()),
+        CallCallee::Member { property, .. } => Some(property.as_str()),
+        CallCallee::Constructor { name, .. } => name.as_deref(),
+        _ => None,
+    }
 }
 
 fn resolve_function_ref(db: &AnalysisDb, value: &str) -> bool {
@@ -872,11 +900,11 @@ mod tests {
     }
 
     #[test]
-    fn refined_call_fact_family_accepts_valid_file_span_site_payload() {
+    fn refined_call_fact_family_accepts_valid_file_callee_site_payload() {
         let mut validation_input = input(vec![refined_call_candidate(
             "refined:valid",
             vec![
-                "site=file_span:src/app.ts:0",
+                "site=file_callee:src/app.ts:model",
                 "synthetic_target=extension:model-target",
                 "algorithm=repo_model",
                 "status=resolved",

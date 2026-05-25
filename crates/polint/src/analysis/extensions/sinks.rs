@@ -156,6 +156,7 @@ fn valid_call_site_ref(value: &str) -> bool {
     has_nonempty_prefixed_value(value, "call_site:")
         || has_nonempty_prefixed_value(value, "stable:")
         || has_nonempty_prefixed_value(value, "file_span:")
+        || has_nonempty_prefixed_value(value, "file_callee:")
 }
 
 fn valid_function_ref(value: &str) -> bool {

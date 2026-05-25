@@ -3,7 +3,7 @@ use super::facts::{
 };
 use super::store::RefinedCallOutput;
 use crate::analysis::calls::facts::{
-    CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
+    CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallTargetStatus,
     UnresolvedCallReason,
 };
 use crate::analysis::extensions::sinks::{
@@ -111,6 +111,11 @@ fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
                 .strip_prefix("file_span:")
                 .and_then(|file_span| resolve_file_span_site(db, file_span))
         })
+        .or_else(|| {
+            value
+                .strip_prefix("file_callee:")
+                .and_then(|file_callee| resolve_file_callee_site(db, file_callee))
+        })
 }
 
 fn resolve_file_span_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
@@ -125,6 +130,29 @@ fn resolve_file_span_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
                     .is_some_and(|file| file.relative_path == relative_path)
         })
         .map(|site| site.id)
+}
+
+fn resolve_file_callee_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
+    let (relative_path, callee) = value.rsplit_once(':')?;
+    let mut matches = db.call_sites().iter().filter(|site| {
+        db.file(site.file)
+            .is_some_and(|file| file.relative_path == relative_path)
+            && call_site_callee_label(&site.callee) == Some(callee)
+    });
+    let site = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(site.id)
+}
+
+fn call_site_callee_label(callee: &CallCallee) -> Option<&str> {
+    match callee {
+        CallCallee::Identifier { name, .. } => Some(name.as_str()),
+        CallCallee::Member { property, .. } => Some(property.as_str()),
+        CallCallee::Constructor { name, .. } => name.as_deref(),
+        _ => None,
+    }
 }
 
 fn parse_function_ref(value: &str) -> Option<FunctionId> {
@@ -233,7 +261,7 @@ mod tests {
         let mut db = db_with_call_site();
         db.replace_extension_facts(ExtensionOutput {
             accepted: vec![accepted_extension_fact(vec![
-                "site=file_span:src/app.ts:0",
+                "site=file_callee:src/app.ts:model",
                 "target_function=function:0",
                 "algorithm=repo_model",
                 "status=resolved",
