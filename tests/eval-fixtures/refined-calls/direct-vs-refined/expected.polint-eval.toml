@@ -15,6 +15,9 @@ fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "par
 invariant = { name = "refined_calls.counts.by_tier.type_value_function_token.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
+invariant = { name = "refined_calls.counts.by_language.Go.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
 invariant = { name = "refined_calls.counts.by_status.unresolved.nonzero", value = "true", mode = "exact" }
 
 [[expected]]

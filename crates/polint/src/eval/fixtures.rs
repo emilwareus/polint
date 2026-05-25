@@ -2082,6 +2082,11 @@ mod eval_native_fixture_runner_tests {
             "direct refined-call fixture must assert function-token tier counts"
         );
         assert!(
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_language.Go.nonzero")),
+            "direct refined-call fixture must assert Go refined-call coverage"
+        );
+        assert!(
             extension_expected
                 .iter()
                 .any(|identity| identity.contains("Fact:refined_calls.edge:extension:refined-ok")),

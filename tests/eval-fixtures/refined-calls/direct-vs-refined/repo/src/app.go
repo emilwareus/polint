@@ -5,5 +5,9 @@ type worker interface {
 }
 
 func Process(worker worker, value int) int {
-	return worker.Work(value)
+	return helper(worker.Work(value))
+}
+
+func helper(value int) int {
+	return value + 1
 }

@@ -71,14 +71,19 @@ pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
     }
 
     for unresolved in db.unresolved_calls().iter().filter(|unresolved| {
-        unresolved.reason == UnresolvedCallReason::InterfaceDispatch
-            || unresolved.reason == UnresolvedCallReason::FunctionValue
+        matches!(
+            unresolved.reason,
+            UnresolvedCallReason::InterfaceDispatch
+                | UnresolvedCallReason::FunctionValue
+                | UnresolvedCallReason::DynamicProperty
+        )
     }) {
         if let Some(site) = db
             .call_sites()
             .iter()
             .find(|site| site.id == unresolved.site && site.language == Language::Go)
         {
+            let mut emitted_status_edge = false;
             if site
                 .receiver
                 .is_some_and(|receiver| has_setup_missing_type(db, receiver))
@@ -91,6 +96,7 @@ pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
                     RefinedCallTier::TypeValueFunctionToken,
                     edges.len(),
                 ));
+                emitted_status_edge = true;
             }
 
             if site.receiver.is_some_and(|receiver| {
@@ -105,6 +111,18 @@ pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
                     CallTargetStatus::BudgetExceeded,
                     UnresolvedCallReason::BudgetExceeded,
                     RefinedCallTier::PointsToAssisted,
+                    edges.len(),
+                ));
+                emitted_status_edge = true;
+            }
+
+            if !emitted_status_edge {
+                edges.push(unresolved_go_edge(
+                    db,
+                    unresolved,
+                    CallTargetStatus::Unresolved,
+                    unresolved.reason,
+                    RefinedCallTier::TypeValueFunctionToken,
                     edges.len(),
                 ));
             }
@@ -385,6 +403,29 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_go_interface_call_remains_explicit_unknown() {
+        let db = go_db_with_unresolved_receiver();
+
+        let output = derive_go_refinements(&db);
+
+        assert_eq!(output.edges.len(), 1);
+        assert_eq!(output.edges[0].status, CallTargetStatus::Unresolved);
+        assert_eq!(
+            output.edges[0].reason,
+            Some(UnresolvedCallReason::InterfaceDispatch)
+        );
+    }
+
+    #[test]
+    fn unrelated_go_missing_semantic_call_is_not_recast_as_dispatch() {
+        let db = go_db_with_unresolved_reason(UnresolvedCallReason::MissingSemanticReference);
+
+        let output = derive_go_refinements(&db);
+
+        assert!(output.edges.is_empty());
+    }
+
+    #[test]
     fn within_budget_points_to_set_creates_points_to_assisted_edge() {
         let mut db = go_db_with_target();
         db.replace_type_value_alias_facts(TypeValueAliasOutput {
@@ -437,6 +478,10 @@ mod tests {
     }
 
     fn go_db_with_unresolved_receiver() -> AnalysisDb {
+        go_db_with_unresolved_reason(UnresolvedCallReason::InterfaceDispatch)
+    }
+
+    fn go_db_with_unresolved_reason(reason: UnresolvedCallReason) -> AnalysisDb {
         let mut db = go_db_base();
         db.replace_call_facts(CallOutput {
             sites: vec![go_call_site()],
@@ -445,7 +490,7 @@ mod tests {
                 site: CallSiteId(0),
                 caller: FunctionId(0),
                 status: CallTargetStatus::Unresolved,
-                reason: UnresolvedCallReason::InterfaceDispatch,
+                reason,
                 algorithm: CallAlgorithm::Unsupported,
                 provenance: CallProvenance::Native,
                 precision: CallPrecision::Unknown,

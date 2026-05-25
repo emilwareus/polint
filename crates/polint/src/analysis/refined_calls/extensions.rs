@@ -98,12 +98,33 @@ fn resolve_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
             .find(|site| site.stable_key == id)
             .map(|site| site.id);
     }
-    value.strip_prefix("stable:").and_then(|stable| {
-        db.call_sites()
-            .iter()
-            .find(|site| site.stable_key == stable)
-            .map(|site| site.id)
-    })
+    value
+        .strip_prefix("stable:")
+        .and_then(|stable| {
+            db.call_sites()
+                .iter()
+                .find(|site| site.stable_key == stable)
+                .map(|site| site.id)
+        })
+        .or_else(|| {
+            value
+                .strip_prefix("file_span:")
+                .and_then(|file_span| resolve_file_span_site(db, file_span))
+        })
+}
+
+fn resolve_file_span_site(db: &AnalysisDb, value: &str) -> Option<CallSiteId> {
+    let (relative_path, start_byte) = value.rsplit_once(':')?;
+    let start_byte = start_byte.parse::<u32>().ok()?;
+    db.call_sites()
+        .iter()
+        .find(|site| {
+            site.span.start_byte == start_byte
+                && db
+                    .file(site.file)
+                    .is_some_and(|file| file.relative_path == relative_path)
+        })
+        .map(|site| site.id)
 }
 
 fn parse_function_ref(value: &str) -> Option<FunctionId> {
@@ -212,7 +233,7 @@ mod tests {
         let mut db = db_with_call_site();
         db.replace_extension_facts(ExtensionOutput {
             accepted: vec![accepted_extension_fact(vec![
-                "site=call_site:0",
+                "site=file_span:src/app.ts:0",
                 "target_function=function:0",
                 "algorithm=repo_model",
                 "status=resolved",

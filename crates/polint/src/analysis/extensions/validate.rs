@@ -150,6 +150,11 @@ fn rejection_reason(
     {
         return Some(ExtensionRejectionReason::MalformedPayload);
     }
+    if candidate.fact_family == REFINED_CALL_EDGE_FAMILY
+        && !refined_call_refs_resolve(db, candidate)
+    {
+        return Some(ExtensionRejectionReason::MalformedPayload);
+    }
     if is_type_value_alias_fact_family(&candidate.fact_family)
         && !type_value_alias_refs.resolve_candidate_refs(candidate)
     {
@@ -203,6 +208,70 @@ fn is_type_value_alias_relation_family(family: &str) -> bool {
         family,
         TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY | TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
     )
+}
+
+fn refined_call_refs_resolve(db: &AnalysisDb, candidate: &ExtensionFactCandidate) -> bool {
+    payload_value(candidate, "site=").is_some_and(|site| resolve_call_site_ref(db, site))
+        && payload_value(candidate, "target_function=")
+            .is_none_or(|function| resolve_function_ref(db, function))
+        && payload_value(candidate, "target_symbol=")
+            .is_none_or(|symbol| resolve_symbol_ref(db, symbol))
+}
+
+fn resolve_call_site_ref(db: &AnalysisDb, value: &str) -> bool {
+    if let Some(id) = value.strip_prefix("call_site:") {
+        return id.parse::<u64>().map_or_else(
+            |_| db.call_sites().iter().any(|site| site.stable_key == id),
+            |id| {
+                db.call_sites()
+                    .iter()
+                    .any(|site| site.id == crate::analysis::ids::CallSiteId(id))
+            },
+        );
+    }
+    value
+        .strip_prefix("stable:")
+        .is_some_and(|stable| db.call_sites().iter().any(|site| site.stable_key == stable))
+        || value
+            .strip_prefix("file_span:")
+            .is_some_and(|file_span| resolve_call_site_file_span_ref(db, file_span))
+}
+
+fn resolve_call_site_file_span_ref(db: &AnalysisDb, value: &str) -> bool {
+    let Some((relative_path, start_byte)) = value.rsplit_once(':') else {
+        return false;
+    };
+    let Ok(start_byte) = start_byte.parse::<u32>() else {
+        return false;
+    };
+    db.call_sites().iter().any(|site| {
+        site.span.start_byte == start_byte
+            && db
+                .file(site.file)
+                .is_some_and(|file| file.relative_path == relative_path)
+    })
+}
+
+fn resolve_function_ref(db: &AnalysisDb, value: &str) -> bool {
+    value
+        .strip_prefix("function:")
+        .and_then(|id| id.parse::<u64>().ok())
+        .is_some_and(|id| {
+            db.functions()
+                .iter()
+                .any(|function| function.id == crate::core::FunctionId(id))
+        })
+}
+
+fn resolve_symbol_ref(db: &AnalysisDb, value: &str) -> bool {
+    value
+        .strip_prefix("symbol:")
+        .and_then(|id| id.parse::<u64>().ok())
+        .is_some_and(|id| {
+            db.symbols()
+                .iter()
+                .any(|symbol| symbol.id == crate::core::SymbolId(id))
+        })
 }
 
 #[derive(Debug, Default)]
@@ -372,25 +441,40 @@ fn span_is_valid(db: &AnalysisDb, candidate: &ExtensionFactCandidate) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::calls::facts::{
+        CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
+    };
+    use crate::analysis::calls::store::CallOutput;
     use crate::analysis::extensions::sinks::{
-        ExtensionFactConfidence, ExtensionFactStatus, ExtensionSpanRef,
+        ExtensionFactConfidence, ExtensionFactStatus, ExtensionSpanRef, REFINED_CALL_EDGE_FAMILY,
         TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
     };
-    use crate::analysis::ids::PlaceId;
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::MirOutput;
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
-    use crate::core::{AnalysisDb, FileId, FunctionId, Language};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
     use std::sync::Arc;
 
     fn db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
-        db.add_source_file(
+        let file = db.add_source_file(
             "src/app.ts".into(),
             "src/app.ts".to_string(),
             Language::TypeScript,
             Arc::from("export const app = 1;\n"),
             "hash".to_string(),
         );
+        db.push_function(FunctionFact {
+            id: FunctionId(99),
+            file,
+            name: "app".to_string(),
+            span: span(),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: vec!["model".to_string()],
+        });
         db.replace_semantic_mir(MirOutput {
             bodies: Vec::new(),
             places: (0..3).map(test_place).collect(),
@@ -398,7 +482,37 @@ mod tests {
             unsupported: Vec::new(),
         })
         .expect("semantic MIR fixture should be valid");
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: span(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: "model".to_string(),
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Ambiguous,
+                precision: CallPrecision::Heuristic,
+                stable_key: "call-site:model".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call fixture should be valid");
         db
+    }
+
+    fn span() -> Span {
+        Span::point(FileId(0), 1, 1)
     }
 
     fn test_place(id: u64) -> PlaceFact {
@@ -435,6 +549,19 @@ mod tests {
             evidence: vec!["fixture".to_string()],
             payload_labels: vec!["kind=route".to_string()],
         }
+    }
+
+    fn refined_call_candidate(
+        stable_key: &str,
+        payload_labels: Vec<&str>,
+    ) -> ExtensionFactCandidate {
+        let mut c = candidate(stable_key);
+        c.fact_family = REFINED_CALL_EDGE_FAMILY.to_string();
+        c.payload_labels = payload_labels
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        c
     }
 
     fn input(candidates: Vec<ExtensionFactCandidate>) -> ExtensionValidationInput {
@@ -742,5 +869,76 @@ mod tests {
             output.rejected[0].reason,
             ExtensionRejectionReason::TypeValueAliasPrecisionCeiling
         );
+    }
+
+    #[test]
+    fn refined_call_fact_family_accepts_valid_file_span_site_payload() {
+        let mut validation_input = input(vec![refined_call_candidate(
+            "refined:valid",
+            vec![
+                "site=file_span:src/app.ts:0",
+                "synthetic_target=extension:model-target",
+                "algorithm=repo_model",
+                "status=resolved",
+            ],
+        )]);
+        validation_input
+            .declared_outputs
+            .insert(REFINED_CALL_EDGE_FAMILY.to_string());
+
+        let output = validate_extension_output(&db(), validation_input);
+
+        assert_eq!(output.accepted.len(), 1);
+        assert!(output.rejected.is_empty());
+    }
+
+    #[test]
+    fn refined_call_fact_family_rejects_dangling_site_and_native_targets() {
+        let cases = [
+            (
+                "refined:missing-site",
+                vec![
+                    "site=call_site:99",
+                    "synthetic_target=extension:model-target",
+                    "algorithm=repo_model",
+                    "status=resolved",
+                ],
+            ),
+            (
+                "refined:missing-function",
+                vec![
+                    "site=call_site:0",
+                    "target_function=function:99",
+                    "algorithm=repo_model",
+                    "status=resolved",
+                ],
+            ),
+            (
+                "refined:missing-symbol",
+                vec![
+                    "site=call_site:0",
+                    "target_symbol=symbol:99",
+                    "algorithm=repo_model",
+                    "status=resolved",
+                ],
+            ),
+        ];
+
+        for (stable_key, payload_labels) in cases {
+            let mut validation_input =
+                input(vec![refined_call_candidate(stable_key, payload_labels)]);
+            validation_input
+                .declared_outputs
+                .insert(REFINED_CALL_EDGE_FAMILY.to_string());
+
+            let output = validate_extension_output(&db(), validation_input);
+
+            assert_eq!(output.accepted.len(), 0, "{stable_key}");
+            assert_eq!(
+                output.rejected[0].reason,
+                ExtensionRejectionReason::MalformedPayload,
+                "{stable_key}"
+            );
+        }
     }
 }
