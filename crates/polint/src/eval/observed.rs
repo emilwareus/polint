@@ -2911,7 +2911,8 @@ path = "repo"
                 ("provider_order.12", "polint.extensions"),
                 ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.refined_calls"),
-                ("provider_order.15", "polint.metrics"),
+                ("provider_order.15", "polint.data_flow"),
+                ("provider_order.16", "polint.metrics"),
             ]
         );
     }

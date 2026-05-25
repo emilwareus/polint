@@ -207,6 +207,11 @@ const REFINED_CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const DATA_FLOW_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::data_flow::cache_key::DATA_FLOW_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
@@ -586,6 +591,41 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.data_flow",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "mir_bodies",
+            "mir_operations",
+            "places",
+            "cfg_functions",
+            "cfg_nodes",
+            "cfg_edges",
+            "call_sites",
+            "call_targets",
+            "refined_call_edges",
+            "summary_tito",
+            "summary_events",
+            "type_facts",
+            "value_facts",
+            "access_paths",
+            "points_to_sets",
+            "alias_answers",
+            "entrypoints",
+            "trust_boundaries",
+            "extension_facts",
+        ],
+        outputs: &[
+            "data_flow_nodes",
+            "data_flow_edges",
+            "data_flow_models",
+            "data_flow_budgets",
+        ],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: DATA_FLOW_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -638,6 +678,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
+                "polint.data_flow",
                 "polint.metrics",
             ]
         );
@@ -663,6 +704,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
+                "polint.data_flow",
                 "polint.metrics",
             ]
         );
@@ -715,6 +757,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
+                "polint.data_flow",
                 "polint.metrics",
             ]
         );
@@ -1089,6 +1132,38 @@ mod tests {
                         "extension_facts",
                     ],
                     outputs: vec!["refined_call_edges"],
+                },
+                ProviderOrderRow {
+                    id: "polint.data_flow",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "mir_bodies",
+                        "mir_operations",
+                        "places",
+                        "cfg_functions",
+                        "cfg_nodes",
+                        "cfg_edges",
+                        "call_sites",
+                        "call_targets",
+                        "refined_call_edges",
+                        "summary_tito",
+                        "summary_events",
+                        "type_facts",
+                        "value_facts",
+                        "access_paths",
+                        "points_to_sets",
+                        "alias_answers",
+                        "entrypoints",
+                        "trust_boundaries",
+                        "extension_facts",
+                    ],
+                    outputs: vec![
+                        "data_flow_nodes",
+                        "data_flow_edges",
+                        "data_flow_models",
+                        "data_flow_budgets",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",
