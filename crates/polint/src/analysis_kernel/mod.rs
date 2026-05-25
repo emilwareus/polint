@@ -930,6 +930,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
+                "polint.data_flow",
                 "polint.metrics",
             ]
         );
@@ -1753,6 +1754,7 @@ function setup() {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
+                "polint.data_flow",
                 "polint.metrics",
             ]
         );
