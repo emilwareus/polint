@@ -39,7 +39,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 34 | 6/6 | Complete   | 2026-05-23 |
 | 35 | 8/8 | Complete   | 2026-05-24 |
 | 36 | 7/7 | Complete   | 2026-05-24 |
-| 37 | 4/6 | In Progress|  |
+| 37 | 5/6 | In Progress|  |
 | 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
 | 39 | Slicing, Paths, and Evidence Bundles | Add structured evidence, slices, chops, ranked paths, summary expansion, and evidence rendering. | SAE-PREC-04 |
 | 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
