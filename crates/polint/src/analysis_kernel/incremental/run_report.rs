@@ -201,6 +201,7 @@ mod tests {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );

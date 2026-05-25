@@ -202,6 +202,11 @@ const TYPE_VALUE_ALIAS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const REFINED_CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::refined_calls::cache_key::REFINED_CALLS_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const EXTENSIONS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::extensions::cache_key::EXTENSION_FACTS_SCHEMA_LABEL,
     version: 1,
@@ -557,6 +562,30 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.refined_calls",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+            "entrypoints",
+            "dispatch_edges",
+            "summary_call",
+            "summary_events",
+            "type_facts",
+            "value_facts",
+            "allocation_tokens",
+            "points_to_sets",
+            "alias_answers",
+            "extension_facts",
+        ],
+        outputs: &["refined_call_edges"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: REFINED_CALLS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.metrics",
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
@@ -608,6 +637,7 @@ mod tests {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );
@@ -632,6 +662,7 @@ mod tests {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );
@@ -683,6 +714,7 @@ mod tests {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );
@@ -1036,6 +1068,27 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.refined_calls",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                        "entrypoints",
+                        "dispatch_edges",
+                        "summary_call",
+                        "summary_events",
+                        "type_facts",
+                        "value_facts",
+                        "allocation_tokens",
+                        "points_to_sets",
+                        "alias_answers",
+                        "extension_facts",
+                    ],
+                    outputs: vec!["refined_call_edges"],
                 },
                 ProviderOrderRow {
                     id: "polint.metrics",

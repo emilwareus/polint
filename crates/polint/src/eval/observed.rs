@@ -330,6 +330,13 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
                 "kernel.run_report.provider_outputs",
             ));
         }
+        if output.provider_id == "polint.refined_calls" {
+            invariants.push(observed_invariant(
+                "provider_output.polint.refined_calls.present",
+                "true",
+                "kernel.run_report.provider_outputs",
+            ));
+        }
         if !matches!(
             output.provider_id.as_str(),
             "polint.go.syntax" | "polint.ts.syntax"
@@ -892,6 +899,11 @@ pub(crate) fn call_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
 }
 
 #[cfg(test)]
+pub(crate) fn refined_call_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    refined_call_facts(debug_json)
+}
+
+#[cfg(test)]
 pub(crate) fn abstract_domain_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     abstract_domain_facts(debug_json)
 }
@@ -1225,6 +1237,7 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(semantic_mir_facts(debug_json));
     facts.extend(cfg_facts(debug_json));
     facts.extend(call_facts(debug_json));
+    facts.extend(refined_call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
     facts.extend(direct_summary_facts(debug_json));
     facts.extend(entrypoint_facts(debug_json));
@@ -1600,10 +1613,152 @@ fn call_status_label(label: &str) -> Option<ObservedStatus> {
         "Unsupported" | "unsupported" => Some(ObservedStatus::Unsupported),
         "SetupMissing" | "setup_missing" => Some(ObservedStatus::SetupMissing),
         "Rejected" | "rejected" => Some(ObservedStatus::Rejected),
-        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::Unknown),
+        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::BudgetExceeded),
         "Unknown" | "unknown" => Some(ObservedStatus::Unknown),
         _ => None,
     }
+}
+
+#[cfg(test)]
+fn refined_call_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(refined_calls) = debug_json.get("refined_calls").and_then(Value::as_object) else {
+        return facts;
+    };
+    if let Some(rows) = refined_calls.get("edges").and_then(Value::as_array) {
+        for row in rows {
+            if let Some(fact) = refined_call_fact(row) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts.extend(refined_call_count_invariants(refined_calls));
+    facts.extend(refined_call_delta_invariants(refined_calls));
+    facts
+}
+
+#[cfg(test)]
+fn refined_call_fact(row: &Value) -> Option<ObservedFact> {
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: row
+            .get("provenance")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        precision: row
+            .get("precision")
+            .and_then(Value::as_str)
+            .map(call_precision_label),
+        status: Some(call_status_from_row(row)),
+        payload: refined_call_payload(row),
+    })
+}
+
+#[cfg(test)]
+fn refined_call_payload(row: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    push_str_fragment(&mut parts, "language", row.get("language"));
+    push_str_fragment(&mut parts, "tier", row.get("tier"));
+    push_str_fragment(&mut parts, "edge_kind", row.get("edge_kind"));
+    push_str_fragment(&mut parts, "algorithm", row.get("algorithm"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "precision", row.get("precision"));
+    push_str_fragment(&mut parts, "provenance", row.get("provenance"));
+    push_str_fragment(&mut parts, "reason", row.get("reason"));
+    push_str_fragment(&mut parts, "site", row.get("site_stable_key"));
+    push_str_fragment(&mut parts, "base", row.get("base_target_stable_key"));
+    push_str_fragment(&mut parts, "caller", row.get("caller_stable_key"));
+    push_str_fragment(
+        &mut parts,
+        "target_function",
+        row.get("target_function_stable_key"),
+    );
+    push_str_fragment(
+        &mut parts,
+        "target_symbol",
+        row.get("target_symbol_stable_key"),
+    );
+    push_str_fragment(&mut parts, "synthetic_target", row.get("synthetic_target"));
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(";"))
+    }
+}
+
+#[cfg(test)]
+fn refined_call_count_invariants(
+    refined_calls: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(counts) = refined_calls.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut invariants = Vec::new();
+    for group in [
+        "by_language",
+        "by_algorithm",
+        "by_tier",
+        "by_status",
+        "by_precision",
+        "by_provenance",
+        "by_reason",
+    ] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("refined_calls.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.refined_calls.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn refined_call_delta_invariants(
+    refined_calls: &serde_json::Map<String, Value>,
+) -> Vec<ObservedItem> {
+    let Some(deltas) = refined_calls.get("deltas").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut invariants = Vec::new();
+    for field in [
+        "direct_edges",
+        "refined_edges",
+        "changed_edges",
+        "extension_model_edges",
+        "unresolved_refined_edges",
+        "budget_exceeded_refined_edges",
+    ] {
+        let Some(value) = deltas.get(field).and_then(Value::as_u64) else {
+            continue;
+        };
+        invariants.push(observed_invariant(
+            format!("refined_calls.deltas.{field}"),
+            value.to_string(),
+            "kernel.metadata_debug_json.refined_calls.deltas",
+        ));
+        if value > 0 {
+            invariants.push(observed_invariant(
+                format!("refined_calls.deltas.{field}.nonzero"),
+                "true",
+                "kernel.metadata_debug_json.refined_calls.deltas",
+            ));
+        }
+    }
+    invariants
 }
 
 #[cfg(test)]
@@ -2755,7 +2910,8 @@ path = "repo"
                 ("provider_order.11", "polint.entrypoints"),
                 ("provider_order.12", "polint.extensions"),
                 ("provider_order.13", "polint.type_value_alias"),
-                ("provider_order.14", "polint.metrics"),
+                ("provider_order.14", "polint.refined_calls"),
+                ("provider_order.15", "polint.metrics"),
             ]
         );
     }

@@ -109,8 +109,11 @@ fn normalize_observed_item_paths(observed: &mut [ObservedItem]) -> anyhow::Resul
 fn validate_synthetic_observed_rows(manifest: &NativeFixtureManifest) -> anyhow::Result<()> {
     if manifest.synthetic_observed {
         ensure!(
-            manifest.area == FixtureArea::Extension,
-            "synthetic observed rows are only allowed for extension fixtures"
+            matches!(
+                manifest.area,
+                FixtureArea::Extension | FixtureArea::RefinedCalls
+            ),
+            "synthetic observed rows are only allowed for extension or refined-call fixtures"
         );
     } else {
         ensure!(
@@ -1509,7 +1512,7 @@ fact = { family = "SourceFile", stable_key = "src/app.ts", mode = "partial", pro
     }
 
     #[test]
-    fn eval_fixture_manifest_rejects_synthetic_observed_rows_outside_extension_area() {
+    fn eval_fixture_manifest_rejects_synthetic_observed_rows_outside_allowed_areas() {
         let temp = tempfile::tempdir().unwrap();
         let fixture_dir = temp.path().join("tests/eval-fixtures/kernel/synthetic");
         write_fixture(
@@ -1532,8 +1535,10 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
         let rendered = format!("{err:#}");
 
         assert!(
-            rendered.contains("synthetic observed rows are only allowed for extension fixtures"),
-            "synthetic observed rows outside extension area should be rejected: {rendered}"
+            rendered.contains(
+                "synthetic observed rows are only allowed for extension or refined-call fixtures"
+            ),
+            "synthetic observed rows outside allowed areas should be rejected: {rendered}"
         );
     }
 }
@@ -1595,6 +1600,14 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/type-value-alias/ts-js-core")
     }
 
+    fn refined_calls_direct_vs_refined_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/refined-calls/direct-vs-refined")
+    }
+
+    fn refined_calls_extension_model_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/refined-calls/extension-model")
+    }
+
     #[test]
     fn eval_native_fixture_runner_provider_order_fixture_passes() {
         let run = run_native_fixture_for_test(&provider_order_fixture_dir()).unwrap();
@@ -1635,7 +1648,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.11", "polint.entrypoints"),
                 ("provider_order.12", "polint.extensions"),
                 ("provider_order.13", "polint.type_value_alias"),
-                ("provider_order.14", "polint.metrics"),
+                ("provider_order.14", "polint.refined_calls"),
+                ("provider_order.15", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
                     "abstract-domain-facts-1:1",
@@ -2017,6 +2031,87 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_native_fixture_runner_refined_calls_fixture_passes() {
+        for fixture_dir in [
+            refined_calls_direct_vs_refined_fixture_dir(),
+            refined_calls_extension_model_fixture_dir(),
+        ] {
+            if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
+                continue;
+            }
+
+            let run = run_native_fixture_for_test(&fixture_dir).unwrap();
+            let case = run.cases.first().expect("refined calls case");
+            let rendered = to_deterministic_json_pretty(&run);
+
+            assert_eq!(case.area, FixtureArea::RefinedCalls);
+            assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+            assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+            assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+            assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn eval_refined_calls_manifests_cover_required_taxonomy() {
+        let direct = load_native_fixture(&refined_calls_direct_vs_refined_fixture_dir()).unwrap();
+        let extension = load_native_fixture(&refined_calls_extension_model_fixture_dir()).unwrap();
+
+        assert_eq!(direct.manifest.area, FixtureArea::RefinedCalls);
+        assert_eq!(extension.manifest.area, FixtureArea::RefinedCalls);
+
+        let direct_expected = direct
+            .manifest
+            .expected
+            .iter()
+            .map(expected_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+        let extension_expected = extension
+            .manifest
+            .expected
+            .iter()
+            .map(expected_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(
+            direct_expected
+                .iter()
+                .any(|identity| identity.contains("Fact:RefinedCallEdge")),
+            "direct refined-call fixture must assert refined edges"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity.contains(
+                "Invariant:refined_calls.counts.by_tier.type_value_function_token.nonzero"
+            )),
+            "direct refined-call fixture must assert function-token tier counts"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_language.Go.nonzero")),
+            "direct refined-call fixture must assert Go refined-call coverage"
+        );
+        assert!(
+            extension_expected
+                .iter()
+                .any(|identity| identity.contains("Fact:refined_calls.edge:extension:refined-ok")),
+            "extension refined-call fixture must assert accepted model fact"
+        );
+        assert!(
+            extension_expected
+                .iter()
+                .any(|identity| identity
+                    .contains("Fact:refined_calls.edge:extension:refined-rejected")),
+            "extension refined-call fixture must assert rejected malformed model fact"
+        );
+        assert!(
+            extension_expected.iter().any(|identity| {
+                identity.contains("Invariant:refined_calls.deltas.extension_model_edges.nonzero")
+            }),
+            "extension refined-call fixture must assert extension-model delta"
+        );
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -2074,6 +2169,7 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Provenance,
             FixtureArea::Cache,
             FixtureArea::Extension,
+            FixtureArea::RefinedCalls,
         ] {
             assert!(
                 passing_by_area.contains_key(&required_area),
@@ -2082,9 +2178,31 @@ mod eval_native_fixture_runner_tests {
         }
     }
 
+    fn expected_identity(item: &ExpectedItem) -> String {
+        match item {
+            ExpectedItem::Diagnostic(diagnostic) => {
+                format!("Diagnostic:{}", diagnostic.rule_id)
+            }
+            ExpectedItem::Fact(fact) => {
+                format!("Fact:{}:{}", fact.family, fact.stable_key)
+            }
+            ExpectedItem::GraphEdge(edge) => {
+                format!("GraphEdge:{}:{}:{}", edge.graph, edge.from, edge.to)
+            }
+            ExpectedItem::Path(path) => format!("Path:{}", path.path_id),
+            ExpectedItem::Invariant(invariant) => {
+                format!("Invariant:{}", invariant.name)
+            }
+            ExpectedItem::RuntimeBudget(budget) => {
+                format!("RuntimeBudget:{}", budget.name)
+            }
+        }
+    }
+
     fn fixture_requires_runtime_extension(fixture_dir: &Path) -> bool {
         fixture_dir.ends_with("extension/real-sink")
             || fixture_dir.ends_with("type-value-alias/extension-precision")
+            || fixture_dir.ends_with("refined-calls/extension-model")
     }
 
     fn item_kinds(items: &[ExpectedItem]) -> Vec<&'static str> {

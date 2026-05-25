@@ -1,0 +1,8 @@
+[package]
+name = "polint-fixture-refined-calls-extension"
+version = "0.0.0"
+edition = "2024"
+
+[[bin]]
+name = "polint-fixture-refined-calls-extension"
+path = "src/main.rs"

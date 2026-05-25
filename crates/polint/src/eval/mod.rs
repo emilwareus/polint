@@ -302,6 +302,105 @@ fact = { family = "UnresolvedCall", stable_key = "call-unresolved:src/app.ts:dyn
 }
 
 #[cfg(test)]
+mod refined_call_rows {
+    use crate::eval::model::{
+        FixtureArea, ObservedItem, ObservedStatus, REFINED_CALL_FACT_FAMILIES,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn eval_expected_facts_accept_refined_call_family_and_area() {
+        assert_eq!(REFINED_CALL_FACT_FAMILIES, ["RefinedCallEdge"]);
+
+        let manifest = r#"
+schema_version = "polint-eval-fixture-1"
+case_id = "refined-call-row-model"
+area = "refined-calls"
+
+[repo]
+path = "repo"
+
+[[expected]]
+fact = { family = "RefinedCallEdge", stable_key = "family=RefinedCallEdge", mode = "partial", producer_id = "polint.refined_calls", precision = "setup_aware", status = "resolved" }
+"#;
+
+        let parsed: crate::eval::fixtures::NativeFixtureManifest =
+            toml::from_str(manifest).expect("refined call expected facts should parse");
+
+        assert_eq!(parsed.area, FixtureArea::RefinedCalls);
+        assert_eq!(parsed.expected.len(), 1);
+    }
+
+    #[test]
+    fn observed_refined_call_debug_rows_normalize_to_fact_rows_and_invariants() {
+        let debug = json!({
+            "refined_calls": {
+                "edges": [{
+                    "family": "RefinedCallEdge",
+                    "stable_key": "family=RefinedCallEdge/tier=direct_only",
+                    "producer_id": "polint.refined_calls",
+                    "status": "resolved",
+                    "precision": "setup_aware",
+                    "language": "TypeScript",
+                    "tier": "direct_only",
+                    "edge_kind": "Direct",
+                    "algorithm": "direct_reference",
+                    "reason": null,
+                    "provenance": "native_direct",
+                    "site_stable_key": "call-site:callee",
+                    "base_target_stable_key": "call-target:callee",
+                    "caller_stable_key": "function:caller",
+                    "target_function_stable_key": "function:callee",
+                    "target_symbol_stable_key": null,
+                    "synthetic_target": null
+                }],
+                "counts": {
+                    "total_edges": 1,
+                    "direct_edges": 1,
+                    "refined_non_direct_edges": 0,
+                    "by_language": {"TypeScript": 1},
+                    "by_algorithm": {"direct_reference": 1},
+                    "by_tier": {"direct_only": 1},
+                    "by_status": {"resolved": 1},
+                    "by_precision": {"setup_aware": 1},
+                    "by_provenance": {"native_direct": 1},
+                    "by_reason": {}
+                },
+                "deltas": {
+                    "direct_edges": 1,
+                    "refined_edges": 1,
+                    "changed_edges": 0,
+                    "extension_model_edges": 0,
+                    "unresolved_refined_edges": 0,
+                    "budget_exceeded_refined_edges": 0
+                }
+            }
+        });
+
+        let observed = crate::eval::observed::refined_call_facts_for_test(&debug);
+
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Fact(fact) => {
+                fact.family == "RefinedCallEdge"
+                    && fact.status == Some(ObservedStatus::Resolved)
+                    && fact.payload.as_deref().is_some_and(|payload| {
+                        payload.contains("tier=direct_only")
+                            && payload.contains("algorithm=direct_reference")
+                    })
+            }
+            _ => false,
+        }));
+        assert!(observed.iter().any(|item| match item {
+            ObservedItem::Invariant(invariant) => {
+                invariant.name == "refined_calls.counts.by_tier.direct_only.nonzero"
+                    && invariant.value == "true"
+            }
+            _ => false,
+        }));
+    }
+}
+
+#[cfg(test)]
 mod abstract_domain_rows {
     use crate::eval::matcher::{MatchOutcome, MatcherConfig, match_case};
     use crate::eval::metrics::compute_metrics;

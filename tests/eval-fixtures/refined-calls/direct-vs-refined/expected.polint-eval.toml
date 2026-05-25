@@ -1,0 +1,33 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "refined-calls-direct-vs-refined"
+area = "refined-calls"
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "partial", producer_id = "polint.refined_calls", precision = "unknown", status = "unresolved" }
+
+[[expected]]
+invariant = { name = "refined_calls.counts.by_tier.type_value_function_token.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.counts.by_language.Go.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.counts.by_status.unresolved.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.deltas.refined_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.refined_calls.present", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "refined_calls.direct_vs_refined", max_runtime_ms = 10000, mode = "exact" }

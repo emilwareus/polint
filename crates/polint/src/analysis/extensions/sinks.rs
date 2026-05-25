@@ -7,6 +7,7 @@ pub(crate) const TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY: &str = "type_value_alias.a
 pub(crate) const TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY: &str =
     "type_value_alias.points_to_constraint";
 pub(crate) const TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY: &str = "type_value_alias.alias_answer";
+pub(crate) const REFINED_CALL_EDGE_FAMILY: &str = "refined_calls.edge";
 
 pub(crate) const TYPE_VALUE_ALIAS_FACT_FAMILIES: &[&str] = &[
     TYPE_VALUE_ALIAS_TYPE_FAMILY,
@@ -133,6 +134,51 @@ pub(crate) fn has_required_type_value_alias_payload(candidate: &ExtensionFactCan
         }
         _ => true,
     }
+}
+
+pub(crate) fn has_required_refined_call_payload(candidate: &ExtensionFactCandidate) -> bool {
+    if candidate.fact_family != REFINED_CALL_EDGE_FAMILY {
+        return true;
+    }
+    payload_label(candidate, "site=").is_some_and(valid_call_site_ref)
+        && has_refined_call_target(candidate)
+        && payload_label(candidate, "algorithm=").is_some_and(valid_refined_call_algorithm)
+        && payload_label(candidate, "status=").is_some_and(valid_refined_call_status)
+}
+
+fn has_refined_call_target(candidate: &ExtensionFactCandidate) -> bool {
+    payload_label(candidate, "target_function=").is_some_and(valid_function_ref)
+        || payload_label(candidate, "target_symbol=").is_some_and(valid_symbol_ref)
+        || payload_label(candidate, "synthetic_target=").is_some_and(|value| !value.is_empty())
+}
+
+fn valid_call_site_ref(value: &str) -> bool {
+    has_nonempty_prefixed_value(value, "call_site:")
+        || has_nonempty_prefixed_value(value, "stable:")
+        || has_nonempty_prefixed_value(value, "file_span:")
+        || has_nonempty_prefixed_value(value, "file_callee:")
+}
+
+fn valid_function_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "function:")
+}
+
+fn valid_symbol_ref(value: &str) -> bool {
+    valid_numeric_ref(value, "symbol:")
+}
+
+fn valid_refined_call_algorithm(value: &str) -> bool {
+    matches!(
+        value,
+        "repo_model" | "framework_model" | "function_token" | "points_to"
+    )
+}
+
+fn valid_refined_call_status(value: &str) -> bool {
+    matches!(
+        value,
+        "resolved" | "ambiguous" | "unresolved" | "budget_exceeded" | "rejected"
+    )
 }
 
 fn has_type_value_alias_points_to_payload(candidate: &ExtensionFactCandidate) -> bool {
@@ -370,5 +416,34 @@ mod tests {
             "status=no_alias".to_string(),
         ];
         assert!(!has_required_type_value_alias_payload(&candidate));
+    }
+
+    #[test]
+    fn refined_call_payload_requires_site_target_algorithm_and_status() {
+        let mut candidate = ExtensionFactCandidate {
+            extension_id: "demo".to_string(),
+            provider_id: "model".to_string(),
+            fact_family: REFINED_CALL_EDGE_FAMILY.to_string(),
+            stable_key: "refined:extension".to_string(),
+            binding_refs: vec!["file:src/app.ts".to_string()],
+            span: None,
+            precision: Some(ExtensionFactPrecision::Heuristic),
+            confidence: ExtensionFactConfidence::Medium,
+            status: ExtensionFactStatus::Candidate,
+            evidence: vec!["extension-evidence".to_string()],
+            payload_labels: vec![
+                "site=call_site:0".to_string(),
+                "target_function=function:1".to_string(),
+                "algorithm=repo_model".to_string(),
+                "status=resolved".to_string(),
+            ],
+        };
+
+        assert!(has_required_refined_call_payload(&candidate));
+
+        candidate
+            .payload_labels
+            .retain(|label| !label.starts_with("site="));
+        assert!(!has_required_refined_call_payload(&candidate));
     }
 }

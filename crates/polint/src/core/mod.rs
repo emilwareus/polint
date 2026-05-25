@@ -35,6 +35,11 @@ use crate::analysis::points_to::facts::{
     PointsToConstraintFact, PointsToPrecision, PointsToSetFact, PointsToStatus,
 };
 use crate::analysis::points_to::store::PointsToStore;
+use crate::analysis::refined_calls::facts::{
+    RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
+};
+use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
+use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{
     SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
@@ -668,6 +673,8 @@ pub struct AnalysisDb {
     call_targets: Vec<CallTargetFact>,
     unresolved_calls: Vec<UnresolvedCallFact>,
     call_store: Option<CallStore>,
+    refined_call_edges: Vec<RefinedCallEdgeFact>,
+    refined_call_store: Option<RefinedCallStore>,
     abstract_domain_observations: Vec<DomainObservationFact>,
     abstract_domain_events: Vec<DomainEventFact>,
     abstract_domain_store: Option<DomainStore>,
@@ -1021,6 +1028,17 @@ impl AnalysisDb {
         Ok(())
     }
 
+    pub(crate) fn replace_refined_call_facts(
+        &mut self,
+        output: RefinedCallOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = RefinedCallStore::from_output(output)?;
+        self.refined_call_edges = store.edges().to_vec();
+        self.refined_call_store = Some(store);
+        self.refresh_refined_call_metadata();
+        Ok(())
+    }
+
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
         let store = DomainStore::from_output(output);
         self.abstract_domain_observations = store.observations().to_vec();
@@ -1094,6 +1112,15 @@ impl AnalysisDb {
     #[allow(dead_code)]
     pub(crate) fn call_store(&self) -> Option<&CallStore> {
         self.call_store.as_ref()
+    }
+
+    pub(crate) fn refined_call_edges(&self) -> &[RefinedCallEdgeFact] {
+        &self.refined_call_edges
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn refined_call_store(&self) -> Option<&RefinedCallStore> {
+        self.refined_call_store.as_ref()
     }
 
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
@@ -1341,6 +1368,19 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in unresolved_metadata {
             self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
+        }
+    }
+
+    fn refresh_refined_call_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::RefinedCallEdge);
+
+        let edge_metadata = self
+            .refined_call_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.refined_call_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
         }
     }
 
@@ -2630,6 +2670,9 @@ impl AnalysisDb {
                 run_id as u64,
             );
         }
+        for edge in self.refined_call_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::RefinedCallEdge, edge.id.0);
+        }
         for symbol in self.symbols() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
         }
@@ -3779,6 +3822,79 @@ impl AnalysisDb {
         )
     }
 
+    fn refined_call_edge_metadata(&self, fact: &RefinedCallEdgeFact) -> FactMeta {
+        let (precision, status_confidence) = call_status_metadata(fact.status, fact.precision);
+        let confidence = refined_call_confidence_metadata(fact.confidence, status_confidence);
+        let validation = refined_call_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::RefinedCallEdge,
+            REFINED_CALLS_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", call_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    call_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "algorithm",
+                    call_algorithm_label(fact.algorithm).to_string(),
+                ),
+                (
+                    "edge_kind",
+                    call_edge_kind_label(fact.edge_kind).to_string(),
+                ),
+                ("tier", refined_call_tier_label(fact.tier).to_string()),
+                (
+                    "validation",
+                    refined_call_validation_label(fact.validation).to_string(),
+                ),
+                (
+                    "reason",
+                    fact.reason
+                        .map(call_unresolved_reason_label)
+                        .map(str::to_string)
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "site_key",
+                    self.fact_stable_key(FactFamily::CallSite, fact.site.0),
+                ),
+                (
+                    "base_target_key",
+                    fact.base_target
+                        .map(|target| self.fact_stable_key(FactFamily::CallTarget, target.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "caller_key",
+                    self.fact_stable_key(FactFamily::Function, fact.caller.0),
+                ),
+                (
+                    "target_function_key",
+                    fact.target_function
+                        .map(|function| self.fact_stable_key(FactFamily::Function, function.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "target_symbol_key",
+                    fact.target_symbol
+                        .map(|symbol| self.fact_stable_key(FactFamily::Symbol, symbol.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "synthetic_target",
+                    fact.synthetic_target.clone().unwrap_or_else(none_value),
+                ),
+                ("evidence", fact.evidence.join("\n")),
+                ("inputs", fact.input_stable_keys.join("\n")),
+            ]),
+        )
+    }
+
     fn unresolved_call_metadata(&self, fact: &UnresolvedCallFact) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -4364,6 +4480,29 @@ fn fact_meta_from_stable_key<const EXTRA: usize>(
     }
 }
 
+fn fact_meta_from_stable_key_with_validation<const EXTRA: usize>(
+    _family: FactFamily,
+    producer_id: &'static str,
+    precision: FactPrecision,
+    confidence: FactConfidence,
+    validation: ValidationStatus,
+    stable_key: String,
+    payload_extra_parts: [(&'static str, String); EXTRA],
+) -> FactMeta {
+    let payload_parts = payload_extra_parts.to_vec();
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+
+    FactMeta {
+        stable_key,
+        producer_id,
+        layer_id: producer_id,
+        precision,
+        confidence,
+        validation,
+        payload_digest,
+    }
+}
+
 fn topology_fact_metadata(
     family: FactFamily,
     producer_id: &'static str,
@@ -4889,6 +5028,52 @@ fn call_unresolved_reason_label(reason: UnresolvedCallReason) -> &'static str {
         UnresolvedCallReason::BudgetExceeded => "budget_exceeded",
         UnresolvedCallReason::UnknownCallee => "unknown_callee",
         UnresolvedCallReason::Unknown => "unknown",
+    }
+}
+
+fn refined_call_tier_label(tier: RefinedCallTier) -> &'static str {
+    match tier {
+        RefinedCallTier::DirectOnly => "direct_only",
+        RefinedCallTier::DirectPlusFramework => "direct_plus_framework",
+        RefinedCallTier::TypeValueFunctionToken => "type_value_function_token",
+        RefinedCallTier::SummaryAssisted => "summary_assisted",
+        RefinedCallTier::PointsToAssisted => "points_to_assisted",
+        RefinedCallTier::ExtensionModel => "extension_model",
+        RefinedCallTier::AllAccepted => "all_accepted",
+    }
+}
+
+fn refined_call_validation_label(validation: RefinedCallValidation) -> &'static str {
+    match validation {
+        RefinedCallValidation::Native => "native",
+        RefinedCallValidation::ReferentiallyValidated => "referentially_validated",
+        RefinedCallValidation::ExtensionValidated => "extension_validated",
+        RefinedCallValidation::Rejected => "rejected",
+    }
+}
+
+fn refined_call_validation_metadata(validation: RefinedCallValidation) -> ValidationStatus {
+    match validation {
+        RefinedCallValidation::Native => ValidationStatus::NativeTrusted,
+        RefinedCallValidation::ReferentiallyValidated => ValidationStatus::ReferentiallyValidated,
+        RefinedCallValidation::ExtensionValidated => ValidationStatus::SchemaValidated,
+        RefinedCallValidation::Rejected => ValidationStatus::ConflictRejected,
+    }
+}
+
+fn refined_call_confidence_metadata(
+    confidence: RefinedCallConfidence,
+    fallback: FactConfidence,
+) -> FactConfidence {
+    let requested = match confidence {
+        RefinedCallConfidence::High => FactConfidence::High,
+        RefinedCallConfidence::Medium => FactConfidence::Medium,
+        RefinedCallConfidence::Low => FactConfidence::Low,
+    };
+    match (requested, fallback) {
+        (FactConfidence::Low, _) | (_, FactConfidence::Low) => FactConfidence::Low,
+        (FactConfidence::Medium, _) | (_, FactConfidence::Medium) => FactConfidence::Medium,
+        (FactConfidence::High, FactConfidence::High) => FactConfidence::High,
     }
 }
 

@@ -417,11 +417,11 @@ impl AnalysisKernel {
                 Self::provider_manifest("polint.type_value_alias"),
                 entrypoints_semantic_mir_digest,
                 entrypoints_cfg_digest,
-                entrypoints_calls_digest,
+                entrypoints_calls_digest.clone(),
                 abstract_domains_dependency_output_digest,
-                direct_summaries_dependency_output_digest,
-                entrypoints_dependency_output_digest,
-                extensions_dependency_output_digest,
+                direct_summaries_dependency_output_digest.clone(),
+                entrypoints_dependency_output_digest.clone(),
+                extensions_dependency_output_digest.clone(),
                 entrypoints_symbol_digest,
                 entrypoints_topology_digest,
                 vec![
@@ -436,7 +436,35 @@ impl AnalysisKernel {
             "polint.type_value_alias",
             &db,
             polint_type_value_alias_cache_stats,
-            type_value_alias_output_digest,
+            type_value_alias_output_digest.clone(),
+        ));
+
+        let type_value_alias_dependency_output_digest = type_value_alias_output_digest
+            .unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.type_value_alias",
+                )
+            });
+        let refined_calls =
+            crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.refined_calls"),
+                entrypoints_calls_digest,
+                entrypoints_dependency_output_digest,
+                direct_summaries_dependency_output_digest,
+                type_value_alias_dependency_output_digest,
+                extensions_dependency_output_digest,
+            );
+        let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
+        let refined_calls_output_digest = refined_calls.output_digest.clone();
+        diagnostics.extend(refined_calls.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.refined_calls",
+            &db,
+            polint_refined_calls_cache_stats,
+            refined_calls_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(
@@ -871,6 +899,7 @@ mod tests {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );
@@ -1372,6 +1401,51 @@ mod tests {
     }
 
     #[test]
+    fn refined_call_internals_do_not_leak_into_public_surfaces_no_leak() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root");
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let markers = refined_call_internal_markers();
+
+        let rendered = crate::diagnostics::render(
+            crate::diagnostics::OutputFormat::Json,
+            &[],
+            crate::diagnostics::RenderOpts {
+                json: crate::diagnostics::JsonReportMeta {
+                    tool_name: "polint",
+                    tool_version: "test",
+                },
+                color: crate::diagnostics::ColorChoice::Never,
+                sources: None,
+            },
+        );
+        assert_no_refined_call_markers("polint check --format json", &rendered, &markers);
+
+        let mut public_surfaces = Vec::new();
+        collect_files_with_extensions(&crate_root.join("src/sdk"), &["rs"], &mut public_surfaces);
+        public_surfaces.extend([
+            crate_root.join("src/runner/mod.rs"),
+            crate_root.join("src/cli/mod.rs"),
+            crate_root.join("src/lib.rs"),
+            repo_root.join("README.md"),
+        ]);
+        collect_files_with_extensions(&repo_root.join("docs/facts"), &["md"], &mut public_surfaces);
+        public_surfaces.sort();
+        public_surfaces.dedup();
+
+        for source_path in public_surfaces {
+            if !source_path.exists() {
+                continue;
+            }
+            let source = std::fs::read_to_string(&source_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+            assert_no_refined_call_markers(&source_path.display().to_string(), &source, &markers);
+        }
+    }
+
+    #[test]
     fn typescript_framework_entrypoints_from_real_source_include_handler_and_path() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -1535,6 +1609,35 @@ function setup() {
         ]
     }
 
+    fn refined_call_internal_markers() -> [&'static str; 15] {
+        [
+            "polint.refined_calls",
+            "RefinedCallEdgeFact",
+            "RefinedCallTier",
+            "RefinedCallReason",
+            "RefinedCallGraph",
+            "refined_call_edges",
+            "direct_plus_framework",
+            "points_to_assisted",
+            "extension_model",
+            "derive_refined_calls_with_cache_stats",
+            "RefinedCallStore",
+            "RefinedCallOutput",
+            "refined_calls.edge",
+            "TypeValueFunctionToken",
+            "DirectPlusFramework",
+        ]
+    }
+
+    fn assert_no_refined_call_markers(label: &str, source: &str, markers: &[&str]) {
+        for marker in markers {
+            assert!(
+                !source.contains(marker),
+                "{label} leaked Phase 37 refined-call internal marker `{marker}`"
+            );
+        }
+    }
+
     fn assert_no_framework_markers(label: &str, source: &str, markers: &[&str]) {
         for marker in markers {
             assert!(
@@ -1619,6 +1722,7 @@ function setup() {
                 "polint.entrypoints",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.refined_calls",
                 "polint.metrics",
             ]
         );

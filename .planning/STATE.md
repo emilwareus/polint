@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-24T14:40:22.254Z"
-last_activity: 2026-05-24
+status: "Phase 37 shipped -- PR #45 CI fix ready"
+last_updated: "2026-05-25T08:03:13.000Z"
+last_activity: 2026-05-25
 progress:
   total_phases: 22
   completed_phases: 17
-  total_plans: 100
-  completed_plans: 100
+  total_plans: 106
+  completed_plans: 102
   percent: 77
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 37 — refined-call-graph-providers
+**Current focus:** Phase 37 Windows CI fixture fix verified locally; PR #45 ready for CI rerun after push
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 37 (refined-call-graph-providers) — PENDING
-Plan: Not planned
-Last activity: 2026-05-24
+Status: Phase 37 shipped -- PR #45 CI fix ready
+Phase: 37 (refined-call-graph-providers) — COMPLETE
+Plan: 6/6 plans complete
+Last activity: 2026-05-25
 
 ## Phase Progress
 
@@ -67,7 +67,7 @@ Last activity: 2026-05-24
 | 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
 | 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
 | 36 | Complete | 7/7 plans complete; private type/value/place/alias substrate, validation/debug/eval fixtures, extension precision, public no-leak proof, and final verification done; requirement SAE-PREC-01 |
-| 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
+| 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Pending | Local plus summary-projected data flow; requirement SAE-PREC-03 |
 | 39 | Pending | Slicing, paths, and evidence bundles; requirement SAE-PREC-04 |
 | 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |
@@ -379,14 +379,17 @@ Last activity: 2026-05-24
 
 ## Session
 
-- Last session: 2026-05-24
-- Last activity: 2026-05-24 - Fixed Phase 36 closeout review proof gaps and reran full package validation.
-- Stopped at: Phase 36 complete; ready to start Phase 37.
+- Last session: 2026-05-25
+- Last activity: 2026-05-25 - Fixed remaining PR #45 Windows runtime-extension fixture CI failure; focused tests, full local library tests, fmt, and clippy pass.
+- Stopped at: Phase 37 complete; PR #45 ready for CI rerun after push.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
+| 260525-d15 | Fix CI failures from PR 45 attached logs | 2026-05-25 | implemented | [260525-d15-fix-ci-failures-from-pr-45-attached-logs](./quick/260525-d15-fix-ci-failures-from-pr-45-attached-logs/) |
+| 260525-c1a | Fix final review findings for Phase 37 refined calls | 2026-05-25 | implemented | [260525-c1a-fix-final-review-findings-for-phase-37-r](./quick/260525-c1a-fix-final-review-findings-for-phase-37-r/) |
 | 260524 | Fix Phase 36 closeout review proof gaps | 2026-05-24 | implemented | [260524-fix-phase36-closeout-review-proof](./quick/260524-fix-phase36-closeout-review-proof/) |
 | 260524-jtj | Fix Phase 36 review findings and add regressions | 2026-05-24 | implemented | [260524-jtj-fix-phase-36-review-findings-add-regress](./quick/260524-jtj-fix-phase-36-review-findings-add-regress/) |
 | 260524 | Fix PR 41 Ubuntu clippy failures | 2026-05-24 | implemented | [260524-fix-pr41-ubuntu-clippy](./quick/260524-fix-pr41-ubuntu-clippy/) |
@@ -415,4 +418,4 @@ Last activity: 2026-05-24
 
 ## Next Action
 
-Start Phase 37 (refined-call-graph-providers) when ready.
+Push PR #45 CI fixes and wait for CI to go green before merge; next planned phase is Phase 38 (local plus summary-projected data flow).

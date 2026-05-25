@@ -37,6 +37,8 @@ pub(crate) const CFG_FACT_FAMILIES: &[&str] = &[
 
 pub(crate) const CALL_FACT_FAMILIES: &[&str] = &["CallSite", "CallTarget", "UnresolvedCall"];
 
+pub(crate) const REFINED_CALL_FACT_FAMILIES: &[&str] = &["RefinedCallEdge"];
+
 pub(crate) const ABSTRACT_DOMAIN_FACT_FAMILIES: &[&str] = &["DomainObservation", "DomainEvent"];
 
 pub(crate) const DIRECT_SUMMARY_FACT_FAMILIES: &[&str] = &[
@@ -81,6 +83,8 @@ pub(crate) enum FixtureArea {
     Cfg,
     #[serde(rename = "direct-calls")]
     DirectCalls,
+    #[serde(rename = "refined-calls")]
+    RefinedCalls,
     #[serde(rename = "abstract-domains")]
     AbstractDomains,
     #[serde(rename = "direct-summaries")]
