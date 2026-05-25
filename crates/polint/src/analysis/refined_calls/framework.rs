@@ -14,7 +14,9 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
 use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
-use crate::core::{AnalysisDb, FunctionId, Language, SymbolId};
+#[cfg(test)]
+use crate::core::Language;
+use crate::core::{AnalysisDb, FunctionId, SymbolId};
 
 pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput {
     let entrypoints_by_key = db

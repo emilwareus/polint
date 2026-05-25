@@ -6,7 +6,9 @@ use crate::analysis::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact,
     CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
 };
-use crate::analysis::ids::{CallSiteId, PlaceId, RefinedCallEdgeId};
+#[cfg(test)]
+use crate::analysis::ids::CallSiteId;
+use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::vars::place_var;
 use crate::analysis::types::facts::{TypeFact, TypePrecision, TypeShape, TypeStatus, TypeSubject};
@@ -119,22 +121,24 @@ fn function_token_edge(
         db,
         target,
         RefinedCallEdgeId(index as u64),
-        RefinedCallTier::TypeValueFunctionToken,
-        CallAlgorithm::FunctionTokenFlow,
-        value_precision(value),
-        vec![
-            "ts_js_function_token".to_string(),
-            format!("value={value_key}"),
-        ],
-        vec![target_key.clone(), value_key.clone()],
-        stable_key_from_parts(
-            FactFamily::RefinedCallEdge,
-            &[
-                ("tier", "ts_js_function_token".to_string()),
-                ("base_target", target_key),
-                ("value", value_key),
+        TargetRefinement {
+            tier: RefinedCallTier::TypeValueFunctionToken,
+            algorithm: CallAlgorithm::FunctionTokenFlow,
+            precision: value_precision(value),
+            evidence: vec![
+                "ts_js_function_token".to_string(),
+                format!("value={value_key}"),
             ],
-        ),
+            input_stable_keys: vec![target_key.clone(), value_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::RefinedCallEdge,
+                &[
+                    ("tier", "ts_js_function_token".to_string()),
+                    ("base_target", target_key),
+                    ("value", value_key),
+                ],
+            ),
+        },
     )
 }
 
@@ -150,22 +154,24 @@ fn callable_type_edge(
         db,
         target,
         RefinedCallEdgeId(index as u64),
-        RefinedCallTier::TypeValueFunctionToken,
-        CallAlgorithm::FunctionTokenFlow,
-        type_precision(type_fact.precision),
-        vec![
-            "ts_js_callable_type".to_string(),
-            format!("type={type_key}"),
-        ],
-        vec![target_key.clone(), type_key.clone()],
-        stable_key_from_parts(
-            FactFamily::RefinedCallEdge,
-            &[
-                ("tier", "ts_js_callable_type".to_string()),
-                ("base_target", target_key),
-                ("type", type_key),
+        TargetRefinement {
+            tier: RefinedCallTier::TypeValueFunctionToken,
+            algorithm: CallAlgorithm::FunctionTokenFlow,
+            precision: type_precision(type_fact.precision),
+            evidence: vec![
+                "ts_js_callable_type".to_string(),
+                format!("type={type_key}"),
             ],
-        ),
+            input_stable_keys: vec![target_key.clone(), type_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::RefinedCallEdge,
+                &[
+                    ("tier", "ts_js_callable_type".to_string()),
+                    ("base_target", target_key),
+                    ("type", type_key),
+                ],
+            ),
+        },
     )
 }
 
@@ -186,22 +192,24 @@ fn points_to_edge(
         db,
         target,
         RefinedCallEdgeId(index as u64),
-        RefinedCallTier::PointsToAssisted,
-        CallAlgorithm::PointsTo,
-        CallPrecision::Conservative,
-        vec![
-            "ts_js_points_to".to_string(),
-            format!("points_to={points_to_key}"),
-        ],
-        vec![target_key.clone(), points_to_key.clone()],
-        stable_key_from_parts(
-            FactFamily::RefinedCallEdge,
-            &[
-                ("tier", "ts_js_points_to".to_string()),
-                ("base_target", target_key),
-                ("points_to", points_to_key),
+        TargetRefinement {
+            tier: RefinedCallTier::PointsToAssisted,
+            algorithm: CallAlgorithm::PointsTo,
+            precision: CallPrecision::Conservative,
+            evidence: vec![
+                "ts_js_points_to".to_string(),
+                format!("points_to={points_to_key}"),
             ],
-        ),
+            input_stable_keys: vec![target_key.clone(), points_to_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::RefinedCallEdge,
+                &[
+                    ("tier", "ts_js_points_to".to_string()),
+                    ("base_target", target_key),
+                    ("points_to", points_to_key),
+                ],
+            ),
+        },
     )
 }
 
@@ -241,16 +249,20 @@ fn points_to_budget_edge(
     }
 }
 
-fn edge_from_target(
-    db: &AnalysisDb,
-    target: &CallTargetFact,
-    id: RefinedCallEdgeId,
+struct TargetRefinement {
     tier: RefinedCallTier,
     algorithm: CallAlgorithm,
     precision: CallPrecision,
     evidence: Vec<String>,
     input_stable_keys: Vec<String>,
     stable_key: String,
+}
+
+fn edge_from_target(
+    db: &AnalysisDb,
+    target: &CallTargetFact,
+    id: RefinedCallEdgeId,
+    refinement: TargetRefinement,
 ) -> RefinedCallEdgeFact {
     RefinedCallEdgeFact {
         id,
@@ -267,17 +279,17 @@ fn edge_from_target(
             .map(|site| site.language)
             .unwrap_or(Language::Unknown),
         edge_kind: target.edge_kind,
-        algorithm,
-        tier,
+        algorithm: refinement.algorithm,
+        tier: refinement.tier,
         status: target.status,
         reason: target.reason,
         provenance: CallProvenance::Native,
-        precision,
+        precision: refinement.precision,
         validation: RefinedCallValidation::ReferentiallyValidated,
         confidence: confidence_for_status(target.status),
-        evidence,
-        input_stable_keys,
-        stable_key,
+        evidence: refinement.evidence,
+        input_stable_keys: refinement.input_stable_keys,
+        stable_key: refinement.stable_key,
     }
 }
 
@@ -341,6 +353,9 @@ fn callable_type_facts_for_place(db: &AnalysisDb, place: PlaceId) -> Vec<&TypeFa
 }
 
 fn points_to_sets_for_place(db: &AnalysisDb, place: PlaceId) -> Vec<&PointsToSetFact> {
+    if place.0 > (u64::MAX >> 4) {
+        return Vec::new();
+    }
     let var = place_var(place);
     db.points_to_sets()
         .iter()

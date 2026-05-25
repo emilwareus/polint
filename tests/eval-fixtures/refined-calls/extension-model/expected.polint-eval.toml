@@ -1,0 +1,58 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "refined-calls-extension-model"
+area = "refined-calls"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 30000
+
+[[expected]]
+fact = { family = "RefinedCallEdge", stable_key = "extension:refined-ok", mode = "partial", producer_id = "polint.refined_calls", precision = "heuristic", status = "resolved" }
+
+[[expected]]
+fact = { family = "refined_calls.edge", stable_key = "extension:refined-ok", mode = "exact", producer_id = "polint.extension.demo.refined", precision = "heuristic", status = "accepted" }
+
+[[expected]]
+fact = { family = "refined_calls.edge", stable_key = "extension:refined-rejected", mode = "exact", producer_id = "polint.extension.demo.refined", status = "rejected" }
+
+[[expected]]
+invariant = { name = "refined_calls.counts.by_tier.extension_model.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "refined_calls.deltas.extension_model_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "refined_calls.extension_model", max_runtime_ms = 30000, mode = "exact" }
+
+[[observed]]
+fact = { family = "RefinedCallEdge", stable_key = "extension:refined-ok", mode = "exact", producer_id = "polint.refined_calls", provenance = "model", precision = "heuristic", status = "resolved", payload = "tier=extension_model;algorithm=repo_model" }
+
+[[observed]]
+fact = { family = "refined_calls.edge", stable_key = "extension:refined-ok", mode = "exact", producer_id = "polint.extension.demo.refined", provenance = "kernel.extension_sink.accepted", precision = "heuristic", status = "accepted", payload = "payload=site=call_site:0,target_function=function:1,algorithm=repo_model,status=resolved" }
+
+[[observed]]
+fact = { family = "refined_calls.edge", stable_key = "extension:refined-rejected", mode = "exact", producer_id = "polint.extension.demo.refined", provenance = "kernel.extension_sink.rejected", status = "rejected", payload = "reason=malformed_payload" }
+
+[[observed]]
+invariant = { name = "refined_calls.counts.by_tier.extension_model.nonzero", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "refined_calls.deltas.extension_model_edges.nonzero", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+runtime_budget = { name = "refined_calls.extension_model", budget_passed = true, observed_runtime_ms = 9 }

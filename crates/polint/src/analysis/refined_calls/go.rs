@@ -6,12 +6,16 @@ use crate::analysis::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallTargetFact, CallTargetStatus,
     UnresolvedCallFact, UnresolvedCallReason,
 };
-use crate::analysis::ids::{CallSiteId, PlaceId, RefinedCallEdgeId};
+#[cfg(test)]
+use crate::analysis::ids::CallSiteId;
+use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::vars::place_var;
 use crate::analysis::types::facts::{TypeFact, TypePrecision, TypeStatus, TypeSubject};
 use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
-use crate::core::{AnalysisDb, FunctionId, Language};
+#[cfg(test)]
+use crate::core::FunctionId;
+use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn derive_go_refinements(db: &AnalysisDb) -> RefinedCallOutput {
     let mut edges = Vec::new();
@@ -123,21 +127,23 @@ fn type_edge_from_target(
     edge_from_target(
         target,
         RefinedCallEdgeId(index as u64),
-        RefinedCallTier::TypeValueFunctionToken,
-        CallAlgorithm::TypeHierarchy,
-        type_fact.map_or(CallPrecision::Heuristic, |fact| {
-            type_precision(fact.precision)
-        }),
-        vec!["go_receiver_type".to_string(), format!("type={type_key}")],
-        vec![target_key.clone(), type_key.clone()],
-        stable_key_from_parts(
-            FactFamily::RefinedCallEdge,
-            &[
-                ("tier", "go_receiver_type".to_string()),
-                ("base_target", target_key),
-                ("type", type_key),
-            ],
-        ),
+        TargetRefinement {
+            tier: RefinedCallTier::TypeValueFunctionToken,
+            algorithm: CallAlgorithm::TypeHierarchy,
+            precision: type_fact.map_or(CallPrecision::Heuristic, |fact| {
+                type_precision(fact.precision)
+            }),
+            evidence: vec!["go_receiver_type".to_string(), format!("type={type_key}")],
+            input_stable_keys: vec![target_key.clone(), type_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::RefinedCallEdge,
+                &[
+                    ("tier", "go_receiver_type".to_string()),
+                    ("base_target", target_key),
+                    ("type", type_key),
+                ],
+            ),
+        },
     )
 }
 
@@ -154,34 +160,40 @@ fn points_to_edge_from_target(
     edge_from_target(
         target,
         RefinedCallEdgeId(index as u64),
-        RefinedCallTier::PointsToAssisted,
-        CallAlgorithm::PointsTo,
-        CallPrecision::Conservative,
-        vec![
-            "go_receiver_points_to".to_string(),
-            format!("points_to={points_to_key}"),
-        ],
-        vec![target_key.clone(), points_to_key.clone()],
-        stable_key_from_parts(
-            FactFamily::RefinedCallEdge,
-            &[
-                ("tier", "go_points_to".to_string()),
-                ("base_target", target_key),
-                ("points_to", points_to_key),
+        TargetRefinement {
+            tier: RefinedCallTier::PointsToAssisted,
+            algorithm: CallAlgorithm::PointsTo,
+            precision: CallPrecision::Conservative,
+            evidence: vec![
+                "go_receiver_points_to".to_string(),
+                format!("points_to={points_to_key}"),
             ],
-        ),
+            input_stable_keys: vec![target_key.clone(), points_to_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::RefinedCallEdge,
+                &[
+                    ("tier", "go_points_to".to_string()),
+                    ("base_target", target_key),
+                    ("points_to", points_to_key),
+                ],
+            ),
+        },
     )
 }
 
-fn edge_from_target(
-    target: &CallTargetFact,
-    id: RefinedCallEdgeId,
+struct TargetRefinement {
     tier: RefinedCallTier,
     algorithm: CallAlgorithm,
     precision: CallPrecision,
     evidence: Vec<String>,
     input_stable_keys: Vec<String>,
     stable_key: String,
+}
+
+fn edge_from_target(
+    target: &CallTargetFact,
+    id: RefinedCallEdgeId,
+    refinement: TargetRefinement,
 ) -> RefinedCallEdgeFact {
     RefinedCallEdgeFact {
         id,
@@ -193,17 +205,17 @@ fn edge_from_target(
         synthetic_target: None,
         language: Language::Go,
         edge_kind: target.edge_kind,
-        algorithm,
-        tier,
+        algorithm: refinement.algorithm,
+        tier: refinement.tier,
         status: target.status,
         reason: target.reason,
         provenance: CallProvenance::Native,
-        precision,
+        precision: refinement.precision,
         validation: RefinedCallValidation::ReferentiallyValidated,
         confidence: confidence_for_status(target.status),
-        evidence,
-        input_stable_keys,
-        stable_key,
+        evidence: refinement.evidence,
+        input_stable_keys: refinement.input_stable_keys,
+        stable_key: refinement.stable_key,
     }
 }
 
