@@ -1654,7 +1654,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.refined_calls"),
                 ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.metrics"),
+                ("provider_order.16", "polint.evidence"),
+                ("provider_order.17", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
                     "abstract-domain-facts-1:1",

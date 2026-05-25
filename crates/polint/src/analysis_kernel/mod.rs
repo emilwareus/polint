@@ -478,14 +478,14 @@ impl AnalysisKernel {
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.data_flow"),
-            entrypoints_semantic_mir_digest,
-            entrypoints_cfg_digest,
-            entrypoints_calls_digest,
-            refined_calls_dependency_output_digest,
-            direct_summaries_dependency_output_digest,
-            type_value_alias_dependency_output_digest,
-            entrypoints_dependency_output_digest,
-            extensions_dependency_output_digest,
+            entrypoints_semantic_mir_digest.clone(),
+            entrypoints_cfg_digest.clone(),
+            entrypoints_calls_digest.clone(),
+            refined_calls_dependency_output_digest.clone(),
+            direct_summaries_dependency_output_digest.clone(),
+            type_value_alias_dependency_output_digest.clone(),
+            entrypoints_dependency_output_digest.clone(),
+            extensions_dependency_output_digest.clone(),
         );
         let polint_data_flow_cache_stats = data_flow.cache_stats.clone();
         let data_flow_output_digest = data_flow.output_digest.clone();
@@ -494,7 +494,34 @@ impl AnalysisKernel {
             "polint.data_flow",
             &db,
             polint_data_flow_cache_stats,
-            data_flow_output_digest,
+            data_flow_output_digest.clone(),
+        ));
+
+        let data_flow_dependency_output_digest = data_flow_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.data_flow")
+        });
+        let evidence = crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.evidence"),
+            entrypoints_semantic_mir_digest,
+            entrypoints_cfg_digest,
+            entrypoints_calls_digest,
+            refined_calls_dependency_output_digest,
+            direct_summaries_dependency_output_digest,
+            type_value_alias_dependency_output_digest,
+            entrypoints_dependency_output_digest,
+            extensions_dependency_output_digest,
+            data_flow_dependency_output_digest,
+        );
+        let polint_evidence_cache_stats = evidence.cache_stats.clone();
+        let evidence_output_digest = evidence.output_digest;
+        diagnostics.extend(evidence.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.evidence",
+            &db,
+            polint_evidence_cache_stats,
+            evidence_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(

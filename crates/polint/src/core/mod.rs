@@ -29,6 +29,14 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::error::AnalysisError;
+use crate::analysis::evidence::facts::{
+    EvidenceBundleFact, EvidenceConfidence, EvidenceEdgeFact, EvidenceNodeFact,
+    EvidenceOmittedRegionFact, EvidencePathFact, EvidencePrecision, EvidenceProvenance,
+    EvidenceReplayKeyFact, EvidenceSliceFact, EvidenceStatus, EvidenceUnknownFact,
+    EvidenceValidation,
+};
+use crate::analysis::evidence::provider::EVIDENCE_PROVIDER_ID;
+use crate::analysis::evidence::store::{EvidenceOutput, EvidenceStore};
 use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactPrecision};
 use crate::analysis::extensions::store::{
     AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
@@ -686,6 +694,15 @@ pub struct AnalysisDb {
     data_flow_models: Vec<DataFlowModelFact>,
     data_flow_budgets: Vec<DataFlowBudgetFact>,
     data_flow_store: Option<DataFlowStore>,
+    evidence_nodes: Vec<EvidenceNodeFact>,
+    evidence_edges: Vec<EvidenceEdgeFact>,
+    evidence_bundles: Vec<EvidenceBundleFact>,
+    evidence_paths: Vec<EvidencePathFact>,
+    evidence_slices: Vec<EvidenceSliceFact>,
+    evidence_unknowns: Vec<EvidenceUnknownFact>,
+    evidence_omitted_regions: Vec<EvidenceOmittedRegionFact>,
+    evidence_replay_keys: Vec<EvidenceReplayKeyFact>,
+    evidence_store: Option<EvidenceStore>,
     abstract_domain_observations: Vec<DomainObservationFact>,
     abstract_domain_events: Vec<DomainEventFact>,
     abstract_domain_store: Option<DomainStore>,
@@ -1064,6 +1081,24 @@ impl AnalysisDb {
         Ok(())
     }
 
+    pub(crate) fn replace_evidence_facts(
+        &mut self,
+        output: EvidenceOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = EvidenceStore::from_output(output)?;
+        self.evidence_nodes = store.nodes().to_vec();
+        self.evidence_edges = store.edges().to_vec();
+        self.evidence_bundles = store.bundles().to_vec();
+        self.evidence_paths = store.paths().to_vec();
+        self.evidence_slices = store.slices().to_vec();
+        self.evidence_unknowns = store.unknowns().to_vec();
+        self.evidence_omitted_regions = store.omitted_regions().to_vec();
+        self.evidence_replay_keys = store.replay_keys().to_vec();
+        self.evidence_store = Some(store);
+        self.refresh_evidence_metadata();
+        Ok(())
+    }
+
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
         let store = DomainStore::from_output(output);
         self.abstract_domain_observations = store.observations().to_vec();
@@ -1167,6 +1202,43 @@ impl AnalysisDb {
     #[allow(dead_code)]
     pub(crate) fn data_flow_store(&self) -> Option<&DataFlowStore> {
         self.data_flow_store.as_ref()
+    }
+
+    pub(crate) fn evidence_nodes(&self) -> &[EvidenceNodeFact] {
+        &self.evidence_nodes
+    }
+
+    pub(crate) fn evidence_edges(&self) -> &[EvidenceEdgeFact] {
+        &self.evidence_edges
+    }
+
+    pub(crate) fn evidence_bundles(&self) -> &[EvidenceBundleFact] {
+        &self.evidence_bundles
+    }
+
+    pub(crate) fn evidence_paths(&self) -> &[EvidencePathFact] {
+        &self.evidence_paths
+    }
+
+    pub(crate) fn evidence_slices(&self) -> &[EvidenceSliceFact] {
+        &self.evidence_slices
+    }
+
+    pub(crate) fn evidence_unknowns(&self) -> &[EvidenceUnknownFact] {
+        &self.evidence_unknowns
+    }
+
+    pub(crate) fn evidence_omitted_regions(&self) -> &[EvidenceOmittedRegionFact] {
+        &self.evidence_omitted_regions
+    }
+
+    pub(crate) fn evidence_replay_keys(&self) -> &[EvidenceReplayKeyFact] {
+        &self.evidence_replay_keys
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn evidence_store(&self) -> Option<&EvidenceStore> {
+        self.evidence_store.as_ref()
     }
 
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
@@ -1470,6 +1542,95 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in budget_metadata {
             self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
+        }
+    }
+
+    fn refresh_evidence_metadata(&mut self) {
+        for family in [
+            FactFamily::EvidenceNode,
+            FactFamily::EvidenceEdge,
+            FactFamily::EvidenceBundle,
+            FactFamily::EvidencePath,
+            FactFamily::EvidenceSlice,
+            FactFamily::EvidenceUnknown,
+            FactFamily::EvidenceOmittedRegion,
+            FactFamily::EvidenceReplayKey,
+        ] {
+            self.fact_meta.remove_family(family);
+        }
+
+        let node_metadata = self
+            .evidence_nodes
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_node_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::EvidenceNode, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .evidence_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::EvidenceEdge, run_id, metadata);
+        }
+
+        let bundle_metadata = self
+            .evidence_bundles
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_bundle_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in bundle_metadata {
+            self.record_fact_meta(FactFamily::EvidenceBundle, run_id, metadata);
+        }
+
+        let path_metadata = self
+            .evidence_paths
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_path_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in path_metadata {
+            self.record_fact_meta(FactFamily::EvidencePath, run_id, metadata);
+        }
+
+        let slice_metadata = self
+            .evidence_slices
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_slice_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in slice_metadata {
+            self.record_fact_meta(FactFamily::EvidenceSlice, run_id, metadata);
+        }
+
+        let unknown_metadata = self
+            .evidence_unknowns
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.evidence_unknown_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unknown_metadata {
+            self.record_fact_meta(FactFamily::EvidenceUnknown, run_id, metadata);
+        }
+
+        let omitted_metadata = self
+            .evidence_omitted_regions
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_omitted_region_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in omitted_metadata {
+            self.record_fact_meta(FactFamily::EvidenceOmittedRegion, run_id, metadata);
+        }
+
+        let replay_metadata = self
+            .evidence_replay_keys
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.evidence_replay_key_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in replay_metadata {
+            self.record_fact_meta(FactFamily::EvidenceReplayKey, run_id, metadata);
         }
     }
 
@@ -2773,6 +2934,42 @@ impl AnalysisDb {
         }
         for budget in self.data_flow_budgets() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowBudget, budget.id.0);
+        }
+        for node in self.evidence_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceNode, node.id.0);
+        }
+        for edge in self.evidence_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceEdge, edge.id.0);
+        }
+        for bundle in self.evidence_bundles() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceBundle, bundle.id.0);
+        }
+        for path in self.evidence_paths() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidencePath, path.id.0);
+        }
+        for slice in self.evidence_slices() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceSlice, slice.id.0);
+        }
+        for (run_id, _unknown) in self.evidence_unknowns().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceUnknown,
+                run_id as u64,
+            );
+        }
+        for omitted in self.evidence_omitted_regions() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceOmittedRegion,
+                omitted.id.0,
+            );
+        }
+        for (run_id, _replay) in self.evidence_replay_keys().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceReplayKey,
+                run_id as u64,
+            );
         }
         for symbol in self.symbols() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
@@ -4180,6 +4377,238 @@ impl AnalysisDb {
         )
     }
 
+    fn evidence_node_metadata(&self, fact: &EvidenceNodeFact) -> FactMeta {
+        let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
+        let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
+        let validation = evidence_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::EvidenceNode,
+            EVIDENCE_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("status", evidence_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    evidence_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "provenance",
+                    evidence_provenance_label(fact.provenance).to_string(),
+                ),
+                (
+                    "validation",
+                    evidence_validation_label(fact.validation).to_string(),
+                ),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "file_key",
+                    fact.file
+                        .map(|file| self.source_file_key(file))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "function_key",
+                    fact.function
+                        .map(|function| self.fact_stable_key(FactFamily::Function, function.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                ("span", option_span_metadata_value(fact.span.as_ref())),
+                ("sources", fact.source_fact_stable_keys.join("\n")),
+            ]),
+        )
+    }
+
+    fn evidence_edge_metadata(&self, fact: &EvidenceEdgeFact) -> FactMeta {
+        let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
+        let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
+        let validation = evidence_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::EvidenceEdge,
+            EVIDENCE_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("query_mode", format!("{:?}", fact.query_mode)),
+                ("status", evidence_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    evidence_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "provenance",
+                    evidence_provenance_label(fact.provenance).to_string(),
+                ),
+                (
+                    "validation",
+                    evidence_validation_label(fact.validation).to_string(),
+                ),
+                (
+                    "from_key",
+                    self.fact_stable_key(FactFamily::EvidenceNode, fact.from.0),
+                ),
+                (
+                    "to_key",
+                    self.fact_stable_key(FactFamily::EvidenceNode, fact.to.0),
+                ),
+                (
+                    "call_site_key",
+                    fact.call_site
+                        .map(|site| self.fact_stable_key(FactFamily::CallSite, site.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "summary_key",
+                    fact.summary_stable_key.clone().unwrap_or_else(none_value),
+                ),
+                ("sources", fact.source_fact_stable_keys.join("\n")),
+            ]),
+        )
+    }
+
+    fn evidence_bundle_metadata(&self, fact: &EvidenceBundleFact) -> FactMeta {
+        let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
+        let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
+        let validation = evidence_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::EvidenceBundle,
+            EVIDENCE_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("diagnostic_key", fact.diagnostic_stable_key.clone()),
+                ("query_mode", format!("{:?}", fact.query_mode)),
+                ("status", evidence_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    evidence_precision_label(fact.precision).to_string(),
+                ),
+                ("selected_paths", fact.selected_paths.len().to_string()),
+                ("selected_slices", fact.selected_slices.len().to_string()),
+                (
+                    "replay_key",
+                    fact.replay_key.clone().unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn evidence_path_metadata(&self, fact: &EvidencePathFact) -> FactMeta {
+        let (precision, confidence) =
+            evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
+        fact_meta_from_stable_key(
+            FactFamily::EvidencePath,
+            EVIDENCE_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("query_mode", format!("{:?}", fact.query_mode)),
+                ("status", evidence_status_label(fact.status).to_string()),
+                ("rank", fact.rank.to_string()),
+                ("node_count", fact.nodes.len().to_string()),
+                ("edge_count", fact.edges.len().to_string()),
+                ("hidden_node_count", fact.hidden_node_count.to_string()),
+            ]),
+        )
+    }
+
+    fn evidence_slice_metadata(&self, fact: &EvidenceSliceFact) -> FactMeta {
+        let (precision, confidence) =
+            evidence_status_metadata(fact.status, EvidencePrecision::Heuristic);
+        fact_meta_from_stable_key(
+            FactFamily::EvidenceSlice,
+            EVIDENCE_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("query_mode", format!("{:?}", fact.query_mode)),
+                ("status", evidence_status_label(fact.status).to_string()),
+                ("root_count", fact.root_nodes.len().to_string()),
+                ("node_count", fact.nodes.len().to_string()),
+                ("edge_count", fact.edges.len().to_string()),
+            ]),
+        )
+    }
+
+    fn evidence_unknown_metadata(&self, fact: &EvidenceUnknownFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::EvidenceUnknown,
+            EVIDENCE_PROVIDER_ID,
+            FactPrecision::Unresolved,
+            FactConfidence::Low,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("reason", format!("{:?}", fact.reason)),
+                ("message", fact.message.clone()),
+                ("sources", fact.source_fact_stable_keys.join("\n")),
+            ]),
+        )
+    }
+
+    fn evidence_omitted_region_metadata(&self, fact: &EvidenceOmittedRegionFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::EvidenceOmittedRegion,
+            EVIDENCE_PROVIDER_ID,
+            FactPrecision::Unresolved,
+            FactConfidence::Low,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("reason", format!("{:?}", fact.reason)),
+                ("hidden_node_count", fact.hidden_node_count.to_string()),
+                ("hidden_edge_count", fact.hidden_edge_count.to_string()),
+                (
+                    "budget_label",
+                    fact.budget_label.clone().unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn evidence_replay_key_metadata(&self, fact: &EvidenceReplayKeyFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::EvidenceReplayKey,
+            EVIDENCE_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("query_mode", format!("{:?}", fact.query_mode)),
+                ("graph_schema", fact.graph_schema.clone()),
+                ("max_paths", fact.query_budget.max_paths.to_string()),
+                ("max_nodes", fact.query_budget.max_nodes.to_string()),
+                ("max_edges", fact.query_budget.max_edges.to_string()),
+                ("max_depth", fact.query_budget.max_depth.to_string()),
+                ("ranking", format!("{:?}", fact.ranking)),
+                ("renderer", format!("{:?}", fact.renderer)),
+                ("upstream", fact.upstream_digest_keys.join("\n")),
+            ]),
+        )
+    }
+
     fn unresolved_call_metadata(&self, fact: &UnresolvedCallFact) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5454,6 +5883,119 @@ fn data_flow_validation_label(validation: DataFlowValidation) -> &'static str {
         DataFlowValidation::ExtensionValidated => "extension_validated",
         DataFlowValidation::BudgetValidated => "budget_validated",
         DataFlowValidation::Rejected => "rejected",
+    }
+}
+
+fn evidence_status_metadata(
+    status: EvidenceStatus,
+    precision: EvidencePrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        EvidenceStatus::Present => match precision {
+            EvidencePrecision::Exact => FactPrecision::Exact,
+            EvidencePrecision::SetupAware => FactPrecision::SetupAware,
+            EvidencePrecision::Syntax => FactPrecision::Syntax,
+            EvidencePrecision::Conservative | EvidencePrecision::Heuristic => {
+                FactPrecision::Heuristic
+            }
+            EvidencePrecision::Unknown => FactPrecision::Unresolved,
+        },
+        EvidenceStatus::Partial | EvidenceStatus::Unknown | EvidenceStatus::BudgetExceeded => {
+            FactPrecision::Unresolved
+        }
+        EvidenceStatus::Unsupported | EvidenceStatus::Rejected => FactPrecision::Unsupported,
+        EvidenceStatus::SetupMissing => FactPrecision::SetupMissing,
+    };
+    let confidence = match status {
+        EvidenceStatus::Present => match precision {
+            EvidencePrecision::Exact
+            | EvidencePrecision::SetupAware
+            | EvidencePrecision::Syntax => FactConfidence::High,
+            EvidencePrecision::Conservative | EvidencePrecision::Heuristic => {
+                FactConfidence::Medium
+            }
+            EvidencePrecision::Unknown => FactConfidence::Low,
+        },
+        EvidenceStatus::Partial => FactConfidence::Medium,
+        EvidenceStatus::Unknown
+        | EvidenceStatus::Unsupported
+        | EvidenceStatus::SetupMissing
+        | EvidenceStatus::BudgetExceeded
+        | EvidenceStatus::Rejected => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn evidence_confidence_metadata(
+    confidence: EvidenceConfidence,
+    fallback: FactConfidence,
+) -> FactConfidence {
+    let requested = match confidence {
+        EvidenceConfidence::High => FactConfidence::High,
+        EvidenceConfidence::Medium => FactConfidence::Medium,
+        EvidenceConfidence::Low => FactConfidence::Low,
+    };
+    match (requested, fallback) {
+        (FactConfidence::Low, _) | (_, FactConfidence::Low) => FactConfidence::Low,
+        (FactConfidence::Medium, _) | (_, FactConfidence::Medium) => FactConfidence::Medium,
+        (FactConfidence::High, FactConfidence::High) => FactConfidence::High,
+    }
+}
+
+fn evidence_validation_metadata(validation: EvidenceValidation) -> ValidationStatus {
+    match validation {
+        EvidenceValidation::Native => ValidationStatus::NativeTrusted,
+        EvidenceValidation::ReferentiallyValidated => ValidationStatus::ReferentiallyValidated,
+        EvidenceValidation::ExtensionValidated => ValidationStatus::SchemaValidated,
+        EvidenceValidation::BudgetValidated | EvidenceValidation::RendererValidated => {
+            ValidationStatus::StableKeyValidated
+        }
+        EvidenceValidation::Rejected => ValidationStatus::ConflictRejected,
+    }
+}
+
+fn evidence_status_label(status: EvidenceStatus) -> &'static str {
+    match status {
+        EvidenceStatus::Present => "present",
+        EvidenceStatus::Partial => "partial",
+        EvidenceStatus::Unknown => "unknown",
+        EvidenceStatus::Unsupported => "unsupported",
+        EvidenceStatus::SetupMissing => "setup_missing",
+        EvidenceStatus::BudgetExceeded => "budget_exceeded",
+        EvidenceStatus::Rejected => "rejected",
+    }
+}
+
+fn evidence_precision_label(precision: EvidencePrecision) -> &'static str {
+    match precision {
+        EvidencePrecision::Exact => "exact",
+        EvidencePrecision::SetupAware => "setup_aware",
+        EvidencePrecision::Syntax => "syntax",
+        EvidencePrecision::Conservative => "conservative",
+        EvidencePrecision::Heuristic => "heuristic",
+        EvidencePrecision::Unknown => "unknown",
+    }
+}
+
+fn evidence_provenance_label(provenance: EvidenceProvenance) -> &'static str {
+    match provenance {
+        EvidenceProvenance::Native => "native",
+        EvidenceProvenance::Summary => "summary",
+        EvidenceProvenance::Extension => "extension",
+        EvidenceProvenance::Model => "model",
+        EvidenceProvenance::Query => "query",
+        EvidenceProvenance::Synthetic => "synthetic",
+    }
+}
+
+fn evidence_validation_label(validation: EvidenceValidation) -> &'static str {
+    match validation {
+        EvidenceValidation::Native => "native",
+        EvidenceValidation::ReferentiallyValidated => "referentially_validated",
+        EvidenceValidation::ExtensionValidated => "extension_validated",
+        EvidenceValidation::BudgetValidated => "budget_validated",
+        EvidenceValidation::RendererValidated => "renderer_validated",
+        EvidenceValidation::Rejected => "rejected",
     }
 }
 
