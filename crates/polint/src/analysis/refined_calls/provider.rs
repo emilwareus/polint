@@ -62,7 +62,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     output
         .edges
         .extend(super::extensions::derive_extension_refinements(db).edges);
-    output = output.normalized();
+    output = finalized_output(output);
 
     let output_digest = refined_calls_output_digest(
         manifest,
@@ -89,6 +89,14 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
             output_digest: Some(output_digest),
         },
     }
+}
+
+fn finalized_output(mut output: RefinedCallOutput) -> RefinedCallOutput {
+    output = output.normalized();
+    for (index, edge) in output.edges.iter_mut().enumerate() {
+        edge.id = crate::analysis::ids::RefinedCallEdgeId(index as u64);
+    }
+    output
 }
 
 fn refined_edge_from_base_target(
@@ -291,5 +299,46 @@ mod tests {
             stable_refined_call_key(&db, &target, RefinedCallTier::DirectOnly),
             stable_refined_call_key(&db, &target, RefinedCallTier::DirectOnly)
         );
+    }
+
+    #[test]
+    fn finalized_output_reassigns_dense_ids_after_sorting() {
+        let output = finalized_output(RefinedCallOutput {
+            edges: vec![refined_edge("z", 10), refined_edge("a", 10)],
+        });
+
+        assert_eq!(
+            output
+                .edges
+                .iter()
+                .map(|edge| (edge.id.0, edge.stable_key.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(0, "a"), (1, "z")]
+        );
+    }
+
+    fn refined_edge(stable_key: &str, id: u64) -> RefinedCallEdgeFact {
+        RefinedCallEdgeFact {
+            id: crate::analysis::ids::RefinedCallEdgeId(id),
+            site: CallSiteId(0),
+            base_target: None,
+            caller: FunctionId(0),
+            target_function: None,
+            target_symbol: None,
+            synthetic_target: None,
+            language: crate::core::Language::TypeScript,
+            edge_kind: CallEdgeKind::Synthetic,
+            algorithm: CallAlgorithm::FrameworkModel,
+            tier: RefinedCallTier::DirectPlusFramework,
+            status: CallTargetStatus::Resolved,
+            reason: None,
+            provenance: CallProvenance::Model,
+            precision: CallPrecision::Heuristic,
+            validation: RefinedCallValidation::Native,
+            confidence: RefinedCallConfidence::Medium,
+            evidence: Vec::new(),
+            input_stable_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
     }
 }

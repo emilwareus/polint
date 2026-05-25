@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::analysis::calls::facts::CallEdgeKind;
 use crate::analysis_kernel::FactFamily;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, Severity, TextRange, fingerprint};
@@ -27,7 +28,7 @@ pub(crate) fn validate_refined_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diag
         .collect::<BTreeSet<_>>();
 
     for edge in db.refined_call_edges() {
-        if !call_sites.contains(&edge.site) {
+        if !call_sites.contains(&edge.site) && !uses_synthetic_framework_site(edge) {
             diagnostics.push(invalid_refined_call_diagnostic(
                 &edge.stable_key,
                 format!("dangling call site {:?}", edge.site),
@@ -73,6 +74,17 @@ pub(crate) fn validate_refined_calls(db: &AnalysisDb, diagnostics: &mut Vec<Diag
             ));
         }
     }
+}
+
+fn uses_synthetic_framework_site(
+    edge: &crate::analysis::refined_calls::facts::RefinedCallEdgeFact,
+) -> bool {
+    edge.base_target.is_none()
+        && edge.edge_kind == CallEdgeKind::Synthetic
+        && edge
+            .evidence
+            .iter()
+            .any(|evidence| evidence == "framework_dispatch" || evidence == "unresolved_framework")
 }
 
 fn invalid_refined_call_diagnostic(stable_key: &str, reason: String) -> Diagnostic {
