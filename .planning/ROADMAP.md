@@ -445,6 +445,49 @@ Plans:
 **Goal:** Add local value-flow graph, direct-call interprocedural edges, summary-projected edges, model sinks, budgets, unknowns, and query-scoped path search.
 **Requirements:** SAE-PREC-03
 **Research:** `research/data-flow/FINAL-REPORT.md`, `research/data-flow/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`
+**Plans:** 7/10 plans complete; 3 gap-closure plans ready
+
+Plans:
+
+**Wave 1**
+
+- [x] 38-01-PLAN.md - Private data-flow fact contracts and store
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 38-02-PLAN.md - Provider, cache, and kernel wiring
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 38-03-PLAN.md - Local MIR place nodes
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 38-04-PLAN.md - Direct-call projected data-flow edges
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 38-05-PLAN.md - Trust-boundary source models and extension model facts
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 38-06-PLAN.md - Budgeted private path search
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 38-07-PLAN.md - Validation hook, eval order proof, and private-boundary documentation
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 38-08-PLAN.md - Local value-flow edges and stored uncertainty
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 38-09-PLAN.md - Summary-projected and interprocedural data-flow closure
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 38-10-PLAN.md - Data-flow eval fixtures, debug, and public boundary proof
 
 **Success criteria:**
 
