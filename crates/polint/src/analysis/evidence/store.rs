@@ -221,6 +221,8 @@ pub(crate) struct EvidenceStore {
     by_status: BTreeMap<EvidenceStatus, Vec<usize>>,
     by_provenance: BTreeMap<EvidenceProvenance, Vec<usize>>,
     by_replay_key: BTreeMap<String, Vec<usize>>,
+    outgoing: BTreeMap<EvidenceNodeId, Vec<usize>>,
+    incoming: BTreeMap<EvidenceNodeId, Vec<usize>>,
 }
 
 impl EvidenceStore {
@@ -306,6 +308,8 @@ impl EvidenceStore {
                     .or_default()
                     .push(index);
             }
+            store.outgoing.entry(edge.from).or_default().push(index);
+            store.incoming.entry(edge.to).or_default().push(index);
         }
         for (index, bundle) in store.output.bundles.iter().enumerate() {
             store
@@ -364,6 +368,47 @@ impl EvidenceStore {
 
     pub(crate) fn replay_keys(&self) -> &[EvidenceReplayKeyFact] {
         &self.output.replay_keys
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    )]
+    pub(crate) fn node(&self, node: EvidenceNodeId) -> Option<&EvidenceNodeFact> {
+        self.output.nodes.get(node.0 as usize)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    )]
+    pub(crate) fn edge(&self, edge: EvidenceEdgeId) -> Option<&EvidenceEdgeFact> {
+        self.output.edges.get(edge.0 as usize)
+    }
+
+    pub(crate) fn incoming(&self, node: EvidenceNodeId) -> Vec<&EvidenceEdgeFact> {
+        self.edge_refs(self.incoming.get(&node))
+    }
+
+    pub(crate) fn outgoing(&self, node: EvidenceNodeId) -> Vec<&EvidenceEdgeFact> {
+        self.edge_refs(self.outgoing.get(&node))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    )]
+    pub(crate) fn by_edge_kind(&self, kind: EvidenceEdgeKind) -> Vec<&EvidenceEdgeFact> {
+        self.edge_refs(self.by_edge_kind.get(&kind))
+    }
+
+    fn edge_refs(&self, indexes: Option<&Vec<usize>>) -> Vec<&EvidenceEdgeFact> {
+        indexes.map_or_else(Vec::new, |indexes| {
+            indexes
+                .iter()
+                .map(|index| &self.output.edges[*index])
+                .collect()
+        })
     }
 }
 

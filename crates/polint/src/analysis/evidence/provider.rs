@@ -4,11 +4,23 @@ use std::fmt::Debug;
 use super::cache_key::{
     evidence_provider_parameter_digest, evidence_provider_parameter_digest_for_snapshot,
 };
+use super::facts::{
+    EvidenceConfidence, EvidenceEdgeFact, EvidenceEdgeKind, EvidenceExpansion, EvidenceNodeFact,
+    EvidenceNodeKind, EvidencePrecision, EvidenceProvenance, EvidenceQueryMode, EvidenceStatus,
+    EvidenceValidation,
+};
 use super::store::EvidenceOutput;
+use crate::analysis::cfg::facts::{CfgPrecision, CfgStatus};
+use crate::analysis::data_flow::facts::{
+    DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
+    DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
+};
+use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -37,7 +49,10 @@ pub(crate) fn derive_evidence_with_cache_stats(
     data_flow_output_digest: Digest,
 ) -> EvidenceProviderOutput {
     debug_assert_eq!(manifest.id, EVIDENCE_PROVIDER_ID);
-    let output = EvidenceOutput::empty().normalized();
+    let mut output = EvidenceOutput::empty();
+    derive_data_flow_evidence(db, &mut output);
+    derive_control_dependence_evidence(db, &mut output);
+    let output = output.normalized();
     let output_digest = evidence_output_digest(
         manifest,
         input_snapshot,
@@ -66,6 +81,327 @@ pub(crate) fn derive_evidence_with_cache_stats(
             cache_stats,
             output_digest: Some(output_digest),
         },
+    }
+}
+
+fn derive_data_flow_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
+    let mut node_map = std::collections::BTreeMap::new();
+    for node in db.data_flow_nodes() {
+        let evidence_id = EvidenceNodeId(output.nodes.len() as u64);
+        node_map.insert(node.id, evidence_id);
+        output
+            .nodes
+            .push(evidence_node_from_data_flow(node, evidence_id));
+    }
+
+    for edge in db.data_flow_edges() {
+        let (Some(from), Some(to)) = (node_map.get(&edge.from), node_map.get(&edge.to)) else {
+            continue;
+        };
+        output.edges.push(evidence_edge_from_data_flow(
+            edge,
+            EvidenceEdgeId(output.edges.len() as u64),
+            *from,
+            *to,
+        ));
+    }
+}
+
+fn evidence_node_from_data_flow(node: &DataFlowNodeFact, id: EvidenceNodeId) -> EvidenceNodeFact {
+    EvidenceNodeFact {
+        id,
+        kind: data_flow_node_kind(node),
+        language: node.language,
+        file: node.file,
+        function: node.function,
+        body: node.body,
+        operation: node.operation,
+        cfg_node: node.cfg_node,
+        place: node.place,
+        symbol: node.symbol,
+        reference: node.reference,
+        call_site: node.call_site,
+        span: node.span.clone(),
+        status: EvidenceStatus::Present,
+        precision: EvidencePrecision::Syntax,
+        provenance: EvidenceProvenance::Native,
+        validation: EvidenceValidation::ReferentiallyValidated,
+        confidence: EvidenceConfidence::High,
+        compact_label: Some(format!("{:?}", node.kind)),
+        source_fact_stable_keys: vec![node.stable_key.clone()],
+        stable_key: stable_key_from_parts(
+            FactFamily::EvidenceNode,
+            &[("data_flow_node", node.stable_key.clone())],
+        ),
+    }
+}
+
+fn evidence_edge_from_data_flow(
+    edge: &DataFlowEdgeFact,
+    id: EvidenceEdgeId,
+    from: EvidenceNodeId,
+    to: EvidenceNodeId,
+) -> EvidenceEdgeFact {
+    EvidenceEdgeFact {
+        id,
+        from,
+        to,
+        kind: data_flow_edge_kind(edge.kind),
+        query_mode: EvidenceQueryMode::ThinBackward,
+        status: data_flow_status(edge.status),
+        precision: data_flow_precision(edge.precision),
+        provenance: data_flow_provenance(edge.provenance),
+        validation: data_flow_validation(edge.validation),
+        confidence: data_flow_confidence(edge.confidence),
+        call_site: edge.call_site,
+        summary_stable_key: edge
+            .input_stable_keys
+            .iter()
+            .find(|key| key.contains("Summary"))
+            .cloned(),
+        expansion: EvidenceExpansion::None,
+        compact_label: Some(format!("{:?}", edge.kind)),
+        source_fact_stable_keys: std::iter::once(edge.stable_key.clone())
+            .chain(edge.input_stable_keys.iter().cloned())
+            .collect(),
+        stable_key: stable_key_from_parts(
+            FactFamily::EvidenceEdge,
+            &[("data_flow_edge", edge.stable_key.clone())],
+        ),
+    }
+}
+
+fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutput) {
+    for dependence in db.cfg_control_dependence() {
+        let Some(controlling_edge) = db
+            .cfg_edges()
+            .iter()
+            .find(|edge| edge.id == dependence.controlling_edge)
+        else {
+            continue;
+        };
+        let from = EvidenceNodeId(output.nodes.len() as u64);
+        output.nodes.push(EvidenceNodeFact {
+            id: from,
+            kind: EvidenceNodeKind::Statement,
+            language: db
+                .cfg_functions()
+                .iter()
+                .find(|function| function.id == dependence.cfg_function)
+                .map(|function| function.language)
+                .unwrap_or(crate::core::Language::Unknown),
+            file: db
+                .cfg_functions()
+                .iter()
+                .find(|function| function.id == dependence.cfg_function)
+                .map(|function| function.file),
+            function: db
+                .cfg_functions()
+                .iter()
+                .find(|function| function.id == dependence.cfg_function)
+                .map(|function| function.function),
+            body: None,
+            operation: None,
+            cfg_node: Some(controlling_edge.from),
+            place: None,
+            symbol: None,
+            reference: None,
+            call_site: None,
+            span: None,
+            status: cfg_status(dependence.status),
+            precision: cfg_precision(dependence.precision),
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::ReferentiallyValidated,
+            confidence: EvidenceConfidence::High,
+            compact_label: Some(format!("control:{:?}", dependence.controlling_edge_kind)),
+            source_fact_stable_keys: vec![
+                dependence.stable_key.clone(),
+                controlling_edge.stable_key.clone(),
+            ],
+            stable_key: stable_key_from_parts(
+                FactFamily::EvidenceNode,
+                &[
+                    ("control_dependence", dependence.stable_key.clone()),
+                    ("role", "controller".to_string()),
+                ],
+            ),
+        });
+        let to = EvidenceNodeId(output.nodes.len() as u64);
+        output.nodes.push(EvidenceNodeFact {
+            id: to,
+            kind: EvidenceNodeKind::Synthetic,
+            language: crate::core::Language::Unknown,
+            file: None,
+            function: None,
+            body: None,
+            operation: None,
+            cfg_node: Some(controlling_edge.to),
+            place: None,
+            symbol: None,
+            reference: None,
+            call_site: None,
+            span: None,
+            status: cfg_status(dependence.status),
+            precision: cfg_precision(dependence.precision),
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::ReferentiallyValidated,
+            confidence: EvidenceConfidence::High,
+            compact_label: Some("controlled_block".to_string()),
+            source_fact_stable_keys: vec![dependence.stable_key.clone()],
+            stable_key: stable_key_from_parts(
+                FactFamily::EvidenceNode,
+                &[
+                    ("control_dependence", dependence.stable_key.clone()),
+                    ("role", "controlled".to_string()),
+                ],
+            ),
+        });
+        output.edges.push(EvidenceEdgeFact {
+            id: EvidenceEdgeId(output.edges.len() as u64),
+            from,
+            to,
+            kind: EvidenceEdgeKind::Control,
+            query_mode: EvidenceQueryMode::FullBackward,
+            status: cfg_status(dependence.status),
+            precision: cfg_precision(dependence.precision),
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::ReferentiallyValidated,
+            confidence: EvidenceConfidence::High,
+            call_site: None,
+            summary_stable_key: None,
+            expansion: EvidenceExpansion::None,
+            compact_label: Some(format!("{:?}", dependence.controlling_edge_kind)),
+            source_fact_stable_keys: vec![
+                dependence.stable_key.clone(),
+                controlling_edge.stable_key.clone(),
+            ],
+            stable_key: stable_key_from_parts(
+                FactFamily::EvidenceEdge,
+                &[("control_dependence", dependence.stable_key.clone())],
+            ),
+        });
+    }
+}
+
+fn data_flow_node_kind(node: &DataFlowNodeFact) -> EvidenceNodeKind {
+    if node.operation.is_some() {
+        EvidenceNodeKind::Operation
+    } else if node.place.is_some() {
+        EvidenceNodeKind::Place
+    } else if node.call_site.is_some() {
+        EvidenceNodeKind::CallSite
+    } else if node.model.is_some()
+        || matches!(
+            node.kind,
+            DataFlowNodeKind::Source
+                | DataFlowNodeKind::Sink
+                | DataFlowNodeKind::Sanitizer
+                | DataFlowNodeKind::Barrier
+        )
+    {
+        EvidenceNodeKind::Model
+    } else {
+        EvidenceNodeKind::Synthetic
+    }
+}
+
+fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
+    match kind {
+        DataFlowEdgeKind::LocalRead
+        | DataFlowEdgeKind::LocalBinding
+        | DataFlowEdgeKind::LocalAssignment
+        | DataFlowEdgeKind::LocalUse
+        | DataFlowEdgeKind::LocalWrite
+        | DataFlowEdgeKind::ReturnValue
+        | DataFlowEdgeKind::CallArgumentToParameter
+        | DataFlowEdgeKind::CallArgumentToReturn
+        | DataFlowEdgeKind::CallReturnToUse
+        | DataFlowEdgeKind::ReceiverToMethod
+        | DataFlowEdgeKind::SourceIntroduction
+        | DataFlowEdgeKind::SinkReachability => EvidenceEdgeKind::DataValue,
+        DataFlowEdgeKind::FieldProjection
+        | DataFlowEdgeKind::IndexProjection
+        | DataFlowEdgeKind::Dereference
+        | DataFlowEdgeKind::AddressOf => EvidenceEdgeKind::DataAddress,
+        DataFlowEdgeKind::SummaryTito | DataFlowEdgeKind::SummaryProjected => {
+            EvidenceEdgeKind::Summary
+        }
+        DataFlowEdgeKind::Model | DataFlowEdgeKind::Sanitizer | DataFlowEdgeKind::Barrier => {
+            EvidenceEdgeKind::Model
+        }
+        DataFlowEdgeKind::UnknownFlow
+        | DataFlowEdgeKind::HavocFlow
+        | DataFlowEdgeKind::BudgetTruncated => EvidenceEdgeKind::Unknown,
+    }
+}
+
+fn data_flow_status(status: DataFlowStatus) -> EvidenceStatus {
+    match status {
+        DataFlowStatus::Present => EvidenceStatus::Present,
+        DataFlowStatus::Unknown => EvidenceStatus::Unknown,
+        DataFlowStatus::Unsupported => EvidenceStatus::Unsupported,
+        DataFlowStatus::SetupMissing => EvidenceStatus::SetupMissing,
+        DataFlowStatus::BudgetExceeded => EvidenceStatus::BudgetExceeded,
+        DataFlowStatus::Rejected => EvidenceStatus::Rejected,
+    }
+}
+
+fn data_flow_precision(precision: DataFlowPrecision) -> EvidencePrecision {
+    match precision {
+        DataFlowPrecision::Exact => EvidencePrecision::Exact,
+        DataFlowPrecision::SetupAware => EvidencePrecision::SetupAware,
+        DataFlowPrecision::Syntax => EvidencePrecision::Syntax,
+        DataFlowPrecision::Conservative => EvidencePrecision::Conservative,
+        DataFlowPrecision::Heuristic => EvidencePrecision::Heuristic,
+        DataFlowPrecision::Unknown => EvidencePrecision::Unknown,
+    }
+}
+
+fn data_flow_provenance(provenance: DataFlowProvenance) -> EvidenceProvenance {
+    match provenance {
+        DataFlowProvenance::Native => EvidenceProvenance::Native,
+        DataFlowProvenance::Summary => EvidenceProvenance::Summary,
+        DataFlowProvenance::Extension => EvidenceProvenance::Extension,
+        DataFlowProvenance::Model => EvidenceProvenance::Model,
+        DataFlowProvenance::Query => EvidenceProvenance::Query,
+    }
+}
+
+fn data_flow_validation(validation: DataFlowValidation) -> EvidenceValidation {
+    match validation {
+        DataFlowValidation::Native => EvidenceValidation::Native,
+        DataFlowValidation::ReferentiallyValidated => EvidenceValidation::ReferentiallyValidated,
+        DataFlowValidation::ExtensionValidated => EvidenceValidation::ExtensionValidated,
+        DataFlowValidation::BudgetValidated => EvidenceValidation::BudgetValidated,
+        DataFlowValidation::Rejected => EvidenceValidation::Rejected,
+    }
+}
+
+fn data_flow_confidence(confidence: DataFlowConfidence) -> EvidenceConfidence {
+    match confidence {
+        DataFlowConfidence::High => EvidenceConfidence::High,
+        DataFlowConfidence::Medium => EvidenceConfidence::Medium,
+        DataFlowConfidence::Low => EvidenceConfidence::Low,
+    }
+}
+
+fn cfg_status(status: CfgStatus) -> EvidenceStatus {
+    match status {
+        CfgStatus::Resolved => EvidenceStatus::Present,
+        CfgStatus::Partial => EvidenceStatus::Partial,
+        CfgStatus::Unknown => EvidenceStatus::Unknown,
+        CfgStatus::Unsupported => EvidenceStatus::Unsupported,
+    }
+}
+
+fn cfg_precision(precision: CfgPrecision) -> EvidencePrecision {
+    match precision {
+        CfgPrecision::ExactSyntax | CfgPrecision::ExactLowered => EvidencePrecision::Exact,
+        CfgPrecision::SetupAware => EvidencePrecision::SetupAware,
+        CfgPrecision::Conservative => EvidencePrecision::Conservative,
+        CfgPrecision::Heuristic => EvidencePrecision::Heuristic,
+        CfgPrecision::Unknown => EvidencePrecision::Unknown,
+        CfgPrecision::Unsupported => EvidencePrecision::Unknown,
     }
 }
 
@@ -190,7 +526,23 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::cfg::facts::{
+        BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
+        CfgNodeKind, CfgPrecision, CfgStatus, CfgView, ControlDependenceFact,
+    };
+    use crate::analysis::cfg::ids::{
+        BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId, ControlDependenceId,
+    };
+    use crate::analysis::cfg::store::CfgOutput;
+    use crate::analysis::data_flow::facts::{
+        DataFlowAlgorithm, DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind,
+        DataFlowNodeFact, DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance, DataFlowStatus,
+        DataFlowValidation,
+    };
+    use crate::analysis::data_flow::store::DataFlowOutput;
+    use crate::analysis::ids::{DataFlowEdgeId, DataFlowNodeId, MirBodyId, PlaceId};
     use crate::analysis_kernel::AnalysisKernel;
+    use crate::core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn evidence_runs_after_data_flow_and_before_metrics() {
@@ -213,5 +565,192 @@ mod tests {
 
         assert!(data_flow < evidence);
         assert!(evidence < metrics);
+    }
+
+    #[test]
+    fn data_flow_rows_become_evidence_nodes_and_value_edges() {
+        let mut db = AnalysisDb::new();
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: vec![data_flow_node(0, "df:source"), data_flow_node(1, "df:sink")],
+            edges: vec![data_flow_edge(0, "df:edge:value")],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow output");
+        let mut output = EvidenceOutput::empty();
+
+        derive_data_flow_evidence(&db, &mut output);
+
+        assert_eq!(output.nodes.len(), 2);
+        assert_eq!(output.edges[0].kind, EvidenceEdgeKind::DataValue);
+        assert!(
+            output.edges[0]
+                .source_fact_stable_keys
+                .contains(&"df:edge:value".to_string())
+        );
+        assert!(output.nodes.iter().any(|node| {
+            node.source_fact_stable_keys
+                .contains(&"df:source".to_string())
+        }));
+    }
+
+    #[test]
+    fn control_dependence_rows_become_control_evidence_edges() {
+        let mut db = AnalysisDb::new();
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![cfg_function()],
+            nodes: vec![cfg_node(1), cfg_node(2)],
+            blocks: vec![basic_block(1), basic_block(2)],
+            edges: vec![cfg_edge()],
+            control_dependence: vec![control_dependence()],
+            ..CfgOutput::empty()
+        })
+        .expect("valid cfg output");
+        let mut output = EvidenceOutput::empty();
+
+        derive_control_dependence_evidence(&db, &mut output);
+
+        assert_eq!(output.edges[0].kind, EvidenceEdgeKind::Control);
+        assert_eq!(output.edges[0].query_mode, EvidenceQueryMode::FullBackward);
+        assert!(
+            output.edges[0]
+                .source_fact_stable_keys
+                .contains(&"cfg:control".to_string())
+        );
+    }
+
+    fn data_flow_node(id: u64, stable_key: &str) -> DataFlowNodeFact {
+        DataFlowNodeFact {
+            id: DataFlowNodeId(id),
+            kind: DataFlowNodeKind::Place,
+            language: Language::Go,
+            file: Some(FileId(1)),
+            function: Some(FunctionId(1)),
+            body: Some(MirBodyId(1)),
+            operation: None,
+            cfg_node: None,
+            place: Some(PlaceId(id)),
+            symbol: None,
+            reference: None,
+            call_site: None,
+            model: None,
+            span: Some(span()),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn data_flow_edge(id: u64, stable_key: &str) -> DataFlowEdgeFact {
+        DataFlowEdgeFact {
+            id: DataFlowEdgeId(id),
+            from: DataFlowNodeId(0),
+            to: DataFlowNodeId(1),
+            kind: DataFlowEdgeKind::LocalAssignment,
+            algorithm: DataFlowAlgorithm::LocalMir,
+            status: DataFlowStatus::Present,
+            precision: DataFlowPrecision::Syntax,
+            validation: DataFlowValidation::Native,
+            confidence: DataFlowConfidence::High,
+            provenance: DataFlowProvenance::Native,
+            call_site: None,
+            call_target: None,
+            refined_call: None,
+            model: None,
+            budget: None,
+            evidence: Vec::new(),
+            input_stable_keys: vec!["df:source".to_string(), "df:sink".to_string()],
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn cfg_function() -> CfgFunctionFact {
+        CfgFunctionFact {
+            id: CfgFunctionId(1),
+            body: MirBodyId(1),
+            function: FunctionId(1),
+            language: Language::Go,
+            file: FileId(1),
+            span: span(),
+            entry_node: CfgNodeId(1),
+            normal_exit_node: CfgNodeId(2),
+            exceptional_exit_node: None,
+            stable_key: "cfg:function".to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactSyntax,
+        }
+    }
+
+    fn cfg_node(id: u64) -> CfgNodeFact {
+        CfgNodeFact {
+            id: CfgNodeId(id),
+            cfg_function: CfgFunctionId(1),
+            body: MirBodyId(1),
+            operation: None,
+            block: BasicBlockId(id),
+            kind: CfgNodeKind::Operation,
+            span: Some(span()),
+            generated: false,
+            operation_ordinal: id as u32,
+            stable_key: format!("cfg:node:{id}"),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactSyntax,
+        }
+    }
+
+    fn basic_block(id: u64) -> BasicBlockFact {
+        BasicBlockFact {
+            id: BasicBlockId(id),
+            cfg_function: CfgFunctionId(1),
+            kind: BasicBlockKind::StraightLine,
+            first_node: Some(CfgNodeId(id)),
+            last_node: Some(CfgNodeId(id)),
+            reachable: true,
+            reverse_postorder: id as u32,
+            stable_key: format!("cfg:block:{id}"),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactSyntax,
+        }
+    }
+
+    fn cfg_edge() -> CfgEdgeFact {
+        CfgEdgeFact {
+            id: CfgEdgeId(1),
+            cfg_function: CfgFunctionId(1),
+            view: CfgView::NormalControl,
+            from: CfgNodeId(1),
+            to: CfgNodeId(2),
+            from_block: BasicBlockId(1),
+            to_block: BasicBlockId(2),
+            kind: CfgEdgeKind::True,
+            label: Some("if".to_string()),
+            stable_key: "cfg:edge".to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactSyntax,
+        }
+    }
+
+    fn control_dependence() -> ControlDependenceFact {
+        ControlDependenceFact {
+            id: ControlDependenceId(1),
+            cfg_function: CfgFunctionId(1),
+            view: CfgView::NormalControl,
+            controlling_edge: CfgEdgeId(1),
+            controlling_edge_kind: CfgEdgeKind::True,
+            controlled_block: BasicBlockId(2),
+            stable_key: "cfg:control".to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactSyntax,
+        }
+    }
+
+    fn span() -> Span {
+        Span {
+            file: FileId(1),
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 2,
+        }
     }
 }
