@@ -415,15 +415,15 @@ impl AnalysisKernel {
                 &mut db,
                 &input_snapshot,
                 Self::provider_manifest("polint.type_value_alias"),
-                entrypoints_semantic_mir_digest,
-                entrypoints_cfg_digest,
+                entrypoints_semantic_mir_digest.clone(),
+                entrypoints_cfg_digest.clone(),
                 entrypoints_calls_digest.clone(),
-                abstract_domains_dependency_output_digest,
+                abstract_domains_dependency_output_digest.clone(),
                 direct_summaries_dependency_output_digest.clone(),
                 entrypoints_dependency_output_digest.clone(),
                 extensions_dependency_output_digest.clone(),
-                entrypoints_symbol_digest,
-                entrypoints_topology_digest,
+                entrypoints_symbol_digest.clone(),
+                entrypoints_topology_digest.clone(),
                 vec![
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
@@ -451,11 +451,11 @@ impl AnalysisKernel {
                 &mut db,
                 &input_snapshot,
                 Self::provider_manifest("polint.refined_calls"),
-                entrypoints_calls_digest,
-                entrypoints_dependency_output_digest,
-                direct_summaries_dependency_output_digest,
-                type_value_alias_dependency_output_digest,
-                extensions_dependency_output_digest,
+                entrypoints_calls_digest.clone(),
+                entrypoints_dependency_output_digest.clone(),
+                direct_summaries_dependency_output_digest.clone(),
+                type_value_alias_dependency_output_digest.clone(),
+                extensions_dependency_output_digest.clone(),
             );
         let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
         let refined_calls_output_digest = refined_calls.output_digest.clone();
@@ -464,7 +464,37 @@ impl AnalysisKernel {
             "polint.refined_calls",
             &db,
             polint_refined_calls_cache_stats,
-            refined_calls_output_digest,
+            refined_calls_output_digest.clone(),
+        ));
+
+        let refined_calls_dependency_output_digest =
+            refined_calls_output_digest.unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.refined_calls",
+                )
+            });
+        let data_flow = crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.data_flow"),
+            entrypoints_semantic_mir_digest,
+            entrypoints_cfg_digest,
+            entrypoints_calls_digest,
+            refined_calls_dependency_output_digest,
+            direct_summaries_dependency_output_digest,
+            type_value_alias_dependency_output_digest,
+            entrypoints_dependency_output_digest,
+            extensions_dependency_output_digest,
+        );
+        let polint_data_flow_cache_stats = data_flow.cache_stats.clone();
+        let data_flow_output_digest = data_flow.output_digest.clone();
+        diagnostics.extend(data_flow.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.data_flow",
+            &db,
+            polint_data_flow_cache_stats,
+            data_flow_output_digest,
         ));
 
         let metrics = crate::metrics::derive_requested_metrics_with_cache_stats(

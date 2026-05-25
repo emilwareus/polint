@@ -13,6 +13,12 @@ use crate::analysis::cfg::facts::{
     UnsupportedControlFlowFact,
 };
 use crate::analysis::cfg::store::CfgOutput;
+use crate::analysis::data_flow::facts::{
+    DataFlowBudgetFact, DataFlowConfidence, DataFlowEdgeFact, DataFlowModelFact, DataFlowNodeFact,
+    DataFlowPrecision, DataFlowStatus, DataFlowValidation,
+};
+use crate::analysis::data_flow::provider::DATA_FLOW_PROVIDER_ID;
+use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
 use crate::analysis::domains::facts::{
     DomainEventFact, DomainObservationFact, DomainPrecision, DomainStatus,
 };
@@ -675,6 +681,11 @@ pub struct AnalysisDb {
     call_store: Option<CallStore>,
     refined_call_edges: Vec<RefinedCallEdgeFact>,
     refined_call_store: Option<RefinedCallStore>,
+    data_flow_nodes: Vec<DataFlowNodeFact>,
+    data_flow_edges: Vec<DataFlowEdgeFact>,
+    data_flow_models: Vec<DataFlowModelFact>,
+    data_flow_budgets: Vec<DataFlowBudgetFact>,
+    data_flow_store: Option<DataFlowStore>,
     abstract_domain_observations: Vec<DomainObservationFact>,
     abstract_domain_events: Vec<DomainEventFact>,
     abstract_domain_store: Option<DomainStore>,
@@ -1039,6 +1050,20 @@ impl AnalysisDb {
         Ok(())
     }
 
+    pub(crate) fn replace_data_flow_facts(
+        &mut self,
+        output: DataFlowOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = DataFlowStore::from_output(output)?;
+        self.data_flow_nodes = store.nodes().to_vec();
+        self.data_flow_edges = store.edges().to_vec();
+        self.data_flow_models = store.models().to_vec();
+        self.data_flow_budgets = store.budgets().to_vec();
+        self.data_flow_store = Some(store);
+        self.refresh_data_flow_metadata();
+        Ok(())
+    }
+
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
         let store = DomainStore::from_output(output);
         self.abstract_domain_observations = store.observations().to_vec();
@@ -1121,6 +1146,27 @@ impl AnalysisDb {
     #[allow(dead_code)]
     pub(crate) fn refined_call_store(&self) -> Option<&RefinedCallStore> {
         self.refined_call_store.as_ref()
+    }
+
+    pub(crate) fn data_flow_nodes(&self) -> &[DataFlowNodeFact] {
+        &self.data_flow_nodes
+    }
+
+    pub(crate) fn data_flow_edges(&self) -> &[DataFlowEdgeFact] {
+        &self.data_flow_edges
+    }
+
+    pub(crate) fn data_flow_models(&self) -> &[DataFlowModelFact] {
+        &self.data_flow_models
+    }
+
+    pub(crate) fn data_flow_budgets(&self) -> &[DataFlowBudgetFact] {
+        &self.data_flow_budgets
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn data_flow_store(&self) -> Option<&DataFlowStore> {
+        self.data_flow_store.as_ref()
     }
 
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
@@ -1381,6 +1427,49 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
+        }
+    }
+
+    fn refresh_data_flow_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::DataFlowNode);
+        self.fact_meta.remove_family(FactFamily::DataFlowEdge);
+        self.fact_meta.remove_family(FactFamily::DataFlowModel);
+        self.fact_meta.remove_family(FactFamily::DataFlowBudget);
+
+        let node_metadata = self
+            .data_flow_nodes
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_node_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::DataFlowNode, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .data_flow_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::DataFlowEdge, run_id, metadata);
+        }
+
+        let model_metadata = self
+            .data_flow_models
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_model_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in model_metadata {
+            self.record_fact_meta(FactFamily::DataFlowModel, run_id, metadata);
+        }
+
+        let budget_metadata = self
+            .data_flow_budgets
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_budget_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in budget_metadata {
+            self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
         }
     }
 
@@ -2673,6 +2762,18 @@ impl AnalysisDb {
         for edge in self.refined_call_edges() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::RefinedCallEdge, edge.id.0);
         }
+        for node in self.data_flow_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowNode, node.id.0);
+        }
+        for edge in self.data_flow_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowEdge, edge.id.0);
+        }
+        for model in self.data_flow_models() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowModel, model.id.0);
+        }
+        for budget in self.data_flow_budgets() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowBudget, budget.id.0);
+        }
         for symbol in self.symbols() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
         }
@@ -3895,6 +3996,156 @@ impl AnalysisDb {
         )
     }
 
+    fn data_flow_node_metadata(&self, fact: &DataFlowNodeFact) -> FactMeta {
+        let (precision, confidence) =
+            data_flow_status_metadata(DataFlowStatus::Present, DataFlowPrecision::Syntax);
+        fact_meta_from_stable_key(
+            FactFamily::DataFlowNode,
+            DATA_FLOW_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "file_key",
+                    fact.file
+                        .map(|file| self.source_file_key(file))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "function_key",
+                    fact.function
+                        .map(|function| self.fact_stable_key(FactFamily::Function, function.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "symbol_key",
+                    fact.symbol
+                        .map(|symbol| self.fact_stable_key(FactFamily::Symbol, symbol.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "reference_key",
+                    fact.reference
+                        .map(|reference| self.fact_stable_key(FactFamily::Reference, reference.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "call_site_key",
+                    fact.call_site
+                        .map(|site| self.fact_stable_key(FactFamily::CallSite, site.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("span", option_span_metadata_value(fact.span.as_ref())),
+            ]),
+        )
+    }
+
+    fn data_flow_edge_metadata(&self, fact: &DataFlowEdgeFact) -> FactMeta {
+        let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
+        let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
+        let validation = data_flow_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::DataFlowEdge,
+            DATA_FLOW_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("algorithm", format!("{:?}", fact.algorithm)),
+                ("status", data_flow_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    data_flow_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "validation",
+                    data_flow_validation_label(fact.validation).to_string(),
+                ),
+                (
+                    "from_key",
+                    self.fact_stable_key(FactFamily::DataFlowNode, fact.from.0),
+                ),
+                (
+                    "to_key",
+                    self.fact_stable_key(FactFamily::DataFlowNode, fact.to.0),
+                ),
+                (
+                    "call_site_key",
+                    fact.call_site
+                        .map(|site| self.fact_stable_key(FactFamily::CallSite, site.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "call_target_key",
+                    fact.call_target
+                        .map(|target| self.fact_stable_key(FactFamily::CallTarget, target.0))
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "refined_call_key",
+                    fact.refined_call
+                        .map(|edge| self.fact_stable_key(FactFamily::RefinedCallEdge, edge.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("evidence", fact.evidence.join("\n")),
+                ("inputs", fact.input_stable_keys.join("\n")),
+            ]),
+        )
+    }
+
+    fn data_flow_model_metadata(&self, fact: &DataFlowModelFact) -> FactMeta {
+        let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
+        let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
+        let validation = data_flow_validation_metadata(fact.validation);
+        fact_meta_from_stable_key_with_validation(
+            FactFamily::DataFlowModel,
+            DATA_FLOW_PROVIDER_ID,
+            precision,
+            confidence,
+            validation,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                ("provider_id", fact.provider_id.clone()),
+                ("model_id", fact.model_id.clone().unwrap_or_else(none_value)),
+                (
+                    "source_key",
+                    fact.source_stable_key.clone().unwrap_or_else(none_value),
+                ),
+                ("evidence", fact.evidence.join("\n")),
+                ("payload_labels", fact.payload_labels.join("\n")),
+            ]),
+        )
+    }
+
+    fn data_flow_budget_metadata(&self, fact: &DataFlowBudgetFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::DataFlowBudget,
+            DATA_FLOW_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("reason", format!("{:?}", fact.reason)),
+                ("status", data_flow_status_label(fact.status).to_string()),
+                ("limit", fact.limit.to_string()),
+                ("observed", fact.observed.to_string()),
+            ]),
+        )
+    }
+
     fn unresolved_call_metadata(&self, fact: &UnresolvedCallFact) -> FactMeta {
         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
         fact_meta_from_stable_key(
@@ -5074,6 +5325,101 @@ fn refined_call_confidence_metadata(
         (FactConfidence::Low, _) | (_, FactConfidence::Low) => FactConfidence::Low,
         (FactConfidence::Medium, _) | (_, FactConfidence::Medium) => FactConfidence::Medium,
         (FactConfidence::High, FactConfidence::High) => FactConfidence::High,
+    }
+}
+
+fn data_flow_status_metadata(
+    status: DataFlowStatus,
+    precision: DataFlowPrecision,
+) -> (FactPrecision, FactConfidence) {
+    let fact_precision = match status {
+        DataFlowStatus::Present => match precision {
+            DataFlowPrecision::Exact => FactPrecision::Exact,
+            DataFlowPrecision::SetupAware => FactPrecision::SetupAware,
+            DataFlowPrecision::Syntax => FactPrecision::Syntax,
+            DataFlowPrecision::Conservative | DataFlowPrecision::Heuristic => {
+                FactPrecision::Heuristic
+            }
+            DataFlowPrecision::Unknown => FactPrecision::Unresolved,
+        },
+        DataFlowStatus::Unknown | DataFlowStatus::BudgetExceeded => FactPrecision::Unresolved,
+        DataFlowStatus::Unsupported | DataFlowStatus::Rejected => FactPrecision::Unsupported,
+        DataFlowStatus::SetupMissing => FactPrecision::SetupMissing,
+    };
+    let confidence = match status {
+        DataFlowStatus::Present => match precision {
+            DataFlowPrecision::Exact
+            | DataFlowPrecision::SetupAware
+            | DataFlowPrecision::Syntax => FactConfidence::High,
+            DataFlowPrecision::Conservative | DataFlowPrecision::Heuristic => {
+                FactConfidence::Medium
+            }
+            DataFlowPrecision::Unknown => FactConfidence::Low,
+        },
+        DataFlowStatus::Unknown
+        | DataFlowStatus::Unsupported
+        | DataFlowStatus::SetupMissing
+        | DataFlowStatus::BudgetExceeded
+        | DataFlowStatus::Rejected => FactConfidence::Low,
+    };
+    (fact_precision, confidence)
+}
+
+fn data_flow_confidence_metadata(
+    confidence: DataFlowConfidence,
+    fallback: FactConfidence,
+) -> FactConfidence {
+    let requested = match confidence {
+        DataFlowConfidence::High => FactConfidence::High,
+        DataFlowConfidence::Medium => FactConfidence::Medium,
+        DataFlowConfidence::Low => FactConfidence::Low,
+    };
+    match (requested, fallback) {
+        (FactConfidence::Low, _) | (_, FactConfidence::Low) => FactConfidence::Low,
+        (FactConfidence::Medium, _) | (_, FactConfidence::Medium) => FactConfidence::Medium,
+        (FactConfidence::High, FactConfidence::High) => FactConfidence::High,
+    }
+}
+
+fn data_flow_validation_metadata(validation: DataFlowValidation) -> ValidationStatus {
+    match validation {
+        DataFlowValidation::Native => ValidationStatus::NativeTrusted,
+        DataFlowValidation::ReferentiallyValidated => ValidationStatus::ReferentiallyValidated,
+        DataFlowValidation::ExtensionValidated => ValidationStatus::SchemaValidated,
+        DataFlowValidation::BudgetValidated => ValidationStatus::StableKeyValidated,
+        DataFlowValidation::Rejected => ValidationStatus::ConflictRejected,
+    }
+}
+
+fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
+    match status {
+        DataFlowStatus::Present => "present",
+        DataFlowStatus::Unknown => "unknown",
+        DataFlowStatus::Unsupported => "unsupported",
+        DataFlowStatus::SetupMissing => "setup_missing",
+        DataFlowStatus::BudgetExceeded => "budget_exceeded",
+        DataFlowStatus::Rejected => "rejected",
+    }
+}
+
+fn data_flow_precision_label(precision: DataFlowPrecision) -> &'static str {
+    match precision {
+        DataFlowPrecision::Exact => "exact",
+        DataFlowPrecision::SetupAware => "setup_aware",
+        DataFlowPrecision::Syntax => "syntax",
+        DataFlowPrecision::Conservative => "conservative",
+        DataFlowPrecision::Heuristic => "heuristic",
+        DataFlowPrecision::Unknown => "unknown",
+    }
+}
+
+fn data_flow_validation_label(validation: DataFlowValidation) -> &'static str {
+    match validation {
+        DataFlowValidation::Native => "native",
+        DataFlowValidation::ReferentiallyValidated => "referentially_validated",
+        DataFlowValidation::ExtensionValidated => "extension_validated",
+        DataFlowValidation::BudgetValidated => "budget_validated",
+        DataFlowValidation::Rejected => "rejected",
     }
 }
 
