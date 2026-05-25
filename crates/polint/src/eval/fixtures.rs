@@ -2036,6 +2036,10 @@ mod eval_native_fixture_runner_tests {
             refined_calls_direct_vs_refined_fixture_dir(),
             refined_calls_extension_model_fixture_dir(),
         ] {
+            if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
+                continue;
+            }
+
             let run = run_native_fixture_for_test(&fixture_dir).unwrap();
             let case = run.cases.first().expect("refined calls case");
             let rendered = to_deterministic_json_pretty(&run);
