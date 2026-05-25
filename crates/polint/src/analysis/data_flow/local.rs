@@ -184,6 +184,10 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
         let Some(to) = self.node_for_place(target) else {
             return;
         };
+        if matches!(value, MirValue::Literal { .. }) {
+            self.kill_incoming_overwrite_flows(to, kind);
+            return;
+        }
         let status =
             if matches!(value, MirValue::Unknown { .. }) || kind == DataFlowEdgeKind::HavocFlow {
                 DataFlowStatus::Unknown
@@ -261,6 +265,45 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 ],
                 input_stable_keys: vec![self.place_key(*place), operation.stable_key.clone()],
             });
+        }
+    }
+
+    fn kill_incoming_overwrite_flows(
+        &mut self,
+        target_node: DataFlowNodeId,
+        kind: DataFlowEdgeKind,
+    ) {
+        if !matches!(
+            kind,
+            DataFlowEdgeKind::LocalAssignment | DataFlowEdgeKind::LocalBinding
+        ) {
+            return;
+        }
+
+        let removed = self
+            .output
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.algorithm == DataFlowAlgorithm::LocalMir
+                    && edge.to == target_node
+                    && edge.status == DataFlowStatus::Present
+                    && matches!(
+                        edge.kind,
+                        DataFlowEdgeKind::LocalAssignment | DataFlowEdgeKind::LocalBinding
+                    )
+            })
+            .map(|edge| edge.stable_key.clone())
+            .collect::<BTreeSet<_>>();
+        if removed.is_empty() {
+            return;
+        }
+
+        self.output
+            .edges
+            .retain(|edge| !removed.contains(&edge.stable_key));
+        for stable_key in &removed {
+            self.emitted_edges.remove(stable_key);
         }
     }
 
@@ -691,6 +734,117 @@ mod tests {
             .expect("havoc edge");
         assert_eq!(edge.status, DataFlowStatus::Unknown);
         assert!(!edge.evidence.is_empty());
+    }
+
+    #[test]
+    fn literal_assignment_does_not_emit_unknown_source_present_flow() {
+        let mut db = AnalysisDb::default();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body()],
+            places: vec![place(
+                0,
+                PlaceRoot::Local {
+                    function: FunctionId(1),
+                    name: "target".to_string(),
+                },
+                Vec::new(),
+            )],
+            operations: vec![op(
+                0,
+                MirOperationKind::Assign {
+                    place: PlaceId(0),
+                    value: MirValue::Literal {
+                        value: "\"safe\"".to_string(),
+                    },
+                    mode: AssignMode::Overwrite,
+                },
+            )],
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        let mut output = DataFlowOutput::empty();
+        push_place_nodes(&db, &mut output);
+
+        derive_local_value_flow(&db, &mut output);
+
+        assert!(
+            output.edges.is_empty(),
+            "literal assignments should not create synthetic source-to-place flows"
+        );
+    }
+
+    #[test]
+    fn literal_overwrite_kills_stale_incoming_local_flow() {
+        let mut db = AnalysisDb::default();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body()],
+            places: vec![
+                place(
+                    0,
+                    PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("input".to_string()),
+                    },
+                    Vec::new(),
+                ),
+                place(
+                    1,
+                    PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "local".to_string(),
+                    },
+                    Vec::new(),
+                ),
+            ],
+            operations: vec![
+                op(
+                    0,
+                    MirOperationKind::Bind {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                    },
+                ),
+                op(
+                    1,
+                    MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Literal {
+                            value: "\"safe\"".to_string(),
+                        },
+                        mode: AssignMode::Overwrite,
+                    },
+                ),
+                op(
+                    2,
+                    MirOperationKind::Return {
+                        value: Some(MirValue::Place(PlaceId(1))),
+                    },
+                ),
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        let mut output = DataFlowOutput::empty();
+        push_place_nodes(&db, &mut output);
+
+        derive_local_value_flow(&db, &mut output);
+
+        assert!(
+            !output.edges.iter().any(|edge| {
+                edge.kind == DataFlowEdgeKind::LocalBinding
+                    && edge.from == DataFlowNodeId(0)
+                    && edge.to == DataFlowNodeId(1)
+            }),
+            "literal overwrite should clear stale parameter-to-local flow"
+        );
+        assert!(
+            output
+                .edges
+                .iter()
+                .any(|edge| edge.kind == DataFlowEdgeKind::ReturnValue),
+            "the later return edge should still be represented"
+        );
     }
 
     fn body() -> MirBody {

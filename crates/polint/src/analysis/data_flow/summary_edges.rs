@@ -24,7 +24,7 @@ pub(crate) fn derive_summary_projected_edges(db: &AnalysisDb, output: &mut DataF
         }
     }
     for event in db.summary_events() {
-        if event.domain == SummaryDomainKind::DataFlowTito || event.status != SummaryStatus::Present
+        if event.domain == SummaryDomainKind::DataFlowTito && event.status != SummaryStatus::Present
         {
             project_summary_event(output, event);
         }
@@ -73,7 +73,7 @@ fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
         budget_fact(
             DataFlowBudgetReason::PathCount,
             1,
-            1,
+            2,
             &fact.stable_key,
             output,
         )
@@ -116,7 +116,7 @@ fn project_summary_event(output: &mut DataFlowOutput, event: &SummaryEventFact) 
         budget_fact(
             DataFlowBudgetReason::PathCount,
             1,
-            1,
+            2,
             &event.stable_key,
             output,
         )
@@ -356,6 +356,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn summary_projection_ignores_present_events_and_non_data_flow_events() {
+        let mut db = AnalysisDb::default();
+        db.replace_summary_facts(crate::analysis::summaries::store::SummaryOutput {
+            summaries: Vec::new(),
+            events: vec![
+                event_with_domain(
+                    SummaryDomainKind::DataFlowTito,
+                    SummaryStatus::Present,
+                    "summary-event:tito:no-flow",
+                ),
+                event_with_domain(
+                    SummaryDomainKind::ControlEffects,
+                    SummaryStatus::Unsupported,
+                    "summary-event:control:unsupported",
+                ),
+            ],
+        });
+        let mut output = DataFlowOutput::empty();
+
+        derive_summary_projected_edges(&db, &mut output);
+
+        assert!(output.edges.is_empty());
+        assert!(output.nodes.is_empty());
+    }
+
     fn summary(status: SummaryStatus) -> SummaryFact {
         SummaryFact {
             id: SummaryId(1),
@@ -372,16 +398,28 @@ mod tests {
 
     #[allow(dead_code)]
     fn event(status: SummaryStatus) -> SummaryEventFact {
+        event_with_domain(
+            SummaryDomainKind::DataFlowTito,
+            status,
+            "summary-event:tito",
+        )
+    }
+
+    fn event_with_domain(
+        domain: SummaryDomainKind,
+        status: SummaryStatus,
+        stable_key: &str,
+    ) -> SummaryEventFact {
         SummaryEventFact {
             id: SummaryEventId(1),
             callable_stable_key: "callable:identity".to_string(),
             function: FunctionId(1),
-            domain: SummaryDomainKind::DataFlowTito,
+            domain,
             event_kind: "missing_summary".to_string(),
             reason: "test".to_string(),
             status,
             precision: SummaryPrecision::UnknownTop,
-            stable_key: "summary-event:tito".to_string(),
+            stable_key: stable_key.to_string(),
         }
     }
 }

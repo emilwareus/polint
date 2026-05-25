@@ -88,7 +88,7 @@ fn rejection_or_downgrade_reason(
     if candidate
         .source_path
         .as_deref()
-        .is_some_and(|path| path.starts_with('/') || path.contains(".."))
+        .is_some_and(is_invalid_extension_source_path)
     {
         return Some(ExtensionEvidenceMergeReason::InvalidSpan);
     }
@@ -115,6 +115,14 @@ fn rejection_or_downgrade_reason(
     None
 }
 
+fn is_invalid_extension_source_path(path: &str) -> bool {
+    path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains("..")
+        || path.contains('\\')
+        || path.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+}
+
 fn has_native_anchor(store: &EvidenceStore, candidate: &ExtensionEvidenceCandidateFact) -> bool {
     !candidate.native_anchor_stable_keys.is_empty()
         && store.edges().iter().any(|edge| {
@@ -123,6 +131,8 @@ fn has_native_anchor(store: &EvidenceStore, candidate: &ExtensionEvidenceCandida
                     edge.validation,
                     EvidenceValidation::Native | EvidenceValidation::ReferentiallyValidated
                 )
+                && edge.from == candidate.from
+                && edge.to == candidate.to
                 && candidate.native_anchor_stable_keys.iter().any(|key| {
                     edge.stable_key == *key || edge.source_fact_stable_keys.contains(key)
                 })
@@ -235,14 +245,40 @@ mod tests {
     }
 
     #[test]
+    fn exact_native_anchor_must_match_candidate_endpoints() {
+        let store = store();
+        let mut candidate = candidate("edge:extension", EvidenceNodeId(1));
+        candidate.to = EvidenceNodeId(0);
+        candidate.claimed_precision = EvidencePrecision::Exact;
+        candidate.native_anchor_stable_keys = vec!["edge:native".to_string()];
+
+        let row = validate_extension_evidence(&store, vec![candidate])
+            .rows
+            .remove(0);
+
+        assert_eq!(
+            row.verdict,
+            ExtensionEvidenceMergeVerdict::AcceptedWithPrecisionDowngrade
+        );
+        assert_eq!(
+            row.reason,
+            Some(ExtensionEvidenceMergeReason::ExactClaimRequiresNativeAnchor)
+        );
+    }
+
+    #[test]
     fn invalid_spans_and_unbounded_expansion_are_rejected() {
         let store = store();
         let mut bad_span = candidate("edge:bad-span", EvidenceNodeId(0));
         bad_span.source_path = Some("/Users/me/repo/src.rs".to_string());
+        let mut bad_windows_span = candidate("edge:bad-windows-span", EvidenceNodeId(0));
+        bad_windows_span.source_path = Some("C:\\Users\\me\\repo\\src.rs".to_string());
         let mut bad_expansion = candidate("edge:bad-expansion", EvidenceNodeId(0));
         bad_expansion.expansion = EvidenceExpansion::Expandable { key: String::new() };
 
-        let rows = validate_extension_evidence(&store, vec![bad_span, bad_expansion]).rows;
+        let rows =
+            validate_extension_evidence(&store, vec![bad_span, bad_windows_span, bad_expansion])
+                .rows;
 
         assert!(
             rows.iter()

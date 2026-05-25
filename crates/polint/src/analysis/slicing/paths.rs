@@ -108,6 +108,17 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
     }]);
     let mut paths = Vec::new();
     let mut omitted_regions = Vec::new();
+    let mut saw_unavailable_edge_or_node = false;
+    let mut expanded_edges = 0usize;
+
+    if !node_available_for_path(store, query.source) || !node_available_for_path(store, query.sink)
+    {
+        return PathResult {
+            paths,
+            omitted_regions,
+            status: unavailable_node_status(store, query.source, query.sink),
+        };
+    }
 
     while let Some(frame) = queue.pop_front() {
         if frame.node == query.sink {
@@ -135,9 +146,34 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
             continue;
         }
         for edge in outgoing_ranked_edges(store, frame.node) {
+            if edge.status == EvidenceStatus::BudgetExceeded {
+                omitted_regions.push(PathOmittedRegion {
+                    reason: PathOmittedReason::EdgeLimit,
+                    hidden_node_count: 0,
+                    hidden_edge_count: 1,
+                });
+                continue;
+            }
+            if edge.status != EvidenceStatus::Present
+                || edge.kind == EvidenceEdgeKind::Unknown
+                || !node_available_for_path(store, edge.from)
+                || !node_available_for_path(store, edge.to)
+            {
+                saw_unavailable_edge_or_node = true;
+                continue;
+            }
             if !path_edge_allowed(edge.kind, query.mode) {
                 continue;
             }
+            if expanded_edges >= query.budget.max_edges {
+                omitted_regions.push(PathOmittedRegion {
+                    reason: PathOmittedReason::EdgeLimit,
+                    hidden_node_count: 0,
+                    hidden_edge_count: 1,
+                });
+                continue;
+            }
+            expanded_edges += 1;
             let next = edge.to;
             if frame.visited.contains(&next) {
                 continue;
@@ -147,14 +183,6 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
                     reason: PathOmittedReason::NodeLimit,
                     hidden_node_count: 1,
                     hidden_edge_count: 0,
-                });
-                continue;
-            }
-            if frame.edges.len() >= query.budget.max_edges {
-                omitted_regions.push(PathOmittedRegion {
-                    reason: PathOmittedReason::EdgeLimit,
-                    hidden_node_count: 0,
-                    hidden_edge_count: 1,
                 });
                 continue;
             }
@@ -172,7 +200,7 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
     });
     let status = if !omitted_regions.is_empty() {
         EvidenceStatus::BudgetExceeded
-    } else if paths.is_empty() {
+    } else if paths.is_empty() || saw_unavailable_edge_or_node {
         EvidenceStatus::Unknown
     } else {
         EvidenceStatus::Present
@@ -184,21 +212,44 @@ pub(crate) fn find_paths(store: &EvidenceStore, query: PathQuery) -> PathResult 
     }
 }
 
+fn node_available_for_path(store: &EvidenceStore, node: EvidenceNodeId) -> bool {
+    store
+        .node(node)
+        .is_some_and(|node| node.status == EvidenceStatus::Present)
+}
+
+fn unavailable_node_status(
+    store: &EvidenceStore,
+    source: EvidenceNodeId,
+    sink: EvidenceNodeId,
+) -> EvidenceStatus {
+    if [source, sink].into_iter().any(|node| {
+        store
+            .node(node)
+            .is_some_and(|node| node.status == EvidenceStatus::BudgetExceeded)
+    }) {
+        EvidenceStatus::BudgetExceeded
+    } else {
+        EvidenceStatus::Unknown
+    }
+}
+
 pub(crate) fn chop(store: &EvidenceStore, query: ChopQuery) -> ChopResult {
     let forward = reachable(store, query.source, Direction::Forward, query.budget);
     let backward = reachable(store, query.sink, Direction::Backward, query.budget);
     let nodes = forward
-        .intersection(&backward)
+        .nodes
+        .intersection(&backward.nodes)
         .copied()
         .collect::<Vec<EvidenceNodeId>>();
-    ChopResult {
-        status: if nodes.is_empty() {
-            EvidenceStatus::Unknown
-        } else {
-            EvidenceStatus::Present
-        },
-        nodes,
-    }
+    let status = if forward.budget_exceeded || backward.budget_exceeded {
+        EvidenceStatus::BudgetExceeded
+    } else if nodes.is_empty() || forward.saw_uncertain || backward.saw_uncertain {
+        EvidenceStatus::Unknown
+    } else {
+        EvidenceStatus::Present
+    };
+    ChopResult { status, nodes }
 }
 
 pub(crate) mod summary {
@@ -465,8 +516,33 @@ fn outgoing_ranked_edges(
     edges
 }
 
-fn path_edge_allowed(kind: EvidenceEdgeKind, _mode: PathMode) -> bool {
-    !matches!(kind, EvidenceEdgeKind::ExplanationOnly)
+pub(crate) fn path_edge_allowed(kind: EvidenceEdgeKind, mode: PathMode) -> bool {
+    match mode {
+        PathMode::Local => !matches!(
+            kind,
+            EvidenceEdgeKind::ExplanationOnly | EvidenceEdgeKind::Unknown
+        ),
+        PathMode::SourceToSink => matches!(
+            kind,
+            EvidenceEdgeKind::DataValue
+                | EvidenceEdgeKind::DataTaint
+                | EvidenceEdgeKind::DataAddress
+                | EvidenceEdgeKind::Call
+                | EvidenceEdgeKind::Return
+                | EvidenceEdgeKind::ParameterIn
+                | EvidenceEdgeKind::ParameterOut
+                | EvidenceEdgeKind::Summary
+                | EvidenceEdgeKind::Model
+                | EvidenceEdgeKind::Alias
+        ),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Reachability {
+    nodes: BTreeSet<EvidenceNodeId>,
+    saw_uncertain: bool,
+    budget_exceeded: bool,
 }
 
 fn reachable(
@@ -474,11 +550,15 @@ fn reachable(
     start: EvidenceNodeId,
     direction: Direction,
     budget: PathBudget,
-) -> BTreeSet<EvidenceNodeId> {
+) -> Reachability {
     let mut seen = BTreeSet::from([start]);
     let mut queue = VecDeque::from([(start, 0usize)]);
+    let mut saw_uncertain = false;
+    let mut budget_exceeded = false;
+    let mut expanded_edges = 0usize;
     while let Some((node, depth)) = queue.pop_front() {
         if seen.len() >= budget.max_nodes || depth >= budget.max_depth {
+            budget_exceeded = true;
             continue;
         }
         let edges = match direction {
@@ -486,6 +566,26 @@ fn reachable(
             Direction::Backward => store.incoming(node),
         };
         for edge in edges {
+            if edge.status == EvidenceStatus::BudgetExceeded {
+                budget_exceeded = true;
+                continue;
+            }
+            if edge.status != EvidenceStatus::Present
+                || edge.kind == EvidenceEdgeKind::Unknown
+                || !node_available_for_path(store, edge.from)
+                || !node_available_for_path(store, edge.to)
+            {
+                saw_uncertain = true;
+                continue;
+            }
+            if !chop_edge_allowed(edge.kind) {
+                continue;
+            }
+            if expanded_edges >= budget.max_edges {
+                budget_exceeded = true;
+                continue;
+            }
+            expanded_edges += 1;
             let next = match direction {
                 Direction::Forward => edge.to,
                 Direction::Backward => edge.from,
@@ -495,7 +595,22 @@ fn reachable(
             }
         }
     }
-    seen
+    Reachability {
+        nodes: seen,
+        saw_uncertain,
+        budget_exceeded,
+    }
+}
+
+fn chop_edge_allowed(kind: EvidenceEdgeKind) -> bool {
+    path_edge_allowed(kind, PathMode::SourceToSink)
+        && !matches!(
+            kind,
+            EvidenceEdgeKind::Call
+                | EvidenceEdgeKind::Return
+                | EvidenceEdgeKind::ParameterIn
+                | EvidenceEdgeKind::ParameterOut
+        )
 }
 
 #[derive(Debug, Clone)]
@@ -561,6 +676,83 @@ mod tests {
     }
 
     #[test]
+    fn path_search_does_not_materialize_unknown_edge_as_present_path() {
+        let store = path_store_with_edge_status(EvidenceStatus::Unknown);
+
+        let result = find_paths(&store, path_query(4));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn path_search_reports_budget_edge_without_present_path() {
+        let store = path_store_with_edge_status(EvidenceStatus::BudgetExceeded);
+
+        let result = find_paths(&store, path_query(4));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn path_search_reports_budget_before_rejecting_unknown_edge_kind() {
+        let store = path_store_with_edge_kind_and_status(
+            EvidenceEdgeKind::Unknown,
+            EvidenceStatus::BudgetExceeded,
+        );
+
+        let result = find_paths(&store, path_query(4));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+        assert!(
+            result
+                .omitted_regions
+                .iter()
+                .any(|region| region.reason == PathOmittedReason::EdgeLimit)
+        );
+    }
+
+    #[test]
+    fn path_search_does_not_materialize_path_to_non_present_sink() {
+        let store = path_store_with_sink_status(EvidenceStatus::SetupMissing);
+
+        let result = find_paths(&store, path_query(4));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn source_to_sink_paths_reject_control_only_route() {
+        let store = path_store_with_edge_kind(EvidenceEdgeKind::Control);
+
+        let result = find_paths(&store, path_query(4));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn path_search_applies_global_edge_expansion_budget() {
+        let store = path_store();
+        let mut query = path_query(4);
+        query.budget.max_edges = 1;
+
+        let result = find_paths(&store, query);
+
+        assert!(result.paths.is_empty());
+        assert!(
+            result
+                .omitted_regions
+                .iter()
+                .any(|region| region.reason == PathOmittedReason::EdgeLimit)
+        );
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+    }
+
+    #[test]
     fn chop_intersects_forward_and_backward_reachability() {
         let store = path_store();
 
@@ -575,6 +767,102 @@ mod tests {
 
         assert!(result.nodes.contains(&EvidenceNodeId(1)));
         assert!(!result.nodes.contains(&EvidenceNodeId(4)));
+    }
+
+    #[test]
+    fn chop_does_not_treat_unknown_edge_as_present_reachability() {
+        let store = path_store_with_edge_status(EvidenceStatus::Unknown);
+
+        let result = chop(
+            &store,
+            ChopQuery {
+                source: EvidenceNodeId(0),
+                sink: EvidenceNodeId(3),
+                budget: PathBudget::default(),
+            },
+        );
+
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+        assert!(!result.nodes.contains(&EvidenceNodeId(3)));
+    }
+
+    #[test]
+    fn chop_reports_budget_when_budget_edge_blocks_reachability() {
+        let store = path_store_with_edge_status(EvidenceStatus::BudgetExceeded);
+
+        let result = chop(
+            &store,
+            ChopQuery {
+                source: EvidenceNodeId(0),
+                sink: EvidenceNodeId(3),
+                budget: PathBudget::default(),
+            },
+        );
+
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn chop_reports_budget_before_rejecting_unknown_edge_kind() {
+        let store = path_store_with_edge_kind_and_status(
+            EvidenceEdgeKind::Unknown,
+            EvidenceStatus::BudgetExceeded,
+        );
+
+        let result = chop(
+            &store,
+            ChopQuery {
+                source: EvidenceNodeId(0),
+                sink: EvidenceNodeId(3),
+                budget: PathBudget::default(),
+            },
+        );
+
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn chop_does_not_intersect_mismatched_call_boundary_edges_as_present() {
+        let store = EvidenceStore::from_output(EvidenceOutput {
+            nodes: (0..4).map(node).collect(),
+            edges: vec![
+                edge_with(
+                    0,
+                    0,
+                    1,
+                    "edge:call-a-in",
+                    EvidenceEdgeKind::ParameterIn,
+                    EvidenceStatus::Present,
+                ),
+                edge_with(
+                    1,
+                    1,
+                    3,
+                    "edge:call-b-out",
+                    EvidenceEdgeKind::ParameterOut,
+                    EvidenceStatus::Present,
+                ),
+            ],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence");
+
+        let result = chop(
+            &store,
+            ChopQuery {
+                source: EvidenceNodeId(0),
+                sink: EvidenceNodeId(3),
+                budget: PathBudget::default(),
+            },
+        );
+
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+        assert!(!result.nodes.contains(&EvidenceNodeId(1)));
     }
 
     fn path_query(max_paths: usize) -> PathQuery {
@@ -598,6 +886,71 @@ mod tests {
                 edge(2, 1, 3, "edge:b"),
                 edge(3, 0, 4, "edge:unrelated"),
             ],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence")
+    }
+
+    fn path_store_with_edge_kind(kind: EvidenceEdgeKind) -> EvidenceStore {
+        path_store_with_edge_kind_and_status(kind, EvidenceStatus::Present)
+    }
+
+    fn path_store_with_edge_kind_and_status(
+        kind: EvidenceEdgeKind,
+        status: EvidenceStatus,
+    ) -> EvidenceStore {
+        EvidenceStore::from_output(EvidenceOutput {
+            nodes: (0..5).map(node).collect(),
+            edges: vec![edge_with(0, 0, 3, "edge:direct", kind, status)],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence")
+    }
+
+    fn path_store_with_edge_status(status: EvidenceStatus) -> EvidenceStore {
+        EvidenceStore::from_output(EvidenceOutput {
+            nodes: (0..5).map(node).collect(),
+            edges: vec![edge_with(
+                0,
+                0,
+                3,
+                "edge:non-present",
+                EvidenceEdgeKind::DataValue,
+                status,
+            )],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence")
+    }
+
+    fn path_store_with_sink_status(status: EvidenceStatus) -> EvidenceStore {
+        let nodes = (0..5)
+            .map(|id| {
+                let mut node = node(id);
+                if id == 3 {
+                    node.status = status;
+                }
+                node
+            })
+            .collect();
+        EvidenceStore::from_output(EvidenceOutput {
+            nodes,
+            edges: vec![edge(0, 0, 3, "edge:direct")],
             bundles: Vec::new(),
             paths: Vec::new(),
             slices: Vec::new(),
@@ -635,13 +988,31 @@ mod tests {
     }
 
     fn edge(id: u64, from: u64, to: u64, stable_key: &str) -> EvidenceEdgeFact {
+        edge_with(
+            id,
+            from,
+            to,
+            stable_key,
+            EvidenceEdgeKind::DataValue,
+            EvidenceStatus::Present,
+        )
+    }
+
+    fn edge_with(
+        id: u64,
+        from: u64,
+        to: u64,
+        stable_key: &str,
+        kind: EvidenceEdgeKind,
+        status: EvidenceStatus,
+    ) -> EvidenceEdgeFact {
         EvidenceEdgeFact {
             id: EvidenceEdgeId(id),
             from: EvidenceNodeId(from),
             to: EvidenceNodeId(to),
-            kind: EvidenceEdgeKind::DataValue,
+            kind,
             query_mode: EvidenceQueryMode::Path,
-            status: EvidenceStatus::Present,
+            status,
             precision: EvidencePrecision::Exact,
             provenance: EvidenceProvenance::Native,
             validation: EvidenceValidation::Native,

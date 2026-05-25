@@ -4,7 +4,9 @@ use crate::analysis::evidence::facts::{EvidenceEdgeFact, EvidenceEdgeKind, Evide
 use crate::analysis::evidence::rank::{PathRankScore, compare_scores, rank_score_for_edges};
 use crate::analysis::evidence::store::EvidenceStore;
 use crate::analysis::ids::{CallSiteId, EvidenceEdgeId, EvidenceNodeId};
-use crate::analysis::slicing::paths::{PathBudget, PathOmittedReason, PathOmittedRegion};
+use crate::analysis::slicing::paths::{
+    PathBudget, PathMode, PathOmittedReason, PathOmittedRegion, path_edge_allowed,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InterproceduralPathQuery {
@@ -34,26 +36,52 @@ pub(crate) fn find_interprocedural_paths(
     store: &EvidenceStore,
     query: InterproceduralPathQuery,
 ) -> InterproceduralPathResult {
+    if query.budget.max_paths == 0 {
+        return InterproceduralPathResult {
+            paths: Vec::new(),
+            omitted_regions: vec![PathOmittedRegion {
+                reason: PathOmittedReason::PathCount,
+                hidden_node_count: 0,
+                hidden_edge_count: 1,
+            }],
+            unknown_edges: Vec::new(),
+            status: EvidenceStatus::BudgetExceeded,
+        };
+    }
+
+    if !node_available_for_path(store, query.source) || !node_available_for_path(store, query.sink)
+    {
+        return InterproceduralPathResult {
+            paths: Vec::new(),
+            omitted_regions: Vec::new(),
+            unknown_edges: Vec::new(),
+            status: unavailable_node_status(store, query.source, query.sink),
+        };
+    }
+
     let mut queue = VecDeque::from([PathFrame {
         node: query.source,
         nodes: vec![query.source],
         edges: Vec::new(),
-        visited: BTreeSet::from([query.source]),
+        visited: BTreeSet::from([(query.source, PathContext::default())]),
         context: PathContext::default(),
     }]);
     let mut paths = Vec::new();
     let mut omitted_regions = Vec::new();
     let mut unknown_edges = BTreeSet::new();
+    let mut expanded_edges = 0usize;
 
     while let Some(frame) = queue.pop_front() {
-        if frame.node == query.sink && frame.context.call_sites.is_empty() {
+        if frame.node == query.sink {
             paths.push(path_from_frame(store, frame));
             if paths.len() >= query.budget.max_paths {
-                omitted_regions.push(PathOmittedRegion {
-                    reason: PathOmittedReason::PathCount,
-                    hidden_node_count: 0,
-                    hidden_edge_count: queue.len() as u32,
-                });
+                if !queue.is_empty() {
+                    omitted_regions.push(PathOmittedRegion {
+                        reason: PathOmittedReason::PathCount,
+                        hidden_node_count: 0,
+                        hidden_edge_count: queue.len() as u32,
+                    });
+                }
                 break;
             }
             continue;
@@ -67,9 +95,35 @@ pub(crate) fn find_interprocedural_paths(
             continue;
         }
         for edge in outgoing_edges(store, frame.node) {
-            if edge.status != EvidenceStatus::Present || edge.kind == EvidenceEdgeKind::Unknown {
+            if edge.status == EvidenceStatus::BudgetExceeded {
                 unknown_edges.insert(edge.id);
+                omitted_regions.push(PathOmittedRegion {
+                    reason: PathOmittedReason::EdgeLimit,
+                    hidden_node_count: 0,
+                    hidden_edge_count: 1,
+                });
+                continue;
             }
+            if edge.status != EvidenceStatus::Present
+                || edge.kind == EvidenceEdgeKind::Unknown
+                || !node_available_for_path(store, edge.from)
+                || !node_available_for_path(store, edge.to)
+            {
+                unknown_edges.insert(edge.id);
+                continue;
+            }
+            if !path_edge_allowed(edge.kind, PathMode::SourceToSink) {
+                continue;
+            }
+            if expanded_edges >= query.budget.max_edges {
+                omitted_regions.push(PathOmittedRegion {
+                    reason: PathOmittedReason::EdgeLimit,
+                    hidden_node_count: 0,
+                    hidden_edge_count: 1,
+                });
+                continue;
+            }
+            expanded_edges += 1;
             let Some(next_context) = transition_context(
                 &frame.context,
                 edge,
@@ -78,7 +132,7 @@ pub(crate) fn find_interprocedural_paths(
             ) else {
                 continue;
             };
-            if frame.visited.contains(&edge.to) {
+            if frame.visited.contains(&(edge.to, next_context.clone())) {
                 continue;
             }
             if frame.nodes.len() >= query.budget.max_nodes {
@@ -89,19 +143,11 @@ pub(crate) fn find_interprocedural_paths(
                 });
                 continue;
             }
-            if frame.edges.len() >= query.budget.max_edges {
-                omitted_regions.push(PathOmittedRegion {
-                    reason: PathOmittedReason::EdgeLimit,
-                    hidden_node_count: 0,
-                    hidden_edge_count: 1,
-                });
-                continue;
-            }
             let mut next = frame.clone();
             next.node = edge.to;
             next.nodes.push(edge.to);
             next.edges.push(edge.id);
-            next.visited.insert(edge.to);
+            next.visited.insert((edge.to, next_context.clone()));
             next.context = next_context;
             queue.push_back(next);
         }
@@ -122,6 +168,28 @@ pub(crate) fn find_interprocedural_paths(
         omitted_regions,
         unknown_edges: unknown_edges.into_iter().collect(),
         status,
+    }
+}
+
+fn node_available_for_path(store: &EvidenceStore, node: EvidenceNodeId) -> bool {
+    store
+        .node(node)
+        .is_some_and(|node| node.status == EvidenceStatus::Present)
+}
+
+fn unavailable_node_status(
+    store: &EvidenceStore,
+    source: EvidenceNodeId,
+    sink: EvidenceNodeId,
+) -> EvidenceStatus {
+    if [source, sink].into_iter().any(|node| {
+        store
+            .node(node)
+            .is_some_and(|node| node.status == EvidenceStatus::BudgetExceeded)
+    }) {
+        EvidenceStatus::BudgetExceeded
+    } else {
+        EvidenceStatus::Unknown
     }
 }
 
@@ -185,7 +253,7 @@ fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> InterproceduralPa
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct PathContext {
     call_sites: Vec<CallSiteId>,
 }
@@ -195,7 +263,7 @@ struct PathFrame {
     node: EvidenceNodeId,
     nodes: Vec<EvidenceNodeId>,
     edges: Vec<EvidenceEdgeId>,
-    visited: BTreeSet<EvidenceNodeId>,
+    visited: BTreeSet<(EvidenceNodeId, PathContext)>,
     context: PathContext,
 }
 
@@ -257,8 +325,115 @@ mod tests {
         let result =
             find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(1)));
 
+        assert!(result.paths.is_empty());
         assert_eq!(result.unknown_edges, vec![EvidenceEdgeId(0)]);
         assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn max_paths_zero_returns_budget_without_paths() {
+        let store = context_store();
+        let mut query = query(EvidenceNodeId(0), EvidenceNodeId(3));
+        query.budget.max_paths = 0;
+
+        let result = find_interprocedural_paths(&store, query);
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+        assert!(
+            result
+                .omitted_regions
+                .iter()
+                .any(|region| region.reason == PathOmittedReason::PathCount)
+        );
+    }
+
+    #[test]
+    fn callee_sink_is_reachable_before_returning_to_caller_context() {
+        let store = context_store();
+
+        let result =
+            find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(2)));
+
+        assert_eq!(result.paths.len(), 1);
+        assert_eq!(result.paths[0].stable_key, "edge:a-in");
+        assert_eq!(result.status, EvidenceStatus::Present);
+    }
+
+    #[test]
+    fn non_present_interprocedural_edge_is_not_materialized_as_path() {
+        let store = interprocedural_store_with_edge_status(EvidenceStatus::SetupMissing);
+
+        let result =
+            find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(1)));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.unknown_edges, vec![EvidenceEdgeId(0)]);
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn budget_interprocedural_edge_is_reported_before_unknown_kind_filtering() {
+        let store = unknown_store_with_status(EvidenceStatus::BudgetExceeded);
+
+        let result =
+            find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(1)));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.unknown_edges, vec![EvidenceEdgeId(0)]);
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+        assert!(
+            result
+                .omitted_regions
+                .iter()
+                .any(|region| region.reason == PathOmittedReason::EdgeLimit)
+        );
+    }
+
+    #[test]
+    fn control_only_interprocedural_route_is_not_materialized_as_path() {
+        let store = EvidenceStore::from_output(EvidenceOutput {
+            nodes: vec![node(0), node(1)],
+            edges: vec![edge(
+                0,
+                0,
+                1,
+                EvidenceEdgeKind::Control,
+                None,
+                "edge:control",
+            )],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence");
+
+        let result =
+            find_interprocedural_paths(&store, query(EvidenceNodeId(0), EvidenceNodeId(1)));
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::Unknown);
+    }
+
+    #[test]
+    fn interprocedural_search_applies_global_edge_expansion_budget() {
+        let store = context_store();
+        let mut query = query(EvidenceNodeId(0), EvidenceNodeId(3));
+        query.budget.max_edges = 1;
+
+        let result = find_interprocedural_paths(&store, query);
+
+        assert!(result.paths.is_empty());
+        assert_eq!(result.status, EvidenceStatus::BudgetExceeded);
+        assert!(
+            result
+                .omitted_regions
+                .iter()
+                .any(|region| region.reason == PathOmittedReason::EdgeLimit)
+        );
     }
 
     fn query(source: EvidenceNodeId, sink: EvidenceNodeId) -> InterproceduralPathQuery {
@@ -311,7 +486,34 @@ mod tests {
         .expect("valid evidence")
     }
 
+    fn interprocedural_store_with_edge_status(status: EvidenceStatus) -> EvidenceStore {
+        let mut edge = edge(
+            0,
+            0,
+            1,
+            EvidenceEdgeKind::DataValue,
+            None,
+            "edge:non-present",
+        );
+        edge.status = status;
+        EvidenceStore::from_output(EvidenceOutput {
+            nodes: vec![node(0), node(1)],
+            edges: vec![edge],
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        })
+        .expect("valid evidence")
+    }
+
     fn unknown_store() -> EvidenceStore {
+        unknown_store_with_status(EvidenceStatus::Unknown)
+    }
+
+    fn unknown_store_with_status(status: EvidenceStatus) -> EvidenceStore {
         EvidenceStore::from_output(EvidenceOutput {
             nodes: vec![node(0), node(1)],
             edges: vec![EvidenceEdgeFact {
@@ -320,7 +522,7 @@ mod tests {
                 to: EvidenceNodeId(1),
                 kind: EvidenceEdgeKind::Unknown,
                 query_mode: EvidenceQueryMode::Path,
-                status: EvidenceStatus::Unknown,
+                status,
                 precision: EvidencePrecision::Unknown,
                 provenance: EvidenceProvenance::Native,
                 validation: EvidenceValidation::Native,

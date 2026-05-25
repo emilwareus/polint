@@ -189,18 +189,7 @@ exclude = []
 #[test]
 fn evidence_public_no_leak() {
     let temp = tempfile::tempdir().unwrap();
-    write_file(
-        &temp.path().join(".polint.toml"),
-        r#"
-[workspace]
-include = ["src/**"]
-exclude = []
-"#,
-    );
-    write_file(
-        &temp.path().join("src/app.ts"),
-        "export function answer(): number { return 42; }\n",
-    );
+    write_evidence_no_leak_rule_repo(temp.path());
 
     let public_json = output_string(
         polint_cmd()
@@ -209,6 +198,21 @@ exclude = []
             .assert()
             .success(),
     );
+    let public_json_value: serde_json::Value = serde_json::from_str(&public_json)
+        .unwrap_or_else(|error| panic!("check JSON should parse: {error}\n{public_json}"));
+    assert_eq!(
+        public_json_value["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json"
+    );
+    let probe = diagnostics_for_rule(&public_json_value, "local/evidence-leak-probe");
+    assert_eq!(probe.len(), 1, "{public_json_value:#?}");
+    assert!(
+        diagnostic_has_evidence(probe[0], "evidence_status", "partial"),
+        "no-leak fixture must exercise diagnostic output with structured evidence rows: {probe:#?}"
+    );
+    let public_report: polint::sdk::prelude::PolintReport = serde_json::from_str(&public_json)
+        .unwrap_or_else(|error| panic!("public check report should match SDK schema: {error}"));
+
     let ai_friendly = output_string(
         polint_cmd()
             .current_dir(temp.path())
@@ -249,6 +253,86 @@ exclude = []
     assert!(
         public_sources.contains("Evidence is not a public SDK fact view"),
         "evidence docs must state public SDK limits"
+    );
+    assert_eq!(
+        public_report.diagnostics.len(),
+        1,
+        "schema-validated public report should retain the evidence diagnostic"
+    );
+}
+
+fn write_evidence_no_leak_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/evidence-leak-probe",
+    description = "Emit evidence-shaped public diagnostic output.",
+    severity = "warn"
+)]
+fn evidence_leak_probe(ctx: &mut RuleCtx<'_>, literals: StringLiterals<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for literal in literals.iter() {
+        if literal.value.contains("LEAK_PROBE") {
+            ctx.report(
+                Diagnostic::warning(
+                    rule_id.clone(),
+                    ctx.file_path(literal.file),
+                    literal.span.diagnostic_range(),
+                    "Evidence leak probe diagnostic.",
+                )
+                .with_evidence("evidence_status", "partial")
+                .with_evidence("evidence_precision", "setup_aware")
+                .with_evidence("evidence_path", "source>sink"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![evidence_leak_probe()])
+}
+"#,
+    );
+    write_file(
+        &root.join("src/app.ts"),
+        r#"export const probe = "LEAK_PROBE";
+"#,
     );
 }
 

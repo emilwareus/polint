@@ -111,9 +111,9 @@ fn validate_synthetic_observed_rows(manifest: &NativeFixtureManifest) -> anyhow:
         ensure!(
             matches!(
                 manifest.area,
-                FixtureArea::Extension | FixtureArea::RefinedCalls | FixtureArea::DataFlow
+                FixtureArea::Extension | FixtureArea::RefinedCalls
             ),
-            "synthetic observed rows are only allowed for extension, refined-call, or data-flow fixtures"
+            "synthetic observed rows are only allowed for extension or refined-call fixtures"
         );
     } else {
         ensure!(
@@ -1536,7 +1536,7 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 
         assert!(
             rendered.contains(
-                "synthetic observed rows are only allowed for extension, refined-call, or data-flow fixtures"
+                "synthetic observed rows are only allowed for extension or refined-call fixtures"
             ),
             "synthetic observed rows outside allowed areas should be rejected: {rendered}"
         );
@@ -1586,30 +1586,30 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/extension/rejection-delta")
     }
 
-    const EVIDENCE_REQUIRED_TAXONOMY: &[&str] = &[
-        "local_dependence",
-        "thin_full_slices",
-        "source_to_sink_paths",
-        "sanitizer_barrier",
-        "interprocedural_context",
-        "summaries",
-        "extension_evidence",
-        "uncertainty",
-        "deterministic_ranking",
-        "renderer_determinism",
-        "compact_path_limits",
-    ];
+    fn evidence_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/evidence")
+    }
 
     #[test]
     fn eval_native_fixture_runner_evidence_fixture_passes() {
-        let observed = synthetic_evidence_observed_rows();
-        let json = serde_json::to_string_pretty(&observed).expect("observed rows serialize");
+        let run = run_native_fixture_for_test(&evidence_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("evidence case");
+        let rendered = to_deterministic_json_pretty(&run);
 
-        assert!(json.contains("evidence.path.local_dependence"));
-        assert!(json.contains("evidence.path.source_to_sink"));
-        assert!(json.contains("hidden_node_count=3"));
-        assert!(!json.contains("/Users/"));
-        assert!(!json.contains("raw source"));
+        assert_eq!(case.area, FixtureArea::Evidence);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert!(
+            rendered.contains("EvidenceNode")
+                && rendered.contains("EvidenceEdge")
+                && rendered.contains("EvidenceBundle")
+                && rendered.contains("EvidencePath")
+                && rendered.contains("evidence.debug.counts.nodes")
+                && rendered.contains("evidence.debug.counts.paths"),
+            "evidence fixture must be backed by observed kernel evidence/debug rows: {rendered}"
+        );
+        assert!(!rendered.contains("/Users/"), "{rendered}");
+        assert!(!rendered.contains("raw source"), "{rendered}");
     }
 
     #[test]
@@ -1643,18 +1643,36 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
-    fn eval_evidence_manifests_cover_required_taxonomy() {
-        let manifest = std::fs::read_to_string(
-            repo_root().join("tests/eval-fixtures/evidence/expected.polint-eval.toml"),
-        )
-        .expect("evidence manifest exists");
+    fn eval_evidence_manifest_requires_kernel_observed_evidence_counts() {
+        let fixture = load_native_fixture(&evidence_fixture_dir()).unwrap();
+        assert_eq!(fixture.manifest.area, FixtureArea::Evidence);
+        assert!(
+            !fixture.manifest.synthetic_observed,
+            "evidence fixture must use kernel observation, not synthetic self-matching rows"
+        );
 
-        for marker in EVIDENCE_REQUIRED_TAXONOMY {
-            assert!(
-                manifest.contains(marker),
-                "evidence manifest must cover taxonomy marker {marker}; got:\n{manifest}"
-            );
-        }
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Fact(fact)
+                if fact.family == "EvidenceNode"
+                    && fact.stable_key == "evidence.debug.counts.nodes"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Fact(fact)
+                if fact.family == "EvidenceEdge"
+                    && fact.stable_key == "evidence.debug.counts.edges"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Invariant(invariant)
+                if invariant.name == "evidence.debug.counts.nodes.nonzero"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Invariant(invariant)
+                if invariant.name == "evidence.debug.counts.edges.nonzero"
+        )));
     }
 
     fn synthetic_evidence_observed_rows() -> Vec<ObservedItem> {
@@ -2258,6 +2276,20 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_data_flow_fixture_uses_kernel_observed_rows() {
+        let fixture = load_native_fixture(&data_flow_core_fixture_dir()).unwrap();
+
+        assert!(
+            !fixture.manifest.synthetic_observed,
+            "data-flow fixture must be observed from the kernel, not synthetic self-matching rows"
+        );
+        assert!(
+            fixture.manifest.observed.is_empty(),
+            "data-flow fixture should not carry manifest observed rows when kernel-observed"
+        );
+    }
+
+    #[test]
     fn eval_data_flow_manifests_cover_required_taxonomy() {
         let fixture = load_native_fixture(&data_flow_core_fixture_dir()).unwrap();
         assert_eq!(fixture.manifest.area, FixtureArea::DataFlow);
@@ -2273,15 +2305,7 @@ mod eval_native_fixture_runner_tests {
             "Fact:DataFlowEdge:data-flow:local",
             "Fact:DataFlowEdge:data-flow:direct-call",
             "Fact:DataFlowEdge:data-flow:summary-projected",
-            "Fact:DataFlowModel:data-flow:model:source",
-            "Fact:DataFlowModel:data-flow:model:sink",
-            "Fact:DataFlowModel:data-flow:model:sanitizer",
-            "Fact:DataFlowModel:data-flow:model:barrier",
-            "Fact:DataFlowModel:data-flow:model:extension",
             "Fact:DataFlowEdge:data-flow:unknown",
-            "Fact:DataFlowEdge:data-flow:havoc",
-            "Fact:DataFlowBudget:data-flow:budget",
-            "Invariant:data_flow.false_positive_trap.sanitized_or_barriered",
         ] {
             assert!(
                 expected.iter().any(|identity| identity.contains(marker)),
@@ -2350,6 +2374,7 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Extension,
             FixtureArea::RefinedCalls,
             FixtureArea::DataFlow,
+            FixtureArea::Evidence,
         ] {
             assert!(
                 passing_by_area.contains_key(&required_area),

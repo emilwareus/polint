@@ -262,6 +262,13 @@ impl EvidenceStore {
         )?;
         reject_duplicates(
             output
+                .unknowns
+                .iter()
+                .map(|unknown| unknown.stable_key.as_str()),
+            "evidence unknown stable key",
+        )?;
+        reject_duplicates(
+            output
                 .replay_keys
                 .iter()
                 .map(|replay| replay.stable_key.as_str()),
@@ -781,7 +788,7 @@ mod tests {
     use super::*;
     use crate::analysis::evidence::facts::{
         EvidenceConfidence, EvidenceExpansion, EvidencePrecision, EvidenceRankScore,
-        EvidenceValidation,
+        EvidenceUnknownReason, EvidenceValidation,
     };
     use crate::core::Language;
 
@@ -831,6 +838,43 @@ mod tests {
             paths: Vec::new(),
             slices: Vec::new(),
             unknowns: Vec::new(),
+            omitted_regions: Vec::new(),
+            replay_keys: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_rejects_duplicate_unknown_stable_keys() {
+        let result = EvidenceStore::from_output(EvidenceOutput {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            bundles: Vec::new(),
+            paths: Vec::new(),
+            slices: Vec::new(),
+            unknowns: vec![
+                EvidenceUnknownFact {
+                    bundle: None,
+                    path: None,
+                    slice: None,
+                    edge: None,
+                    reason: EvidenceUnknownReason::OpaqueSummary,
+                    message: "first".to_string(),
+                    source_fact_stable_keys: Vec::new(),
+                    stable_key: "unknown:dup".to_string(),
+                },
+                EvidenceUnknownFact {
+                    bundle: None,
+                    path: None,
+                    slice: None,
+                    edge: None,
+                    reason: EvidenceUnknownReason::BudgetExceeded,
+                    message: "second".to_string(),
+                    source_fact_stable_keys: Vec::new(),
+                    stable_key: "unknown:dup".to_string(),
+                },
+            ],
             omitted_regions: Vec::new(),
             replay_keys: Vec::new(),
         });

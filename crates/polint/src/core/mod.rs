@@ -2117,6 +2117,7 @@ impl AnalysisDb {
                 ("domain", fact.domain.as_str().to_string()),
                 ("callable", fact.callable_stable_key.clone()),
                 ("provenance", fact.provenance.as_str().to_string()),
+                ("payload_digest", fact.payload_digest.clone()),
             ]),
         )
     }

@@ -79,7 +79,7 @@ pub(crate) fn derive_evidence_with_cache_stats(
         Err(error) => EvidenceProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
         },
     }
 }
@@ -178,6 +178,11 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             continue;
         };
         let from = EvidenceNodeId(output.nodes.len() as u64);
+        let controlled_node = db
+            .cfg_blocks()
+            .iter()
+            .find(|block| block.id == dependence.controlled_block)
+            .and_then(|block| block.first_node.or(block.last_node));
         output.nodes.push(EvidenceNodeFact {
             id: from,
             kind: EvidenceNodeKind::Statement,
@@ -232,7 +237,7 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             function: None,
             body: None,
             operation: None,
-            cfg_node: Some(controlling_edge.to),
+            cfg_node: controlled_node,
             place: None,
             symbol: None,
             reference: None,
@@ -323,8 +328,9 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
         DataFlowEdgeKind::SummaryTito | DataFlowEdgeKind::SummaryProjected => {
             EvidenceEdgeKind::Summary
         }
-        DataFlowEdgeKind::Model | DataFlowEdgeKind::Sanitizer | DataFlowEdgeKind::Barrier => {
-            EvidenceEdgeKind::Model
+        DataFlowEdgeKind::Model => EvidenceEdgeKind::Model,
+        DataFlowEdgeKind::Sanitizer | DataFlowEdgeKind::Barrier => {
+            EvidenceEdgeKind::ExplanationOnly
         }
         DataFlowEdgeKind::UnknownFlow
         | DataFlowEdgeKind::HavocFlow
@@ -531,11 +537,44 @@ fn evidence_output_digest(
             .iter()
             .map(|bundle| format!("evidence_bundle={}", stable_fact_payload(bundle))),
     );
+    parts.extend(
+        output
+            .paths
+            .iter()
+            .map(|path| format!("evidence_path={}", stable_fact_payload(path))),
+    );
+    parts.extend(
+        output
+            .slices
+            .iter()
+            .map(|slice| format!("evidence_slice={}", stable_fact_payload(slice))),
+    );
+    parts.extend(
+        output
+            .unknowns
+            .iter()
+            .map(|unknown| format!("evidence_unknown={}", stable_fact_payload(unknown))),
+    );
+    parts.extend(
+        output
+            .omitted_regions
+            .iter()
+            .map(|omitted| format!("evidence_omitted_region={}", stable_fact_payload(omitted))),
+    );
+    parts.extend(
+        output
+            .replay_keys
+            .iter()
+            .map(|replay| format!("evidence_replay_key={}", stable_fact_payload(replay))),
+    );
     if output.nodes.is_empty()
         && output.edges.is_empty()
         && output.bundles.is_empty()
         && output.paths.is_empty()
         && output.slices.is_empty()
+        && output.unknowns.is_empty()
+        && output.omitted_regions.is_empty()
+        && output.replay_keys.is_empty()
     {
         parts.push("evidence_output=empty".to_string());
     }
@@ -590,8 +629,17 @@ mod tests {
         DataFlowValidation,
     };
     use crate::analysis::data_flow::store::DataFlowOutput;
+    use crate::analysis::evidence::facts::{
+        EvidenceBundleFact, EvidenceOmittedReason, EvidenceOmittedRegionFact, EvidencePathFact,
+        EvidenceQueryBudget, EvidenceRankScore, EvidenceRankingMode, EvidenceRendererMode,
+        EvidenceReplayKeyFact, EvidenceSliceFact, EvidenceUnknownFact, EvidenceUnknownReason,
+    };
     use crate::analysis::ids::{DataFlowEdgeId, DataFlowNodeId, MirBodyId, PlaceId};
     use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_kernel::incremental::{
+        GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot,
+        TsJsLifecycleSnapshot,
+    };
     use crate::core::{FileId, FunctionId, Language, Span};
 
     #[test]
@@ -645,6 +693,33 @@ mod tests {
     }
 
     #[test]
+    fn sanitizer_and_barrier_edges_are_not_source_to_sink_propagation_models() {
+        let mut sanitizer = data_flow_edge(0, "df:edge:sanitizer");
+        sanitizer.kind = DataFlowEdgeKind::Sanitizer;
+        let mut barrier = data_flow_edge(1, "df:edge:barrier");
+        barrier.kind = DataFlowEdgeKind::Barrier;
+        let mut db = AnalysisDb::new();
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: vec![data_flow_node(0, "df:source"), data_flow_node(1, "df:sink")],
+            edges: vec![sanitizer, barrier],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow output");
+        let mut output = EvidenceOutput::empty();
+
+        derive_data_flow_evidence(&db, &mut output);
+
+        assert_eq!(output.edges.len(), 2);
+        assert!(
+            output
+                .edges
+                .iter()
+                .all(|edge| edge.kind == EvidenceEdgeKind::ExplanationOnly)
+        );
+    }
+
+    #[test]
     fn control_dependence_rows_become_control_evidence_edges() {
         let mut db = AnalysisDb::new();
         db.replace_cfg_facts(CfgOutput {
@@ -667,6 +742,82 @@ mod tests {
                 .source_fact_stable_keys
                 .contains(&"cfg:control".to_string())
         );
+    }
+
+    #[test]
+    fn control_dependence_controlled_node_anchors_to_controlled_block() {
+        let mut db = AnalysisDb::new();
+        let mut dependence = control_dependence();
+        dependence.controlled_block = BasicBlockId(3);
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![cfg_function()],
+            nodes: vec![cfg_node(1), cfg_node(2), cfg_node(3)],
+            blocks: vec![basic_block(1), basic_block(2), basic_block(3)],
+            edges: vec![cfg_edge()],
+            control_dependence: vec![dependence],
+            ..CfgOutput::empty()
+        })
+        .expect("valid cfg output");
+        let mut output = EvidenceOutput::empty();
+
+        derive_control_dependence_evidence(&db, &mut output);
+
+        assert!(output.nodes.iter().any(|node| {
+            node.compact_label.as_deref() == Some("controlled_block")
+                && node.cfg_node == Some(CfgNodeId(3))
+        }));
+    }
+
+    #[test]
+    fn output_digest_changes_for_all_advertised_output_families() {
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == EVIDENCE_PROVIDER_ID)
+            .expect("evidence provider manifest");
+        let snapshot = minimal_snapshot();
+        let upstream = digest("upstream");
+        let base = EvidenceOutput::empty();
+        let base_digest = digest_for_output(manifest, &snapshot, &upstream, &base);
+
+        for output in [
+            EvidenceOutput {
+                nodes: vec![evidence_node(0, "node:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                edges: vec![evidence_edge(0, 0, 1, "edge:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                bundles: vec![evidence_bundle(0, "bundle:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                paths: vec![evidence_path(0, "path:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                slices: vec![evidence_slice(0, "slice:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                unknowns: vec![evidence_unknown("unknown:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                omitted_regions: vec![evidence_omitted(0, "omitted:output")],
+                ..EvidenceOutput::empty()
+            },
+            EvidenceOutput {
+                replay_keys: vec![evidence_replay_key("replay:output")],
+                ..EvidenceOutput::empty()
+            },
+        ] {
+            assert_ne!(
+                base_digest,
+                digest_for_output(manifest, &snapshot, &upstream, &output)
+            );
+        }
     }
 
     fn data_flow_node(id: u64, stable_key: &str) -> DataFlowNodeFact {
@@ -801,6 +952,181 @@ mod tests {
             start_col: 1,
             end_line: 1,
             end_col: 2,
+        }
+    }
+
+    fn minimal_snapshot() -> InputSnapshot {
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: InputComponent {
+                name: "config".to_string(),
+                status: InputComponentStatus::Present,
+                digest: digest("config"),
+                detail: Vec::new(),
+            },
+            go_lifecycle: GoLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        }
+    }
+
+    fn digest(label: &str) -> Digest {
+        Digest::from_parts(DigestKind::ProviderOutput, label, &[label])
+    }
+
+    fn digest_for_output(
+        manifest: &ProviderManifest,
+        snapshot: &InputSnapshot,
+        upstream: &Digest,
+        output: &EvidenceOutput,
+    ) -> Digest {
+        evidence_output_digest(
+            manifest, snapshot, upstream, upstream, upstream, upstream, upstream, upstream,
+            upstream, upstream, upstream, output,
+        )
+    }
+
+    fn evidence_node(id: u64, stable_key: &str) -> EvidenceNodeFact {
+        EvidenceNodeFact {
+            id: EvidenceNodeId(id),
+            kind: EvidenceNodeKind::Synthetic,
+            language: Language::Go,
+            file: None,
+            function: None,
+            body: None,
+            operation: None,
+            cfg_node: None,
+            place: None,
+            symbol: None,
+            reference: None,
+            call_site: None,
+            span: None,
+            status: EvidenceStatus::Present,
+            precision: EvidencePrecision::Syntax,
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::Native,
+            confidence: EvidenceConfidence::High,
+            compact_label: None,
+            source_fact_stable_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_edge(id: u64, from: u64, to: u64, stable_key: &str) -> EvidenceEdgeFact {
+        EvidenceEdgeFact {
+            id: EvidenceEdgeId(id),
+            from: EvidenceNodeId(from),
+            to: EvidenceNodeId(to),
+            kind: EvidenceEdgeKind::DataValue,
+            query_mode: EvidenceQueryMode::ThinBackward,
+            status: EvidenceStatus::Present,
+            precision: EvidencePrecision::Syntax,
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::Native,
+            confidence: EvidenceConfidence::High,
+            call_site: None,
+            summary_stable_key: None,
+            expansion: EvidenceExpansion::None,
+            compact_label: None,
+            source_fact_stable_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_bundle(id: u64, stable_key: &str) -> EvidenceBundleFact {
+        EvidenceBundleFact {
+            id: crate::analysis::ids::EvidenceBundleId(id),
+            diagnostic_stable_key: "diag:output".to_string(),
+            query_mode: EvidenceQueryMode::ThinBackward,
+            status: EvidenceStatus::Present,
+            precision: EvidencePrecision::Syntax,
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::Native,
+            confidence: EvidenceConfidence::High,
+            entry_node: None,
+            selected_paths: Vec::new(),
+            selected_slices: Vec::new(),
+            replay_key: None,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_path(id: u64, stable_key: &str) -> EvidencePathFact {
+        EvidencePathFact {
+            id: crate::analysis::ids::EvidencePathId(id),
+            bundle: None,
+            query_mode: EvidenceQueryMode::Path,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            rank: 0,
+            score: EvidenceRankScore::default(),
+            status: EvidenceStatus::Present,
+            hidden_node_count: 0,
+            omitted_regions: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_slice(id: u64, stable_key: &str) -> EvidenceSliceFact {
+        EvidenceSliceFact {
+            id: crate::analysis::ids::EvidenceSliceId(id),
+            bundle: None,
+            query_mode: EvidenceQueryMode::ThinBackward,
+            root_nodes: Vec::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            status: EvidenceStatus::Present,
+            omitted_regions: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_unknown(stable_key: &str) -> EvidenceUnknownFact {
+        EvidenceUnknownFact {
+            bundle: None,
+            path: None,
+            slice: None,
+            edge: None,
+            reason: EvidenceUnknownReason::OpaqueSummary,
+            message: "unknown".to_string(),
+            source_fact_stable_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_omitted(id: u64, stable_key: &str) -> EvidenceOmittedRegionFact {
+        EvidenceOmittedRegionFact {
+            id: crate::analysis::ids::EvidenceOmittedRegionId(id),
+            bundle: None,
+            path: None,
+            slice: None,
+            reason: EvidenceOmittedReason::CompactRendering,
+            hidden_node_count: 1,
+            hidden_edge_count: 0,
+            budget_label: Some("test".to_string()),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn evidence_replay_key(stable_key: &str) -> EvidenceReplayKeyFact {
+        EvidenceReplayKeyFact {
+            bundle: crate::analysis::ids::EvidenceBundleId(0),
+            query_mode: EvidenceQueryMode::Path,
+            graph_schema: "evidence.graph.v1".to_string(),
+            query_budget: EvidenceQueryBudget::default(),
+            ranking: EvidenceRankingMode::DeterministicDisplay,
+            renderer: EvidenceRendererMode::Debug,
+            upstream_digest_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
         }
     }
 }

@@ -127,10 +127,6 @@ pub(crate) fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResu
                 });
                 continue;
             }
-            edges.insert(edge.id);
-            if edge.kind == EvidenceEdgeKind::Unknown || edge.status != EvidenceStatus::Present {
-                unknown_edges.insert(edge.id);
-            }
             let next = next_node(edge, query.direction);
             if !nodes.contains(&next) {
                 if nodes.len() >= query.budget.max_nodes {
@@ -143,6 +139,10 @@ pub(crate) fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResu
                 }
                 nodes.insert(next);
                 queue.push_back((next, depth + 1));
+            }
+            edges.insert(edge.id);
+            if edge.kind == EvidenceEdgeKind::Unknown || edge.status != EvidenceStatus::Present {
+                unknown_edges.insert(edge.id);
             }
         }
     }
@@ -304,6 +304,20 @@ mod tests {
                 .iter()
                 .any(|region| region.reason == SliceOmittedReason::FilteredEdges)
         );
+    }
+
+    #[test]
+    fn local_slice_omits_edge_when_endpoint_node_exceeds_budget() {
+        let store = store_with_value_and_control_edges();
+        let mut query = query(EdgeFilter::FullLocal);
+        query.budget.max_nodes = 2;
+
+        let result = local_slice(&store, query);
+
+        assert!(result.nodes.contains(&EvidenceNodeId(0)));
+        assert!(!result.nodes.contains(&EvidenceNodeId(1)));
+        assert!(result.edges.contains(&EvidenceEdgeId(0)));
+        assert!(!result.edges.contains(&EvidenceEdgeId(1)));
     }
 
     fn query(edge_filter: EdgeFilter) -> SliceQuery {

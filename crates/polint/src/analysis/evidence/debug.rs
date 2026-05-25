@@ -110,21 +110,18 @@ pub(crate) fn evidence_debug_report(store: &EvidenceStore) -> EvidenceDebugRepor
         .collect::<Vec<_>>();
     omitted_regions.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 
-    let budget_caps = store
-        .replay_keys()
-        .first()
-        .map(|key| EvidenceDebugBudgetCaps {
-            max_paths: key.query_budget.max_paths,
-            max_nodes: key.query_budget.max_nodes,
-            max_edges: key.query_budget.max_edges,
-            max_depth: key.query_budget.max_depth,
-        })
-        .unwrap_or(EvidenceDebugBudgetCaps {
-            max_paths: 0,
-            max_nodes: 0,
-            max_edges: 0,
-            max_depth: 0,
-        });
+    let budget_caps =
+        store
+            .replay_keys()
+            .iter()
+            .fold(EvidenceDebugBudgetCaps::zero(), |caps, key| {
+                EvidenceDebugBudgetCaps {
+                    max_paths: caps.max_paths.max(key.query_budget.max_paths),
+                    max_nodes: caps.max_nodes.max(key.query_budget.max_nodes),
+                    max_edges: caps.max_edges.max(key.query_budget.max_edges),
+                    max_depth: caps.max_depth.max(key.query_budget.max_depth),
+                }
+            });
 
     EvidenceDebugReport {
         counts: EvidenceDebugCounts {
@@ -184,6 +181,17 @@ pub(crate) fn evidence_debug_report(store: &EvidenceStore) -> EvidenceDebugRepor
     }
 }
 
+impl EvidenceDebugBudgetCaps {
+    fn zero() -> Self {
+        Self {
+            max_paths: 0,
+            max_nodes: 0,
+            max_edges: 0,
+            max_depth: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,8 +227,60 @@ mod tests {
         assert!(!rendered.contains("parser"));
     }
 
+    #[test]
+    fn debug_budget_caps_are_aggregated_across_replay_keys() {
+        let mut output = output();
+        output.bundles.push(EvidenceBundleFact {
+            id: EvidenceBundleId(1),
+            diagnostic_stable_key: "diag:2".to_string(),
+            query_mode: EvidenceQueryMode::Path,
+            status: EvidenceStatus::Partial,
+            precision: EvidencePrecision::SetupAware,
+            provenance: EvidenceProvenance::Query,
+            validation: EvidenceValidation::RendererValidated,
+            confidence: EvidenceConfidence::Medium,
+            entry_node: None,
+            selected_paths: Vec::new(),
+            selected_slices: Vec::new(),
+            replay_key: Some("replay:larger".to_string()),
+            stable_key: "bundle:larger".to_string(),
+        });
+        output.replay_keys.push(EvidenceReplayKeyFact {
+            bundle: EvidenceBundleId(1),
+            query_mode: EvidenceQueryMode::Path,
+            graph_schema: "evidence.graph.v1".to_string(),
+            query_budget: EvidenceQueryBudget {
+                max_paths: 9,
+                max_nodes: 128,
+                max_edges: 256,
+                max_depth: 64,
+            },
+            ranking: EvidenceRankingMode::DeterministicDisplay,
+            renderer: EvidenceRendererMode::Debug,
+            upstream_digest_keys: Vec::new(),
+            stable_key: "replay:larger".to_string(),
+        });
+        let store = EvidenceStore::from_output(output).expect("valid evidence");
+
+        let report = evidence_debug_report(&store);
+
+        assert_eq!(
+            report.budget_caps,
+            EvidenceDebugBudgetCaps {
+                max_paths: 9,
+                max_nodes: 128,
+                max_edges: 256,
+                max_depth: 64,
+            }
+        );
+    }
+
     fn store() -> EvidenceStore {
-        EvidenceStore::from_output(EvidenceOutput {
+        EvidenceStore::from_output(output()).expect("valid evidence")
+    }
+
+    fn output() -> EvidenceOutput {
+        EvidenceOutput {
             nodes: vec![node(0), node(1)],
             edges: vec![EvidenceEdgeFact {
                 id: EvidenceEdgeId(0),
@@ -302,8 +362,7 @@ mod tests {
                 upstream_digest_keys: Vec::new(),
                 stable_key: "replay:bundle".to_string(),
             }],
-        })
-        .expect("valid evidence")
+        }
     }
 
     fn node(id: u64) -> EvidenceNodeFact {

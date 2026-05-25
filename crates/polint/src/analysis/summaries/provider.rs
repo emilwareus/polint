@@ -224,7 +224,7 @@ fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &s
 }
 
 #[allow(clippy::too_many_arguments)]
-fn direct_summaries_output_digest(
+pub(crate) fn direct_summaries_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     semantic_mir_output_digest: &Digest,
@@ -319,7 +319,9 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn callable_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {
+pub(crate) fn callable_stable_key_map(
+    db: &AnalysisDb,
+) -> std::collections::BTreeMap<MirBodyId, String> {
     db.mir_bodies()
         .iter()
         .map(|body| (body.id, body.stable_key.clone()))

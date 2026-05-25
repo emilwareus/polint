@@ -1,26 +1,34 @@
 schema_version = "polint-eval-fixture-1"
 case_id = "evidence-taxonomy"
-area = "data-flow"
-synthetic_observed = true
+area = "evidence"
+synthetic_observed = false
 
 [repo]
 path = "repo"
 
-# Phase 39 taxonomy coverage markers:
-# local_dependence
-# thin_full_slices
-# source_to_sink_paths
-# sanitizer_barrier
-# interprocedural_context
-# summaries
-# extension_evidence
-# uncertainty
-# deterministic_ranking
-# renderer_determinism
-# compact_path_limits
+[[expected]]
+fact = { family = "EvidenceNode", stable_key = "evidence.debug.counts.nodes", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
 
 [[expected]]
-path = { path_id = "evidence.path.local_dependence", nodes = ["source", "sink"], mode = "partial", partial_truth = true }
+fact = { family = "EvidenceEdge", stable_key = "evidence.debug.counts.edges", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
 
-[[observed]]
-path = { path_id = "evidence.path.local_dependence", nodes = ["source", "sink"], mode = "partial", partial_truth = true, producer_id = "polint.evidence", provenance = "native", precision = "conservative", status = "partial" }
+[[expected]]
+fact = { family = "EvidenceBundle", stable_key = "evidence.debug.counts.bundles", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "EvidencePath", stable_key = "evidence.debug.counts.paths", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "EvidenceSlice", stable_key = "evidence.debug.counts.slices", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "EvidenceUnknown", stable_key = "evidence.debug.counts.unknowns", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "EvidenceOmittedRegion", stable_key = "evidence.debug.counts.omitted_regions", mode = "partial", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+invariant = { name = "evidence.debug.counts.nodes.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "evidence.debug.counts.edges.nonzero", value = "true", mode = "exact" }

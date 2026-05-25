@@ -327,7 +327,6 @@ impl AnalysisKernel {
                 ],
             );
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
-        let direct_summaries_output_digest = direct_summaries.output_digest.clone();
         diagnostics.extend(direct_summaries.diagnostics);
 
         // SCC closure: interprocedural summary improvement over SCCs.
@@ -342,10 +341,32 @@ impl AnalysisKernel {
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
+        let final_direct_summaries_output = crate::analysis::summaries::store::SummaryOutput {
+            summaries: db.summary_facts().to_vec(),
+            events: db.summary_events().to_vec(),
+        };
+        let direct_summaries_output_digest =
+            crate::analysis::summaries::provider::direct_summaries_output_digest(
+                Self::provider_manifest("polint.direct_summaries"),
+                &input_snapshot,
+                &entrypoints_semantic_mir_digest,
+                &entrypoints_cfg_digest,
+                &entrypoints_calls_digest,
+                &abstract_domains_dependency_output_digest,
+                &entrypoints_symbol_digest,
+                &entrypoints_topology_digest,
+                &[
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+                &crate::analysis::summaries::provider::callable_stable_key_map(&db),
+                &final_direct_summaries_output,
+            );
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.direct_summaries",
             &db,
             polint_direct_summaries_cache_stats,
+            Some(direct_summaries_output_digest.clone()),
         ));
 
         let entrypoints =
@@ -373,13 +394,7 @@ impl AnalysisKernel {
             entrypoints_output_digest.clone(),
         ));
 
-        let direct_summaries_dependency_output_digest = direct_summaries_output_digest
-            .unwrap_or_else(|| {
-                incremental::Digest::absent(
-                    incremental::DigestKind::ProviderOutput,
-                    "polint.direct_summaries",
-                )
-            });
+        let direct_summaries_dependency_output_digest = direct_summaries_output_digest;
         let entrypoints_dependency_output_digest = entrypoints_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(
                 incremental::DigestKind::ProviderOutput,
@@ -609,13 +624,24 @@ impl AnalysisKernel {
         output_digest: Option<incremental::Digest>,
     ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
-        let output_digest = output_digest.unwrap_or_else(|| {
-            incremental::provider_output_digest_from_manifest(
-                manifest,
-                &provider_output_summary_parts(db, manifest),
-            )
-        });
-        incremental::provider_output_from_manifest(manifest, output_digest, cache_stats)
+        let (output_digest, validation) = match output_digest {
+            Some(output_digest) => (output_digest, "native_trusted"),
+            None if provider_id == "polint.data_flow" || provider_id == "polint.evidence" => (
+                incremental::Digest::absent(incremental::DigestKind::ProviderOutput, provider_id),
+                "provider_failed",
+            ),
+            None => (
+                incremental::provider_output_digest_from_manifest(
+                    manifest,
+                    &provider_output_summary_parts(db, manifest),
+                ),
+                "native_trusted",
+            ),
+        };
+        let mut meta =
+            incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
+        meta.validation = validation.to_string();
+        meta
     }
 
     fn provider_manifest(provider_id: &str) -> &'static ProviderManifest {
@@ -981,13 +1007,36 @@ mod tests {
         })
         .expect("kernel run should succeed");
         let manifest = AnalysisKernel::provider_manifest("polint.direct_summaries");
-        let expected = incremental::provider_output_digest_from_manifest(
+        let generic = incremental::provider_output_digest_from_manifest(
             manifest,
             &provider_output_summary_parts(&output.db, manifest),
         );
         let direct_summaries = provider_output(&output, "polint.direct_summaries");
 
-        assert_eq!(direct_summaries.output_digest, expected);
+        assert_ne!(
+            direct_summaries.output_digest, generic,
+            "post-SCC direct summaries must use the direct-summaries digest, including provider parameters and dependency digests"
+        );
+        assert_eq!(
+            direct_summaries.output_digest.kind,
+            incremental::DigestKind::ProviderOutput
+        );
+    }
+
+    #[test]
+    fn failed_derived_provider_output_is_not_reported_as_trusted_fallback_digest() {
+        let row = AnalysisKernel::provider_output_for_with_optional_digest(
+            "polint.data_flow",
+            &AnalysisDb::default(),
+            incremental::CacheStats::default(),
+            None,
+        );
+
+        assert_eq!(row.validation, "provider_failed");
+        assert_eq!(
+            row.output_digest.kind,
+            incremental::DigestKind::ProviderOutput
+        );
     }
 
     #[test]

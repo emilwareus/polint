@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::analysis::evidence::facts::EvidenceExpansion;
 use crate::analysis::evidence::store::EvidenceStore;
 use crate::analysis::ids::EvidenceBundleId;
-use crate::diagnostics::Evidence;
+use crate::diagnostics::{Evidence, TextRange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EvidenceRenderLimit {
@@ -11,6 +11,18 @@ pub(crate) struct EvidenceRenderLimit {
     pub(crate) max_edges_per_path: usize,
     pub(crate) max_unknowns: usize,
     pub(crate) max_omitted_regions: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EvidenceSarifStep {
+    pub(crate) message: String,
+    pub(crate) location: Option<EvidenceSarifLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EvidenceSarifLocation {
+    pub(crate) uri: String,
+    pub(crate) range: TextRange,
 }
 
 impl Default for EvidenceRenderLimit {
@@ -63,6 +75,13 @@ pub(crate) fn render_bundle_json_v1(
         .map(|key| key.stable_key.clone())
         .or_else(|| bundle.replay_key.clone());
 
+    let total_paths = paths.len();
+    let total_unknowns = unknowns.len();
+    let total_omitted_regions = omitted.len();
+    let rendered_paths = total_paths.min(limit.max_paths);
+    let rendered_unknowns = total_unknowns.min(limit.max_unknowns);
+    let rendered_omitted_regions = total_omitted_regions.min(limit.max_omitted_regions);
+
     Some(json!({
         "version": 1,
         "bundle": {
@@ -77,22 +96,32 @@ pub(crate) fn render_bundle_json_v1(
             "replay_key": replay_key,
         },
         "paths": paths.into_iter().take(limit.max_paths).map(|path| {
+            let total_edges = path.edges.len();
             let edge_values = path
                 .edges
                 .iter()
                 .take(limit.max_edges_per_path)
                 .filter_map(|edge_id| store.edge(*edge_id))
-                .map(|edge| json!({
-                    "id": edge.id.0,
-                    "stable_key": edge.stable_key,
-                    "kind": label(edge.kind),
-                    "status": label(edge.status),
-                    "precision": label(edge.precision),
-                    "provenance": label(edge.provenance),
-                    "validation": label(edge.validation),
-                    "summary_stable_key": edge.summary_stable_key,
-                    "expansion": expansion_json(&edge.expansion),
-                }))
+                .map(|edge| {
+                    let mut value = json!({
+                        "id": edge.id.0,
+                        "stable_key": edge.stable_key,
+                        "kind": label(edge.kind),
+                        "status": label(edge.status),
+                        "precision": label(edge.precision),
+                        "provenance": label(edge.provenance),
+                        "validation": label(edge.validation),
+                        "confidence": label(edge.confidence),
+                        "summary_stable_key": edge.summary_stable_key,
+                        "expansion": expansion_json(&edge.expansion),
+                    });
+                    if let Some(location) = edge_location_json(store, edge)
+                        && let Some(object) = value.as_object_mut()
+                    {
+                        object.insert("location".to_string(), location);
+                    }
+                    value
+                })
                 .collect::<Vec<_>>();
             json!({
                 "id": path.id.0,
@@ -103,6 +132,9 @@ pub(crate) fn render_bundle_json_v1(
                 "nodes": path.nodes.iter().map(|node| node.0).collect::<Vec<_>>(),
                 "edges": edge_values,
                 "omitted_regions": path.omitted_regions.iter().map(|region| region.0).collect::<Vec<_>>(),
+                "total_edges": total_edges,
+                "rendered_edges": total_edges.min(limit.max_edges_per_path),
+                "edges_truncated": total_edges > limit.max_edges_per_path,
             })
         }).collect::<Vec<_>>(),
         "unknowns": unknowns.into_iter().take(limit.max_unknowns).map(|unknown| json!({
@@ -119,6 +151,21 @@ pub(crate) fn render_bundle_json_v1(
             "hidden_edge_count": region.hidden_edge_count,
             "budget_label": region.budget_label,
         })).collect::<Vec<_>>(),
+        "limits": {
+            "max_paths": limit.max_paths,
+            "max_edges_per_path": limit.max_edges_per_path,
+            "max_unknowns": limit.max_unknowns,
+            "max_omitted_regions": limit.max_omitted_regions,
+            "total_paths": total_paths,
+            "rendered_paths": rendered_paths,
+            "paths_truncated": total_paths > limit.max_paths,
+            "total_unknowns": total_unknowns,
+            "rendered_unknowns": rendered_unknowns,
+            "unknowns_truncated": total_unknowns > limit.max_unknowns,
+            "total_omitted_regions": total_omitted_regions,
+            "rendered_omitted_regions": rendered_omitted_regions,
+            "omitted_regions_truncated": total_omitted_regions > limit.max_omitted_regions,
+        },
     }))
 }
 
@@ -141,7 +188,14 @@ pub(crate) fn scalar_evidence_for_bundle_json(value: &Value) -> Vec<Evidence> {
 }
 
 pub(crate) fn sarif_thread_flow_messages(value: &Value) -> Vec<String> {
-    let mut messages = value
+    sarif_thread_flow_steps(value)
+        .into_iter()
+        .map(|step| step.message)
+        .collect()
+}
+
+pub(crate) fn sarif_thread_flow_steps(value: &Value) -> Vec<EvidenceSarifStep> {
+    let mut steps = value
         .get("paths")
         .and_then(Value::as_array)
         .into_iter()
@@ -164,24 +218,68 @@ pub(crate) fn sarif_thread_flow_messages(value: &Value) -> Vec<String> {
                         .and_then(|object| object.get("state"))
                         .and_then(Value::as_str)
                         .unwrap_or("none");
-                    format!(
-                        "evidence {kind}: status={status}; precision={precision}; expansion={expansion}"
-                    )
+                    let provenance = edge
+                        .get("provenance")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let validation = edge
+                        .get("validation")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let confidence = edge
+                        .get("confidence")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    EvidenceSarifStep {
+                        message: format!(
+                            "evidence {kind}: status={status}; precision={precision}; provenance={provenance}; validation={validation}; confidence={confidence}; expansion={expansion}"
+                        ),
+                        location: sarif_location_from_edge(edge),
+                    }
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    let fallback_location = steps.iter().find_map(|step| step.location.clone());
     if let Some(unknowns) = value.get("unknowns").and_then(Value::as_array)
         && !unknowns.is_empty()
     {
-        messages.push("evidence unknown: path contains unknown evidence".to_string());
+        steps.push(EvidenceSarifStep {
+            message: "evidence unknown: path contains unknown evidence".to_string(),
+            location: fallback_location.clone(),
+        });
     }
     if let Some(omitted) = value.get("omitted_regions").and_then(Value::as_array)
         && !omitted.is_empty()
     {
-        messages.push("evidence omitted: budget or compact rendering hid details".to_string());
+        steps.push(EvidenceSarifStep {
+            message: "evidence omitted: budget or compact rendering hid details".to_string(),
+            location: fallback_location,
+        });
     }
-    messages
+    steps
+}
+
+fn edge_location_json(
+    _store: &EvidenceStore,
+    _edge: &crate::analysis::evidence::facts::EvidenceEdgeFact,
+) -> Option<Value> {
+    None
+}
+
+fn sarif_location_from_edge(edge: &Value) -> Option<EvidenceSarifLocation> {
+    let location = edge.get("location")?.as_object()?;
+    let uri = location.get("uri")?.as_str()?.to_string();
+    let range = location.get("range")?.as_object()?;
+    Some(EvidenceSarifLocation {
+        uri,
+        range: TextRange {
+            start_line: range.get("start_line")?.as_u64()?.try_into().ok()?,
+            start_col: range.get("start_col")?.as_u64()?.try_into().ok()?,
+            end_line: range.get("end_line")?.as_u64()?.try_into().ok()?,
+            end_col: range.get("end_col")?.as_u64()?.try_into().ok()?,
+        },
+    })
 }
 
 fn expansion_json(expansion: &EvidenceExpansion) -> Value {
@@ -256,6 +354,47 @@ mod tests {
     }
 
     #[test]
+    fn bundle_json_reports_totals_and_truncation_flags() {
+        let store = render_store();
+
+        let value = render_bundle_json_v1(
+            &store,
+            EvidenceBundleId(0),
+            EvidenceRenderLimit {
+                max_paths: 0,
+                max_edges_per_path: 0,
+                max_unknowns: 0,
+                max_omitted_regions: 0,
+            },
+        )
+        .expect("bundle");
+
+        assert_eq!(value["limits"]["total_paths"], 1);
+        assert_eq!(value["limits"]["rendered_paths"], 0);
+        assert_eq!(value["limits"]["paths_truncated"], true);
+        assert_eq!(value["limits"]["total_unknowns"], 1);
+        assert_eq!(value["limits"]["unknowns_truncated"], true);
+        assert_eq!(value["limits"]["total_omitted_regions"], 1);
+        assert_eq!(value["limits"]["omitted_regions_truncated"], true);
+    }
+
+    #[test]
+    fn bundle_json_round_trips_through_structured_evidence_validator() {
+        let store = render_store();
+
+        let value =
+            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
+                .expect("bundle");
+
+        crate::diagnostics::StructuredEvidenceV1::try_from_value(value.clone())
+            .expect("rendered evidence should satisfy public schema contract");
+        assert!(
+            value["paths"][0]["edges"][0].get("location").is_none(),
+            "absent edge locations should be omitted instead of serialized as null"
+        );
+    }
+
+    #[test]
     fn scalar_bridge_preserves_existing_evidence_shape() {
         let store = render_store();
         let value =
@@ -279,6 +418,32 @@ mod tests {
 
         assert!(messages.iter().any(|message| message.contains("unknown")));
         assert!(messages.iter().any(|message| message.contains("omitted")));
+    }
+
+    #[test]
+    fn sarif_messages_include_provenance_validation_and_confidence() {
+        let store = render_store();
+        let value =
+            render_bundle_json_v1(&store, EvidenceBundleId(0), EvidenceRenderLimit::default())
+                .expect("bundle");
+
+        let messages = sarif_thread_flow_messages(&value);
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("provenance=Summary"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message.contains("validation=ReferentiallyValidated") })
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("confidence=Medium"))
+        );
     }
 
     fn render_store() -> EvidenceStore {

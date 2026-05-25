@@ -105,6 +105,7 @@ pub(crate) enum FixtureArea {
     FrameworkEntrypoints,
     #[serde(rename = "data-flow")]
     DataFlow,
+    Evidence,
     Facts,
     Graphs,
     Paths,

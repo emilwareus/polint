@@ -74,7 +74,7 @@ pub(crate) fn derive_data_flow_with_cache_stats(
         Err(error) => DataFlowProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            output_digest: None,
         },
     }
 }
