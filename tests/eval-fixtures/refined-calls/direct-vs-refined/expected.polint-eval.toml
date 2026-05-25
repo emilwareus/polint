@@ -9,7 +9,7 @@ path = "repo"
 max_runtime_ms = 10000
 
 [[expected]]
-fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "partial", producer_id = "polint.refined_calls" }
+fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "partial", producer_id = "polint.refined_calls", precision = "unknown", status = "unresolved" }
 
 [[expected]]
 invariant = { name = "refined_calls.counts.by_tier.type_value_function_token.nonzero", value = "true", mode = "exact" }

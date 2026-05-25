@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-24T22:03:31.055Z"
-last_activity: 2026-05-24 -- Phase 37 planning complete
+last_updated: "2026-05-25T00:00:00.000Z"
+last_activity: 2026-05-25 -- Phase 37 review fixes complete
 progress:
   total_phases: 22
   completed_phases: 17
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 37 — refined-call-graph-providers
+**Current focus:** Phase 37 review complete; ready for verification/ship decision
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 37 (refined-call-graph-providers) — PENDING
-Plan: Not planned
-Last activity: 2026-05-24 -- Phase 37 planning complete
+Status: Phase 37 implementation complete; review fixes verified
+Phase: 37 (refined-call-graph-providers) — COMPLETE
+Plan: 6/6 plans complete
+Last activity: 2026-05-25 -- Phase 37 review fixes complete
 
 ## Phase Progress
 
@@ -67,7 +67,7 @@ Last activity: 2026-05-24 -- Phase 37 planning complete
 | 34 | Complete | 6/6 plans complete; Rust extension discovery/host/protocol, sink validation, kernel integration, cache identity/quarantine, real extension eval, review fixes, and final verification done; requirement SAE-INT-04 |
 | 35 | Complete | 8/8 plans complete; framework fact contracts, provider wiring, Go/TS recognizers, trust boundaries, dispatch, validation, eval fixtures, public no-leak proof, and clippy cleanup done; requirement SAE-INT-05 |
 | 36 | Complete | 7/7 plans complete; private type/value/place/alias substrate, validation/debug/eval fixtures, extension precision, public no-leak proof, and final verification done; requirement SAE-PREC-01 |
-| 37 | Pending | Refined call graph providers; requirement SAE-PREC-02 |
+| 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Pending | Local plus summary-projected data flow; requirement SAE-PREC-03 |
 | 39 | Pending | Slicing, paths, and evidence bundles; requirement SAE-PREC-04 |
 | 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |

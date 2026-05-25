@@ -93,6 +93,18 @@ fn validate_refined_call_edges(
                 "stable key does not include refined call fact family".to_string(),
             ));
         }
+        if edge.evidence.is_empty() {
+            diagnostics.push(invalid_refined_call_diagnostic(
+                &edge.stable_key,
+                "missing refined call evidence".to_string(),
+            ));
+        }
+        if edge.input_stable_keys.is_empty() {
+            diagnostics.push(invalid_refined_call_diagnostic(
+                &edge.stable_key,
+                "missing refined call input stable keys".to_string(),
+            ));
+        }
         if edge.provenance == CallProvenance::Model && edge.precision == CallPrecision::Exact {
             diagnostics.push(invalid_refined_call_diagnostic(
                 &edge.stable_key,
@@ -243,6 +255,28 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("duplicate stable key"))
         );
+    }
+
+    #[test]
+    fn validation_catches_missing_evidence_and_inputs() {
+        let db = db_with_call_site();
+        let mut refined = edge("family=RefinedCallEdge/no-evidence", CallSiteId(0));
+        refined.evidence.clear();
+        refined.input_stable_keys.clear();
+        let mut diagnostics = Vec::new();
+
+        validate_refined_call_edges(&db, &[refined], &mut diagnostics);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("missing refined call evidence"))
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("missing refined call input stable keys")
+        }));
     }
 
     fn db_with_call_site() -> AnalysisDb {
