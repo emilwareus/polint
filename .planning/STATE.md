@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: "Phase 37 shipped -- PR #45"
-last_updated: "2026-05-25T06:30:11.814Z"
+last_updated: "2026-05-25T06:50:35.000Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 22
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 37 review complete; ready for verification/ship decision
+**Current focus:** Phase 37 final review fixes complete; PR #45 ready for merge decision
 
 ## Current Status
 
@@ -379,14 +379,15 @@ Last activity: 2026-05-25
 
 ## Session
 
-- Last session: 2026-05-24
-- Last activity: 2026-05-24 - Fixed Phase 36 closeout review proof gaps and reran full package validation.
-- Stopped at: Phase 36 complete; ready to start Phase 37.
+- Last session: 2026-05-25
+- Last activity: 2026-05-25 - Fixed Phase 37 final review findings, reran deep verification, and prepared PR #45 for merge.
+- Stopped at: Phase 37 complete; PR #45 ready for merge decision.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260525-c1a | Fix final review findings for Phase 37 refined calls | 2026-05-25 | implemented | [260525-c1a-fix-final-review-findings-for-phase-37-r](./quick/260525-c1a-fix-final-review-findings-for-phase-37-r/) |
 | 260524 | Fix Phase 36 closeout review proof gaps | 2026-05-24 | implemented | [260524-fix-phase36-closeout-review-proof](./quick/260524-fix-phase36-closeout-review-proof/) |
 | 260524-jtj | Fix Phase 36 review findings and add regressions | 2026-05-24 | implemented | [260524-jtj-fix-phase-36-review-findings-add-regress](./quick/260524-jtj-fix-phase-36-review-findings-add-regress/) |
 | 260524 | Fix PR 41 Ubuntu clippy failures | 2026-05-24 | implemented | [260524-fix-pr41-ubuntu-clippy](./quick/260524-fix-pr41-ubuntu-clippy/) |
@@ -415,4 +416,4 @@ Last activity: 2026-05-25
 
 ## Next Action
 
-Start Phase 37 (refined-call-graph-providers) when ready.
+Review and merge PR #45 when ready; next planned phase is Phase 38 (local plus summary-projected data flow).
