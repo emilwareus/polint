@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-25T14:51:00.120Z"
+status: ready_to_plan
+last_updated: 2026-05-25T15:26:02.002Z
 last_activity: 2026-05-25
 progress:
   total_phases: 22
-  completed_phases: 19
+  completed_phases: 20
   total_plans: 123
-  completed_plans: 122
-  percent: 86
+  completed_plans: 123
+  percent: 91
+stopped_at: Phase 39 complete (7/7) — ready to discuss Phase 40
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 39 — slicing-paths-and-evidence-bundles
+**Current focus:** Phase 40 — external benchmark adapters and promotion gates
 
 ## Current Status
 
@@ -41,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 39 (slicing-paths-and-evidence-bundles) — EXECUTING
-Plan: 7 of 7
+Status: Ready to plan
+Phase: 40
+Plan: Not started
 Last activity: 2026-05-25
 
 ## Phase Progress
@@ -53,9 +54,9 @@ Last activity: 2026-05-25
 | 20 | Complete | 2/2 plans complete; private kernel facade/delegation plus internal provider manifests/order inspection done |
 | 21 | Complete | 4/4 plans complete; provenance, precision, validation metadata, deterministic debug JSON, and public compatibility proof done; requirement SAE-FND-02 |
 | 22 | Complete | 6/6 plans complete; evaluation model/report hashing, generic matchers/metrics, native fixture runner, provenance/cache/extension fixtures, fixture category coverage, and public-boundary proof done; requirement SAE-FND-03 |
-| 23 | Pending | Input snapshots and cache-key vocabulary; requirement SAE-FND-04 |
+| 23 | Complete | 5/5 plans complete; input snapshots, typed cache keys, provider output metadata, cache stats, lifecycle/toolchain/rule/model digest inputs, and cache invalidation proof done; requirement SAE-FND-04 |
 | 24 | Complete | 5/5 plans complete; persistent layer cache proof, stale-safety, public-boundary coverage, and full verification done; requirement SAE-FND-05 |
-| 25 | Pending | Rule manifest, inspect, and test skeleton; requirement SAE-FND-06 |
+| 25 | Complete | 4/4 plans complete; rule manifests, inspect JSON, test fixture runner, and public rule behavior proof done; requirement SAE-FND-06 |
 | 26 | Complete | 6/6 plans complete; semantic index contracts, TS/JS and Go semantic rows, validation/debug output, cache persistence, eval fixtures, and public-boundary proof done; requirement SAE-SEM-01 |
 | 27 | Complete | 7/7 plans complete; topology contracts, Go/TS topology collectors, provider/cache wiring, module topology provider, eval fixtures, public-boundary proof, and docs alignment done; requirement SAE-SEM-02 |
 | 28 | Complete | 7/7 plans complete; private MIR/place contracts, semantic store, Go and TS/JS lowering, provider/cache/debug wiring, semantic-MIR eval snapshots, and public-boundary proof done; requirement SAE-SEM-03 |
@@ -69,7 +70,7 @@ Last activity: 2026-05-25
 | 36 | Complete | 7/7 plans complete; private type/value/place/alias substrate, validation/debug/eval fixtures, extension precision, public no-leak proof, and final verification done; requirement SAE-PREC-01 |
 | 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
-| 39 | Pending | Slicing, paths, and evidence bundles; requirement SAE-PREC-04 |
+| 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |
 | 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
 
@@ -380,8 +381,8 @@ Last activity: 2026-05-25
 ## Session
 
 - Last session: 2026-05-25
-- Last activity: 2026-05-25 - Completed Phase 38 gap-closure plans 38-08 through 38-10 and passed final verification.
-- Stopped at: Phase 38 complete; ready to plan Phase 39.
+- Last activity: 2026-05-25 - Completed Phase 39 slicing, paths, and evidence bundles and passed final verification.
+- Stopped at: Phase 39 complete; ready to discuss Phase 40.
 
 ### Quick Tasks Completed
 
@@ -418,4 +419,4 @@ Last activity: 2026-05-25
 
 ## Next Action
 
-Run `/gsd-plan-phase 39` to plan slicing, paths, and evidence bundles for SAE-PREC-04.
+Run `/gsd-discuss-phase 40 --auto` to gather context for external benchmark adapters and promotion gates for SAE-PROM-01.
