@@ -186,6 +186,92 @@ exclude = []
     }
 }
 
+#[test]
+fn evidence_public_no_leak() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let public_json = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let ai_friendly = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "ai-friendly", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let sarif = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "sarif", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let help = output_string(polint_cmd().args(["check", "--help"]).assert().success());
+
+    let public_sources = [
+        repo_root().join("crates/polint/src/sdk/mod.rs"),
+        repo_root().join("crates/polint/src/sdk/facts.rs"),
+        repo_root().join("crates/polint/src/runner/mod.rs"),
+        repo_root().join("README.md"),
+        repo_root().join("docs/facts/evidence.md"),
+    ]
+    .into_iter()
+    .map(|path| fs::read_to_string(path).unwrap())
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    for (surface, output) in [
+        ("check json", public_json.as_str()),
+        ("ai-friendly", ai_friendly.as_str()),
+        ("sarif", sarif.as_str()),
+        ("check help", help.as_str()),
+        ("public docs/sdk/runner", public_sources.as_str()),
+    ] {
+        assert_no_evidence_internal_markers(surface, output);
+    }
+    assert!(
+        public_sources.contains("Evidence is not a public SDK fact view"),
+        "evidence docs must state public SDK limits"
+    );
+}
+
+fn assert_no_evidence_internal_markers(surface: &str, output: &str) {
+    for marker in [
+        "analysis::evidence",
+        "EvidenceStore",
+        "EvidenceNodeFact",
+        "EvidenceEdgeFact",
+        "ExtensionEvidenceCandidateFact",
+        "ExtensionEvidenceMergeFact",
+        "polint::sdk::facts::Evidence",
+        "pub mod evidence",
+        "polint.evidence",
+        "/Users/",
+    ] {
+        assert!(
+            !output.contains(marker),
+            "public surface {surface} leaked evidence internal marker `{marker}`:\n{output}"
+        );
+    }
+}
+
 fn output_string(assert: Assert) -> String {
     let output = assert.get_output();
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be valid UTF-8");

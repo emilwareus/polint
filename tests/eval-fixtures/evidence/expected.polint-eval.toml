@@ -1,0 +1,26 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "evidence-taxonomy"
+area = "data-flow"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+# Phase 39 taxonomy coverage markers:
+# local_dependence
+# thin_full_slices
+# source_to_sink_paths
+# sanitizer_barrier
+# interprocedural_context
+# summaries
+# extension_evidence
+# uncertainty
+# deterministic_ranking
+# renderer_determinism
+# compact_path_limits
+
+[[expected]]
+path = { path_id = "evidence.path.local_dependence", nodes = ["source", "sink"], mode = "partial", partial_truth = true }
+
+[[observed]]
+path = { path_id = "evidence.path.local_dependence", nodes = ["source", "sink"], mode = "partial", partial_truth = true, producer_id = "polint.evidence", provenance = "native", precision = "conservative", status = "partial" }

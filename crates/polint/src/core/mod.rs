@@ -5892,7 +5892,7 @@ fn evidence_status_metadata(
 ) -> (FactPrecision, FactConfidence) {
     let fact_precision = match status {
         EvidenceStatus::Present => match precision {
-            EvidencePrecision::Exact => FactPrecision::Exact,
+            EvidencePrecision::Exact => FactPrecision::SetupAware,
             EvidencePrecision::SetupAware => FactPrecision::SetupAware,
             EvidencePrecision::Syntax => FactPrecision::Syntax,
             EvidencePrecision::Conservative | EvidencePrecision::Heuristic => {
@@ -9734,6 +9734,44 @@ mod tests {
         assert_eq!(metadata.layer_id, "polint.extension.demo.routes");
         assert_eq!(metadata.precision, FactPrecision::Heuristic);
         assert_eq!(metadata.validation, ValidationStatus::SchemaValidated);
+    }
+
+    #[test]
+    fn evidence_exact_rows_do_not_exceed_setup_aware_metadata_ceiling() {
+        let mut db = AnalysisDb::new();
+        db.replace_evidence_facts(crate::analysis::evidence::store::EvidenceOutput {
+            nodes: vec![EvidenceNodeFact {
+                id: crate::analysis::ids::EvidenceNodeId(0),
+                kind: crate::analysis::evidence::facts::EvidenceNodeKind::Operation,
+                language: Language::Go,
+                file: None,
+                function: None,
+                body: None,
+                operation: None,
+                cfg_node: None,
+                place: None,
+                symbol: None,
+                reference: None,
+                call_site: None,
+                span: None,
+                status: EvidenceStatus::Present,
+                precision: EvidencePrecision::Exact,
+                provenance: EvidenceProvenance::Native,
+                validation: EvidenceValidation::Native,
+                confidence: EvidenceConfidence::High,
+                compact_label: None,
+                source_fact_stable_keys: Vec::new(),
+                stable_key: "evidence:node:exact".to_string(),
+            }],
+            ..crate::analysis::evidence::store::EvidenceOutput::empty()
+        })
+        .expect("valid evidence output");
+
+        let metadata = db
+            .metadata_for(FactRef::new(FactFamily::EvidenceNode, 0))
+            .expect("evidence metadata exists");
+        assert_eq!(metadata.producer_id, "polint.evidence");
+        assert_eq!(metadata.precision, FactPrecision::SetupAware);
     }
 
     proptest! {

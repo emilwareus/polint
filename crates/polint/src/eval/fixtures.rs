@@ -1547,7 +1547,9 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 mod eval_native_fixture_runner_tests {
     use std::path::{Path, PathBuf};
 
-    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::model::{
+        ExpectedItem, FixtureArea, ObservedFact, ObservedItem, ObservedStatus,
+    };
     use crate::eval::report::{deterministic_output_hash, to_deterministic_json_pretty};
 
     use super::*;
@@ -1582,6 +1584,132 @@ mod eval_native_fixture_runner_tests {
 
     fn extension_rejection_delta_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/extension/rejection-delta")
+    }
+
+    const EVIDENCE_REQUIRED_TAXONOMY: &[&str] = &[
+        "local_dependence",
+        "thin_full_slices",
+        "source_to_sink_paths",
+        "sanitizer_barrier",
+        "interprocedural_context",
+        "summaries",
+        "extension_evidence",
+        "uncertainty",
+        "deterministic_ranking",
+        "renderer_determinism",
+        "compact_path_limits",
+    ];
+
+    #[test]
+    fn eval_native_fixture_runner_evidence_fixture_passes() {
+        let observed = synthetic_evidence_observed_rows();
+        let json = serde_json::to_string_pretty(&observed).expect("observed rows serialize");
+
+        assert!(json.contains("evidence.path.local_dependence"));
+        assert!(json.contains("evidence.path.source_to_sink"));
+        assert!(json.contains("hidden_node_count=3"));
+        assert!(!json.contains("/Users/"));
+        assert!(!json.contains("raw source"));
+    }
+
+    #[test]
+    fn eval_evidence_extension_fixture_passes() {
+        let observed = synthetic_evidence_observed_rows();
+
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:accepted"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:downgraded"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:rejected"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:native_edge_count"
+                    && fact.payload.as_deref() == Some("2")
+        )));
+    }
+
+    #[test]
+    fn eval_evidence_manifests_cover_required_taxonomy() {
+        let manifest = std::fs::read_to_string(
+            repo_root().join("tests/eval-fixtures/evidence/expected.polint-eval.toml"),
+        )
+        .expect("evidence manifest exists");
+
+        for marker in EVIDENCE_REQUIRED_TAXONOMY {
+            assert!(
+                manifest.contains(marker),
+                "evidence manifest must cover taxonomy marker {marker}; got:\n{manifest}"
+            );
+        }
+    }
+
+    fn synthetic_evidence_observed_rows() -> Vec<ObservedItem> {
+        let mut rows = vec![
+            ObservedItem::Path(crate::eval::model::ObservedPath {
+                path_id: "evidence.path.local_dependence".to_string(),
+                nodes: vec!["source".to_string(), "sink".to_string()],
+                mode: crate::eval::model::AssertionMode::Partial,
+                partial_truth: true,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("native".to_string()),
+                precision: Some("conservative".to_string()),
+                status: Some(ObservedStatus::Partial),
+            }),
+            ObservedItem::Path(crate::eval::model::ObservedPath {
+                path_id: "evidence.path.source_to_sink".to_string(),
+                nodes: vec![
+                    "source".to_string(),
+                    "summary".to_string(),
+                    "sink".to_string(),
+                ],
+                mode: crate::eval::model::AssertionMode::Partial,
+                partial_truth: true,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("summary".to_string()),
+                precision: Some("setup_aware".to_string()),
+                status: Some(ObservedStatus::Partial),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "evidence_debug".to_string(),
+                stable_key: "evidence.debug.hidden_nodes".to_string(),
+                mode: crate::eval::model::AssertionMode::Exact,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("renderer".to_string()),
+                precision: Some("debug".to_string()),
+                status: Some(ObservedStatus::Present),
+                payload: Some("hidden_node_count=3;replay_key=replay:bundle".to_string()),
+            }),
+        ];
+        rows.extend(
+            crate::eval::observed::observed_extension_evidence_delta_rows(
+                &crate::analysis::evidence::validate::ExtensionEvidenceDelta {
+                    native_edge_count: 2,
+                    accepted: 1,
+                    downgraded: 1,
+                    candidate_only: 1,
+                    rejected: 1,
+                    representative_reasons: vec![
+                        "ExactClaimRequiresNativeAnchor".to_string(),
+                        "InvalidEndpoint".to_string(),
+                    ],
+                },
+            ),
+        );
+        rows
     }
 
     fn extension_real_sink_fixture_dir() -> PathBuf {
