@@ -201,6 +201,230 @@ pub(crate) fn chop(store: &EvidenceStore, query: ChopQuery) -> ChopResult {
     }
 }
 
+pub(crate) mod summary {
+    use crate::analysis::evidence::facts::{
+        EvidenceEdgeKind, EvidenceExpansion, EvidencePrecision, EvidenceProvenance, EvidenceStatus,
+    };
+    use crate::analysis::evidence::store::EvidenceStore;
+    use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct EvidenceSummaryStep {
+        pub(crate) edge: EvidenceEdgeId,
+        pub(crate) stable_key: String,
+        pub(crate) summary_stable_key: String,
+        pub(crate) callable_stable_key: Option<String>,
+        pub(crate) domain: Option<String>,
+        pub(crate) input_endpoint: EvidenceNodeId,
+        pub(crate) output_endpoint: EvidenceNodeId,
+        pub(crate) status: EvidenceStatus,
+        pub(crate) precision: EvidencePrecision,
+        pub(crate) provenance: EvidenceProvenance,
+        pub(crate) expansion: EvidenceExpansion,
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Private compressed summary rendering is consumed by Phase 39 bundle renderers."
+    )]
+    pub(crate) fn compressed_steps(store: &EvidenceStore) -> Vec<EvidenceSummaryStep> {
+        let mut steps = store
+            .edges()
+            .iter()
+            .filter_map(|edge| compressed_step_for_edge(store, edge.id))
+            .collect::<Vec<_>>();
+        steps.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        steps
+    }
+
+    pub(crate) fn compressed_step_for_edge(
+        store: &EvidenceStore,
+        edge_id: EvidenceEdgeId,
+    ) -> Option<EvidenceSummaryStep> {
+        let edge = store.edge(edge_id)?;
+        let summary_stable_key = edge.summary_stable_key.clone()?;
+        if edge.kind != EvidenceEdgeKind::Summary
+            && !matches!(
+                edge.expansion,
+                EvidenceExpansion::Opaque { .. }
+                    | EvidenceExpansion::Expandable { .. }
+                    | EvidenceExpansion::ExternalModel { .. }
+            )
+        {
+            return None;
+        }
+        Some(EvidenceSummaryStep {
+            edge: edge.id,
+            stable_key: edge.stable_key.clone(),
+            domain: edge
+                .source_fact_stable_keys
+                .iter()
+                .find_map(|key| summary_domain_from_key(key))
+                .or_else(|| {
+                    edge.compact_label
+                        .as_deref()
+                        .and_then(summary_domain_from_key)
+                }),
+            callable_stable_key: edge
+                .source_fact_stable_keys
+                .iter()
+                .find(|key| is_callable_key(key))
+                .cloned(),
+            summary_stable_key,
+            input_endpoint: edge.from,
+            output_endpoint: edge.to,
+            status: edge.status,
+            precision: edge.precision,
+            provenance: edge.provenance,
+            expansion: edge.expansion.clone(),
+        })
+    }
+
+    fn is_callable_key(key: &str) -> bool {
+        key.starts_with("callable:")
+            || key.contains("Function")
+            || key.contains("CallTarget")
+            || key.contains("RefinedCallEdge")
+    }
+
+    fn summary_domain_from_key(key: &str) -> Option<String> {
+        if key.contains("data_flow_tito") || key.contains("SummaryTito") {
+            Some("data_flow_tito".to_string())
+        } else if key.contains("control_effects") || key.contains("SummaryControl") {
+            Some("control_effects".to_string())
+        } else if key.contains("call_effects") || key.contains("SummaryCall") {
+            Some("call_effects".to_string())
+        } else if key.contains("memory_effects") || key.contains("SummaryMemory") {
+            Some("memory_effects".to_string())
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::analysis::evidence::facts::{
+            EvidenceConfidence, EvidenceEdgeFact, EvidenceNodeFact, EvidenceNodeKind,
+            EvidenceQueryMode, EvidenceValidation,
+        };
+        use crate::analysis::evidence::store::EvidenceOutput;
+        use crate::core::Language;
+
+        #[test]
+        fn summary_projected_edge_becomes_one_compressed_step() {
+            let store = summary_store(EvidenceExpansion::Expandable {
+                key: "evidence:expand:summary:tito".to_string(),
+            });
+
+            let steps = compressed_steps(&store);
+
+            assert_eq!(steps.len(), 1);
+            assert_eq!(steps[0].summary_stable_key, "summary:tito");
+            assert_eq!(steps[0].callable_stable_key.as_deref(), Some("callable:fn"));
+            assert_eq!(steps[0].domain.as_deref(), Some("data_flow_tito"));
+            assert_eq!(steps[0].input_endpoint, EvidenceNodeId(0));
+            assert_eq!(steps[0].output_endpoint, EvidenceNodeId(1));
+        }
+
+        #[test]
+        fn expandable_summaries_carry_stable_expansion_key() {
+            let store = summary_store(EvidenceExpansion::Expandable {
+                key: "evidence:expand:summary:tito".to_string(),
+            });
+
+            let step = compressed_steps(&store).remove(0);
+
+            assert_eq!(
+                step.expansion,
+                EvidenceExpansion::Expandable {
+                    key: "evidence:expand:summary:tito".to_string()
+                }
+            );
+        }
+
+        #[test]
+        fn opaque_summaries_carry_reason_and_unknown_status() {
+            let store = summary_store(EvidenceExpansion::Opaque {
+                reason: "summary_status=Unknown".to_string(),
+            });
+
+            let step = compressed_steps(&store).remove(0);
+
+            assert_eq!(step.status, EvidenceStatus::Unknown);
+            assert!(matches!(
+                step.expansion,
+                EvidenceExpansion::Opaque { ref reason } if !reason.is_empty()
+            ));
+        }
+
+        fn summary_store(expansion: EvidenceExpansion) -> EvidenceStore {
+            let status = if matches!(expansion, EvidenceExpansion::Opaque { .. }) {
+                EvidenceStatus::Unknown
+            } else {
+                EvidenceStatus::Present
+            };
+            EvidenceStore::from_output(EvidenceOutput {
+                nodes: vec![node(0), node(1)],
+                edges: vec![EvidenceEdgeFact {
+                    id: EvidenceEdgeId(0),
+                    from: EvidenceNodeId(0),
+                    to: EvidenceNodeId(1),
+                    kind: EvidenceEdgeKind::Summary,
+                    query_mode: EvidenceQueryMode::Path,
+                    status,
+                    precision: EvidencePrecision::SetupAware,
+                    provenance: EvidenceProvenance::Summary,
+                    validation: EvidenceValidation::ReferentiallyValidated,
+                    confidence: EvidenceConfidence::Medium,
+                    call_site: None,
+                    summary_stable_key: Some("summary:tito".to_string()),
+                    expansion,
+                    compact_label: Some("data_flow_tito".to_string()),
+                    source_fact_stable_keys: vec![
+                        "summary:tito".to_string(),
+                        "callable:fn".to_string(),
+                    ],
+                    stable_key: "edge:summary".to_string(),
+                }],
+                bundles: Vec::new(),
+                paths: Vec::new(),
+                slices: Vec::new(),
+                unknowns: Vec::new(),
+                omitted_regions: Vec::new(),
+                replay_keys: Vec::new(),
+            })
+            .expect("valid evidence")
+        }
+
+        fn node(id: u64) -> EvidenceNodeFact {
+            EvidenceNodeFact {
+                id: EvidenceNodeId(id),
+                kind: EvidenceNodeKind::Summary,
+                language: Language::Go,
+                file: None,
+                function: None,
+                body: None,
+                operation: None,
+                cfg_node: None,
+                place: None,
+                symbol: None,
+                reference: None,
+                call_site: None,
+                span: None,
+                status: EvidenceStatus::Present,
+                precision: EvidencePrecision::Syntax,
+                provenance: EvidenceProvenance::Native,
+                validation: EvidenceValidation::Native,
+                confidence: EvidenceConfidence::High,
+                compact_label: None,
+                source_fact_stable_keys: Vec::new(),
+                stable_key: format!("node:{id}"),
+            }
+        }
+    }
+}
+
 fn path_from_frame(store: &EvidenceStore, frame: PathFrame) -> EvidencePath {
     let score = rank_score_for_edges(store, &frame.edges);
     let precision = if frame.edges.iter().all(|edge| {

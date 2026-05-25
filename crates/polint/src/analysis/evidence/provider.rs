@@ -142,6 +142,7 @@ fn evidence_edge_from_data_flow(
     from: EvidenceNodeId,
     to: EvidenceNodeId,
 ) -> EvidenceEdgeFact {
+    let summary_stable_key = summary_source_key(edge);
     EvidenceEdgeFact {
         id,
         from,
@@ -154,12 +155,8 @@ fn evidence_edge_from_data_flow(
         validation: data_flow_validation(edge.validation),
         confidence: data_flow_confidence(edge.confidence),
         call_site: edge.call_site,
-        summary_stable_key: edge
-            .input_stable_keys
-            .iter()
-            .find(|key| key.contains("Summary"))
-            .cloned(),
-        expansion: EvidenceExpansion::None,
+        summary_stable_key: summary_stable_key.clone(),
+        expansion: evidence_expansion(edge, summary_stable_key.as_deref()),
         compact_label: Some(format!("{:?}", edge.kind)),
         source_fact_stable_keys: std::iter::once(edge.stable_key.clone())
             .chain(edge.input_stable_keys.iter().cloned())
@@ -313,12 +310,12 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
         | DataFlowEdgeKind::LocalUse
         | DataFlowEdgeKind::LocalWrite
         | DataFlowEdgeKind::ReturnValue
-        | DataFlowEdgeKind::CallArgumentToParameter
         | DataFlowEdgeKind::CallArgumentToReturn
-        | DataFlowEdgeKind::CallReturnToUse
-        | DataFlowEdgeKind::ReceiverToMethod
         | DataFlowEdgeKind::SourceIntroduction
         | DataFlowEdgeKind::SinkReachability => EvidenceEdgeKind::DataValue,
+        DataFlowEdgeKind::CallArgumentToParameter => EvidenceEdgeKind::ParameterIn,
+        DataFlowEdgeKind::CallReturnToUse => EvidenceEdgeKind::ParameterOut,
+        DataFlowEdgeKind::ReceiverToMethod => EvidenceEdgeKind::Call,
         DataFlowEdgeKind::FieldProjection
         | DataFlowEdgeKind::IndexProjection
         | DataFlowEdgeKind::Dereference
@@ -333,6 +330,59 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
         | DataFlowEdgeKind::HavocFlow
         | DataFlowEdgeKind::BudgetTruncated => EvidenceEdgeKind::Unknown,
     }
+}
+
+fn summary_source_key(edge: &DataFlowEdgeFact) -> Option<String> {
+    edge.input_stable_keys
+        .iter()
+        .find(|key| is_summary_key(key))
+        .cloned()
+}
+
+fn is_summary_key(key: &str) -> bool {
+    key.starts_with("summary:")
+        || key.contains("SummaryTito")
+        || key.contains("SummaryControl")
+        || key.contains("SummaryCall")
+        || key.contains("SummaryMemory")
+        || key.contains("SummaryEvent")
+}
+
+fn evidence_expansion(
+    edge: &DataFlowEdgeFact,
+    summary_stable_key: Option<&str>,
+) -> EvidenceExpansion {
+    let Some(summary_stable_key) = summary_stable_key else {
+        return EvidenceExpansion::None;
+    };
+    if edge.status == DataFlowStatus::Present
+        && matches!(
+            edge.kind,
+            DataFlowEdgeKind::SummaryTito | DataFlowEdgeKind::SummaryProjected
+        )
+    {
+        EvidenceExpansion::Expandable {
+            key: format!("evidence:expand:{summary_stable_key}"),
+        }
+    } else if edge.provenance == DataFlowProvenance::Model {
+        EvidenceExpansion::ExternalModel {
+            model: edge
+                .model
+                .map(|model| format!("data_flow_model:{}", model.0))
+                .unwrap_or_else(|| "external_model".to_string()),
+        }
+    } else {
+        EvidenceExpansion::Opaque {
+            reason: summary_opaque_reason(edge),
+        }
+    }
+}
+
+fn summary_opaque_reason(edge: &DataFlowEdgeFact) -> String {
+    edge.evidence
+        .iter()
+        .find_map(|entry| entry.strip_prefix("reason=").map(str::to_string))
+        .unwrap_or_else(|| format!("summary_status={:?}", edge.status))
 }
 
 fn data_flow_status(status: DataFlowStatus) -> EvidenceStatus {
