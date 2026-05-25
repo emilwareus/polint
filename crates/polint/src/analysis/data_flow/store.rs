@@ -144,7 +144,9 @@ pub(crate) struct DataFlowStore {
 
 impl DataFlowStore {
     pub(crate) fn from_output(output: DataFlowOutput) -> Result<Self, AnalysisError> {
+        validate_references(&output)?;
         let output = output.normalized();
+        validate_references(&output)?;
         reject_duplicates(
             output.nodes.iter().map(|node| node.stable_key.as_str()),
             "data-flow node stable key",
@@ -164,23 +166,6 @@ impl DataFlowStore {
                 .map(|budget| budget.stable_key.as_str()),
             "data-flow budget stable key",
         )?;
-
-        let nodes = output
-            .nodes
-            .iter()
-            .map(|node| node.id)
-            .collect::<BTreeSet<_>>();
-        for edge in &output.edges {
-            if !nodes.contains(&edge.from) || !nodes.contains(&edge.to) {
-                return Err(AnalysisError::InvalidFact {
-                    provider: "polint.data_flow",
-                    reason: format!(
-                        "data-flow edge `{}` references missing endpoint",
-                        edge.stable_key
-                    ),
-                });
-            }
-        }
 
         let mut store = Self {
             output,
@@ -250,6 +235,103 @@ impl DataFlowStore {
     }
 }
 
+fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
+    reject_duplicate_ids(output.nodes.iter().map(|node| node.id), "data-flow node id")?;
+    reject_duplicate_ids(
+        output.models.iter().map(|model| model.id),
+        "data-flow model id",
+    )?;
+    reject_duplicate_ids(
+        output.budgets.iter().map(|budget| budget.id),
+        "data-flow budget id",
+    )?;
+
+    let nodes = output
+        .nodes
+        .iter()
+        .map(|node| node.id)
+        .collect::<BTreeSet<_>>();
+    let models = output
+        .models
+        .iter()
+        .map(|model| model.id)
+        .collect::<BTreeSet<_>>();
+    let budgets = output
+        .budgets
+        .iter()
+        .map(|budget| budget.id)
+        .collect::<BTreeSet<_>>();
+
+    for node in &output.nodes {
+        if let Some(model) = node.model
+            && !models.contains(&model)
+        {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!(
+                    "data-flow node `{}` references missing model",
+                    node.stable_key
+                ),
+            });
+        }
+    }
+
+    for edge in &output.edges {
+        if !nodes.contains(&edge.from) || !nodes.contains(&edge.to) {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!(
+                    "data-flow edge `{}` references missing endpoint",
+                    edge.stable_key
+                ),
+            });
+        }
+        if let Some(model) = edge.model
+            && !models.contains(&model)
+        {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!(
+                    "data-flow edge `{}` references missing model",
+                    edge.stable_key
+                ),
+            });
+        }
+        if let Some(budget) = edge.budget
+            && !budgets.contains(&budget)
+        {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!(
+                    "data-flow edge `{}` references missing budget",
+                    edge.stable_key
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn reject_duplicate_ids<T>(
+    ids: impl Iterator<Item = T>,
+    label: &'static str,
+) -> Result<(), AnalysisError>
+where
+    T: Copy + Ord + std::fmt::Debug,
+{
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id) {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!("duplicate {label} `{id:?}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn reject_duplicates<'a>(
     keys: impl Iterator<Item = &'a str>,
     label: &'static str,
@@ -282,8 +364,8 @@ pub(crate) fn next_data_flow_model_id(models: &[DataFlowModelFact]) -> DataFlowM
 mod tests {
     use super::*;
     use crate::analysis::data_flow::facts::{
-        DataFlowAlgorithm, DataFlowConfidence, DataFlowPrecision, DataFlowProvenance,
-        DataFlowValidation,
+        DataFlowAlgorithm, DataFlowConfidence, DataFlowModelKind, DataFlowPrecision,
+        DataFlowProvenance, DataFlowValidation,
     };
     use crate::core::Language;
 
@@ -316,6 +398,60 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn store_rejects_dangling_edge_endpoint_that_collides_after_normalization() {
+        let result = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(10, "node:a"), node(20, "node:b")],
+            edges: vec![edge(0, 10, 0, "edge:dangling-colliding")],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_rejects_dangling_model_reference_that_collides_after_normalization() {
+        let mut source = node(10, "node:source");
+        source.model = Some(DataFlowModelId(0));
+
+        let result = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![source],
+            edges: Vec::new(),
+            models: vec![model(10, "model:source")],
+            budgets: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_rejects_duplicate_node_ids_before_endpoint_remap() {
+        let result = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(10, "node:a"), node(10, "node:b")],
+            edges: vec![edge(0, 10, 10, "edge:ambiguous")],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_rejects_duplicate_model_ids_before_model_remap() {
+        let mut source = node(10, "node:source");
+        source.model = Some(DataFlowModelId(20));
+
+        let result = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![source],
+            edges: Vec::new(),
+            models: vec![model(20, "model:a"), model(20, "model:b")],
+            budgets: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
     fn node(id: u64, stable_key: &str) -> DataFlowNodeFact {
         DataFlowNodeFact {
             id: DataFlowNodeId(id),
@@ -332,6 +468,25 @@ mod tests {
             call_site: None,
             model: None,
             span: None,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn model(id: u64, stable_key: &str) -> DataFlowModelFact {
+        DataFlowModelFact {
+            id: DataFlowModelId(id),
+            kind: DataFlowModelKind::Source,
+            language: Language::TypeScript,
+            provider_id: "test".to_string(),
+            model_id: None,
+            source_stable_key: None,
+            status: DataFlowStatus::Present,
+            precision: DataFlowPrecision::SetupAware,
+            validation: DataFlowValidation::ReferentiallyValidated,
+            confidence: DataFlowConfidence::High,
+            provenance: DataFlowProvenance::Native,
+            evidence: Vec::new(),
+            payload_labels: Vec::new(),
             stable_key: stable_key.to_string(),
         }
     }

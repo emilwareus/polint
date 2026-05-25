@@ -110,7 +110,7 @@ fn derive_refined_call_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
             id,
             from,
             to,
-            kind: DataFlowEdgeKind::CallArgumentToParameter,
+            kind: DataFlowEdgeKind::CallArgumentToReturn,
             algorithm: DataFlowAlgorithm::DirectCall,
             status: DataFlowStatus::Present,
             precision: DataFlowPrecision::SetupAware,
@@ -127,7 +127,7 @@ fn derive_refined_call_edges(db: &AnalysisDb, output: &mut DataFlowOutput) {
             stable_key: stable_key_from_parts(
                 FactFamily::DataFlowEdge,
                 &[
-                    ("kind", "call_argument_to_parameter".to_string()),
+                    ("kind", "call_argument_to_return".to_string()),
                     ("refined_call", edge.stable_key.clone()),
                 ],
             ),

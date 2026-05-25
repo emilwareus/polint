@@ -3997,16 +3997,49 @@ impl AnalysisDb {
     }
 
     fn data_flow_node_metadata(&self, fact: &DataFlowNodeFact) -> FactMeta {
-        let (precision, confidence) =
-            data_flow_status_metadata(DataFlowStatus::Present, DataFlowPrecision::Syntax);
-        fact_meta_from_stable_key(
+        let model = fact
+            .model
+            .and_then(|id| self.data_flow_models.iter().find(|model| model.id == id));
+        let (status, data_flow_precision, data_flow_confidence, data_flow_validation, model_key) =
+            model.map_or(
+                (
+                    DataFlowStatus::Present,
+                    DataFlowPrecision::Syntax,
+                    DataFlowConfidence::High,
+                    DataFlowValidation::Native,
+                    none_value(),
+                ),
+                |model| {
+                    (
+                        model.status,
+                        model.precision,
+                        model.confidence,
+                        model.validation,
+                        model.stable_key.clone(),
+                    )
+                },
+            );
+        let (precision, status_confidence) = data_flow_status_metadata(status, data_flow_precision);
+        let confidence = data_flow_confidence_metadata(data_flow_confidence, status_confidence);
+        let validation = data_flow_validation_metadata(data_flow_validation);
+        fact_meta_from_stable_key_with_validation(
             FactFamily::DataFlowNode,
             DATA_FLOW_PROVIDER_ID,
             precision,
             confidence,
+            validation,
             fact.stable_key.clone(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
+                ("status", data_flow_status_label(status).to_string()),
+                (
+                    "precision",
+                    data_flow_precision_label(data_flow_precision).to_string(),
+                ),
+                (
+                    "validation",
+                    data_flow_validation_label(data_flow_validation).to_string(),
+                ),
                 ("language", language_label(fact.language).to_string()),
                 (
                     "file_key",
@@ -4044,6 +4077,7 @@ impl AnalysisDb {
                         .map(|site| self.fact_stable_key(FactFamily::CallSite, site.0))
                         .unwrap_or_else(none_value),
                 ),
+                ("model_key", model_key),
                 ("span", option_span_metadata_value(fact.span.as_ref())),
             ]),
         )
@@ -6751,6 +6785,82 @@ mod tests {
                     .precision,
                 FactPrecision::Exact
             );
+        }
+    }
+
+    mod data_flow_fact_metadata {
+        use super::*;
+        use crate::analysis::data_flow::facts::{
+            DataFlowModelKind, DataFlowNodeKind, DataFlowProvenance,
+        };
+
+        #[test]
+        fn model_backed_node_metadata_uses_model_precision_and_payload() {
+            let mut db = AnalysisDb::new();
+
+            db.replace_data_flow_facts(data_flow_output_with_model("model:source:first"))
+                .expect("first data-flow replace");
+            let first_metadata = db
+                .metadata_for(FactRef::new(FactFamily::DataFlowNode, 0))
+                .expect("node metadata")
+                .clone();
+
+            db.replace_data_flow_facts(data_flow_output_with_model("model:source:second"))
+                .expect("second data-flow replace");
+            let second_metadata = db
+                .metadata_for(FactRef::new(FactFamily::DataFlowNode, 0))
+                .expect("node metadata")
+                .clone();
+
+            assert_eq!(first_metadata.precision, FactPrecision::SetupAware);
+            assert_eq!(
+                first_metadata.validation,
+                ValidationStatus::ReferentiallyValidated
+            );
+            assert_ne!(
+                first_metadata.payload_digest,
+                second_metadata.payload_digest
+            );
+        }
+
+        fn data_flow_output_with_model(model_key: &str) -> DataFlowOutput {
+            DataFlowOutput {
+                nodes: vec![DataFlowNodeFact {
+                    id: crate::analysis::ids::DataFlowNodeId(10),
+                    kind: DataFlowNodeKind::Source,
+                    language: Language::TypeScript,
+                    file: None,
+                    function: None,
+                    body: None,
+                    operation: None,
+                    cfg_node: None,
+                    place: None,
+                    symbol: None,
+                    reference: None,
+                    call_site: None,
+                    model: Some(crate::analysis::ids::DataFlowModelId(20)),
+                    span: None,
+                    stable_key: "node:source".to_string(),
+                }],
+                edges: Vec::new(),
+                models: vec![DataFlowModelFact {
+                    id: crate::analysis::ids::DataFlowModelId(20),
+                    kind: DataFlowModelKind::Source,
+                    language: Language::TypeScript,
+                    provider_id: "test".to_string(),
+                    model_id: None,
+                    source_stable_key: None,
+                    status: DataFlowStatus::Present,
+                    precision: DataFlowPrecision::SetupAware,
+                    validation: DataFlowValidation::ReferentiallyValidated,
+                    confidence: DataFlowConfidence::High,
+                    provenance: DataFlowProvenance::Native,
+                    evidence: Vec::new(),
+                    payload_labels: Vec::new(),
+                    stable_key: model_key.to_string(),
+                }],
+                budgets: Vec::new(),
+            }
         }
     }
 

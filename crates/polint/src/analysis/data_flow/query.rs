@@ -44,12 +44,23 @@ pub(crate) fn find_paths(
     sink: DataFlowNodeId,
     budget: DataFlowSearchBudget,
 ) -> Vec<DataFlowPath> {
+    if budget.max_paths == 0 {
+        return vec![status_path(
+            DataFlowPathId(0),
+            source,
+            sink,
+            DataFlowPathStatus::BudgetExceeded,
+            budget,
+        )];
+    }
+
     let mut paths = Vec::new();
     let mut queue = VecDeque::from([PathFrame {
         node: source,
         edges: Vec::new(),
         visited: BTreeSet::from([source]),
     }]);
+    let mut budget_exceeded = false;
 
     while let Some(frame) = queue.pop_front() {
         if frame.node == sink {
@@ -62,14 +73,19 @@ pub(crate) fn find_paths(
                 budget,
             });
             if paths.len() >= budget.max_paths {
+                budget_exceeded = !queue.is_empty();
                 break;
             }
             continue;
         }
+        let edges = traversable_edges(store, frame.node);
         if frame.edges.len() >= budget.max_depth {
+            if edges.iter().any(|edge| !frame.visited.contains(&edge.to)) {
+                budget_exceeded = true;
+            }
             continue;
         }
-        for edge in traversable_edges(store, frame.node) {
+        for edge in edges {
             if frame.visited.contains(&edge.to) {
                 continue;
             }
@@ -86,16 +102,39 @@ pub(crate) fn find_paths(
     }
 
     if paths.is_empty() {
-        paths.push(DataFlowPath {
-            id: DataFlowPathId(0),
+        let status = if budget_exceeded {
+            DataFlowPathStatus::BudgetExceeded
+        } else {
+            DataFlowPathStatus::NotFound
+        };
+        paths.push(status_path(DataFlowPathId(0), source, sink, status, budget));
+    } else if budget_exceeded {
+        paths.push(status_path(
+            DataFlowPathId(paths.len() as u64),
             source,
             sink,
-            edges: Vec::new(),
-            status: DataFlowPathStatus::NotFound,
+            DataFlowPathStatus::BudgetExceeded,
             budget,
-        });
+        ));
     }
     paths
+}
+
+fn status_path(
+    id: DataFlowPathId,
+    source: DataFlowNodeId,
+    sink: DataFlowNodeId,
+    status: DataFlowPathStatus,
+    budget: DataFlowSearchBudget,
+) -> DataFlowPath {
+    DataFlowPath {
+        id,
+        source,
+        sink,
+        edges: Vec::new(),
+        status,
+        budget,
+    }
 }
 
 fn traversable_edges(store: &DataFlowStore, node: DataFlowNodeId) -> Vec<&DataFlowEdgeFact> {
@@ -146,6 +185,55 @@ mod tests {
 
         assert_eq!(paths[0].status, DataFlowPathStatus::Found);
         assert_eq!(paths[0].edges, vec![DataFlowEdgeId(0), DataFlowEdgeId(1)]);
+    }
+
+    #[test]
+    fn search_reports_budget_exceeded_when_depth_prevents_exhaustive_answer() {
+        let store = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(0), node(1), node(2)],
+            edges: vec![edge(0, 0, 1), edge(1, 1, 2)],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid store");
+
+        let paths = find_paths(
+            &store,
+            DataFlowNodeId(0),
+            DataFlowNodeId(2),
+            DataFlowSearchBudget {
+                max_depth: 1,
+                max_paths: 4,
+            },
+        );
+
+        assert_eq!(paths[0].status, DataFlowPathStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn search_reports_budget_exceeded_when_path_count_cap_is_hit() {
+        let store = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(0), node(1), node(2), node(3)],
+            edges: vec![edge(0, 0, 1), edge(1, 1, 3), edge(2, 0, 2), edge(3, 2, 3)],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid store");
+
+        let paths = find_paths(
+            &store,
+            DataFlowNodeId(0),
+            DataFlowNodeId(3),
+            DataFlowSearchBudget {
+                max_depth: 4,
+                max_paths: 1,
+            },
+        );
+
+        assert_eq!(
+            paths.last().map(|path| path.status),
+            Some(DataFlowPathStatus::BudgetExceeded)
+        );
     }
 
     fn node(id: u64) -> DataFlowNodeFact {

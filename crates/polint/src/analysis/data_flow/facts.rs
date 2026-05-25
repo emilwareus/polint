@@ -99,7 +99,7 @@ pub(crate) enum DataFlowEdgeKind {
     FieldProjection,
     Dereference,
     AddressOf,
-    CallArgumentToParameter,
+    CallArgumentToReturn,
     CallReturnToUse,
     ReceiverToMethod,
     SummaryTito,
