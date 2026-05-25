@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: "Phase 37 shipped -- PR #45"
-last_updated: "2026-05-25T06:50:35.000Z"
+last_updated: "2026-05-25T07:32:11.000Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 22
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 37 final review fixes complete; PR #45 ready for merge decision
+**Current focus:** Phase 37 CI fixes pushed locally; PR #45 ready for CI rerun after push
 
 ## Current Status
 
@@ -380,13 +380,14 @@ Last activity: 2026-05-25
 ## Session
 
 - Last session: 2026-05-25
-- Last activity: 2026-05-25 - Fixed Phase 37 final review findings, reran deep verification, and prepared PR #45 for merge.
-- Stopped at: Phase 37 complete; PR #45 ready for merge decision.
+- Last activity: 2026-05-25 - Fixed PR #45 CI failures from Ubuntu, Windows, and macOS logs; full local library tests and clippy pass.
+- Stopped at: Phase 37 complete; PR #45 ready for CI rerun.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260525-d15 | Fix CI failures from PR 45 attached logs | 2026-05-25 | implemented | [260525-d15-fix-ci-failures-from-pr-45-attached-logs](./quick/260525-d15-fix-ci-failures-from-pr-45-attached-logs/) |
 | 260525-c1a | Fix final review findings for Phase 37 refined calls | 2026-05-25 | implemented | [260525-c1a-fix-final-review-findings-for-phase-37-r](./quick/260525-c1a-fix-final-review-findings-for-phase-37-r/) |
 | 260524 | Fix Phase 36 closeout review proof gaps | 2026-05-24 | implemented | [260524-fix-phase36-closeout-review-proof](./quick/260524-fix-phase36-closeout-review-proof/) |
 | 260524-jtj | Fix Phase 36 review findings and add regressions | 2026-05-24 | implemented | [260524-jtj-fix-phase-36-review-findings-add-regress](./quick/260524-jtj-fix-phase-36-review-findings-add-regress/) |
@@ -416,4 +417,4 @@ Last activity: 2026-05-25
 
 ## Next Action
 
-Review and merge PR #45 when ready; next planned phase is Phase 38 (local plus summary-projected data flow).
+Push PR #45 CI fixes and wait for CI to go green before merge; next planned phase is Phase 38 (local plus summary-projected data flow).
