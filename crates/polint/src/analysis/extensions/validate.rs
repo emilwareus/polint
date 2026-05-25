@@ -3,11 +3,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::sinks::{
-    ExtensionFactCandidate, ExtensionFactPrecision, TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY,
-    TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY, TYPE_VALUE_ALIAS_ALLOCATION_FAMILY,
-    TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY, TYPE_VALUE_ALIAS_TYPE_FAMILY,
-    TYPE_VALUE_ALIAS_VALUE_FAMILY, has_required_type_value_alias_payload,
-    is_type_value_alias_fact_family,
+    ExtensionFactCandidate, ExtensionFactPrecision, REFINED_CALL_EDGE_FAMILY,
+    TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY, TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY,
+    TYPE_VALUE_ALIAS_ALLOCATION_FAMILY, TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY,
+    TYPE_VALUE_ALIAS_TYPE_FAMILY, TYPE_VALUE_ALIAS_VALUE_FAMILY, has_required_refined_call_payload,
+    has_required_type_value_alias_payload, is_type_value_alias_fact_family,
 };
 use super::store::{AcceptedExtensionFact, ExtensionOutput, RejectedExtensionFact};
 use crate::core::AnalysisDb;
@@ -142,6 +142,11 @@ fn rejection_reason(
     }
     if is_type_value_alias_fact_family(&candidate.fact_family)
         && !has_required_type_value_alias_payload(candidate)
+    {
+        return Some(ExtensionRejectionReason::MalformedPayload);
+    }
+    if candidate.fact_family == REFINED_CALL_EDGE_FAMILY
+        && !has_required_refined_call_payload(candidate)
     {
         return Some(ExtensionRejectionReason::MalformedPayload);
     }
