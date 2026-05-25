@@ -39,6 +39,85 @@ use crate::eval::model::{
 use crate::module_graph::topology::{ImportToPackageStatus, TopologyPrecision, TopologyStatus};
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "Phase 39 evidence delta rows are consumed by eval fixtures that assert extension merge behavior."
+)]
+pub(crate) fn observed_extension_evidence_delta_rows(
+    delta: &crate::analysis::evidence::validate::ExtensionEvidenceDelta,
+) -> Vec<ObservedItem> {
+    vec![
+        evidence_delta_row("accepted", delta.accepted),
+        evidence_delta_row("downgraded", delta.downgraded),
+        evidence_delta_row("candidate_only", delta.candidate_only),
+        evidence_delta_row("rejected", delta.rejected),
+        ObservedItem::Fact(ObservedFact {
+            family: "evidence_extension_delta".to_string(),
+            stable_key: "evidence_extension_delta:reasons".to_string(),
+            mode: AssertionMode::Partial,
+            producer_id: Some("polint.evidence".to_string()),
+            provenance: Some("extension_delta".to_string()),
+            precision: Some("debug".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(delta.representative_reasons.join(",")),
+        }),
+        ObservedItem::Fact(ObservedFact {
+            family: "evidence_extension_delta".to_string(),
+            stable_key: "evidence_extension_delta:native_edge_count".to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.evidence".to_string()),
+            provenance: Some("native".to_string()),
+            precision: Some("debug".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(delta.native_edge_count.to_string()),
+        }),
+    ]
+}
+
+#[cfg(test)]
+fn evidence_delta_row(verdict: &str, count: usize) -> ObservedItem {
+    ObservedItem::Fact(ObservedFact {
+        family: "evidence_extension_delta".to_string(),
+        stable_key: format!("evidence_extension_delta:{verdict}"),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.evidence".to_string()),
+        provenance: Some("extension".to_string()),
+        precision: Some("debug".to_string()),
+        status: Some(ObservedStatus::Present),
+        payload: Some(count.to_string()),
+    })
+}
+
+#[cfg(test)]
+mod extension_evidence_delta_tests {
+    use super::*;
+
+    #[test]
+    fn extension_evidence_deltas_render_deterministic_eval_rows() {
+        let rows = observed_extension_evidence_delta_rows(
+            &crate::analysis::evidence::validate::ExtensionEvidenceDelta {
+                native_edge_count: 3,
+                accepted: 1,
+                downgraded: 2,
+                candidate_only: 1,
+                rejected: 4,
+                representative_reasons: vec![
+                    "InvalidEndpoint".to_string(),
+                    "ExactClaimRequiresNativeAnchor".to_string(),
+                ],
+            },
+        );
+
+        let rendered = serde_json::to_string(&rows).expect("rows serialize");
+
+        assert!(rendered.contains("evidence_extension_delta:accepted"));
+        assert!(rendered.contains("InvalidEndpoint"));
+        assert!(!rendered.contains("/Users/"));
+        assert!(!rendered.contains("raw source"));
+    }
+}
+
+#[cfg(test)]
 const SEMANTIC_DEBUG_SECTIONS: &[&str] = &[
     "scopes",
     "imports",

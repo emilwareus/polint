@@ -134,6 +134,54 @@ pub(crate) struct EvidenceReplayKeyFact {
     pub(crate) stable_key: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExtensionEvidenceCandidateFact {
+    pub(crate) extension_id: String,
+    pub(crate) provider_id: String,
+    pub(crate) stable_key: String,
+    pub(crate) from: EvidenceNodeId,
+    pub(crate) to: EvidenceNodeId,
+    pub(crate) kind: EvidenceEdgeKind,
+    pub(crate) claimed_status: EvidenceStatus,
+    pub(crate) claimed_precision: EvidencePrecision,
+    pub(crate) confidence: EvidenceConfidence,
+    pub(crate) source_path: Option<String>,
+    pub(crate) source_span: Option<Span>,
+    pub(crate) summary_stable_key: Option<String>,
+    pub(crate) expansion: EvidenceExpansion,
+    pub(crate) replay_key: Option<String>,
+    pub(crate) native_anchor_stable_keys: Vec<String>,
+    pub(crate) evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ExtensionEvidenceMergeFact {
+    pub(crate) extension_id: String,
+    pub(crate) provider_id: String,
+    pub(crate) stable_key: String,
+    pub(crate) verdict: ExtensionEvidenceMergeVerdict,
+    pub(crate) reason: Option<ExtensionEvidenceMergeReason>,
+    pub(crate) effective_status: EvidenceStatus,
+    pub(crate) effective_precision: EvidencePrecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum ExtensionEvidenceMergeVerdict {
+    Accepted,
+    AcceptedWithPrecisionDowngrade,
+    CandidateOnly,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum ExtensionEvidenceMergeReason {
+    InvalidEndpoint,
+    InvalidSpan,
+    ExactClaimRequiresNativeAnchor,
+    UnboundedExpansion,
+    CandidateCannotStrengthenDiagnostic,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum EvidenceNodeKind {
     Operation,
@@ -354,6 +402,16 @@ impl EvidenceReplayKeyFact {
     pub(crate) fn normalized(mut self) -> Self {
         self.upstream_digest_keys.sort();
         self.upstream_digest_keys.dedup();
+        self
+    }
+}
+
+impl ExtensionEvidenceCandidateFact {
+    pub(crate) fn normalized(mut self) -> Self {
+        self.native_anchor_stable_keys.sort();
+        self.native_anchor_stable_keys.dedup();
+        self.evidence.sort();
+        self.evidence.dedup();
         self
     }
 }

@@ -5,3 +5,4 @@ pub(crate) mod query;
 pub(crate) mod rank;
 pub(crate) mod render;
 pub(crate) mod store;
+pub(crate) mod validate;
