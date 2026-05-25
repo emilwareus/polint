@@ -41,7 +41,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 36 | 7/7 | Complete   | 2026-05-24 |
 | 37 | 6/6 | Complete   | 2026-05-25 |
 | 38 | 10/10 | Complete   | 2026-05-25 |
-| 39 | Slicing, Paths, and Evidence Bundles | Add structured evidence, slices, chops, ranked paths, summary expansion, and evidence rendering. | SAE-PREC-04 |
+| 39 | 1/7 | In Progress|  |
 | 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
