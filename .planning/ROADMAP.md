@@ -42,7 +42,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 37 | 6/6 | Complete   | 2026-05-25 |
 | 38 | 10/10 | Complete   | 2026-05-25 |
 | 39 | 7/7 | Complete    | 2026-05-25 |
-| 40 | 3/8 | In Progress|  |
+| 40 | 4/8 | In Progress|  |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
 ## Phase Details
@@ -531,7 +531,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 40-04-PLAN.md - Native graph/fact/path promotion gates
+- [x] 40-04-PLAN.md - Native graph/fact/path promotion gates
 
 **Wave 5** *(blocked on Waves 2, 3, and 4 completion)*
 
