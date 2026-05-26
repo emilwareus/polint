@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::eval::gates::{GateCheck, GateVerdict};
 use crate::eval::model::EvaluationMode;
-use crate::eval::report::{EvaluationRun, normalize_run, to_deterministic_json_pretty};
+use crate::eval::report::{EvaluationRun, normalize_run};
 
 pub(crate) const BASELINE_SCHEMA_VERSION: &str = "polint-eval-baseline-0";
 
@@ -303,6 +303,7 @@ fn cache_misses(run: &EvaluationRun) -> i64 {
 mod tests {
     use super::*;
     use crate::eval::performance::{CacheStatsSummary, EvalPerformanceReport, RuntimeStatsSummary};
+    use crate::eval::report::to_deterministic_json_pretty;
     use crate::eval::report::{MetricSections, MetricSummary};
 
     #[test]

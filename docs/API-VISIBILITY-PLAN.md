@@ -9,6 +9,18 @@
 - [`crates/polint/src/lib.rs`](../crates/polint/src/lib.rs): **`pub`** only for `runner`, `sdk`, `run_main`, and **`#[cfg(feature = "bench")] pub mod _bench`** (required so `polint-bench` can import `polint::_bench::*`). Everything else is already **`pub(crate) mod`**.
 - **`unreachable_pub`** fires because many items *inside* those `pub(crate)` modules are still declared **`pub`**, even though no downstream crate can name them through `lib.rs`. Rust correctly suggests **`pub(crate)`** (or tighter).
 
+## Phase 40 eval boundary
+
+Phase 40's evaluation harness, external benchmark adapters, adaptation records,
+baseline comparison records, and promotion gates remain crate-private/internal.
+They are allowed to support tests, research summaries, and hidden implementation
+work, but they are not a supported SDK, runner API, stable CLI command, public
+JSON schema, or docs/facts surface.
+
+Public query-view promotion for call graph, data flow, evidence, benchmark
+execution, or eval reports is deferred to Phase 41 and must go through the same
+explicit visibility review as other SDK additions.
+
 ## Principles (execution checklist)
 
 1. **Default private** in new code; widen only on demand.

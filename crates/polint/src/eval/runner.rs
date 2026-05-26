@@ -13,6 +13,14 @@ use crate::eval::report::{
 use crate::eval::suite::{SuiteLanguageSupport, SuiteManifest, SuiteTier};
 use crate::eval::tiers::{TierSelection, select_case_ids};
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EvalRunArtifacts {
+    pub(crate) json_path: PathBuf,
+    pub(crate) markdown_path: PathBuf,
+    pub(crate) output_hash: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SuiteRunRequest<'a> {
     pub(crate) manifest: &'a SuiteManifest,
@@ -140,6 +148,27 @@ pub(crate) fn safe_join_workspace(root: &Path, relative: &Path) -> anyhow::Resul
 }
 
 #[cfg(test)]
+pub(crate) fn run_native_fixture_to_report_files_for_test(
+    fixture_dir: &Path,
+    output_dir: &Path,
+) -> anyhow::Result<EvalRunArtifacts> {
+    let run = crate::eval::fixtures::run_native_fixture_for_test(fixture_dir)?;
+    std::fs::create_dir_all(output_dir)?;
+    let json_path = output_dir.join("report.json");
+    let markdown_path = output_dir.join("report.md");
+    std::fs::write(
+        &json_path,
+        crate::eval::report::to_deterministic_json_pretty(&run),
+    )?;
+    std::fs::write(&markdown_path, crate::eval::markdown::render_markdown(&run))?;
+    Ok(EvalRunArtifacts {
+        json_path,
+        markdown_path,
+        output_hash: run.output_hash,
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -148,8 +177,9 @@ mod tests {
 
     use super::*;
     use crate::eval::adapter::{PreparedCase, RawObservedOutput};
+    use crate::eval::gates::{PromotionGateThresholds, SuiteGateConfig, evaluate_promotion_gates};
     use crate::eval::model::{FixtureArea, ObservedItem};
-    use crate::eval::report::CaseResult;
+    use crate::eval::report::{CaseResult, deterministic_output_hash};
     use crate::eval::suite::{
         CaseSelector, ExpectedSource, ExpectedSourceFormat, LocalClonePolicy, SuiteCheckout,
         SuiteCheckoutStrategy, SuiteId, SuiteKind, SuiteScoring,
@@ -229,6 +259,97 @@ mod tests {
         assert_eq!(report.suite_id, "runner-suite");
         assert_eq!(report.cases.len(), 1);
         assert!(!report.output_hash.is_empty());
+    }
+
+    #[test]
+    fn internal_eval_helper_writes_deterministic_json_and_markdown() {
+        let temp = tempdir().unwrap();
+        let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
+
+        let first =
+            run_native_fixture_to_report_files_for_test(&fixture_dir, &temp.path().join("first"))
+                .unwrap();
+        let second =
+            run_native_fixture_to_report_files_for_test(&fixture_dir, &temp.path().join("second"))
+                .unwrap();
+
+        assert_eq!(first.output_hash, second.output_hash);
+        assert_eq!(
+            std::fs::read_to_string(&first.json_path).unwrap(),
+            std::fs::read_to_string(&second.json_path).unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&first.markdown_path).unwrap(),
+            std::fs::read_to_string(&second.markdown_path).unwrap()
+        );
+        assert!(
+            std::fs::read_to_string(&first.json_path)
+                .unwrap()
+                .contains("polint-eval-internal-1")
+        );
+    }
+
+    #[test]
+    fn phase40_promotion_fixture_gates_pass_deterministically() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
+        let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let config = SuiteGateConfig {
+            suite_id: "native-promotion".to_string(),
+            tier: "fast".to_string(),
+            thresholds: PromotionGateThresholds {
+                max_unknowns: 1,
+                warn_unknowns_above: 1,
+                ..PromotionGateThresholds::default()
+            },
+        };
+
+        let first_report = evaluate_promotion_gates(&first, Some(&second), &config);
+        let second_report = evaluate_promotion_gates(&first, Some(&second), &config);
+
+        assert_eq!(first.output_hash, second.output_hash);
+        assert_eq!(first_report, second_report);
+        assert_eq!(first_report.verdict, crate::eval::gates::GateVerdict::Pass);
+        assert!(
+            first_report
+                .checks
+                .iter()
+                .any(|check| check.metric == "deterministic_output_hash"
+                    && check.threshold == "true")
+        );
+    }
+
+    #[test]
+    fn runtime_duration_changes_do_not_affect_output_hash() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
+        let mut first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let mut second = first.clone();
+        first.cases[0].runtime.observed_runtime_ms = Some(1);
+        second.cases[0].runtime.observed_runtime_ms = Some(999);
+
+        assert_eq!(
+            deterministic_output_hash(&first),
+            deterministic_output_hash(&second)
+        );
+    }
+
+    #[test]
+    fn phase40_public_boundary_does_not_advertise_hidden_eval_or_unpromoted_views() {
+        let root = repo_root();
+        let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
+        let public_text = [
+            read("README.md"),
+            read("crates/polint/src/sdk/mod.rs"),
+            read("crates/polint/src/runner/mod.rs"),
+            docs_facts_text(&root),
+        ]
+        .join("\n");
+
+        assert!(!public_text.contains("polint eval"));
+        assert!(!public_text.contains("CallGraph<'_"));
+        assert!(!public_text.contains("DataFlow<'_> is supported"));
+        assert!(!public_text.contains("Evidence<'_"));
+        assert!(!read("crates/polint/src/lib.rs").contains("pub mod eval"));
     }
 
     struct NullAdapter;
@@ -317,5 +438,30 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn docs_facts_text(root: &Path) -> String {
+        let mut text = String::new();
+        for entry in std::fs::read_dir(root.join("docs/facts")).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("md")
+            {
+                text.push_str(&std::fs::read_to_string(entry.path()).unwrap());
+                text.push('\n');
+            }
+        }
+        text
     }
 }

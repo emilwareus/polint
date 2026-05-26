@@ -61,7 +61,7 @@ impl BenchmarkComparisonRow {
 }
 
 pub(crate) fn sort_comparison_rows(rows: &mut [BenchmarkComparisonRow]) {
-    rows.sort_by(|left, right| comparison_sort_key(left).cmp(&comparison_sort_key(right)));
+    rows.sort_by_key(comparison_sort_key);
 }
 
 pub(crate) fn semgrep_row(

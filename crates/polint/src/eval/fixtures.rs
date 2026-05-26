@@ -1543,7 +1543,7 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 
         assert!(
             rendered.contains(
-                "synthetic observed rows are only allowed for extension or refined-call fixtures"
+                "synthetic observed rows are only allowed for extension, refined-call, or promotion fixtures"
             ),
             "synthetic observed rows outside allowed areas should be rejected: {rendered}"
         );

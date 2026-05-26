@@ -37,16 +37,16 @@ pub(crate) fn select_case_ids(
     let mut limitations = Vec::new();
 
     if selector.selector == "all" {
-        if let Some(limit) = limit {
-            if unique_ids.len() > limit {
-                limitations.push(format!(
-                    "tier {:?} selector all was capped from {} to {} cases",
-                    tier,
-                    unique_ids.len(),
-                    limit
-                ));
-                unique_ids.truncate(limit);
-            }
+        if let Some(limit) = limit
+            && unique_ids.len() > limit
+        {
+            limitations.push(format!(
+                "tier {:?} selector all was capped from {} to {} cases",
+                tier,
+                unique_ids.len(),
+                limit
+            ));
+            unique_ids.truncate(limit);
         }
     } else if selector.selector.starts_with("sample:balanced:") {
         let sample_size = sample_size(&selector.selector)?;
