@@ -3,11 +3,11 @@ use super::facts::{
     DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
 };
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
-use crate::analysis::calls::facts::{CallSiteFact, CallTargetStatus};
+use crate::analysis::calls::facts::{CallSiteFact, CallSyntaxKind, CallTargetStatus};
 use crate::analysis::ids::{CallSiteId, DataFlowBudgetId, DataFlowNodeId, PlaceId};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
 use crate::analysis::summaries::facts::{
-    SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
+    FlowRoot, SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
 };
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, Language};
@@ -45,7 +45,7 @@ fn derive_resolved_call_edge(
     );
 
     let argument_nodes = argument_nodes(output, edge, site);
-    for (index, argument) in argument_nodes.into_iter().enumerate() {
+    for (index, argument) in argument_nodes.iter().copied() {
         push_edge(
             output,
             CallEdgeDraft {
@@ -66,7 +66,7 @@ fn derive_resolved_call_edge(
             },
         );
     }
-    if let Some(receiver) = receiver_node(output, edge, site) {
+    if let Some(receiver) = receiver_node(output, site) {
         push_edge(
             output,
             CallEdgeDraft {
@@ -84,7 +84,7 @@ fn derive_resolved_call_edge(
             },
         );
     }
-    bridge_target_summaries(db, output, edge, callee_input, callee_output, site_id);
+    bridge_target_summaries(db, output, edge, site, site_id);
     if let Some(returned) = return_node(output, site) {
         push_edge(
             output,
@@ -109,8 +109,7 @@ fn bridge_target_summaries(
     db: &AnalysisDb,
     output: &mut DataFlowOutput,
     edge: &RefinedCallEdgeFact,
-    callee_input: DataFlowNodeId,
-    callee_output: DataFlowNodeId,
+    site: Option<&CallSiteFact>,
     call_site: Option<CallSiteId>,
 ) {
     let Some(target_function) = edge.target_function else {
@@ -122,51 +121,84 @@ fn bridge_target_summaries(
             && summary.domain == SummaryDomainKind::DataFlowTito
             && summary.status == SummaryStatus::Present
     }) {
-        let summary_input = summary_node(output, summary, DataFlowNodeKind::SummaryInput, "input");
-        let summary_output =
-            summary_node(output, summary, DataFlowNodeKind::SummaryOutput, "output");
-        let summary_inputs = vec![
-            summary.stable_key.clone(),
-            summary.callable_stable_key.clone(),
-        ];
-        push_edge(
-            output,
-            CallEdgeDraft {
-                from: callee_input,
-                to: summary_input,
-                kind: DataFlowEdgeKind::SummaryProjected,
-                status: DataFlowStatus::Present,
-                precision: summary_precision(summary.precision),
-                validation: DataFlowValidation::ReferentiallyValidated,
-                budget: None,
-                evidence: vec![
-                    "direct_call_summary_input_bridge".to_string(),
-                    format!("summary={}", summary.stable_key),
-                ],
-                extra_input_stable_keys: summary_inputs.clone(),
+        for flow in &summary.tito_flows {
+            if !super::summary_edges::flow_kind_projects_as_tito(flow.kind) {
+                continue;
+            }
+            let Some(from) = call_root_node(output, edge, site, flow.from) else {
+                continue;
+            };
+            let Some(to) = call_root_node(output, edge, site, flow.to) else {
+                continue;
+            };
+            let summary_input = summary_node(
+                output,
+                summary,
+                DataFlowNodeKind::SummaryInput,
+                &super::summary_edges::root_role(flow.from),
                 call_site,
-                edge,
-            },
-        );
-        push_edge(
-            output,
-            CallEdgeDraft {
-                from: summary_output,
-                to: callee_output,
-                kind: DataFlowEdgeKind::SummaryProjected,
-                status: DataFlowStatus::Present,
-                precision: summary_precision(summary.precision),
-                validation: DataFlowValidation::ReferentiallyValidated,
-                budget: None,
-                evidence: vec![
-                    "direct_call_summary_output_bridge".to_string(),
-                    format!("summary={}", summary.stable_key),
-                ],
-                extra_input_stable_keys: summary_inputs,
+            );
+            let summary_output = summary_node(
+                output,
+                summary,
+                DataFlowNodeKind::SummaryOutput,
+                &super::summary_edges::root_role(flow.to),
                 call_site,
+            );
+            let summary_inputs = vec![
+                summary.stable_key.clone(),
+                summary.callable_stable_key.clone(),
+            ];
+            push_edge(
+                output,
+                CallEdgeDraft {
+                    from,
+                    to: summary_input,
+                    kind: DataFlowEdgeKind::SummaryProjected,
+                    status: DataFlowStatus::Present,
+                    precision: summary_precision(summary.precision),
+                    validation: DataFlowValidation::ReferentiallyValidated,
+                    budget: None,
+                    evidence: vec![
+                        "direct_call_summary_input_bridge".to_string(),
+                        format!("summary={}", summary.stable_key),
+                        format!("flow_from={}", super::summary_edges::root_role(flow.from)),
+                    ],
+                    extra_input_stable_keys: summary_inputs.clone(),
+                    call_site,
+                    edge,
+                },
+            );
+            push_call_summary_tito_edge(
+                output,
                 edge,
-            },
-        );
+                summary,
+                flow,
+                summary_input,
+                summary_output,
+                call_site,
+            );
+            push_edge(
+                output,
+                CallEdgeDraft {
+                    from: summary_output,
+                    to,
+                    kind: DataFlowEdgeKind::SummaryProjected,
+                    status: DataFlowStatus::Present,
+                    precision: summary_precision(summary.precision),
+                    validation: DataFlowValidation::ReferentiallyValidated,
+                    budget: None,
+                    evidence: vec![
+                        "direct_call_summary_output_bridge".to_string(),
+                        format!("summary={}", summary.stable_key),
+                        format!("flow_to={}", super::summary_edges::root_role(flow.to)),
+                    ],
+                    extra_input_stable_keys: summary_inputs,
+                    call_site,
+                    edge,
+                },
+            );
+        }
     }
 }
 
@@ -174,16 +206,48 @@ fn argument_nodes(
     output: &mut DataFlowOutput,
     _edge: &RefinedCallEdgeFact,
     site: Option<&CallSiteFact>,
-) -> Vec<DataFlowNodeId> {
+) -> Vec<(usize, DataFlowNodeId)> {
     site.into_iter()
         .flat_map(|site| site.arguments.iter().copied())
-        .filter_map(|place| place_node(output, place))
+        .enumerate()
+        .filter_map(|(index, place)| place_node(output, place).map(|node| (index, node)))
         .collect::<Vec<_>>()
+}
+
+fn call_root_node(
+    output: &mut DataFlowOutput,
+    edge: &RefinedCallEdgeFact,
+    site: Option<&CallSiteFact>,
+    root: FlowRoot,
+) -> Option<DataFlowNodeId> {
+    match root {
+        FlowRoot::Param(index) => {
+            let site = site?;
+            if edge.language == Language::Go
+                && site.kind == CallSyntaxKind::Method
+                && site.receiver.is_some()
+            {
+                if index == 0 {
+                    return receiver_node(output, Some(site));
+                }
+                return site
+                    .arguments
+                    .get((index - 1) as usize)
+                    .copied()
+                    .and_then(|place| place_node(output, place));
+            }
+            site.arguments
+                .get(index as usize)
+                .copied()
+                .and_then(|place| place_node(output, place))
+        }
+        FlowRoot::Receiver => receiver_node(output, site),
+        FlowRoot::Return => return_node(output, site),
+    }
 }
 
 fn receiver_node(
     output: &mut DataFlowOutput,
-    _edge: &RefinedCallEdgeFact,
     site: Option<&CallSiteFact>,
 ) -> Option<DataFlowNodeId> {
     let receiver = site.and_then(|site| site.receiver)?;
@@ -315,6 +379,7 @@ fn summary_node(
     fact: &SummaryFact,
     kind: DataFlowNodeKind,
     role: &str,
+    call_site: Option<CallSiteId>,
 ) -> DataFlowNodeId {
     let stable_key = stable_key_from_parts(
         FactFamily::DataFlowNode,
@@ -322,6 +387,12 @@ fn summary_node(
             ("kind", format!("{kind:?}")),
             ("summary", fact.stable_key.clone()),
             ("role", role.to_string()),
+            (
+                "call_site",
+                call_site
+                    .map(|id| id.0.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+            ),
         ],
     );
     if let Some(existing) = output
@@ -345,12 +416,76 @@ fn summary_node(
         place: None,
         symbol: None,
         reference: None,
-        call_site: None,
+        call_site,
         model: None,
         span: None,
         stable_key,
     });
     id
+}
+
+fn push_call_summary_tito_edge(
+    output: &mut DataFlowOutput,
+    edge: &RefinedCallEdgeFact,
+    summary: &SummaryFact,
+    flow: &crate::analysis::summaries::facts::SummaryFlowEdge,
+    from: DataFlowNodeId,
+    to: DataFlowNodeId,
+    call_site: Option<CallSiteId>,
+) {
+    let stable_key = stable_key_from_parts(
+        FactFamily::DataFlowEdge,
+        &[
+            ("kind", format!("{:?}", DataFlowEdgeKind::SummaryTito)),
+            ("refined_call", edge.stable_key.clone()),
+            ("summary", summary.stable_key.clone()),
+            ("from", node_key(output, from)),
+            ("to", node_key(output, to)),
+            ("flow_from", super::summary_edges::root_role(flow.from)),
+            ("flow_to", super::summary_edges::root_role(flow.to)),
+            ("flow_kind", format!("{:?}", flow.kind)),
+        ],
+    );
+    if output
+        .edges
+        .iter()
+        .any(|edge| edge.stable_key == stable_key)
+    {
+        return;
+    }
+    output.edges.push(DataFlowEdgeFact {
+        id: next_data_flow_edge_id(&output.edges),
+        from,
+        to,
+        kind: DataFlowEdgeKind::SummaryTito,
+        algorithm: DataFlowAlgorithm::SummaryProjection,
+        status: DataFlowStatus::Present,
+        precision: summary_precision(summary.precision),
+        validation: DataFlowValidation::ReferentiallyValidated,
+        confidence: DataFlowConfidence::Medium,
+        provenance: DataFlowProvenance::Summary,
+        call_site,
+        call_target: edge.base_target,
+        refined_call: Some(edge.id),
+        model: None,
+        budget: None,
+        evidence: vec![
+            "direct_call_summary_data_flow_tito".to_string(),
+            format!("summary={}", summary.stable_key),
+            format!(
+                "flow={}->{}:{:?}",
+                super::summary_edges::root_role(flow.from),
+                super::summary_edges::root_role(flow.to),
+                flow.kind
+            ),
+        ],
+        input_stable_keys: vec![
+            edge.stable_key.clone(),
+            summary.stable_key.clone(),
+            summary.callable_stable_key.clone(),
+        ],
+        stable_key,
+    });
 }
 
 fn unresolved_status(status: CallTargetStatus) -> DataFlowStatus {
@@ -489,7 +624,8 @@ mod tests {
     };
     use crate::analysis::refined_calls::store::RefinedCallOutput;
     use crate::analysis::summaries::facts::{
-        SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
+        FlowKind, FlowRoot, SummaryDomainKind, SummaryFact, SummaryFlowEdge, SummaryPrecision,
+        SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
     use crate::core::{FileId, FunctionId, Language, Span};
@@ -699,6 +835,276 @@ mod tests {
     }
 
     #[test]
+    fn target_data_flow_summary_only_bridges_matching_argument_root() {
+        let mut db = AnalysisDb::default();
+        db.replace_call_facts(CallOutput {
+            sites: vec![call_site(None)],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_edge(CallTargetStatus::Resolved)],
+        })
+        .expect("valid refined calls");
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary_fact()],
+            events: Vec::new(),
+        });
+        let mut output = DataFlowOutput {
+            nodes: vec![
+                place_node(10, PlaceId(10)),
+                place_node(20, PlaceId(20)),
+                place_node(30, PlaceId(30)),
+            ],
+            edges: Vec::new(),
+            models: Vec::new(),
+            budgets: Vec::new(),
+        };
+
+        derive_direct_call_edges(&db, &mut output);
+        super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
+        let store = DataFlowStore::from_output(output).expect("valid store");
+        let unrelated_argument = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(20)))
+            .expect("second argument node")
+            .id;
+        let sink = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(30)))
+            .expect("return node")
+            .id;
+        let paths = find_paths(
+            &store,
+            unrelated_argument,
+            sink,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+
+        assert_eq!(paths[0].status, DataFlowPathStatus::NotFound);
+    }
+
+    #[test]
+    fn go_method_param_zero_summary_bridges_receiver_not_first_argument() {
+        let mut db = AnalysisDb::default();
+        db.replace_call_facts(CallOutput {
+            sites: vec![go_method_call_site()],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![RefinedCallEdgeFact {
+                language: Language::Go,
+                ..refined_edge(CallTargetStatus::Resolved)
+            }],
+        })
+        .expect("valid refined calls");
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary_fact()],
+            events: Vec::new(),
+        });
+        let mut output = DataFlowOutput {
+            nodes: vec![
+                place_node(10, PlaceId(10)),
+                place_node(20, PlaceId(20)),
+                place_node(30, PlaceId(30)),
+            ],
+            edges: Vec::new(),
+            models: Vec::new(),
+            budgets: Vec::new(),
+        };
+
+        derive_direct_call_edges(&db, &mut output);
+        super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
+        let store = DataFlowStore::from_output(output).expect("valid store");
+        let receiver = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(20)))
+            .expect("receiver node")
+            .id;
+        let first_argument = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(10)))
+            .expect("argument node")
+            .id;
+        let sink = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(30)))
+            .expect("return node")
+            .id;
+
+        let receiver_paths = find_paths(
+            &store,
+            receiver,
+            sink,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+        let argument_paths = find_paths(
+            &store,
+            first_argument,
+            sink,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+
+        assert_eq!(receiver_paths[0].status, DataFlowPathStatus::Found);
+        assert_eq!(argument_paths[0].status, DataFlowPathStatus::NotFound);
+    }
+
+    #[test]
+    fn barrier_summary_flow_does_not_bridge_direct_call_path() {
+        let mut db = AnalysisDb::default();
+        db.replace_call_facts(CallOutput {
+            sites: vec![call_site(None)],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_edge(CallTargetStatus::Resolved)],
+        })
+        .expect("valid refined calls");
+        let mut summary = summary_fact();
+        summary.tito_flows[0].kind = FlowKind::Barrier;
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary],
+            events: Vec::new(),
+        });
+        let mut output = DataFlowOutput {
+            nodes: vec![
+                place_node(10, PlaceId(10)),
+                place_node(20, PlaceId(20)),
+                place_node(30, PlaceId(30)),
+            ],
+            edges: Vec::new(),
+            models: Vec::new(),
+            budgets: Vec::new(),
+        };
+
+        derive_direct_call_edges(&db, &mut output);
+        super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
+        let store = DataFlowStore::from_output(output).expect("valid store");
+        let source = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(10)))
+            .expect("argument node")
+            .id;
+        let sink = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(30)))
+            .expect("return node")
+            .id;
+        let paths = find_paths(
+            &store,
+            source,
+            sink,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+
+        assert_eq!(paths[0].status, DataFlowPathStatus::NotFound);
+    }
+
+    #[test]
+    fn repeated_target_summary_paths_do_not_cross_between_call_sites() {
+        let mut db = AnalysisDb::default();
+        db.replace_call_facts(CallOutput {
+            sites: vec![
+                call_site_with(CallSiteId(2), vec![PlaceId(10)], Some(PlaceId(30))),
+                call_site_with(CallSiteId(3), vec![PlaceId(40)], Some(PlaceId(50))),
+            ],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![
+                refined_edge_for(RefinedCallEdgeId(1), CallSiteId(2)),
+                refined_edge_for(RefinedCallEdgeId(2), CallSiteId(3)),
+            ],
+        })
+        .expect("valid refined calls");
+        db.replace_summary_facts(SummaryOutput {
+            summaries: vec![summary_fact()],
+            events: Vec::new(),
+        });
+        let mut output = DataFlowOutput {
+            nodes: vec![
+                place_node(0, PlaceId(10)),
+                place_node(1, PlaceId(30)),
+                place_node(2, PlaceId(40)),
+                place_node(3, PlaceId(50)),
+            ],
+            edges: Vec::new(),
+            models: Vec::new(),
+            budgets: Vec::new(),
+        };
+
+        derive_direct_call_edges(&db, &mut output);
+        super::super::summary_edges::derive_summary_projected_edges(&db, &mut output);
+        let store = DataFlowStore::from_output(output).expect("valid store");
+        let first_argument = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(10)))
+            .expect("first argument node")
+            .id;
+        let first_result = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(30)))
+            .expect("first result node")
+            .id;
+        let second_result = store
+            .nodes()
+            .iter()
+            .find(|node| node.place == Some(PlaceId(50)))
+            .expect("second result node")
+            .id;
+
+        let same_call_paths = find_paths(
+            &store,
+            first_argument,
+            first_result,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+        let cross_call_paths = find_paths(
+            &store,
+            first_argument,
+            second_result,
+            DataFlowSearchBudget {
+                max_depth: 8,
+                max_paths: 4,
+            },
+        );
+
+        assert_eq!(same_call_paths[0].status, DataFlowPathStatus::Found);
+        assert_eq!(cross_call_paths[0].status, DataFlowPathStatus::NotFound);
+    }
+
+    #[test]
     fn unresolved_refined_call_preserves_non_unknown_statuses() {
         for (call_status, data_flow_status) in [
             (CallTargetStatus::Unsupported, DataFlowStatus::Unsupported),
@@ -754,6 +1160,15 @@ mod tests {
         }
     }
 
+    fn refined_edge_for(id: RefinedCallEdgeId, site: CallSiteId) -> RefinedCallEdgeFact {
+        RefinedCallEdgeFact {
+            id,
+            site,
+            stable_key: format!("refined:edge:{}", id.0),
+            ..refined_edge(CallTargetStatus::Resolved)
+        }
+    }
+
     fn call_site(receiver: Option<PlaceId>) -> CallSiteFact {
         CallSiteFact {
             id: CallSiteId(2),
@@ -779,6 +1194,31 @@ mod tests {
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::Exact,
             stable_key: "call-site:2".to_string(),
+        }
+    }
+
+    fn call_site_with(
+        id: CallSiteId,
+        arguments: Vec<PlaceId>,
+        result: Option<PlaceId>,
+    ) -> CallSiteFact {
+        CallSiteFact {
+            id,
+            operation: MirOpId(id.0),
+            arguments,
+            result,
+            stable_key: format!("call-site:{}", id.0),
+            ..call_site(None)
+        }
+    }
+
+    fn go_method_call_site() -> CallSiteFact {
+        CallSiteFact {
+            language: Language::Go,
+            kind: CallSyntaxKind::Method,
+            receiver: Some(PlaceId(20)),
+            arguments: vec![PlaceId(10)],
+            ..call_site(Some(PlaceId(20)))
         }
     }
 
@@ -812,6 +1252,11 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "1234567890abcdef".to_string(),
+            tito_flows: vec![SummaryFlowEdge {
+                from: FlowRoot::Param(0),
+                to: FlowRoot::Return,
+                kind: FlowKind::Value,
+            }],
             stable_key: "summary:target:tito".to_string(),
         }
     }

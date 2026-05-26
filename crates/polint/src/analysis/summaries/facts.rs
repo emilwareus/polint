@@ -143,6 +143,13 @@ pub(crate) enum FlowRoot {
     Return,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct SummaryFlowEdge {
+    pub(crate) from: FlowRoot,
+    pub(crate) to: FlowRoot,
+    pub(crate) kind: FlowKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SummaryFact {
     pub(crate) id: SummaryId,
@@ -153,6 +160,7 @@ pub(crate) struct SummaryFact {
     pub(crate) precision: SummaryPrecision,
     pub(crate) provenance: SummaryProvenance,
     pub(crate) payload_digest: String,
+    pub(crate) tito_flows: Vec<SummaryFlowEdge>,
     pub(crate) stable_key: String,
 }
 
@@ -265,6 +273,7 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "abc123".to_string(),
+            tito_flows: Vec::new(),
             stable_key: "summary:control_effects:func::main".to_string(),
         };
 

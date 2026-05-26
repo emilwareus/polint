@@ -26,6 +26,7 @@ struct LocalFlowBuilder<'a, 'b> {
     output: &'b mut DataFlowOutput,
     place_nodes: BTreeMap<PlaceId, DataFlowNodeId>,
     emitted_edges: BTreeSet<String>,
+    branchy_bodies: BTreeSet<MirBodyId>,
 }
 
 impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
@@ -35,11 +36,19 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             .iter()
             .filter_map(|node| node.place.map(|place| (place, node.id)))
             .collect();
+        let branchy_bodies = db
+            .mir_operations()
+            .iter()
+            .filter_map(|operation| {
+                matches!(operation.kind, MirOperationKind::Branch { .. }).then_some(operation.body)
+            })
+            .collect();
         Self {
             db,
             output,
             place_nodes,
             emitted_edges: BTreeSet::new(),
+            branchy_bodies,
         }
     }
 
@@ -185,7 +194,9 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             return;
         };
         if matches!(value, MirValue::Literal { .. }) {
-            self.kill_incoming_overwrite_flows(to, kind);
+            if !self.branchy_bodies.contains(&operation.body) {
+                self.kill_incoming_overwrite_flows(to, kind);
+            }
             return;
         }
         let status =
@@ -578,7 +589,7 @@ pub(crate) fn node_from_place(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
@@ -844,6 +855,80 @@ mod tests {
                 .iter()
                 .any(|edge| edge.kind == DataFlowEdgeKind::ReturnValue),
             "the later return edge should still be represented"
+        );
+    }
+
+    #[test]
+    fn literal_overwrite_in_branchy_body_preserves_possible_incoming_local_flow() {
+        let mut db = AnalysisDb::default();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body()],
+            places: vec![
+                place(
+                    0,
+                    PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("input".to_string()),
+                    },
+                    Vec::new(),
+                ),
+                place(
+                    1,
+                    PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "local".to_string(),
+                    },
+                    Vec::new(),
+                ),
+            ],
+            operations: vec![
+                op(
+                    0,
+                    MirOperationKind::Bind {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                    },
+                ),
+                op(
+                    1,
+                    MirOperationKind::Branch {
+                        predicate: MirPredicateId(1),
+                        predicate_place: Some(PlaceId(0)),
+                    },
+                ),
+                op(
+                    2,
+                    MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Literal {
+                            value: "\"safe\"".to_string(),
+                        },
+                        mode: AssignMode::Overwrite,
+                    },
+                ),
+                op(
+                    3,
+                    MirOperationKind::Return {
+                        value: Some(MirValue::Place(PlaceId(1))),
+                    },
+                ),
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        let mut output = DataFlowOutput::empty();
+        push_place_nodes(&db, &mut output);
+
+        derive_local_value_flow(&db, &mut output);
+
+        assert!(
+            output.edges.iter().any(|edge| {
+                edge.kind == DataFlowEdgeKind::LocalBinding
+                    && edge.from == DataFlowNodeId(0)
+                    && edge.to == DataFlowNodeId(1)
+            }),
+            "branchy bodies are not path-sensitive, so a literal overwrite must not erase a possible parameter flow"
         );
     }
 

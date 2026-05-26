@@ -362,6 +362,7 @@ struct SummaryDebugRow {
     precision: String,
     provenance: String,
     payload_digest: String,
+    tito_flows: Vec<crate::analysis::summaries::facts::SummaryFlowEdge>,
     stable_key: String,
 }
 
@@ -1241,6 +1242,7 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
             precision: fact.precision.as_str().to_string(),
             provenance: fact.provenance.as_str().to_string(),
             payload_digest: fact.payload_digest.clone(),
+            tito_flows: fact.tito_flows.clone(),
             stable_key: fact.stable_key.clone(),
         })
         .collect();
@@ -3359,6 +3361,7 @@ mod abstract_domains_debug_json {
                     precision: SummaryPrecision::Local,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                     stable_key: "summary:control:app".to_string(),
                 },
                 SummaryFact {
@@ -3370,6 +3373,7 @@ mod abstract_domains_debug_json {
                     precision: SummaryPrecision::UnknownTop,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:memory".to_string(),
+            tito_flows: Vec::new(),
                     stable_key: "summary:memory:app".to_string(),
                 },
             ],
@@ -3457,6 +3461,7 @@ mod abstract_domains_debug_json {
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                 stable_key: "summary:control:app".to_string(),
             }],
             events: vec![SummaryEventFact {
@@ -3528,6 +3533,7 @@ mod abstract_domains_debug_json {
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                 stable_key: "summary:control:app".to_string(),
             }],
             events: Vec::new(),

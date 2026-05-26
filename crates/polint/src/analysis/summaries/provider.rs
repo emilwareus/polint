@@ -273,7 +273,7 @@ pub(crate) fn direct_summaries_output_digest(
     );
     parts.extend(output.summaries.iter().map(|row| {
         format!(
-            "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={}",
+            "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={} tito_flows={:?}",
             row.stable_key,
             callable_keys
                 .get(&MirBodyId(row.function.0))
@@ -284,6 +284,7 @@ pub(crate) fn direct_summaries_output_digest(
             row.precision,
             row.provenance,
             row.payload_digest,
+            row.tito_flows,
         )
     }));
     parts.extend(output.events.iter().map(|row| {
@@ -457,6 +458,7 @@ mod scc_closure_provider {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
+            tito_flows: Vec::new(),
             stable_key: format!("summary:control_effects:{callable_key}"),
         }
     }

@@ -7,7 +7,8 @@ use super::local::budget_fact;
 use super::store::{DataFlowOutput, next_data_flow_edge_id, next_data_flow_node_id};
 use crate::analysis::ids::DataFlowNodeId;
 use crate::analysis::summaries::facts::{
-    SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
+    FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryFlowEdge,
+    SummaryPrecision, SummaryStatus,
 };
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, Language};
@@ -32,27 +33,49 @@ pub(crate) fn derive_summary_projected_edges(db: &AnalysisDb, output: &mut DataF
 }
 
 fn project_present_tito(output: &mut DataFlowOutput, fact: &SummaryFact) {
-    let input = summary_node(output, fact, DataFlowNodeKind::SummaryInput, "input");
-    let output_node = summary_node(output, fact, DataFlowNodeKind::SummaryOutput, "output");
-    push_edge(
-        output,
-        SummaryEdgeDraft {
-            from: input,
-            to: output_node,
-            kind: DataFlowEdgeKind::SummaryTito,
-            status: DataFlowStatus::Present,
-            precision: precision(fact.precision),
-            validation: DataFlowValidation::ReferentiallyValidated,
-            confidence: DataFlowConfidence::Medium,
-            budget: None,
-            evidence: vec![
-                "summary_data_flow_tito".to_string(),
-                format!("payload_digest={}", fact.payload_digest),
-            ],
-            input_stable_keys: vec![fact.stable_key.clone(), fact.callable_stable_key.clone()],
-            stable_anchor: fact.stable_key.clone(),
-        },
-    );
+    for flow in &fact.tito_flows {
+        if !flow_kind_projects_as_tito(flow.kind) {
+            continue;
+        }
+        let input = summary_node(
+            output,
+            fact,
+            DataFlowNodeKind::SummaryInput,
+            &root_role(flow.from),
+        );
+        let output_node = summary_node(
+            output,
+            fact,
+            DataFlowNodeKind::SummaryOutput,
+            &root_role(flow.to),
+        );
+        push_edge(
+            output,
+            SummaryEdgeDraft {
+                from: input,
+                to: output_node,
+                kind: DataFlowEdgeKind::SummaryTito,
+                status: DataFlowStatus::Present,
+                precision: precision(fact.precision),
+                validation: DataFlowValidation::ReferentiallyValidated,
+                confidence: DataFlowConfidence::Medium,
+                budget: None,
+                evidence: vec![
+                    "summary_data_flow_tito".to_string(),
+                    format!("payload_digest={}", fact.payload_digest),
+                    flow_evidence(flow),
+                ],
+                input_stable_keys: vec![fact.stable_key.clone(), fact.callable_stable_key.clone()],
+                stable_anchor: format!(
+                    "{}:{}->{}:{:?}",
+                    fact.stable_key,
+                    root_role(flow.from),
+                    root_role(flow.to),
+                    flow.kind
+                ),
+            },
+        );
+    }
 }
 
 fn project_summary_status(output: &mut DataFlowOutput, fact: &SummaryFact) {
@@ -311,6 +334,27 @@ fn precision(precision: SummaryPrecision) -> DataFlowPrecision {
     }
 }
 
+pub(crate) fn root_role(root: FlowRoot) -> String {
+    match root {
+        FlowRoot::Param(index) => format!("param:{index}"),
+        FlowRoot::Receiver => "receiver".to_string(),
+        FlowRoot::Return => "return".to_string(),
+    }
+}
+
+pub(crate) fn flow_kind_projects_as_tito(kind: FlowKind) -> bool {
+    matches!(kind, FlowKind::Value | FlowKind::BySideEffect)
+}
+
+fn flow_evidence(flow: &SummaryFlowEdge) -> String {
+    format!(
+        "flow={}->{}:{:?}",
+        root_role(flow.from),
+        root_role(flow.to),
+        flow.kind
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +379,42 @@ mod tests {
                 .iter()
                 .any(|key| key == "summary:tito")
         );
+    }
+
+    #[test]
+    fn present_data_flow_tito_summary_without_structured_flows_produces_no_edge() {
+        let mut output = DataFlowOutput::empty();
+        let mut fact = summary(SummaryStatus::Present);
+        fact.tito_flows.clear();
+
+        project_present_tito(&mut output, &fact);
+
+        assert!(output.edges.is_empty());
+        assert!(output.nodes.is_empty());
+    }
+
+    #[test]
+    fn barrier_and_sanitizer_summary_flows_do_not_project_as_tito_edges() {
+        for kind in [FlowKind::Barrier, FlowKind::Sanitizer] {
+            let mut output = DataFlowOutput::empty();
+            let mut fact = summary(SummaryStatus::Present);
+            fact.tito_flows = vec![SummaryFlowEdge {
+                from: FlowRoot::Param(0),
+                to: FlowRoot::Return,
+                kind,
+            }];
+
+            project_present_tito(&mut output, &fact);
+
+            assert!(
+                output.edges.is_empty(),
+                "{kind:?} flow should not become a present TITO edge"
+            );
+            assert!(
+                output.nodes.is_empty(),
+                "{kind:?} flow should not create projected summary nodes"
+            );
+        }
     }
 
     #[test]
@@ -392,6 +472,15 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "1234567890abcdef".to_string(),
+            tito_flows: if status == SummaryStatus::Present {
+                vec![SummaryFlowEdge {
+                    from: FlowRoot::Param(0),
+                    to: FlowRoot::Return,
+                    kind: FlowKind::Value,
+                }]
+            } else {
+                Vec::new()
+            },
             stable_key: "summary:tito".to_string(),
         }
     }

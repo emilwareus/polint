@@ -243,6 +243,7 @@ mod tests {
             precision: SummaryPrecision::SetupAware,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "digest".to_string(),
+            tito_flows: Vec::new(),
             stable_key: "summary:caller:call".to_string(),
         }
     }
