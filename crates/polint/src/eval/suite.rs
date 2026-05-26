@@ -238,6 +238,30 @@ mod tests {
     }
 
     #[test]
+    fn committed_evaluation_suite_manifests_parse_and_validate() {
+        let manifest_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../research/evaluation-harness/suites");
+        let mut paths = std::fs::read_dir(&manifest_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension().and_then(|extension| extension.to_str()) == Some("toml")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+
+        assert!(!paths.is_empty());
+        for path in paths {
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let manifest: SuiteManifest = toml::from_str(&raw)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            manifest
+                .validate()
+                .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
+        }
+    }
+
+    #[test]
     fn suite_manifest_denies_unknown_fields() {
         let raw = r#"
 schema_version = "polint-eval-suite-1"

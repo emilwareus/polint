@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[cfg(test)]
+use crate::analysis_kernel::KernelOutput;
 use crate::eval::model::{EvaluationCase, ObservedItem};
 use crate::eval::report::CaseResult;
 use crate::eval::suite::{SuiteLanguageSupport, SuiteManifest};
@@ -26,12 +28,34 @@ pub(crate) trait BenchmarkAdapter {
         case: &EvaluationCase,
     ) -> anyhow::Result<PreparedCase>;
 
+    #[cfg(test)]
+    fn prepare_case_with_scratch(
+        &self,
+        manifest: &SuiteManifest,
+        case: &EvaluationCase,
+        scratch_root: &std::path::Path,
+    ) -> anyhow::Result<PreparedCase> {
+        let _ = scratch_root;
+        self.prepare_case(manifest, case)
+    }
+
     fn normalize_observed(
         &self,
         manifest: &SuiteManifest,
         case: &EvaluationCase,
         raw: RawObservedOutput,
     ) -> anyhow::Result<Vec<ObservedItem>>;
+
+    #[cfg(test)]
+    fn normalize_kernel_output(
+        &self,
+        _manifest: &SuiteManifest,
+        _case: &EvaluationCase,
+        _prepared: &PreparedCase,
+        _output: &KernelOutput,
+    ) -> anyhow::Result<Vec<ObservedItem>> {
+        Ok(Vec::new())
+    }
 
     fn suite_native_metrics(
         &self,

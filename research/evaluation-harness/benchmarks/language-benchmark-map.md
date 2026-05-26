@@ -10,8 +10,8 @@ those languages.
 
 | Language | Current Suites | Role | Caveat |
 |---|---|---|---|
-| Go | gosec samples, native polint Go fixtures | Security sample coverage, competitor comparison, and engine fact coverage. | No broad independent scanner benchmark equivalent to SecBench.js. |
-| TypeScript / JavaScript | SecBench.js smoke, native polint TS/JS fixtures | Executable vulnerability smoke coverage and engine fact coverage. | Needs repo-local policy fixtures for non-security project conventions. |
+| Go | Go x/tools RTA callgraph, gosec samples, native polint Go fixtures | Primary graph benchmark, security sample coverage, competitor comparison, and engine fact coverage. | Go x/tools RTA is call-edge focused; CFG/dataflow still need native polint goldens. |
+| TypeScript / JavaScript | Jelly callgraph micro, SecBench.js smoke, native polint TS/JS fixtures | Primary graph benchmark, executable vulnerability smoke coverage, and engine fact coverage. | Jelly JSON gives suite-native call graph edges; CFG/dataflow still need native polint goldens. |
 
 ## Go
 
@@ -19,15 +19,16 @@ those languages.
 
 | Benchmark | Measures | Tier |
 |---|---|---|
+| Go x/tools RTA callgraph | Go-native call-edge expectations from official `golang.org/x/tools` RTA fixtures | Fast/nightly/release |
 | gosec samples | Practical Go security cases and gosec comparison rows | Fast/nightly/release |
 | Native Go fixtures | CFG, calls, summaries, data-flow, evidence, cache, and extension facts | Fast/promotion |
 
 ### Go Accuracy Notes
 
-Go has weaker public scanner benchmark coverage than JS/TS. Treat gosec as a
-practical competitor/sample source, not complete ground truth. Public claims
-should combine gosec sample results with native polint fixtures and explicit
-unknown/setup-missing accounting.
+Go graph claims should lead with Go x/tools RTA callgraph results, then use
+native polint fixtures for CFG, direct calls, summaries, data-flow, evidence,
+and cache behavior. Treat gosec as a secondary security benchmark, not the main
+accuracy story.
 
 ## TypeScript / JavaScript
 
@@ -35,16 +36,17 @@ unknown/setup-missing accounting.
 
 | Benchmark | Measures | Tier |
 |---|---|---|
+| Jelly callgraph micro | Suite-native JS/TS call graph edge expectations from Jelly JSON outputs | Fast/nightly/release |
 | SecBench.js smoke | Executable server-side JS package vulnerability cases | Fast/nightly/release |
 | Native TS/JS fixtures | CFG, calls, summaries, data-flow, evidence, cache, and extension facts | Fast/promotion |
-| Jelly-style dynamic comparison | JS/TS call graph recall ideas | Research/reference |
 | BugsJS | Project-scale JS regression corpus | Research/reference |
 
 ### TS/JS Accuracy Notes
 
-SecBench.js is the strongest current external suite, but it does not replace
-repo-local policy fixtures. Adapted-run reports should show whether repo-local
-rules/models improve detection without benchmark-specific label leakage.
+Jelly callgraph micro is the primary current external graph suite for JS/TS.
+SecBench.js remains useful for vulnerability detection, but it does not measure
+graph shape. Adapted-run reports should show whether repo-local models improve
+call-edge recall/precision without benchmark-specific label leakage.
 
 ## Out Of Current Scope
 

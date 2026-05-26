@@ -1,10 +1,18 @@
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::eval::adapter::BenchmarkAdapter;
+#[cfg(test)]
+use crate::eval::adapter::PreparedCase;
+#[cfg(test)]
+use crate::eval::competitors::{BenchmarkComparisonRow, ProductIdentity, ResultSource};
 use crate::eval::matcher::{MatcherConfig, match_case};
 use crate::eval::metrics::compute_metrics;
+#[cfg(test)]
+use crate::eval::model::{AssertionMode, ObservedFact, ObservedItem, ObservedStatus};
 use crate::eval::model::{EvaluationCase, EvaluationMode};
 use crate::eval::report::{
     CaseResult, EVALUATION_SCHEMA_VERSION, EvaluationRun, RuntimeObservation,
@@ -119,6 +127,292 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
     };
     run.output_hash = deterministic_output_hash(&run);
     Ok(normalize_run(&run))
+}
+
+#[cfg(test)]
+pub(crate) fn run_external_suite_for_test<A: BenchmarkAdapter>(
+    adapter: &A,
+    manifest: &SuiteManifest,
+    tier: SuiteTier,
+    mode: EvaluationMode,
+    output_dir: &Path,
+) -> anyhow::Result<EvalRunArtifacts> {
+    let cases = adapter.enumerate_cases(manifest)?;
+    let plan = plan_suite_run(SuiteRunRequest {
+        manifest,
+        tier,
+        mode,
+        candidate_case_ids: cases.iter().map(|case| case.case_id.clone()).collect(),
+        run_polint_analysis: true,
+    })?;
+    let run = build_external_suite_report_for_test(adapter, manifest, &plan, &cases)?;
+    std::fs::create_dir_all(output_dir)?;
+    let stem = report_stem(&manifest.id.0, mode);
+    let json_path = output_dir.join(format!("{stem}.json"));
+    let markdown_path = output_dir.join(format!("{stem}.md"));
+    std::fs::write(
+        &json_path,
+        crate::eval::report::to_deterministic_json_pretty(&run),
+    )?;
+    std::fs::write(&markdown_path, crate::eval::markdown::render_markdown(&run))?;
+    Ok(EvalRunArtifacts {
+        json_path,
+        markdown_path,
+        output_hash: run.output_hash,
+    })
+}
+
+#[cfg(test)]
+fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
+    adapter: &A,
+    manifest: &SuiteManifest,
+    plan: &SuiteRunPlan,
+    cases: &[EvaluationCase],
+) -> anyhow::Result<EvaluationRun> {
+    let scratch = tempfile::tempdir()?;
+    let selected: std::collections::BTreeSet<_> = plan.selection.selected_case_ids.iter().collect();
+    let mut case_results = Vec::new();
+    let mut limitations = plan.limitations.clone();
+
+    for case in cases.iter().filter(|case| selected.contains(&case.case_id)) {
+        let started = std::time::Instant::now();
+        let prepared = adapter.prepare_case_with_scratch(manifest, case, scratch.path())?;
+        let observed = if plan.should_run_polint_analysis {
+            run_polint_for_prepared_case(adapter, manifest, case, &prepared)
+                .unwrap_or_else(|error| analysis_error_observed(case, error))
+        } else {
+            case.observed.clone()
+        };
+        let matches = match_case(&case.expected, &observed, MatcherConfig::default());
+        if observed
+            .iter()
+            .any(|item| analysis_run_limitation_key(item).is_some())
+        {
+            limitations.push(format!(
+                "case {} produced an analysis run limitation",
+                case.case_id
+            ));
+        }
+        case_results.push(CaseResult {
+            case_id: case.case_id.clone(),
+            area: case.area,
+            expected: case.expected.clone(),
+            observed,
+            matches,
+            runtime: RuntimeObservation {
+                budget_name: "eval-runner".to_string(),
+                budget_passed: true,
+                observed_runtime_ms: Some(
+                    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                ),
+            },
+        });
+    }
+
+    let all_matches = case_results
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect::<Vec<_>>();
+    let mut metrics = crate::eval::report::MetricSummary::from(compute_metrics(&all_matches));
+    metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
+
+    let mut run = EvaluationRun {
+        schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
+        suite_id: manifest.id.0.clone(),
+        mode: plan.mode,
+        suite_manifest: Some(manifest.clone()),
+        cases: case_results,
+        metrics,
+        performance: None,
+        comparison_rows: Vec::new(),
+        adaptation: None,
+        adaptation_delta: None,
+        limitations,
+        output_hash: String::new(),
+    };
+    run.comparison_rows = graph_comparison_rows(&run, manifest, plan.mode);
+    run.output_hash = deterministic_output_hash(&run);
+    Ok(normalize_run(&run))
+}
+
+#[cfg(test)]
+fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
+    adapter: &A,
+    manifest: &SuiteManifest,
+    case: &EvaluationCase,
+    prepared: &PreparedCase,
+) -> anyhow::Result<Vec<ObservedItem>> {
+    let mut loaded = crate::config::load_config(&prepared.workspace_root)?;
+    if !prepared.target_files.is_empty() {
+        loaded.config.workspace.include = prepared
+            .target_files
+            .iter()
+            .map(|path| check_path_pattern(&prepared.workspace_root, path))
+            .collect();
+    }
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let rule_digest = crate::cache::keys::rule_hash(&[], None, &std::collections::BTreeMap::new());
+    let cache = crate::cache::Cache::default_for_repo(&prepared.workspace_root, false);
+    let plan = crate::analysis_plan::AnalysisPlan::empty();
+    let output =
+        crate::analysis_kernel::AnalysisKernel::run(crate::analysis_kernel::KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: &config_digest,
+            rule_digest: &rule_digest,
+            plan: &plan,
+            parallel: true,
+        })?;
+    adapter.normalize_kernel_output(manifest, case, prepared, &output)
+}
+
+#[cfg(test)]
+fn check_path_pattern(root: &Path, path: &Path) -> String {
+    let display_path = if path.is_absolute() {
+        path.strip_prefix(root).unwrap_or(path)
+    } else {
+        path
+    };
+    let normalized = display_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string();
+    if normalized.contains(['*', '?', '[', ']', '{', '}']) {
+        return normalized;
+    }
+    if root.join(&normalized).is_dir() || normalized.ends_with('/') {
+        format!("{}/**", normalized.trim_end_matches('/'))
+    } else {
+        normalized
+    }
+}
+
+#[cfg(test)]
+fn analysis_error_observed(case: &EvaluationCase, error: anyhow::Error) -> Vec<ObservedItem> {
+    vec![ObservedItem::Fact(ObservedFact {
+        family: "AnalysisRunLimitation".to_string(),
+        stable_key: format!("analysis_kernel_error:{}", case.case_id),
+        mode: AssertionMode::Partial,
+        producer_id: Some("polint.eval.runner".to_string()),
+        provenance: Some("analysis_kernel".to_string()),
+        precision: Some("none".to_string()),
+        status: Some(ObservedStatus::SetupMissing),
+        payload: Some(error.to_string()),
+    })]
+}
+
+#[cfg(test)]
+fn analysis_run_limitation_key(item: &ObservedItem) -> Option<&str> {
+    match item {
+        ObservedItem::Fact(fact) if fact.family == "AnalysisRunLimitation" => {
+            Some(fact.stable_key.as_str())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn graph_comparison_rows(
+    run: &EvaluationRun,
+    manifest: &SuiteManifest,
+    mode: EvaluationMode,
+) -> Vec<BenchmarkComparisonRow> {
+    let mut rows = Vec::new();
+    let oracle_metrics = BTreeMap::from([
+        ("precision".to_string(), 1.0),
+        ("recall".to_string(), 1.0),
+        ("f1".to_string(), 1.0),
+        (
+            "graph_edges_expected".to_string(),
+            run.metrics.graph_edges_expected as f64,
+        ),
+        (
+            "graph_edges_observed".to_string(),
+            run.metrics.graph_edges_expected as f64,
+        ),
+    ]);
+    rows.push(BenchmarkComparisonRow {
+        suite_id: manifest.id.clone(),
+        suite_commit: manifest.source_commit.clone(),
+        mode: EvaluationMode::ImportedScanner,
+        product: ProductIdentity {
+            name: format!("{} oracle", manifest.name),
+            version: None,
+            vendor: None,
+        },
+        result_source: ResultSource::AdapterOnly {
+            manifest_path: manifest.expected.path.clone(),
+            reason: "suite-native expected graph edges are treated as the oracle row".to_string(),
+        },
+        metrics: oracle_metrics,
+        limitations: vec!["oracle row is derived from suite-native expected edges".to_string()],
+    });
+    rows.push(BenchmarkComparisonRow {
+        suite_id: manifest.id.clone(),
+        suite_commit: manifest.source_commit.clone(),
+        mode,
+        product: ProductIdentity {
+            name: "polint".to_string(),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            vendor: Some("polint".to_string()),
+        },
+        result_source: ResultSource::PolintRun {
+            report_path: format!(
+                ".context/graph-benchmarks/{}.json",
+                report_stem(&manifest.id.0, mode)
+            ),
+            config_digest: None,
+        },
+        metrics: run_metric_map(run),
+        limitations: run.limitations.clone(),
+    });
+    rows
+}
+
+#[cfg(test)]
+fn run_metric_map(run: &EvaluationRun) -> BTreeMap<String, f64> {
+    BTreeMap::from([
+        (
+            "true_positives".to_string(),
+            run.metrics.true_positives as f64,
+        ),
+        (
+            "false_positives".to_string(),
+            run.metrics.false_positives as f64,
+        ),
+        (
+            "false_negatives".to_string(),
+            run.metrics.false_negatives as f64,
+        ),
+        (
+            "precision".to_string(),
+            run.metrics.precision.unwrap_or_default(),
+        ),
+        ("recall".to_string(), run.metrics.recall.unwrap_or_default()),
+        ("f1".to_string(), run.metrics.f1.unwrap_or_default()),
+        ("unknowns".to_string(), run.metrics.unknown_count as f64),
+        (
+            "graph_edges_expected".to_string(),
+            run.metrics.graph_edges_expected as f64,
+        ),
+        (
+            "graph_edges_observed".to_string(),
+            run.metrics.graph_edges_observed as f64,
+        ),
+    ])
+}
+
+#[cfg(test)]
+fn report_stem(suite_id: &str, mode: EvaluationMode) -> String {
+    let mode = match mode {
+        EvaluationMode::PolintBaseline => "baseline",
+        EvaluationMode::PolintAgentAdapted => "adapted",
+        EvaluationMode::ImportedScanner => "imported",
+        EvaluationMode::LocallyReproducedScanner => "local",
+        EvaluationMode::AdapterOnly => "adapter-only",
+    };
+    format!("{suite_id}-{mode}")
 }
 
 pub(crate) fn safe_join_workspace(root: &Path, relative: &Path) -> anyhow::Result<PathBuf> {

@@ -2,7 +2,7 @@
 
 Date: 2026-05-26
 
-This folder defines how polint evaluates scanner accuracy, graph/fact quality,
+This folder defines how polint evaluates graph/fact quality, scanner accuracy,
 runtime, cache behavior, and repo-local adaptation.
 
 ## Current Benchmark Scope
@@ -20,10 +20,15 @@ tables, or adapted-run tables.
 
 | Suite | Language | Purpose |
 |---|---|---|
+| Go x/tools RTA callgraph | Go | Primary Go graph benchmark for call-edge expectations from the official Go tools test corpus. |
+| Jelly JS/TS callgraph micro | TypeScript / JavaScript | Primary JS/TS graph benchmark for suite-native call graph edge expectations. |
 | SecBench.js smoke | TypeScript / JavaScript | Executable server-side JavaScript security benchmark smoke coverage. |
 | gosec samples | Go | Practical Go security sample coverage and competitor comparison against gosec. |
 
-Native polint fixtures remain the first promotion gate before external suites.
+Graph benchmarks are the main external benchmark track. Security suites remain
+supported secondary benchmarks for vulnerability detection and adapted-rule
+measurement. Native polint fixtures remain the first promotion gate before
+external suites.
 
 ## Benchmark Table Contract
 

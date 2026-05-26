@@ -13,25 +13,31 @@ polint supports additional language frontends.
    - `crates/polint/src/eval` remains internal.
    - No public `polint eval` command is advertised.
 
-2. Keep the supported external adapters.
-   - `eval::external::secbench_js` for TS/JS.
-   - `eval::external::gosec` for Go.
+2. Keep graph benchmarks as the main supported external adapters.
+   - `eval::external::go_x_tools_callgraph` for Go call-edge expectations.
+   - `eval::external::jelly_callgraph` for TS/JS call-edge expectations.
 
-3. Keep supported manifests only.
+3. Keep vulnerability benchmarks as secondary supported external adapters.
+   - `eval::external::secbench_js` for TS/JS security cases.
+   - `eval::external::gosec` for Go security cases.
+
+4. Keep supported manifests only.
+   - `research/evaluation-harness/suites/go-x-tools-rta-callgraph.toml`
+   - `research/evaluation-harness/suites/jelly-callgraph-micro.toml`
    - `research/evaluation-harness/suites/secbench-js-smoke.toml`
    - `research/evaluation-harness/suites/gosec-samples.toml`
 
-4. Preserve native promotion fixtures.
+5. Preserve native promotion fixtures.
    - Native fixtures prove engine behavior that external scanner suites cannot:
      CFG, calls, summaries, data flow, evidence, cache, deterministic reports,
      extension acceptance/rejection, and adaptation deltas.
 
-5. Produce benchmark tables with three lanes.
+6. Produce benchmark tables with three lanes.
    - Other-product baseline, sourced from published or locally reproduced results.
    - polint baseline, with no repo-specific adaptation.
    - polint adapted, produced by a separate adaptation agent.
 
-6. Require adaptation provenance.
+7. Require adaptation provenance.
    - Record prompt path/hash, budget, allowed inputs, forbidden inputs, changed
      rules/extensions, digests, accepted/rejected facts, case deltas, runtime,
      cache overhead, and limitations.

@@ -1,0 +1,42 @@
+schema_version = "polint-eval-suite-1"
+id = "go-x-tools-rta-callgraph"
+name = "Go x/tools RTA callgraph"
+kind = "call_graph_precision"
+languages = ["go"]
+adapter_id = "go_x_tools_rta_callgraph"
+source_url = "https://github.com/golang/tools"
+source_commit = "7743a285e3d261ca235408e013ec5c14cb5170e4"
+license = "BSD-3-Clause"
+language_support = "supported"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/golang-tools"
+ignored_by_git = true
+
+[expected]
+format = "suite_native"
+path = "suite-native-go-x-tools-rta-callgraph"
+
+[scoring]
+native = [
+  "go_x_tools.rta_callgraph.case_count",
+  "go_x_tools.rta_callgraph.expected_edge_count",
+]
+unified = ["precision", "recall", "f1", "f2", "f3", "false_positive_rate"]
+
+[tiers.fast]
+enabled = true
+selector = "sample:balanced:6"
+max_cases = 6
+deterministic_seed = "go-x-tools-rta-fast"
+
+[tiers.nightly]
+enabled = true
+selector = "all"
+deterministic_seed = "go-x-tools-rta-nightly"
+
+[tiers.release]
+enabled = true
+selector = "all"
+deterministic_seed = "go-x-tools-rta-release"

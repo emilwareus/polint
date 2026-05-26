@@ -26,6 +26,22 @@ pub(crate) fn resolve_direct_call_targets(
             continue;
         }
         let Some(reference) = index.reference_for_site(site) else {
+            if let Some(target_function) = index.lexical_function_for_site(site) {
+                rows.push(CallTargetFact {
+                    id: CallTargetId(0),
+                    site: site.id,
+                    caller: site.caller,
+                    target_function: Some(target_function.id),
+                    target_symbol: None,
+                    edge_kind: edge_kind_for_site(site.kind),
+                    algorithm: CallAlgorithm::SyntaxOnly,
+                    status: CallTargetStatus::Resolved,
+                    reason: None,
+                    provenance: CallProvenance::MirShape,
+                    precision: CallPrecision::Heuristic,
+                    stable_key: lexical_target_stable_key(site, target_function),
+                });
+            }
             continue;
         };
         if !is_precise_resolved_reference(reference) {
@@ -83,6 +99,7 @@ struct DirectIndex<'db> {
     references_by_id: BTreeMap<ReferenceId, &'db ReferenceFact>,
     symbols_by_id: BTreeMap<SymbolId, &'db SymbolFact>,
     functions_by_file_name: BTreeMap<(Option<FileId>, String), &'db FunctionFact>,
+    functions_by_name: BTreeMap<String, Vec<&'db FunctionFact>>,
 }
 
 impl<'db> DirectIndex<'db> {
@@ -104,6 +121,7 @@ impl<'db> DirectIndex<'db> {
                 .iter()
                 .map(|function| ((Some(function.file), function.name.clone()), function))
                 .collect(),
+            functions_by_name: functions_by_name(db.functions()),
         }
     }
 
@@ -178,6 +196,82 @@ impl<'db> DirectIndex<'db> {
             })
             .map(|function| function.id)
     }
+
+    fn lexical_function_for_site(&self, site: &CallSiteFact) -> Option<&'db FunctionFact> {
+        let callee_name = lexical_callee_name(site)?;
+        self.unique_function_in_file(site.file, callee_name)
+            .or_else(|| self.unique_function_by_name(callee_name))
+    }
+
+    fn unique_function_in_file(
+        &self,
+        file: FileId,
+        callee_name: &str,
+    ) -> Option<&'db FunctionFact> {
+        let mut matches = self
+            .db
+            .functions()
+            .iter()
+            .filter(|function| function.file == file)
+            .filter(|function| function_matches_callee(&function.name, callee_name));
+        let first = matches.next()?;
+        if matches.next().is_none() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+
+    fn unique_function_by_name(&self, callee_name: &str) -> Option<&'db FunctionFact> {
+        let matches = self.functions_by_name.get(callee_name)?;
+        if matches.len() == 1 {
+            matches.first().copied()
+        } else {
+            None
+        }
+    }
+}
+
+fn functions_by_name(functions: &[FunctionFact]) -> BTreeMap<String, Vec<&FunctionFact>> {
+    let mut by_name: BTreeMap<String, Vec<&FunctionFact>> = BTreeMap::new();
+    for function in functions {
+        by_name
+            .entry(function.name.clone())
+            .or_default()
+            .push(function);
+        if let Some(short) = short_function_name(&function.name) {
+            by_name.entry(short.to_string()).or_default().push(function);
+        }
+    }
+    for functions in by_name.values_mut() {
+        functions.sort_by_key(|function| (function.file.0, function.span.start_byte));
+        functions.dedup_by_key(|function| function.id);
+    }
+    by_name
+}
+
+fn lexical_callee_name(site: &CallSiteFact) -> Option<&str> {
+    match &site.callee {
+        CallCallee::Identifier { name, .. } => Some(name.as_str()),
+        CallCallee::Constructor {
+            name: Some(name), ..
+        } => Some(name.as_str()),
+        CallCallee::Member { property, .. } if site.kind == CallSyntaxKind::StaticMember => {
+            Some(property.as_str())
+        }
+        _ => None,
+    }
+}
+
+fn function_matches_callee(function_name: &str, callee_name: &str) -> bool {
+    function_name == callee_name || short_function_name(function_name) == Some(callee_name)
+}
+
+fn short_function_name(function_name: &str) -> Option<&str> {
+    function_name
+        .rsplit_once('.')
+        .map(|(_, short)| short)
+        .filter(|short| !short.is_empty())
 }
 
 fn has_unsupported_call_evidence(db: &AnalysisDb, site: &CallSiteFact) -> bool {
@@ -261,6 +355,31 @@ fn target_stable_key(site: &CallSiteFact, algorithm: CallAlgorithm, symbol: &Sym
     .into_string()
 }
 
+fn lexical_target_stable_key(site: &CallSiteFact, function: &FunctionFact) -> String {
+    semantic_stable_key(
+        FactFamily::CallTarget,
+        &[
+            ("site", site.stable_key.clone()),
+            ("algorithm", format!("{:?}", CallAlgorithm::SyntaxOnly)),
+            (
+                "target",
+                format!(
+                    "{}:{}:{}:{}:{}",
+                    function.name,
+                    function.file.0,
+                    function.span.start_line,
+                    function.span.start_col,
+                    function.span.start_byte
+                ),
+            ),
+            ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+            ("schema", "calls-facts-1:1".to_string()),
+            ("model", "absent".to_string()),
+        ],
+    )
+    .into_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -306,6 +425,71 @@ mod tests {
         assert_eq!(targets[0].target_symbol, Some(target_symbol));
         assert_eq!(targets[0].target_function, Some(target_function));
         assert_eq!(targets[0].edge_kind, CallEdgeKind::Direct);
+    }
+
+    #[test]
+    fn lexical_function_call_without_reference_uses_unique_function_name_fallback() {
+        let mut fixture = Fixture::new(Language::TypeScript, "src/caller.ts");
+        let target_function = fixture.add_function("target", 10);
+
+        let site = fixture.site(
+            1,
+            CallSyntaxKind::Function,
+            CallCallee::Identifier {
+                reference: None,
+                name: "target".to_string(),
+            },
+            3,
+        );
+        let targets = resolve_direct_call_targets(&fixture.db, &[site]);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].algorithm, CallAlgorithm::SyntaxOnly);
+        assert_eq!(targets[0].status, CallTargetStatus::Resolved);
+        assert_eq!(targets[0].target_symbol, None);
+        assert_eq!(targets[0].target_function, Some(target_function));
+        assert_eq!(targets[0].precision, CallPrecision::Heuristic);
+    }
+
+    #[test]
+    fn unresolved_dynamic_member_call_does_not_use_name_only_fallback() {
+        let mut fixture = Fixture::new(Language::TypeScript, "src/caller.ts");
+        fixture.add_function("Service.run", 10);
+
+        let site = fixture.site(
+            1,
+            CallSyntaxKind::Member,
+            CallCallee::Member {
+                base: crate::analysis::ids::PlaceId(1),
+                property: "run".to_string(),
+            },
+            3,
+        );
+        let targets = resolve_direct_call_targets(&fixture.db, &[site]);
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn lexical_static_member_call_without_reference_uses_unique_method_name_fallback() {
+        let mut fixture = Fixture::new(Language::TypeScript, "src/caller.ts");
+        let target_function = fixture.add_function("Service.run", 10);
+
+        let site = fixture.site(
+            1,
+            CallSyntaxKind::StaticMember,
+            CallCallee::Member {
+                base: crate::analysis::ids::PlaceId(1),
+                property: "run".to_string(),
+            },
+            3,
+        );
+        let targets = resolve_direct_call_targets(&fixture.db, &[site]);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].algorithm, CallAlgorithm::SyntaxOnly);
+        assert_eq!(targets[0].edge_kind, CallEdgeKind::StaticMember);
+        assert_eq!(targets[0].target_function, Some(target_function));
     }
 
     #[test]

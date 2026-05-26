@@ -7,16 +7,22 @@ They are research inputs, not vendored product dependencies.
 
 | Repository | Local Path | Commit Checked | Language | Primary Use | Notes |
 |---|---|---:|---|---|---|
+| Go x/tools | `repos/golang-tools` | `7743a285e3d261ca235408e013ec5c14cb5170e4` | Go | Primary Go callgraph benchmark source. | Adapter reads `go/callgraph/rta/testdata/*.txtar` `WANT` call-edge assertions. |
+| Jelly | `repos/jelly` | `b799ed4f0d68c670fe398830aaa51dd5c628cf74` | TypeScript / JavaScript | Primary JS/TS callgraph benchmark source. | Adapter reads suite-native call graph JSON `fun2fun` and `call2fun` edges. |
 | SecBench.js | `repos/SecBench.js` | `bc3156219138` | TypeScript / JavaScript | Executable server-side package vulnerability benchmark. | Local clone contains 704 `.test.js` exploit/test files when present. |
 | gosec | `repos/gosec` | `de65614d10a6` | Go | Go security analyzer samples and competitor baseline. | Useful test cases and taint/performance scripts; not broad independent ground truth. |
+
+## Engine Accuracy Research
+
+- [`GRAPH-ENGINE-BENCHMARK-RESEARCH.md`](GRAPH-ENGINE-BENCHMARK-RESEARCH.md)
+  describes the scanner engine work needed to improve Go and JS/TS graph
+  benchmark precision, recall, unknown handling, and runtime.
 
 ## Repositories From Prior Supported-Language Research Reused Here
 
 | Repository | Local Path | Language | Why It Still Matters |
 |---|---|---|---|
 | CodeQL | `research/data-flow/repos/codeql` | Go and TypeScript / JavaScript slices only | Query tests can inspire microcases, but expected outputs reflect CodeQL modeling choices. |
-| Go x/tools | `research/call-graphs/repos/golang-tools` | Go | Go call graph APIs, tests, and analysis package patterns. |
-| Jelly | `repos/jelly` | TypeScript / JavaScript | Static/dynamic call graph evaluation ideas for JS/TS. |
 | BugsJS Dataset | `repos/BugsJS-bug-dataset` | JavaScript | Project-scale regression corpus; not direct static-analysis ground truth. |
 
 ## Scope Policy

@@ -39,6 +39,199 @@ use crate::eval::model::{
 use crate::module_graph::topology::{ImportToPackageStatus, TopologyPrecision, TopologyStatus};
 
 #[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObservedCallGraphEdge {
+    pub(crate) site_span: crate::core::Span,
+    pub(crate) caller_name: String,
+    pub(crate) caller_span: crate::core::Span,
+    pub(crate) target_name: String,
+    pub(crate) target_span: Option<crate::core::Span>,
+    pub(crate) edge_kind: String,
+    pub(crate) algorithm: String,
+    pub(crate) producer_id: String,
+    pub(crate) provenance: String,
+    pub(crate) precision: String,
+    pub(crate) status: ObservedStatus,
+}
+
+#[cfg(test)]
+pub(crate) fn graph_edges_from_kernel_output(
+    output: &crate::analysis_kernel::KernelOutput,
+) -> Vec<ObservedCallGraphEdge> {
+    let db = &output.db;
+    let functions = db
+        .functions()
+        .iter()
+        .map(|function| (function.id, function))
+        .collect::<BTreeMap<_, _>>();
+    let sites = db
+        .call_sites()
+        .iter()
+        .map(|site| (site.id, site))
+        .collect::<BTreeMap<_, _>>();
+    let mut observed = Vec::new();
+    let mut refined_keys = std::collections::BTreeSet::new();
+
+    for edge in db.refined_call_edges() {
+        refined_keys.insert((
+            edge.site,
+            edge.target_function,
+            edge.synthetic_target.clone(),
+        ));
+        if let Some(row) = call_graph_edge_from_parts(
+            edge.site,
+            edge.caller,
+            edge.target_function,
+            edge.synthetic_target.as_deref(),
+            &sites,
+            &functions,
+            "polint.refined_calls",
+            edge.edge_kind,
+            edge.algorithm,
+            edge.provenance,
+            edge.precision,
+            edge.status,
+        ) {
+            observed.push(row);
+        }
+    }
+
+    for target in db.call_targets() {
+        if refined_keys.contains(&(target.site, target.target_function, None)) {
+            continue;
+        }
+        if let Some(row) = call_graph_edge_from_parts(
+            target.site,
+            target.caller,
+            target.target_function,
+            None,
+            &sites,
+            &functions,
+            "polint.calls",
+            target.edge_kind,
+            target.algorithm,
+            target.provenance,
+            target.precision,
+            target.status,
+        ) {
+            observed.push(row);
+        }
+    }
+
+    observed.sort_by(|left, right| {
+        (
+            left.producer_id.as_str(),
+            left.site_span.file.0,
+            left.site_span.start_line,
+            left.site_span.start_col,
+            left.caller_name.as_str(),
+            left.target_name.as_str(),
+        )
+            .cmp(&(
+                right.producer_id.as_str(),
+                right.site_span.file.0,
+                right.site_span.start_line,
+                right.site_span.start_col,
+                right.caller_name.as_str(),
+                right.target_name.as_str(),
+            ))
+    });
+    observed.dedup_by(|left, right| {
+        left.producer_id == right.producer_id
+            && left.site_span == right.site_span
+            && left.caller_name == right.caller_name
+            && left.target_name == right.target_name
+    });
+    observed
+}
+
+#[cfg(test)]
+pub(crate) fn call_graph_unknown_facts_from_kernel_output(
+    output: &crate::analysis_kernel::KernelOutput,
+) -> Vec<ObservedItem> {
+    output
+        .db
+        .unresolved_calls()
+        .iter()
+        .map(|unresolved| {
+            ObservedItem::Fact(ObservedFact {
+                family: "UnresolvedCall".to_string(),
+                stable_key: unresolved.stable_key.clone(),
+                mode: AssertionMode::Partial,
+                producer_id: Some("polint.calls".to_string()),
+                provenance: Some(format!("{:?}", unresolved.provenance)),
+                precision: Some(format!("{:?}", unresolved.precision)),
+                status: Some(call_status_to_observed(unresolved.status)),
+                payload: Some(format!("{:?}", unresolved.reason)),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The row is a mechanical projection from call/refined-call facts."
+)]
+fn call_graph_edge_from_parts(
+    site_id: crate::analysis::ids::CallSiteId,
+    caller_id: crate::core::FunctionId,
+    target_id: Option<crate::core::FunctionId>,
+    synthetic_target: Option<&str>,
+    sites: &BTreeMap<
+        crate::analysis::ids::CallSiteId,
+        &crate::analysis::calls::facts::CallSiteFact,
+    >,
+    functions: &BTreeMap<crate::core::FunctionId, &crate::core::FunctionFact>,
+    producer_id: &str,
+    edge_kind: crate::analysis::calls::facts::CallEdgeKind,
+    algorithm: crate::analysis::calls::facts::CallAlgorithm,
+    provenance: crate::analysis::calls::facts::CallProvenance,
+    precision: crate::analysis::calls::facts::CallPrecision,
+    status: crate::analysis::calls::facts::CallTargetStatus,
+) -> Option<ObservedCallGraphEdge> {
+    let site = sites.get(&site_id)?;
+    let caller = functions.get(&caller_id)?;
+    let target = target_id.and_then(|id| functions.get(&id).copied());
+    let target_name = target
+        .map(|function| function.name.clone())
+        .or_else(|| synthetic_target.map(str::to_string))?;
+
+    Some(ObservedCallGraphEdge {
+        site_span: site.span.clone(),
+        caller_name: caller.name.clone(),
+        caller_span: caller.span.clone(),
+        target_name,
+        target_span: target.map(|function| function.span.clone()),
+        edge_kind: format!("{edge_kind:?}"),
+        algorithm: format!("{algorithm:?}"),
+        producer_id: producer_id.to_string(),
+        provenance: format!("{provenance:?}"),
+        precision: format!("{precision:?}"),
+        status: call_status_to_observed(status),
+    })
+}
+
+#[cfg(test)]
+fn call_status_to_observed(
+    status: crate::analysis::calls::facts::CallTargetStatus,
+) -> ObservedStatus {
+    match status {
+        crate::analysis::calls::facts::CallTargetStatus::Resolved => ObservedStatus::Resolved,
+        crate::analysis::calls::facts::CallTargetStatus::Ambiguous => ObservedStatus::Ambiguous,
+        crate::analysis::calls::facts::CallTargetStatus::Unresolved => ObservedStatus::Unresolved,
+        crate::analysis::calls::facts::CallTargetStatus::Unsupported => ObservedStatus::Unsupported,
+        crate::analysis::calls::facts::CallTargetStatus::SetupMissing => {
+            ObservedStatus::SetupMissing
+        }
+        crate::analysis::calls::facts::CallTargetStatus::BudgetExceeded => {
+            ObservedStatus::BudgetExceeded
+        }
+        crate::analysis::calls::facts::CallTargetStatus::Rejected => ObservedStatus::Rejected,
+    }
+}
+
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "Phase 39 evidence delta rows are consumed by eval fixtures that assert extension merge behavior."

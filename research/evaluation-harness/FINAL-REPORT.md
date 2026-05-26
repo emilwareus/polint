@@ -19,12 +19,16 @@ Use a supported-external-plus-native evaluation strategy:
 1. Native polint fixtures remain the first promotion gate for internal engine
    behavior: CFG, calls, summaries, data flow, evidence, cache, deterministic
    output, and extension/adaptation deltas.
-2. SecBench.js provides the current external TS/JS scanner benchmark.
-3. gosec samples provide the current external Go scanner benchmark and gosec
+2. Go x/tools RTA callgraph fixtures provide the primary external Go graph
+   benchmark.
+3. Jelly callgraph micro fixtures provide the primary external TS/JS graph
+   benchmark.
+4. SecBench.js provides the current external TS/JS scanner benchmark.
+5. gosec samples provide the current external Go scanner benchmark and gosec
    competitor comparison.
-4. Competitor rows should include Semgrep, CodeQL, gosec, or suite-native
+6. Competitor rows should include Jelly, Go x/tools, Semgrep, CodeQL, gosec, or suite-native
    references only when the result applies to the same supported suite.
-5. Adapted rows should be produced by a separate adaptation agent with a
+7. Adapted rows should be produced by a separate adaptation agent with a
    recorded prompt, budget, allowed inputs, forbidden inputs, changed artifacts,
    digests, case-level deltas, and runtime/cache overhead.
 
@@ -32,6 +36,8 @@ Use a supported-external-plus-native evaluation strategy:
 
 | Suite | Language | Role | Manifest |
 |---|---|---|---|
+| Go x/tools RTA callgraph | Go | Primary external Go call-edge benchmark. | `research/evaluation-harness/suites/go-x-tools-rta-callgraph.toml` |
+| Jelly callgraph micro | TypeScript / JavaScript | Primary external JS/TS call-edge benchmark. | `research/evaluation-harness/suites/jelly-callgraph-micro.toml` |
 | SecBench.js smoke | TypeScript / JavaScript | Executable package vulnerability smoke benchmark. | `research/evaluation-harness/suites/secbench-js-smoke.toml` |
 | gosec samples | Go | Practical Go security samples and gosec comparison baseline. | `research/evaluation-harness/suites/gosec-samples.toml` |
 | Native polint fixtures | Go, TypeScript / JavaScript | Engine fact/graph/path/cache/adaptation promotion proof. | `tests/eval-fixtures/` |
@@ -42,7 +48,7 @@ Reports should include:
 
 - TP, FP, FN, TN where the suite defines them;
 - precision, recall, F1/F2/F3, false-positive rate, and unknown counts;
-- graph/path metrics for native fixtures;
+- graph/path metrics for native fixtures and external graph suites;
 - runtime, memory when available, cache reuse, and provider stats;
 - extension overhead and accepted/rejected extension facts;
 - comparison rows for other products, polint baseline, and polint agent-adapted.
