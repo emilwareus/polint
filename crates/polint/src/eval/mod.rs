@@ -19,7 +19,9 @@ pub(crate) mod model;
 pub(crate) mod observed;
 pub(crate) mod performance;
 pub(crate) mod report;
+pub(crate) mod runner;
 pub(crate) mod suite;
+pub(crate) mod tiers;
 
 #[cfg(test)]
 mod direct_call_rows {

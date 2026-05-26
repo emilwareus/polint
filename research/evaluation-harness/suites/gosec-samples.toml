@@ -1,0 +1,40 @@
+schema_version = "polint-eval-suite-1"
+id = "gosec-samples"
+name = "gosec samples"
+kind = "scanner_vulnerability"
+languages = ["go"]
+adapter_id = "gosec_samples"
+source_url = "https://github.com/securego/gosec"
+source_commit = "de65614d10a6"
+license = "license-review-needed"
+language_support = "supported"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/gosec"
+ignored_by_git = true
+
+[expected]
+format = "suite_native"
+path = "suite-native-gosec-samples"
+
+[scoring]
+native = ["gosec.sample_case_count"]
+unified = ["precision", "recall", "f1", "f2", "f3", "false_positive_rate"]
+
+[tiers.fast]
+enabled = true
+selector = "sample:balanced:20"
+max_cases = 20
+deterministic_seed = "gosec-fast"
+
+[tiers.nightly]
+enabled = true
+selector = "sample:balanced:100"
+max_cases = 100
+deterministic_seed = "gosec-nightly"
+
+[tiers.release]
+enabled = true
+selector = "all"
+
