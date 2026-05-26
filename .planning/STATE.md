@@ -70,7 +70,7 @@ Last activity: 2026-05-25
 | 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
-| 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |
+| 40 | Planned | 0/8 plans complete; external benchmark adapters and promotion gates; requirement SAE-PROM-01 |
 | 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
 
 ## Accumulated Context

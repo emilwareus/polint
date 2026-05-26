@@ -515,6 +515,40 @@ Plans:
 **Requirements:** SAE-PROM-01
 **Research:** `research/evaluation-harness/FINAL-REPORT.md`, `research/evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/VALIDATION.md`, `research/call-graphs/VALIDATION.md`
 
+Plans:
+
+**Wave 1**
+
+- [ ] 40-01-PLAN.md - Eval suite manifest comparison and adaptation schema
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 40-02-PLAN.md - Adapter trait and OWASP expected-results scoring
+
+**Wave 3** *(blocked on Wave 1 completion)*
+
+- [ ] 40-03-PLAN.md - Provider cache performance and report output
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 40-04-PLAN.md - Native graph/fact/path promotion gates
+
+**Wave 5** *(blocked on Waves 2, 3, and 4 completion)*
+
+- [ ] 40-05-PLAN.md - Supported-language smoke suites and tier runner
+
+**Wave 6** *(blocked on Waves 1, 3, and 5 completion)*
+
+- [ ] 40-06-PLAN.md - Agent adaptation prompt artifacts and delta reports
+
+**Wave 7** *(blocked on Waves 3, 5, and 6 completion)*
+
+- [ ] 40-07-PLAN.md - Competitor baseline records and promotion gate baselines
+
+**Wave 8** *(blocked on Waves 4, 5, 6, and 7 completion)*
+
+- [ ] 40-08-PLAN.md - Hidden eval entry point public boundary and closeout proof
+
 **Success criteria:**
 
 1. Reports show TP, FP, FN, precision, recall, F-score, unknown counts, graph/path metrics, runtime, memory, cache reuse, extension overhead, and accepted/rejected extension facts.
