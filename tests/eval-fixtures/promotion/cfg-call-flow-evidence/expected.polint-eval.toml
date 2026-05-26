@@ -1,0 +1,92 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "cfg-call-flow-evidence"
+area = "promotion"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "CfgEdge", stable_key = "promotion:cfg:branch-to-return", mode = "exact", producer_id = "polint.cfg", precision = "exact_lowered", status = "resolved" }
+
+[[expected]]
+fact = { family = "RefinedCallEdge", stable_key = "promotion:call:handler-to-sink", mode = "exact", producer_id = "polint.refined_calls", precision = "setup_aware", status = "resolved" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "promotion:flow:source-to-sink", mode = "exact", producer_id = "polint.data_flow", precision = "syntax", status = "present" }
+
+[[expected]]
+fact = { family = "EvidencePath", stable_key = "promotion:evidence:path-ranked", mode = "exact", producer_id = "polint.evidence", precision = "exact", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowBudget", stable_key = "promotion:budget:query-limit", mode = "exact", producer_id = "polint.data_flow", precision = "unknown", status = "budget_exceeded" }
+
+[[expected]]
+graph_edge = { graph = "promotion.call", from = "handler", to = "sink", mode = "exact", partial_truth = false }
+
+[[expected]]
+graph_edge = { graph = "promotion.call.partial", from = "handler", to = "known-helper", mode = "partial", partial_truth = true }
+
+[[expected]]
+path = { path_id = "promotion.source_to_sink", nodes = ["source", "sink"], mode = "partial", partial_truth = true }
+
+[[expected]]
+invariant = { name = "provider_output.polint.cfg.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.data_flow.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_output.polint.evidence.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "promotion.cache.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "promotion.cfg_call_flow_evidence", max_runtime_ms = 10000, mode = "exact" }
+
+[[observed]]
+fact = { family = "CfgEdge", stable_key = "promotion:cfg:branch-to-return", mode = "exact", producer_id = "polint.cfg", provenance = "synthetic_observed", precision = "exact_lowered", status = "resolved" }
+
+[[observed]]
+fact = { family = "RefinedCallEdge", stable_key = "promotion:call:handler-to-sink", mode = "exact", producer_id = "polint.refined_calls", provenance = "synthetic_observed", precision = "setup_aware", status = "resolved" }
+
+[[observed]]
+fact = { family = "DataFlowEdge", stable_key = "promotion:flow:source-to-sink", mode = "exact", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "syntax", status = "present" }
+
+[[observed]]
+fact = { family = "EvidencePath", stable_key = "promotion:evidence:path-ranked", mode = "exact", producer_id = "polint.evidence", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+fact = { family = "DataFlowBudget", stable_key = "promotion:budget:query-limit", mode = "exact", producer_id = "polint.data_flow", provenance = "synthetic_observed", precision = "unknown", status = "budget_exceeded" }
+
+[[observed]]
+graph_edge = { graph = "promotion.call", from = "handler", to = "sink", mode = "exact", partial_truth = false, producer_id = "polint.refined_calls", provenance = "synthetic_observed", precision = "setup_aware", status = "present" }
+
+[[observed]]
+graph_edge = { graph = "promotion.call.partial", from = "handler", to = "known-helper", mode = "exact", partial_truth = true, producer_id = "polint.refined_calls", provenance = "synthetic_observed", precision = "setup_aware", status = "present" }
+
+[[observed]]
+graph_edge = { graph = "promotion.call.partial", from = "handler", to = "extra-static-helper", mode = "exact", partial_truth = true, producer_id = "polint.refined_calls", provenance = "synthetic_observed", precision = "setup_aware", status = "present" }
+
+[[observed]]
+path = { path_id = "promotion.source_to_sink", nodes = ["source", "sanitizer-check", "sink"], mode = "exact", partial_truth = true, producer_id = "polint.evidence", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "provider_output.polint.cfg.present", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "provider_output.polint.data_flow.present", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "provider_output.polint.evidence.present", value = "true", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+invariant = { name = "promotion.cache.current_determinism", value = "cold_warm_no_cache_equal", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+runtime_budget = { name = "promotion.cfg_call_flow_evidence", budget_passed = true, observed_runtime_ms = 5 }
+

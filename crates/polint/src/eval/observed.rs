@@ -3022,15 +3022,30 @@ mod cfg {
 #[cfg(test)]
 mod eval_observed_kernel_tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    use crate::eval::fixtures::{NativeFixture, load_native_fixture};
+    use crate::eval::fixtures::{NativeFixture, load_native_fixture, run_native_fixture_for_test};
     use crate::eval::model::{ObservedItem, ObservedStatus};
     use crate::eval::report::{
         CaseResult, EvaluationRun, MetricSummary, RuntimeObservation, deterministic_output_hash,
     };
 
     use super::*;
+
+    #[test]
+    fn eval_observed_native_promotion_fixture_runs_through_fixture_runner() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
+        let run = run_native_fixture_for_test(&fixture_dir).unwrap();
+        let case = &run.cases[0];
+
+        assert_eq!(case.case_id, "cfg-call-flow-evidence");
+        assert!(case.matches.iter().any(|summary| {
+            summary.item_kind == crate::eval::matcher::MatchItemKind::GraphEdge
+                && summary.outcome == crate::eval::matcher::MatchOutcome::Unconfirmed
+        }));
+        assert_eq!(run.metrics.runtime_budget_passed, 1);
+        assert!(run.metrics.unknown_count >= 1);
+    }
 
     fn write_fixture(root: &Path, source: &str, budget: Option<u64>) {
         fs::create_dir_all(root.join("repo/src")).unwrap();
@@ -3068,6 +3083,14 @@ path = "repo"
             ),
         )
         .unwrap();
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root")
+            .to_path_buf()
     }
 
     #[test]

@@ -111,9 +111,9 @@ fn validate_synthetic_observed_rows(manifest: &NativeFixtureManifest) -> anyhow:
         ensure!(
             matches!(
                 manifest.area,
-                FixtureArea::Extension | FixtureArea::RefinedCalls
+                FixtureArea::Extension | FixtureArea::RefinedCalls | FixtureArea::Promotion
             ),
-            "synthetic observed rows are only allowed for extension or refined-call fixtures"
+            "synthetic observed rows are only allowed for extension, refined-call, or promotion fixtures"
         );
     } else {
         ensure!(

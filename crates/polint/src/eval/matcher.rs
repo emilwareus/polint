@@ -144,7 +144,7 @@ fn items_match(expected: &ExpectedItem, observed: &ObservedItem, config: Matcher
                 && expected.to == observed.to
         }
         (ExpectedItem::Path(expected), ObservedItem::Path(observed)) => {
-            expected.path_id == observed.path_id && expected.nodes == observed.nodes
+            path_matches(expected, observed)
         }
         (ExpectedItem::Invariant(expected), ObservedItem::Invariant(observed)) => {
             expected.name == observed.name && expected.value == observed.value
@@ -154,6 +154,35 @@ fn items_match(expected: &ExpectedItem, observed: &ObservedItem, config: Matcher
         }
         _ => false,
     }
+}
+
+fn path_matches(
+    expected: &crate::eval::model::ExpectedPath,
+    observed: &crate::eval::model::ObservedPath,
+) -> bool {
+    if expected.path_id != observed.path_id {
+        return false;
+    }
+    if !(expected.partial_truth || expected.mode == AssertionMode::Partial) {
+        return expected.nodes == observed.nodes;
+    }
+    ordered_subsequence(&expected.nodes, &observed.nodes)
+}
+
+fn ordered_subsequence(expected: &[String], observed: &[String]) -> bool {
+    let mut expected = expected.iter();
+    let Some(mut current) = expected.next() else {
+        return true;
+    };
+    for observed_node in observed {
+        if current == observed_node {
+            match expected.next() {
+                Some(next) => current = next,
+                None => return true,
+            }
+        }
+    }
+    false
 }
 
 fn fact_matches(expected: &ExpectedFact, observed: &ObservedFact) -> bool {
@@ -686,6 +715,90 @@ mod tests {
                 MatchOutcome::Unconfirmed,
                 MatchOutcome::Unconfirmed,
             ]
+        );
+    }
+
+    #[test]
+    fn eval_matcher_graph_edges_cover_required_missing_forbidden_and_unconfirmed() {
+        let required = ExpectedItem::GraphEdge(ExpectedGraphEdge {
+            graph: "call".to_string(),
+            from: "handler".to_string(),
+            to: "sink".to_string(),
+            mode: AssertionMode::Exact,
+            partial_truth: false,
+        });
+        let forbidden = ExpectedItem::GraphEdge(ExpectedGraphEdge {
+            graph: "call".to_string(),
+            from: "handler".to_string(),
+            to: "safe".to_string(),
+            mode: AssertionMode::Forbidden,
+            partial_truth: false,
+        });
+        let partial = ExpectedItem::GraphEdge(ExpectedGraphEdge {
+            graph: "call".to_string(),
+            from: "handler".to_string(),
+            to: "known".to_string(),
+            mode: AssertionMode::Partial,
+            partial_truth: true,
+        });
+
+        assert_eq!(
+            match_case(
+                std::slice::from_ref(&required),
+                &[ObservedItem::GraphEdge(observed_graph_edge(
+                    "call", "handler", "sink"
+                ))],
+                MatcherConfig::default()
+            )[0]
+            .outcome,
+            MatchOutcome::TruePositive
+        );
+        assert_eq!(
+            match_case(
+                std::slice::from_ref(&required),
+                &[],
+                MatcherConfig::default()
+            )[0]
+            .outcome,
+            MatchOutcome::FalseNegative
+        );
+        assert_eq!(
+            match_case(
+                std::slice::from_ref(&forbidden),
+                &[ObservedItem::GraphEdge(observed_graph_edge(
+                    "call", "handler", "safe"
+                ))],
+                MatcherConfig::default()
+            )[0]
+            .outcome,
+            MatchOutcome::ForbiddenHit
+        );
+        assert_eq!(
+            outcomes(&match_case(
+                &[partial],
+                &[
+                    ObservedItem::GraphEdge(observed_graph_edge("call", "handler", "known")),
+                    ObservedItem::GraphEdge(observed_graph_edge("call", "handler", "extra")),
+                ],
+                MatcherConfig::default()
+            )),
+            vec![MatchOutcome::TruePositive, MatchOutcome::Unconfirmed]
+        );
+    }
+
+    #[test]
+    fn eval_matcher_partial_paths_match_ordered_evidence_nodes() {
+        let expected = ExpectedItem::Path(ExpectedPath {
+            path_id: "flow".to_string(),
+            nodes: vec!["source".to_string(), "sink".to_string()],
+            mode: AssertionMode::Partial,
+            partial_truth: true,
+        });
+        let observed = ObservedItem::Path(observed_path("flow", &["source", "validate", "sink"]));
+
+        assert_eq!(
+            match_case(&[expected], &[observed], MatcherConfig::default())[0].outcome,
+            MatchOutcome::TruePositive
         );
     }
 

@@ -122,6 +122,7 @@ pub(crate) enum FixtureArea {
     Diagnostics,
     Invariants,
     Budgets,
+    Promotion,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

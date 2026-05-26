@@ -11,6 +11,7 @@ pub(crate) mod adapter;
 pub(crate) mod competitors;
 pub(crate) mod external;
 pub(crate) mod fixtures;
+pub(crate) mod gates;
 pub(crate) mod markdown;
 pub(crate) mod matcher;
 pub(crate) mod metrics;
