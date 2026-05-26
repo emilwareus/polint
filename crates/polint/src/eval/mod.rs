@@ -6,12 +6,24 @@
     )
 )]
 
+pub(crate) mod adaptation;
+pub(crate) mod adapter;
+pub(crate) mod baseline;
+pub(crate) mod competitors;
+pub(crate) mod delta;
+pub(crate) mod external;
 pub(crate) mod fixtures;
+pub(crate) mod gates;
+pub(crate) mod markdown;
 pub(crate) mod matcher;
 pub(crate) mod metrics;
 pub(crate) mod model;
 pub(crate) mod observed;
+pub(crate) mod performance;
 pub(crate) mod report;
+pub(crate) mod runner;
+pub(crate) mod suite;
+pub(crate) mod tiers;
 
 #[cfg(test)]
 mod direct_call_rows {

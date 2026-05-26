@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: ready_to_plan
-last_updated: 2026-05-25T15:26:02.002Z
-last_activity: 2026-05-25
+status: executing
+last_updated: "2026-05-26T08:27:16Z"
+last_activity: 2026-05-26
 progress:
   total_phases: 22
-  completed_phases: 20
-  total_plans: 123
-  completed_plans: 123
-  percent: 91
-stopped_at: Phase 39 complete (7/7) — ready to discuss Phase 40
+  completed_phases: 21
+  total_plans: 131
+  completed_plans: 130
+  percent: 99
 ---
 
 # State: polint
@@ -22,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 40 — external benchmark adapters and promotion gates
+**Current focus:** Phase 41 — public-sdk-query-views-and-agent-ergonomics
 
 ## Current Status
 
@@ -42,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to plan
-Phase: 40
-Plan: Not started
-Last activity: 2026-05-25
+Status: Ready to execute
+Phase: 40 (external-benchmark-adapters-and-promotion-gates) — COMPLETE
+Plan: 8 of 8 complete
+Last activity: 2026-05-26
 
 ## Phase Progress
 
@@ -71,7 +70,7 @@ Last activity: 2026-05-25
 | 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
-| 40 | Pending | External benchmark adapters and promotion gates; requirement SAE-PROM-01 |
+| 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
 
 ## Accumulated Context
@@ -380,14 +379,17 @@ Last activity: 2026-05-25
 
 ## Session
 
-- Last session: 2026-05-25
-- Last activity: 2026-05-25 - Completed Phase 39 slicing, paths, and evidence bundles and passed final verification.
-- Stopped at: Phase 39 complete; ready to discuss Phase 40.
+- Last session: 2026-05-26
+- Last activity: 2026-05-26 - Removed unsupported-language benchmark artifacts and limited benchmark scope to Go and TS/JS.
+- Stopped at: Phase 40 context gathered; ready to plan Phase 40.
+- Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |
+| 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |
 | 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
 | 260525-d15 | Fix CI failures from PR 45 attached logs | 2026-05-25 | implemented | [260525-d15-fix-ci-failures-from-pr-45-attached-logs](./quick/260525-d15-fix-ci-failures-from-pr-45-attached-logs/) |
 | 260525-c1a | Fix final review findings for Phase 37 refined calls | 2026-05-25 | implemented | [260525-c1a-fix-final-review-findings-for-phase-37-r](./quick/260525-c1a-fix-final-review-findings-for-phase-37-r/) |

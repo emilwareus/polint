@@ -81,6 +81,16 @@ pub(crate) struct EvaluationCase {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+pub(crate) enum EvaluationMode {
+    PolintBaseline,
+    PolintAgentAdapted,
+    ImportedScanner,
+    LocallyReproducedScanner,
+    AdapterOnly,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum FixtureArea {
     Kernel,
     Provenance,
@@ -112,6 +122,7 @@ pub(crate) enum FixtureArea {
     Diagnostics,
     Invariants,
     Budgets,
+    Promotion,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

@@ -1,0 +1,43 @@
+schema_version = "polint-eval-suite-1"
+id = "jelly-callgraph-micro"
+name = "Jelly JS/TS callgraph micro"
+kind = "call_graph_precision"
+languages = ["javascript", "typescript"]
+adapter_id = "jelly_callgraph_micro"
+source_url = "https://github.com/cs-au-dk/jelly"
+source_commit = "b799ed4f0d68c670fe398830aaa51dd5c628cf74"
+license = "BSD-3-Clause"
+language_support = "supported"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/jelly"
+ignored_by_git = true
+
+[expected]
+format = "suite_native"
+path = "suite-native-jelly-callgraph"
+
+[scoring]
+native = [
+  "jelly.callgraph_micro.case_count",
+  "jelly.callgraph_micro.expected_edge_count",
+]
+unified = ["precision", "recall", "f1", "f2", "f3", "false_positive_rate"]
+
+[tiers.fast]
+enabled = true
+selector = "sample:balanced:20"
+max_cases = 20
+deterministic_seed = "jelly-callgraph-fast"
+
+[tiers.nightly]
+enabled = true
+selector = "sample:balanced:100"
+max_cases = 100
+deterministic_seed = "jelly-callgraph-nightly"
+
+[tiers.release]
+enabled = true
+selector = "all"
+deterministic_seed = "jelly-callgraph-release"

@@ -31,7 +31,7 @@ Decision: every adapter should report both.
 
 Reasoning:
 
-- OWASP scorecards, RealVuln F3, and other suite-native metrics are useful for comparison;
+- SecBench.js, gosec, and other supported-suite-native metrics are useful for comparison;
 - polint needs cross-suite precision/recall/F-score, unknowns, path quality, provider stats, and extension deltas.
 
 Consequence: report format must support arbitrary suite-native metric maps.

@@ -1,68 +1,62 @@
 # Evaluation Harness Research
 
-Date: 2026-05-15
+Date: 2026-05-26
 
-This folder researches how polint should evaluate a native, multi-language, agent-extensible static-analysis engine.
+This folder defines how polint evaluates graph/fact quality, scanner accuracy,
+runtime, cache behavior, and repo-local adaptation.
 
-The research question is not only "which benchmark should we run?" It is:
+## Current Benchmark Scope
 
-```text
-How do we know that native analysis, rules, and agent-authored Rust extensions
-actually improve precision, recall, evidence quality, runtime, memory, and cache
-behavior across real codebases?
-```
+polint currently supports only:
 
-## Executive Conclusion
+- Go
+- TypeScript / JavaScript
 
-Use an **external-benchmark-first** evaluation strategy, but do not make it external-only.
+Current scored benchmark work must stay inside those languages. Unsupported
+language suites are not part of promotion gates, comparison tables, baseline
+tables, or adapted-run tables.
 
-External benchmarks should be the primary source for scanner-level outcome evaluation:
+## Supported External Suites
 
-- OWASP Benchmark Java and BenchmarkPython for synthetic, runnable vulnerability cases.
-- SecBench.js for executable server-side JavaScript package vulnerabilities.
-- RealVuln for real Python web applications with false-positive traps.
-- SecuriBench Micro, DroidBench, CryptoAPI-Bench, Juliet/SARD, CodeQL tests, gosec samples, and Pyre/Pysa tests for language- and analysis-family-specific coverage.
-- Jelly-style dynamic call graph comparison for JS/TS call graph recall.
-- CrossCommitVuln-Bench and SecCodeBench as forward-looking benchmarks for temporal and agentic workflows.
+| Suite | Language | Purpose |
+|---|---|---|
+| Go x/tools RTA callgraph | Go | Primary Go graph benchmark for call-edge expectations from the official Go tools test corpus. |
+| Jelly JS/TS callgraph micro | TypeScript / JavaScript | Primary JS/TS graph benchmark for suite-native call graph edge expectations. |
+| SecBench.js smoke | TypeScript / JavaScript | Executable server-side JavaScript security benchmark smoke coverage. |
+| gosec samples | Go | Practical Go security sample coverage and competitor comparison against gosec. |
 
-But external suites cannot fully measure polint's most important differentiator:
+Graph benchmarks are the main external benchmark track. Security suites remain
+supported secondary benchmarks for vulnerability detection and adapted-rule
+measurement. Native polint fixtures remain the first promotion gate before
+external suites.
 
-```text
-default analysis
-  + explicit unknowns
-  + repo-local Rust extensions
-  + validated extension merges
-  + provenance-aware facts
-  + cache/invalidation correctness
-```
+## Benchmark Table Contract
 
-Those engine properties require a small native polint fixture layer in addition to external adapters.
+For each supported suite, reports should separate:
+
+- other-product baseline rows, such as Semgrep, CodeQL, gosec, or suite-native references when reproducible;
+- `polint_baseline`, with no repo adaptation;
+- `polint_agent_adapted`, produced by a separate adaptation agent using a recorded prompt and budget.
+
+Adapted runs must record prompt path/hash, allowed and forbidden inputs, changed
+rule or extension artifacts, digests, accepted/rejected facts, case-level deltas,
+runtime/cache overhead, and limitations.
 
 ## Folder Structure
 
 | Path | Purpose |
 |---|---|
-| `FINAL-REPORT.md` | Main findings and recommendation. |
-| `RECOMMENDED_IMPLEMENTATION.md` | Concrete implementation path for a hidden/internal `polint eval` harness. |
-| `RESEARCH-ANALYSIS.md` | Deeper benchmark and metric analysis. |
-| `STANDARD.md` | Standard vocabulary and manifest schema for benchmark adapters. |
-| `REPO-INDEX.md` | OSS repositories cloned and inspected. |
-| `PAPER-INDEX.md` | Papers, benchmark sites, and research sources. |
-| `VALIDATION.md` | What was validated, what remains risky, and how to keep references accurate. |
-| `algorithms/` | Pseudo-code for scoring, matching, scheduling, baselines, and extension deltas. |
-| `benchmarks/` | Language-by-language external benchmark map. |
-| `implementation/` | Suggested internal architecture and phased implementation. |
-| `oss/` | Comparison of inspected OSS benchmark suites and priority ranking. |
+| `FINAL-REPORT.md` | Supported-scope benchmark recommendation. |
+| `RECOMMENDED_IMPLEMENTATION.md` | Concrete implementation path for the internal harness. |
+| `RESEARCH-ANALYSIS.md` | Supported-suite tradeoffs and accuracy caveats. |
+| `STANDARD.md` | Vocabulary and manifest schema for supported-suite adapters. |
+| `REPO-INDEX.md` | Supported benchmark repositories cloned and inspected. |
+| `PAPER-INDEX.md` | Supported benchmark papers and sources. |
+| `VALIDATION.md` | What was validated and remaining supported-scope risks. |
+| `algorithms/` | Scoring, matching, scheduling, baselines, and adaptation deltas. |
+| `benchmarks/` | Go and TS/JS benchmark map. |
+| `implementation/` | Internal architecture and phased implementation notes. |
+| `oss/` | Supported external benchmark comparison. |
 | `decisions/` | Decision log. |
-| `papers/` | Downloaded research PDFs. |
-| `repos/` | Local clones of benchmark and implementation repositories. This directory is gitignored. |
-
-## How To Read This
-
-Start with `FINAL-REPORT.md`. Then read:
-
-1. `RECOMMENDED_IMPLEMENTATION.md` for the build path.
-2. `STANDARD.md` for the shared schema.
-3. `RESEARCH-ANALYSIS.md` for benchmark tradeoffs and accuracy caveats.
-4. `algorithms/scoring-and-matching.md` for concrete scoring logic.
-5. `REPO-INDEX.md` and `PAPER-INDEX.md` for source traceability.
+| `papers/` | Downloaded supported benchmark PDFs. |
+| `repos/` | Local clones of supported benchmark repositories. This directory is gitignored. |

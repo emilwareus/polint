@@ -42,7 +42,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 37 | 6/6 | Complete   | 2026-05-25 |
 | 38 | 10/10 | Complete   | 2026-05-25 |
 | 39 | 7/7 | Complete    | 2026-05-25 |
-| 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
+| 40 | 8/8 | Complete | 2026-05-26 |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
 ## Phase Details
@@ -509,18 +509,57 @@ Plans:
 3. JSON/SARIF evidence rendering is deterministic.
 4. Evidence bundles remain bounded for large findings.
 
-### Phase 40: External Benchmark Adapters and Promotion Gates
+### Phase 40: Supported External Benchmark Adapters and Promotion Gates
 
-**Goal:** Add benchmark adapters and reports that support public precision claims.
+**Goal:** Add Go and TypeScript/JavaScript benchmark adapters and reports that support public precision claims.
 **Requirements:** SAE-PROM-01
 **Research:** `research/evaluation-harness/FINAL-REPORT.md`, `research/evaluation-harness/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/VALIDATION.md`, `research/call-graphs/VALIDATION.md`
+
+Plans:
+
+**Wave 1**
+
+- [x] 40-01-PLAN.md - Eval suite manifest comparison and adaptation schema
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 40-02-PLAN.md - Adapter trait and supported-suite scoring
+
+**Wave 3** *(blocked on Wave 1 completion)*
+
+- [x] 40-03-PLAN.md - Provider cache performance and report output
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 40-04-PLAN.md - Native graph/fact/path promotion gates
+
+**Wave 5** *(blocked on Waves 2, 3, and 4 completion)*
+
+- [x] 40-05-PLAN.md - Supported-language smoke suites and tier runner
+
+**Wave 6** *(blocked on Waves 1, 3, and 5 completion)*
+
+- [x] 40-06-PLAN.md - Agent adaptation prompt artifacts and delta reports
+
+**Wave 7** *(blocked on Waves 3, 5, and 6 completion)*
+
+- [x] 40-07-PLAN.md - Competitor baseline records and promotion gate baselines
+
+**Wave 8** *(blocked on Waves 4, 5, 6, and 7 completion)*
+
+- [x] 40-08-PLAN.md - Hidden eval entry point public boundary and closeout proof
 
 **Success criteria:**
 
 1. Reports show TP, FP, FN, precision, recall, F-score, unknown counts, graph/path metrics, runtime, memory, cache reuse, extension overhead, and accepted/rejected extension facts.
 2. Native fixtures remain the first promotion gate before external suites.
-3. External adapters are added in the order justified by the harness research.
-4. Public claims are tied to measured reports.
+3. External adapters and benchmark manifests are limited to languages polint supports today: Go and TypeScript/JavaScript.
+4. Benchmark comparison tables include, where available, comparable published or locally reproduced results from other scanners/products such as Semgrep, CodeQL, gosec, or suite-native reference tools.
+5. Every scanner benchmark table separates at least three columns: other-product baseline, polint baseline with no repo adaptation, and polint adapted to the target codebase through repo-local rules/models/provider extensions.
+6. Agent-adapted benchmark runs are produced by a separate adaptation agent with a recorded prompt, declared budget, accessible polint skill/context, and no access to benchmark expected labels except through the evaluation report after a run.
+7. Adapted-run reports include the exact prompt, changed rule/extension files, extension/rule digests, accepted/rejected facts, default-vs-adapted case deltas, runtime/cache overhead, and known limitations so adaptation cannot hide benchmark gaming or cost.
+8. Unsupported-language suites are excluded from current scorecards, promotion gates, baseline rows, and adapted-run rows until the corresponding language frontend exists.
+9. Public claims are tied to measured reports.
 
 ### Phase 41: Public SDK Query Views and Agent Ergonomics
 
