@@ -547,7 +547,7 @@ Plans:
 
 **Wave 8** *(blocked on Waves 4, 5, 6, and 7 completion)*
 
-- [ ] 40-08-PLAN.md - Hidden eval entry point public boundary and closeout proof
+- [x] 40-08-PLAN.md - Hidden eval entry point public boundary and closeout proof
 
 **Success criteria:**
 
