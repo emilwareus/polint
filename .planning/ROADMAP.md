@@ -543,7 +543,7 @@ Plans:
 
 **Wave 7** *(blocked on Waves 3, 5, and 6 completion)*
 
-- [ ] 40-07-PLAN.md - Competitor baseline records and promotion gate baselines
+- [x] 40-07-PLAN.md - Competitor baseline records and promotion gate baselines
 
 **Wave 8** *(blocked on Waves 4, 5, 6, and 7 completion)*
 
