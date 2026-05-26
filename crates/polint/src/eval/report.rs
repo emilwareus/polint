@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::cache::stable_hash;
@@ -10,6 +12,7 @@ use crate::eval::model::{
     ObservedGraphEdge, ObservedInvariant, ObservedItem, ObservedPath, ObservedRuntimeBudget,
     ObservedStatus,
 };
+use crate::eval::performance::{self, EvalPerformanceReport};
 use crate::eval::suite::SuiteManifest;
 
 pub(crate) const EVALUATION_SCHEMA_VERSION: &str = "polint-eval-internal-1";
@@ -24,6 +27,8 @@ pub(crate) struct EvaluationRun {
     pub(crate) suite_manifest: Option<SuiteManifest>,
     pub(crate) cases: Vec<CaseResult>,
     pub(crate) metrics: MetricSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) performance: Option<EvalPerformanceReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) comparison_rows: Vec<BenchmarkComparisonRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,6 +85,80 @@ pub(crate) struct MetricSummary {
     pub(crate) f2: Option<f64>,
     pub(crate) f3: Option<f64>,
     pub(crate) false_positive_rate: Option<f64>,
+    #[serde(default)]
+    pub(crate) sections: MetricSections,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct MetricSections {
+    pub(crate) scanner: ScannerMetricSection,
+    pub(crate) graph: GraphMetricSection,
+    pub(crate) paths: PathMetricSection,
+    pub(crate) unknowns: UnknownMetricSection,
+    pub(crate) performance: PerformanceMetricSection,
+    #[serde(default)]
+    pub(crate) suite_native: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adaptation: Option<AdaptationMetricSection>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct ScannerMetricSection {
+    pub(crate) true_positives: u64,
+    pub(crate) false_positives: u64,
+    pub(crate) false_negatives: u64,
+    pub(crate) true_negatives: u64,
+    pub(crate) precision: Option<f64>,
+    pub(crate) recall: Option<f64>,
+    pub(crate) f1: Option<f64>,
+    pub(crate) f2: Option<f64>,
+    pub(crate) f3: Option<f64>,
+    pub(crate) false_positive_rate: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct GraphMetricSection {
+    pub(crate) edges_expected: u64,
+    pub(crate) edges_observed: u64,
+    pub(crate) edges_unconfirmed: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct PathMetricSection {
+    pub(crate) paths_expected: u64,
+    pub(crate) paths_observed: u64,
+    pub(crate) paths_unconfirmed: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct UnknownMetricSection {
+    pub(crate) total: u64,
+    #[serde(default)]
+    pub(crate) by_status: BTreeMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct PerformanceMetricSection {
+    pub(crate) runtime_budget_passed: u64,
+    pub(crate) runtime_budget_failed: u64,
+    pub(crate) cache_hits: u64,
+    pub(crate) cache_misses: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct AdaptationMetricSection {
+    pub(crate) resolved_unknowns: u64,
+    pub(crate) new_false_positives: u64,
+    pub(crate) removed_false_negatives: u64,
+    pub(crate) accepted_extension_facts: u64,
+    pub(crate) rejected_extension_facts: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -134,6 +213,10 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
         .comparison_rows
         .sort_by_cached_key(canonical_json_key);
     normalized.limitations.sort();
+    if let Some(performance) = &mut normalized.performance {
+        performance.providers.sort();
+        performance.demand_queries.sort();
+    }
     normalized
 }
 
@@ -156,6 +239,9 @@ pub(crate) fn deterministic_output_hash(run: &EvaluationRun) -> String {
         for summary in &mut case.matches {
             summary.observed_runtime_ms = None;
         }
+    }
+    if let Some(performance) = &mut normalized.performance {
+        performance::strip_volatile_runtime(performance);
     }
     normalized = normalize_run(&normalized);
     let canonical_json =
@@ -399,6 +485,10 @@ mod tests {
         ObservedDiagnostic, ObservedFact, ObservedGraphEdge, ObservedInvariant, ObservedItem,
         ObservedPath, ObservedRuntimeBudget, ObservedStatus,
     };
+    use crate::eval::performance::{
+        CacheStatsSummary, DemandQueryStatsRow, EvalPerformanceReport, ProviderStatsRow,
+        RuntimeStatsSummary,
+    };
     use crate::eval::suite::SuiteId;
 
     #[test]
@@ -430,6 +520,8 @@ mod tests {
         let mut right = left.clone();
         left.cases[0].runtime.observed_runtime_ms = Some(17);
         right.cases[0].runtime.observed_runtime_ms = Some(999);
+        left.performance = Some(performance_report(17));
+        right.performance = Some(performance_report(999));
 
         assert_eq!(
             deterministic_output_hash(&left),
@@ -608,7 +700,9 @@ mod tests {
                 f2: Some(5.0 * 0.75 * 0.6 / (4.0 * 0.75 + 0.6)),
                 f3: Some(10.0 * 0.75 * 0.6 / (9.0 * 0.75 + 0.6)),
                 false_positive_rate: Some(1.0 / 6.0),
+                sections: MetricSections::default(),
             },
+            performance: None,
             comparison_rows: Vec::new(),
             adaptation: None,
             limitations: Vec::new(),
@@ -660,6 +754,39 @@ mod tests {
                 notes_path: "target/polint-eval/adaptation-notes.md".to_string(),
                 final_adapted_report_path: "target/polint-eval/adapted.json".to_string(),
                 commands_run: Vec::new(),
+            },
+        }
+    }
+
+    fn performance_report(runtime: u64) -> EvalPerformanceReport {
+        EvalPerformanceReport {
+            providers: vec![ProviderStatsRow {
+                provider_id: "polint.source".to_string(),
+                provider_version: "1".to_string(),
+                schema_version: "source".to_string(),
+                output_digest: "digest".to_string(),
+                precision: "exact".to_string(),
+                validation: "native_trusted".to_string(),
+                dependency_input_count: 0,
+                facts_emitted: None,
+                diagnostics_emitted: None,
+                validation_rejections: None,
+                cache: CacheStatsSummary::default(),
+                observed_runtime_ms: Some(runtime),
+            }],
+            cache: CacheStatsSummary::default(),
+            demand_queries: vec![DemandQueryStatsRow {
+                query_kind: "calls".to_string(),
+                query_version: "1".to_string(),
+                parameter_digest: "params".to_string(),
+                cache_status: "computed".to_string(),
+                result_digest: "result".to_string(),
+                precision_tier: "setup_aware".to_string(),
+                compute_duration_micros: Some(runtime * 1000),
+            }],
+            runtime: RuntimeStatsSummary {
+                observed_runtime_ms: Some(runtime),
+                peak_rss_bytes: Some(runtime * 1024),
             },
         }
     }

@@ -929,6 +929,7 @@ fn evaluation_run_for_fixture(
             runtime,
         }],
         metrics,
+        performance: None,
         comparison_rows: Vec::new(),
         adaptation: None,
         limitations: Vec::new(),

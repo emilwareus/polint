@@ -1,7 +1,12 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
-use crate::eval::report::{MatchSummary, MetricSummary};
+use crate::eval::report::{
+    GraphMetricSection, MatchSummary, MetricSections, MetricSummary, PathMetricSection,
+    PerformanceMetricSection, ScannerMetricSection, UnknownMetricSection,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +30,7 @@ pub(crate) struct ComputedMetrics {
     pub(crate) paths_unconfirmed: u64,
     pub(crate) runtime_budget_passed: u64,
     pub(crate) runtime_budget_failed: u64,
+    pub(crate) unknown_by_status: BTreeMap<String, u64>,
     pub(crate) precision: Option<f64>,
     pub(crate) recall: Option<f64>,
     pub(crate) f1: Option<f64>,
@@ -35,6 +41,42 @@ pub(crate) struct ComputedMetrics {
 
 impl From<ComputedMetrics> for MetricSummary {
     fn from(metrics: ComputedMetrics) -> Self {
+        let sections = MetricSections {
+            scanner: ScannerMetricSection {
+                true_positives: metrics.true_positives,
+                false_positives: metrics.false_positives,
+                false_negatives: metrics.false_negatives,
+                true_negatives: metrics.true_negatives,
+                precision: metrics.precision,
+                recall: metrics.recall,
+                f1: metrics.f1,
+                f2: metrics.f2,
+                f3: metrics.f3,
+                false_positive_rate: metrics.false_positive_rate,
+            },
+            graph: GraphMetricSection {
+                edges_expected: metrics.graph_edges_expected,
+                edges_observed: metrics.graph_edges_observed,
+                edges_unconfirmed: metrics.graph_edges_unconfirmed,
+            },
+            paths: PathMetricSection {
+                paths_expected: metrics.paths_expected,
+                paths_observed: metrics.paths_observed,
+                paths_unconfirmed: metrics.paths_unconfirmed,
+            },
+            unknowns: UnknownMetricSection {
+                total: metrics.unknown_count,
+                by_status: metrics.unknown_by_status.clone(),
+            },
+            performance: PerformanceMetricSection {
+                runtime_budget_passed: metrics.runtime_budget_passed,
+                runtime_budget_failed: metrics.runtime_budget_failed,
+                cache_hits: 0,
+                cache_misses: 0,
+            },
+            suite_native: std::collections::BTreeMap::new(),
+            adaptation: None,
+        };
         Self {
             true_positives: metrics.true_positives,
             false_positives: metrics.false_positives,
@@ -61,6 +103,7 @@ impl From<ComputedMetrics> for MetricSummary {
             f2: metrics.f2,
             f3: metrics.f3,
             false_positive_rate: metrics.false_positive_rate,
+            sections,
         }
     }
 }
@@ -86,6 +129,7 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
         paths_unconfirmed: 0,
         runtime_budget_passed: 0,
         runtime_budget_failed: 0,
+        unknown_by_status: BTreeMap::new(),
         precision: None,
         recall: None,
         f1: None,
@@ -106,6 +150,14 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
             MatchOutcome::Unknown => metrics.unknown_count += 1,
             MatchOutcome::RuntimeBudgetPassed => metrics.runtime_budget_passed += 1,
             MatchOutcome::RuntimeBudgetFailed => metrics.runtime_budget_failed += 1,
+        }
+        if summary.outcome == MatchOutcome::Unknown
+            && let Some(status) = summary.observed_status
+        {
+            *metrics
+                .unknown_by_status
+                .entry(status_label(status).to_string())
+                .or_insert(0) += 1;
         }
 
         match summary.item_kind {
@@ -194,6 +246,30 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     );
 
     metrics
+}
+
+fn status_label(status: crate::eval::model::ObservedStatus) -> &'static str {
+    match status {
+        crate::eval::model::ObservedStatus::Present => "present",
+        crate::eval::model::ObservedStatus::Resolved => "resolved",
+        crate::eval::model::ObservedStatus::Partial => "partial",
+        crate::eval::model::ObservedStatus::Top => "top",
+        crate::eval::model::ObservedStatus::Unknown => "unknown",
+        crate::eval::model::ObservedStatus::Unresolved => "unresolved",
+        crate::eval::model::ObservedStatus::Ambiguous => "ambiguous",
+        crate::eval::model::ObservedStatus::Dynamic => "dynamic",
+        crate::eval::model::ObservedStatus::SetupMissing => "setup_missing",
+        crate::eval::model::ObservedStatus::MissingLockfile => "missing_lockfile",
+        crate::eval::model::ObservedStatus::Unsupported => "unsupported",
+        crate::eval::model::ObservedStatus::External => "external",
+        crate::eval::model::ObservedStatus::Cycle => "cycle",
+        crate::eval::model::ObservedStatus::Generated => "generated",
+        crate::eval::model::ObservedStatus::Undeclared => "undeclared",
+        crate::eval::model::ObservedStatus::OutsideWorkspace => "outside_workspace",
+        crate::eval::model::ObservedStatus::BudgetExceeded => "budget_exceeded",
+        crate::eval::model::ObservedStatus::Rejected => "rejected",
+        crate::eval::model::ObservedStatus::Accepted => "accepted",
+    }
 }
 
 fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
@@ -311,6 +387,7 @@ mod tests {
                 paths_unconfirmed: 1,
                 runtime_budget_passed: 1,
                 runtime_budget_failed: 1,
+                unknown_by_status: [("present".to_string(), 1)].into_iter().collect(),
                 precision: Some(2.0 / 3.0),
                 recall: Some(0.5),
                 f1: Some(4.0 / 7.0),
@@ -447,6 +524,43 @@ mod tests {
         assert_eq!(summary.true_positives, 1);
         assert_eq!(summary.false_positive_trap_hits, 1);
         assert_eq!(summary.runtime_budget_failed, 1);
+        assert_eq!(summary.sections.scanner.true_positives, 1);
+        assert_eq!(summary.sections.performance.runtime_budget_failed, 1);
+    }
+
+    #[test]
+    fn eval_metrics_sections_include_graph_path_unknown_and_suite_native_slots() {
+        let mut metrics = compute_metrics(&[
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::GraphEdge,
+                true,
+                true,
+            ),
+            summary(MatchOutcome::Unconfirmed, MatchItemKind::Path, true, true),
+            summary_with_status(
+                MatchOutcome::Unknown,
+                MatchItemKind::Fact,
+                crate::eval::model::ObservedStatus::SetupMissing,
+            ),
+        ]);
+        metrics.unknown_by_status.insert("unknown".to_string(), 2);
+
+        let mut summary: MetricSummary = metrics.into();
+        summary
+            .sections
+            .suite_native
+            .insert("owasp.tpr".to_string(), 0.75);
+
+        assert_eq!(summary.sections.graph.edges_expected, 1);
+        assert_eq!(summary.sections.graph.edges_observed, 1);
+        assert_eq!(summary.sections.paths.paths_unconfirmed, 1);
+        assert_eq!(summary.sections.unknowns.total, 1);
+        assert_eq!(
+            summary.sections.unknowns.by_status.get("setup_missing"),
+            Some(&1)
+        );
+        assert_eq!(summary.sections.suite_native.get("owasp.tpr"), Some(&0.75));
     }
 
     fn summary(
