@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: ready_to_plan
-last_updated: 2026-05-25T15:26:02.002Z
+status: planning
+last_updated: "2026-05-26T06:58:11.239Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 22
@@ -11,7 +11,6 @@ progress:
   total_plans: 123
   completed_plans: 123
   percent: 91
-stopped_at: Phase 39 complete (7/7) — ready to discuss Phase 40
 ---
 
 # State: polint
@@ -380,14 +379,16 @@ Last activity: 2026-05-25
 
 ## Session
 
-- Last session: 2026-05-25
-- Last activity: 2026-05-25 - Completed Phase 39 slicing, paths, and evidence bundles and passed final verification.
-- Stopped at: Phase 39 complete; ready to discuss Phase 40.
+- Last session: 2026-05-26
+- Last activity: 2026-05-26 - Captured Phase 40 external benchmark adapters and promotion gates context.
+- Stopped at: Phase 40 context gathered; ready to plan Phase 40.
+- Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |
 | 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
 | 260525-d15 | Fix CI failures from PR 45 attached logs | 2026-05-25 | implemented | [260525-d15-fix-ci-failures-from-pr-45-attached-logs](./quick/260525-d15-fix-ci-failures-from-pr-45-attached-logs/) |
 | 260525-c1a | Fix final review findings for Phase 37 refined calls | 2026-05-25 | implemented | [260525-c1a-fix-final-review-findings-for-phase-37-r](./quick/260525-c1a-fix-final-review-findings-for-phase-37-r/) |

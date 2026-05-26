@@ -520,7 +520,11 @@ Plans:
 1. Reports show TP, FP, FN, precision, recall, F-score, unknown counts, graph/path metrics, runtime, memory, cache reuse, extension overhead, and accepted/rejected extension facts.
 2. Native fixtures remain the first promotion gate before external suites.
 3. External adapters are added in the order justified by the harness research.
-4. Public claims are tied to measured reports.
+4. Benchmark comparison tables include, where available, comparable published or locally reproduced results from other scanners/products such as Semgrep, CodeQL, gosec, or suite-native reference tools.
+5. Every scanner benchmark table separates at least three columns: other-product baseline, polint baseline with no repo adaptation, and polint adapted to the target codebase through repo-local rules/models/provider extensions.
+6. Agent-adapted benchmark runs are produced by a separate adaptation agent with a recorded prompt, declared budget, accessible polint skill/context, and no access to benchmark expected labels except through the evaluation report after a run.
+7. Adapted-run reports include the exact prompt, changed rule/extension files, extension/rule digests, accepted/rejected facts, default-vs-adapted case deltas, runtime/cache overhead, and known limitations so adaptation cannot hide benchmark gaming or cost.
+8. Public claims are tied to measured reports.
 
 ### Phase 41: Public SDK Query Views and Agent Ergonomics
 

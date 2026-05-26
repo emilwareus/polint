@@ -332,6 +332,8 @@ These metrics are where polint differs from a black-box scanner.
 
 For every agent/user extension benchmark, report:
 
+- other scanner/product scores when the benchmark publishes them or they can be
+  reproduced locally with pinned versions;
 - default score;
 - extended score;
 - new true positives;
@@ -345,6 +347,15 @@ For every agent/user extension benchmark, report:
 - cache invalidation scope.
 
 An extension should be considered good only if it improves meaningful metrics without unacceptable precision, runtime, or cache cost.
+
+For adapted scanner benchmarks, the extended score must be produced by a
+separate adaptation agent, not by manually tuning the harness. The benchmark
+artifact must include the exact prompt, allowed and forbidden inputs, agent
+budget, changed rule/extension files, digests, commands run, and adaptation
+notes. The prompt should direct the agent to explore the target codebase and
+model real framework/lifecycle/source/sink/sanitizer/barrier/summary behavior
+with polint rules or provider extensions. It must forbid reading expected labels
+or hardcoding benchmark case identifiers before the adaptation is written.
 
 ## Matching Policy
 
