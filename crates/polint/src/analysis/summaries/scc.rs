@@ -309,6 +309,7 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
+            tito_flows: Vec::new(),
             stable_key: format!("summary:control_effects:{callable_key}"),
         }
     }

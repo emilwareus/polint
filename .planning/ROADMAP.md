@@ -40,8 +40,8 @@ The milestone should preserve public API discipline. New internals stay private 
 | 35 | 8/8 | Complete   | 2026-05-24 |
 | 36 | 7/7 | Complete   | 2026-05-24 |
 | 37 | 6/6 | Complete   | 2026-05-25 |
-| 38 | Local Plus Summary-Projected Data Flow | Add local/interprocedural value flow, model sinks, unknowns, budgets, and query-scoped path search. | SAE-PREC-03 |
-| 39 | Slicing, Paths, and Evidence Bundles | Add structured evidence, slices, chops, ranked paths, summary expansion, and evidence rendering. | SAE-PREC-04 |
+| 38 | 10/10 | Complete   | 2026-05-25 |
+| 39 | 7/7 | Complete    | 2026-05-25 |
 | 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
@@ -445,6 +445,49 @@ Plans:
 **Goal:** Add local value-flow graph, direct-call interprocedural edges, summary-projected edges, model sinks, budgets, unknowns, and query-scoped path search.
 **Requirements:** SAE-PREC-03
 **Research:** `research/data-flow/FINAL-REPORT.md`, `research/data-flow/RECOMMENDED_IMPLEMENTATION.md`, `research/data-flow/implementation/BOOTSTRAP-INTEGRATION.md`
+**Plans:** 10/10 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 38-01-PLAN.md - Private data-flow fact contracts and store
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 38-02-PLAN.md - Provider, cache, and kernel wiring
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 38-03-PLAN.md - Local MIR place nodes
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 38-04-PLAN.md - Direct-call projected data-flow edges
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 38-05-PLAN.md - Trust-boundary source models and extension model facts
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 38-06-PLAN.md - Budgeted private path search
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 38-07-PLAN.md - Validation hook, eval order proof, and private-boundary documentation
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 38-08-PLAN.md - Local value-flow edges and stored uncertainty
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 38-09-PLAN.md - Summary-projected and interprocedural data-flow closure
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [x] 38-10-PLAN.md - Data-flow eval fixtures, debug, and public boundary proof
 
 **Success criteria:**
 

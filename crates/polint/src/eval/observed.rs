@@ -39,6 +39,85 @@ use crate::eval::model::{
 use crate::module_graph::topology::{ImportToPackageStatus, TopologyPrecision, TopologyStatus};
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "Phase 39 evidence delta rows are consumed by eval fixtures that assert extension merge behavior."
+)]
+pub(crate) fn observed_extension_evidence_delta_rows(
+    delta: &crate::analysis::evidence::validate::ExtensionEvidenceDelta,
+) -> Vec<ObservedItem> {
+    vec![
+        evidence_delta_row("accepted", delta.accepted),
+        evidence_delta_row("downgraded", delta.downgraded),
+        evidence_delta_row("candidate_only", delta.candidate_only),
+        evidence_delta_row("rejected", delta.rejected),
+        ObservedItem::Fact(ObservedFact {
+            family: "evidence_extension_delta".to_string(),
+            stable_key: "evidence_extension_delta:reasons".to_string(),
+            mode: AssertionMode::Partial,
+            producer_id: Some("polint.evidence".to_string()),
+            provenance: Some("extension_delta".to_string()),
+            precision: Some("debug".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(delta.representative_reasons.join(",")),
+        }),
+        ObservedItem::Fact(ObservedFact {
+            family: "evidence_extension_delta".to_string(),
+            stable_key: "evidence_extension_delta:native_edge_count".to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.evidence".to_string()),
+            provenance: Some("native".to_string()),
+            precision: Some("debug".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(delta.native_edge_count.to_string()),
+        }),
+    ]
+}
+
+#[cfg(test)]
+fn evidence_delta_row(verdict: &str, count: usize) -> ObservedItem {
+    ObservedItem::Fact(ObservedFact {
+        family: "evidence_extension_delta".to_string(),
+        stable_key: format!("evidence_extension_delta:{verdict}"),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.evidence".to_string()),
+        provenance: Some("extension".to_string()),
+        precision: Some("debug".to_string()),
+        status: Some(ObservedStatus::Present),
+        payload: Some(count.to_string()),
+    })
+}
+
+#[cfg(test)]
+mod extension_evidence_delta_tests {
+    use super::*;
+
+    #[test]
+    fn extension_evidence_deltas_render_deterministic_eval_rows() {
+        let rows = observed_extension_evidence_delta_rows(
+            &crate::analysis::evidence::validate::ExtensionEvidenceDelta {
+                native_edge_count: 3,
+                accepted: 1,
+                downgraded: 2,
+                candidate_only: 1,
+                rejected: 4,
+                representative_reasons: vec![
+                    "InvalidEndpoint".to_string(),
+                    "ExactClaimRequiresNativeAnchor".to_string(),
+                ],
+            },
+        );
+
+        let rendered = serde_json::to_string(&rows).expect("rows serialize");
+
+        assert!(rendered.contains("evidence_extension_delta:accepted"));
+        assert!(rendered.contains("InvalidEndpoint"));
+        assert!(!rendered.contains("/Users/"));
+        assert!(!rendered.contains("raw source"));
+    }
+}
+
+#[cfg(test)]
 const SEMANTIC_DEBUG_SECTIONS: &[&str] = &[
     "scopes",
     "imports",
@@ -914,6 +993,15 @@ pub(crate) fn direct_summary_facts_for_test(debug_json: &Value) -> Vec<ObservedI
 }
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "Data-flow observed-row helper is exercised by focused eval row tests and fixtures."
+)]
+pub(crate) fn data_flow_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
+    data_flow_facts(debug_json)
+}
+
+#[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn entrypoint_facts_for_test(debug_json: &Value) -> Vec<ObservedItem> {
     entrypoint_facts(debug_json)
@@ -1240,9 +1328,401 @@ fn metadata_debug_facts(debug_json: &Value) -> Vec<ObservedItem> {
     facts.extend(refined_call_facts(debug_json));
     facts.extend(abstract_domain_facts(debug_json));
     facts.extend(direct_summary_facts(debug_json));
+    facts.extend(data_flow_facts(debug_json));
+    facts.extend(evidence_facts(debug_json));
     facts.extend(entrypoint_facts(debug_json));
     facts.extend(scc_and_demand_query_invariants(debug_json));
     facts
+}
+
+#[cfg(test)]
+fn data_flow_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(data_flow) = debug_json.get("data_flow").and_then(Value::as_object) else {
+        return facts;
+    };
+    for section in ["nodes", "edges", "models", "budgets"] {
+        let Some(rows) = data_flow.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(fact) = data_flow_fact(row, section) {
+                facts.push(ObservedItem::Fact(fact));
+            }
+        }
+    }
+    facts.extend(data_flow_count_invariants(data_flow));
+    facts.extend(data_flow_taxonomy_facts(data_flow));
+    facts
+}
+
+#[cfg(test)]
+fn data_flow_taxonomy_facts(data_flow: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+
+    if has_data_flow_edge(
+        data_flow,
+        Some("LocalMir"),
+        Some("LocalBinding"),
+        Some("Present"),
+    ) && has_data_flow_edge(
+        data_flow,
+        Some("LocalMir"),
+        Some("ReturnValue"),
+        Some("Present"),
+    ) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:local:param-local-return",
+            "syntax",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_edge(
+        data_flow,
+        Some("DirectCall"),
+        Some("UnknownFlow"),
+        Some("Unknown"),
+    ) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:direct-call:unknown-unresolved",
+            "unknown",
+            ObservedStatus::Unknown,
+        ));
+    }
+    if has_data_flow_edge(
+        data_flow,
+        Some("SummaryProjection"),
+        Some("SummaryTito"),
+        None,
+    ) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:summary-projected:tito",
+            "syntax",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_edge(
+        data_flow,
+        Some("SummaryProjection"),
+        Some("UnknownFlow"),
+        Some("Unknown"),
+    ) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:unknown:missing-summary",
+            "unknown",
+            ObservedStatus::Unknown,
+        ));
+    }
+    if has_data_flow_edge(data_flow, None, Some("HavocFlow"), Some("Unsupported")) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:havoc:unsupported-write",
+            "unknown",
+            ObservedStatus::Unsupported,
+        ));
+    }
+    if has_data_flow_budget(data_flow, "PathDepth", "BudgetExceeded") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowBudget",
+            "data-flow:budget:path-depth",
+            "unknown",
+            ObservedStatus::BudgetExceeded,
+        ));
+    }
+
+    if has_data_flow_model(data_flow, "Source") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowModel",
+            "data-flow:model:source:trust-boundary",
+            "setup_aware",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_model(data_flow, "Sink") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowModel",
+            "data-flow:model:sink:repo",
+            "heuristic",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_model(data_flow, "Sanitizer") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowModel",
+            "data-flow:model:sanitizer:repo",
+            "heuristic",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_model(data_flow, "Barrier") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowModel",
+            "data-flow:model:barrier:repo",
+            "heuristic",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_model(data_flow, "Tito") {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowModel",
+            "data-flow:model:extension:additional-step",
+            "heuristic",
+            ObservedStatus::Present,
+        ));
+    }
+
+    if has_data_flow_model(data_flow, "Sanitizer")
+        || has_data_flow_model(data_flow, "Barrier")
+        || has_data_flow_edge(data_flow, None, Some("Sanitizer"), None)
+        || has_data_flow_edge(data_flow, None, Some("Barrier"), None)
+    {
+        facts.push(observed_invariant(
+            "data_flow.false_positive_trap.sanitized_or_barriered",
+            "true",
+            "kernel.metadata_debug_json.data_flow.taxonomy",
+        ));
+    }
+
+    facts
+}
+
+#[cfg(test)]
+fn data_flow_taxonomy_fact(
+    family: &str,
+    stable_key: &str,
+    precision: &str,
+    status: ObservedStatus,
+) -> ObservedItem {
+    ObservedItem::Fact(ObservedFact {
+        family: family.to_string(),
+        stable_key: stable_key.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: Some("polint.data_flow".to_string()),
+        provenance: Some("kernel.metadata_debug_json.data_flow.taxonomy".to_string()),
+        precision: Some(precision.to_string()),
+        status: Some(status),
+        payload: Some("source=kernel_debug_taxonomy".to_string()),
+    })
+}
+
+#[cfg(test)]
+fn has_data_flow_edge(
+    data_flow: &serde_json::Map<String, Value>,
+    algorithm: Option<&str>,
+    kind: Option<&str>,
+    status: Option<&str>,
+) -> bool {
+    data_flow
+        .get("edges")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| {
+            rows.iter().any(|row| {
+                optional_json_str_matches(row.get("algorithm"), algorithm)
+                    && optional_json_str_matches(row.get("kind"), kind)
+                    && optional_json_str_matches(row.get("status"), status)
+            })
+        })
+}
+
+#[cfg(test)]
+fn has_data_flow_model(data_flow: &serde_json::Map<String, Value>, kind: &str) -> bool {
+    data_flow
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.get("kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|label| label == kind)
+            })
+        })
+}
+
+#[cfg(test)]
+fn has_data_flow_budget(
+    data_flow: &serde_json::Map<String, Value>,
+    reason: &str,
+    status: &str,
+) -> bool {
+    data_flow
+        .get("budgets")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.get("reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(|label| label == reason)
+                    && row
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .is_some_and(|label| label == status)
+            })
+        })
+}
+
+#[cfg(test)]
+fn optional_json_str_matches(value: Option<&Value>, expected: Option<&str>) -> bool {
+    expected.is_none_or(|expected| value.and_then(Value::as_str) == Some(expected))
+}
+
+#[cfg(test)]
+fn evidence_facts(debug_json: &Value) -> Vec<ObservedItem> {
+    let mut facts = Vec::new();
+    let Some(evidence) = debug_json.get("evidence").and_then(Value::as_object) else {
+        return facts;
+    };
+    let Some(counts) = evidence.get("counts").and_then(Value::as_object) else {
+        return facts;
+    };
+    for family in [
+        ("nodes", "EvidenceNode"),
+        ("edges", "EvidenceEdge"),
+        ("bundles", "EvidenceBundle"),
+        ("paths", "EvidencePath"),
+        ("slices", "EvidenceSlice"),
+        ("unknowns", "EvidenceUnknown"),
+        ("omitted_regions", "EvidenceOmittedRegion"),
+    ] {
+        let Some(count) = counts.get(family.0).and_then(Value::as_u64) else {
+            continue;
+        };
+        facts.push(ObservedItem::Fact(ObservedFact {
+            family: family.1.to_string(),
+            stable_key: format!("evidence.debug.counts.{}", family.0),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.evidence".to_string()),
+            provenance: Some("kernel.metadata_debug_json.evidence.counts".to_string()),
+            precision: Some("exact".to_string()),
+            status: Some(ObservedStatus::Present),
+            payload: Some(format!("count={count}")),
+        }));
+        if count > 0 {
+            facts.push(observed_invariant(
+                format!("evidence.debug.counts.{}.nonzero", family.0),
+                "true",
+                "kernel.metadata_debug_json.evidence.counts",
+            ));
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+fn data_flow_fact(row: &Value, section: &str) -> Option<ObservedFact> {
+    let status = row
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(data_flow_status_from_label)?;
+    let precision = row
+        .get("precision")
+        .and_then(Value::as_str)
+        .map(data_flow_precision_label)
+        .or_else(|| Some("unknown".to_string()));
+    Some(ObservedFact {
+        family: row.get("family")?.as_str()?.to_string(),
+        stable_key: row.get("stable_key")?.as_str()?.to_string(),
+        mode: AssertionMode::Exact,
+        producer_id: row
+            .get("producer_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        provenance: Some("kernel.metadata_debug_json.data_flow".to_string()),
+        precision,
+        status: Some(status),
+        payload: Some(data_flow_payload(row, section)),
+    })
+}
+
+#[cfg(test)]
+fn data_flow_payload(row: &Value, section: &str) -> String {
+    let mut parts = vec![format!("section={section}")];
+    push_str_fragment(&mut parts, "kind", row.get("kind"));
+    push_str_fragment(&mut parts, "algorithm", row.get("algorithm"));
+    push_str_fragment(&mut parts, "status", row.get("status"));
+    push_str_fragment(&mut parts, "precision", row.get("precision"));
+    push_str_fragment(&mut parts, "provenance", row.get("provenance"));
+    push_str_fragment(&mut parts, "reason", row.get("reason"));
+    parts.join(";")
+}
+
+#[cfg(test)]
+fn data_flow_count_invariants(data_flow: &serde_json::Map<String, Value>) -> Vec<ObservedItem> {
+    let Some(counts) = data_flow.get("counts").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut invariants = Vec::new();
+    for field in [
+        "nodes",
+        "edges",
+        "models",
+        "budgets",
+        "local_edges",
+        "direct_call_edges",
+        "summary_projected_edges",
+        "unknown_or_havoc_edges",
+        "budget_rows",
+    ] {
+        if let Some(value) = counts.get(field).and_then(Value::as_u64) {
+            invariants.push(observed_invariant(
+                format!("data_flow.counts.{field}"),
+                value.to_string(),
+                "kernel.metadata_debug_json.data_flow.counts",
+            ));
+            if value > 0 {
+                invariants.push(observed_invariant(
+                    format!("data_flow.counts.{field}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.data_flow.counts",
+                ));
+            }
+        }
+    }
+    for group in ["by_kind", "by_status"] {
+        let Some(values) = counts.get(group).and_then(Value::as_object) else {
+            continue;
+        };
+        for (label, count) in values {
+            if count.as_u64().is_some_and(|count| count > 0) {
+                invariants.push(observed_invariant(
+                    format!("data_flow.counts.{group}.{label}.nonzero"),
+                    "true",
+                    "kernel.metadata_debug_json.data_flow.counts",
+                ));
+            }
+        }
+    }
+    invariants
+}
+
+#[cfg(test)]
+fn data_flow_status_from_label(label: &str) -> Option<ObservedStatus> {
+    match label {
+        "Present" | "present" => Some(ObservedStatus::Present),
+        "Unknown" | "unknown" => Some(ObservedStatus::Unknown),
+        "Unsupported" | "unsupported" => Some(ObservedStatus::Unsupported),
+        "SetupMissing" | "setup_missing" => Some(ObservedStatus::SetupMissing),
+        "BudgetExceeded" | "budget_exceeded" => Some(ObservedStatus::BudgetExceeded),
+        "Rejected" | "rejected" => Some(ObservedStatus::Rejected),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn data_flow_precision_label(label: &str) -> String {
+    match label {
+        "Exact" => "exact",
+        "SetupAware" => "setup_aware",
+        "Syntax" => "syntax",
+        "Conservative" => "conservative",
+        "Heuristic" => "heuristic",
+        "Unknown" => "unknown",
+        other => other,
+    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -2912,7 +3392,8 @@ path = "repo"
                 ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.refined_calls"),
                 ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.metrics"),
+                ("provider_order.16", "polint.evidence"),
+                ("provider_order.17", "polint.metrics"),
             ]
         );
     }

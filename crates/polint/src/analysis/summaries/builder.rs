@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::core::{CallEffects, ControlEffects, DataFlowTito, FlowEdge, MemoryEffects};
 use super::facts::{
     AccessKind, AsyncKind, ExitKind, FlowKind, FlowRoot, SummaryDomainKind, SummaryEventFact,
-    SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
+    SummaryFact, SummaryFlowEdge, SummaryPrecision, SummaryProvenance, SummaryStatus,
 };
 use super::store::SummaryOutput;
 use crate::analysis::calls::facts::UnresolvedCallFact;
@@ -13,7 +13,7 @@ use crate::analysis::domains::facts::{
 };
 use crate::analysis::ids::{MirBodyId, PlaceId, SummaryEventId, SummaryId};
 use crate::analysis::mir::body::MirBody;
-use crate::analysis::mir::op::{MirOperationKind, MirValue};
+use crate::analysis::mir::op::{AssignMode, MirOperationKind, MirValue};
 use crate::analysis::places::PlaceRoot;
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, FunctionId};
@@ -142,6 +142,7 @@ impl DirectSummaryBuilder {
                 precision: control_precision,
                 provenance: control_provenance,
                 payload_digest: control_digest,
+                tito_flows: Vec::new(),
                 stable_key: stable_key_from_parts(
                     FactFamily::SummaryControl,
                     &[
@@ -189,6 +190,7 @@ impl DirectSummaryBuilder {
                 precision: call_precision,
                 provenance: call_provenance,
                 payload_digest: call_digest,
+                tito_flows: Vec::new(),
                 stable_key: stable_key_from_parts(
                     FactFamily::SummaryCall,
                     &[
@@ -234,6 +236,7 @@ impl DirectSummaryBuilder {
                 precision: mem_precision,
                 provenance: mem_provenance,
                 payload_digest: mem_digest,
+                tito_flows: Vec::new(),
                 stable_key: stable_key_from_parts(
                     FactFamily::SummaryMemory,
                     &[
@@ -277,6 +280,7 @@ impl DirectSummaryBuilder {
 
             let (tito_status, tito_precision, tito_provenance) = classify_domain_output(&tito);
             let tito_digest = tito.stable_digest_parts().join(";");
+            let tito_flows = summary_tito_flows(&tito);
 
             summaries.push(SummaryFact {
                 id: SummaryId(0),
@@ -287,6 +291,7 @@ impl DirectSummaryBuilder {
                 precision: tito_precision,
                 provenance: tito_provenance,
                 payload_digest: tito_digest,
+                tito_flows,
                 stable_key: stable_key_from_parts(
                     FactFamily::SummaryTito,
                     &[
@@ -749,11 +754,32 @@ fn build_tito(
     // Track direct assignments: build a simple place-to-place map
     // Then check for parameter-to-return flow
     let mut copy_map: BTreeMap<PlaceId, BTreeSet<PlaceId>> = BTreeMap::new();
+    let has_branch = body_ops
+        .iter()
+        .any(|op| matches!(op.kind, MirOperationKind::Branch { .. }));
 
     for op in body_ops {
         match &op.kind {
-            MirOperationKind::Assign { place, value, .. }
-            | MirOperationKind::Bind { place, value } => {
+            MirOperationKind::Bind { place, value } => {
+                if !has_branch {
+                    copy_map.remove(place);
+                }
+                if let MirValue::Place(src) = value {
+                    copy_map.entry(*place).or_default().insert(*src);
+                }
+            }
+            MirOperationKind::Assign { place, value, mode } => {
+                if !has_branch
+                    && matches!(
+                        mode,
+                        AssignMode::DeclarationBinding
+                            | AssignMode::Overwrite
+                            | AssignMode::Simultaneous
+                            | AssignMode::UnknownWrite
+                    )
+                {
+                    copy_map.remove(place);
+                }
                 if let MirValue::Place(src) = value {
                     copy_map.entry(*place).or_default().insert(*src);
                 }
@@ -801,6 +827,20 @@ fn build_tito(
         has_source_return,
         has_sink_param,
     }
+}
+
+fn summary_tito_flows(tito: &DataFlowTito) -> Vec<SummaryFlowEdge> {
+    let DataFlowTito::Flows { edges, .. } = tito else {
+        return Vec::new();
+    };
+    edges
+        .iter()
+        .map(|edge| SummaryFlowEdge {
+            from: edge.from,
+            to: edge.to,
+            kind: edge.kind,
+        })
+        .collect()
 }
 
 /// Simple transitive-closure source tracing through direct Assign/Copy/Move chains.
@@ -901,7 +941,7 @@ mod tests {
         CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
     };
     use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
@@ -1283,6 +1323,338 @@ mod tests {
             tito_summary.payload_digest.contains("source_return:true"),
             "TITO should mark has_source_return, got: {}",
             tito_summary.payload_digest
+        );
+        assert_eq!(
+            tito_summary.tito_flows,
+            vec![SummaryFlowEdge {
+                from: FlowRoot::Param(0),
+                to: FlowRoot::Return,
+                kind: FlowKind::Value,
+            }]
+        );
+    }
+
+    #[test]
+    fn tito_assignment_overwrite_kills_stale_param_copy() {
+        let mut db = AnalysisDb::new();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:tito-overwrite".to_string(),
+                span: span(),
+                stable_key: "body:tito-overwrite".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![
+                PlaceFact {
+                    id: PlaceId(0),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("arg0".to_string()),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:param0".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+                PlaceFact {
+                    id: PlaceId(1),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "tmp".to_string(),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:tmp".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+            ],
+            operations: vec![
+                MirOperation {
+                    id: MirOpId(0),
+                    body: MirBodyId(0),
+                    ordinal: 1,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                        mode: AssignMode::DeclarationBinding,
+                    },
+                    stable_key: "op:tmp-param".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(1),
+                    body: MirBodyId(0),
+                    ordinal: 2,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Literal {
+                            value: "safe".to_string(),
+                        },
+                        mode: AssignMode::Overwrite,
+                    },
+                    stable_key: "op:tmp-safe".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(2),
+                    body: MirBodyId(0),
+                    ordinal: 3,
+                    span: span(),
+                    kind: MirOperationKind::Return {
+                        value: Some(MirValue::Place(PlaceId(1))),
+                    },
+                    stable_key: "op:return-tmp".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+
+        let output = DirectSummaryBuilder::build(&db);
+        let tito_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::DataFlowTito)
+            .expect("TITO summary");
+
+        assert!(tito_summary.tito_flows.is_empty());
+        assert!(
+            !tito_summary.payload_digest.contains("edge:"),
+            "literal overwrite should remove stale param-to-return flow, got: {}",
+            tito_summary.payload_digest
+        );
+    }
+
+    #[test]
+    fn tito_unknown_write_kills_stale_param_copy_in_straight_line_body() {
+        let mut db = AnalysisDb::new();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:tito-unknown-write".to_string(),
+                span: span(),
+                stable_key: "body:tito-unknown-write".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![
+                PlaceFact {
+                    id: PlaceId(0),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("arg0".to_string()),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:param0".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+                PlaceFact {
+                    id: PlaceId(1),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "tmp".to_string(),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:tmp".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+            ],
+            operations: vec![
+                MirOperation {
+                    id: MirOpId(0),
+                    body: MirBodyId(0),
+                    ordinal: 1,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                        mode: AssignMode::DeclarationBinding,
+                    },
+                    stable_key: "op:tmp-param".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(1),
+                    body: MirBodyId(0),
+                    ordinal: 2,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Unknown {
+                            evidence: "dynamic".to_string(),
+                        },
+                        mode: AssignMode::UnknownWrite,
+                    },
+                    stable_key: "op:tmp-unknown".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(2),
+                    body: MirBodyId(0),
+                    ordinal: 3,
+                    span: span(),
+                    kind: MirOperationKind::Return {
+                        value: Some(MirValue::Place(PlaceId(1))),
+                    },
+                    stable_key: "op:return-tmp".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+
+        let output = DirectSummaryBuilder::build(&db);
+        let tito_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::DataFlowTito)
+            .expect("TITO summary");
+
+        assert!(tito_summary.tito_flows.is_empty());
+    }
+
+    #[test]
+    fn tito_assignment_overwrite_in_branchy_body_keeps_possible_param_copy() {
+        let mut db = AnalysisDb::new();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![MirBody {
+                id: MirBodyId(0),
+                language: Language::TypeScript,
+                file: FileId(1),
+                function: FunctionId(1),
+                package: None,
+                module: None,
+                owner_stable_key: "owner:tito-branch-overwrite".to_string(),
+                span: span(),
+                stable_key: "body:tito-branch-overwrite".to_string(),
+                status: MirStatus::Resolved,
+            }],
+            places: vec![
+                PlaceFact {
+                    id: PlaceId(0),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("arg0".to_string()),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:param0".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+                PlaceFact {
+                    id: PlaceId(1),
+                    language: Language::TypeScript,
+                    file: Some(FileId(1)),
+                    function: Some(FunctionId(1)),
+                    root: PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "tmp".to_string(),
+                    },
+                    projections: Vec::new(),
+                    stable_key: "place:tmp".to_string(),
+                    status: PlaceStatus::Resolved,
+                },
+            ],
+            operations: vec![
+                MirOperation {
+                    id: MirOpId(0),
+                    body: MirBodyId(0),
+                    ordinal: 1,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Place(PlaceId(0)),
+                        mode: AssignMode::DeclarationBinding,
+                    },
+                    stable_key: "op:tmp-param".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(1),
+                    body: MirBodyId(0),
+                    ordinal: 2,
+                    span: span(),
+                    kind: MirOperationKind::Branch {
+                        predicate: MirPredicateId(1),
+                        predicate_place: Some(PlaceId(0)),
+                    },
+                    stable_key: "op:branch".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(2),
+                    body: MirBodyId(0),
+                    ordinal: 3,
+                    span: span(),
+                    kind: MirOperationKind::Assign {
+                        place: PlaceId(1),
+                        value: MirValue::Literal {
+                            value: "safe".to_string(),
+                        },
+                        mode: AssignMode::Overwrite,
+                    },
+                    stable_key: "op:tmp-safe".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirOperation {
+                    id: MirOpId(3),
+                    body: MirBodyId(0),
+                    ordinal: 4,
+                    span: span(),
+                    kind: MirOperationKind::Return {
+                        value: Some(MirValue::Place(PlaceId(1))),
+                    },
+                    stable_key: "op:return-tmp".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
+            unsupported: Vec::new(),
+        })
+        .expect("MIR should store");
+
+        let output = DirectSummaryBuilder::build(&db);
+        let tito_summary = output
+            .summaries
+            .iter()
+            .find(|s| s.domain == SummaryDomainKind::DataFlowTito)
+            .expect("TITO summary");
+
+        assert_eq!(
+            tito_summary.tito_flows,
+            vec![SummaryFlowEdge {
+                from: FlowRoot::Param(0),
+                to: FlowRoot::Return,
+                kind: FlowKind::Value,
+            }]
         );
     }
 

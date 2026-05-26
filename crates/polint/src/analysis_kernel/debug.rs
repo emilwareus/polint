@@ -46,6 +46,12 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         calls: calls_report(db),
         abstract_domains: abstract_domains_report(db),
         summaries: summaries_report(db),
+        data_flow: crate::analysis::data_flow::debug::data_flow_debug_json_for_test(db),
+        evidence: db
+            .evidence_store()
+            .map(crate::analysis::evidence::debug::evidence_debug_report)
+            .map(|report| serde_json::to_value(report).expect("evidence debug report serializes"))
+            .unwrap_or_else(empty_evidence_debug_report),
         entrypoints: crate::analysis::entrypoints::debug::metadata_debug_json_for_test(db),
         refined_calls: crate::analysis::refined_calls::debug::refined_calls_debug_json_for_test(db),
         extensions: extensions_report(db),
@@ -53,6 +59,40 @@ pub(crate) fn metadata_debug_json_with_demand_trace_for_test(
         demand_queries: demand_query_report(demand_query_trace),
     };
     serde_json::to_value(report).expect("metadata debug report should serialize")
+}
+
+fn empty_evidence_debug_report() -> Value {
+    serde_json::json!({
+        "counts": {
+            "nodes": 0,
+            "edges": 0,
+            "bundles": 0,
+            "paths": 0,
+            "slices": 0,
+            "unknowns": 0,
+            "omitted_regions": 0
+        },
+        "statuses": {
+            "exact": 0,
+            "partial": 0,
+            "unknown": 0,
+            "summary_backed": 0,
+            "extension_backed": 0,
+            "budget_limited": 0
+        },
+        "summary_expansion_keys": [],
+        "summary_opaque_reasons": [],
+        "replay_keys": [],
+        "unknown_reasons": [],
+        "omitted_regions": [],
+        "hidden_node_count": 0,
+        "budget_caps": {
+            "max_paths": 0,
+            "max_nodes": 0,
+            "max_edges": 0,
+            "max_depth": 0
+        }
+    })
 }
 
 #[derive(Serialize)]
@@ -67,6 +107,8 @@ struct MetadataDebugReport<'a> {
     calls: CallDebugReport,
     abstract_domains: AbstractDomainDebugReport,
     summaries: SummaryDebugReport,
+    data_flow: serde_json::Value,
+    evidence: serde_json::Value,
     entrypoints: serde_json::Value,
     refined_calls: serde_json::Value,
     extensions: ExtensionDebugReport,
@@ -320,6 +362,7 @@ struct SummaryDebugRow {
     precision: String,
     provenance: String,
     payload_digest: String,
+    tito_flows: Vec<crate::analysis::summaries::facts::SummaryFlowEdge>,
     stable_key: String,
 }
 
@@ -1199,6 +1242,7 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
             precision: fact.precision.as_str().to_string(),
             provenance: fact.provenance.as_str().to_string(),
             payload_digest: fact.payload_digest.clone(),
+            tito_flows: fact.tito_flows.clone(),
             stable_key: fact.stable_key.clone(),
         })
         .collect();
@@ -3317,6 +3361,7 @@ mod abstract_domains_debug_json {
                     precision: SummaryPrecision::Local,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                     stable_key: "summary:control:app".to_string(),
                 },
                 SummaryFact {
@@ -3328,6 +3373,7 @@ mod abstract_domains_debug_json {
                     precision: SummaryPrecision::UnknownTop,
                     provenance: SummaryProvenance::NativeLocal,
                     payload_digest: "digest:memory".to_string(),
+            tito_flows: Vec::new(),
                     stable_key: "summary:memory:app".to_string(),
                 },
             ],
@@ -3415,6 +3461,7 @@ mod abstract_domains_debug_json {
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                 stable_key: "summary:control:app".to_string(),
             }],
             events: vec![SummaryEventFact {
@@ -3486,6 +3533,7 @@ mod abstract_domains_debug_json {
                 precision: SummaryPrecision::Local,
                 provenance: SummaryProvenance::NativeLocal,
                 payload_digest: "digest:control".to_string(),
+            tito_flows: Vec::new(),
                 stable_key: "summary:control:app".to_string(),
             }],
             events: Vec::new(),

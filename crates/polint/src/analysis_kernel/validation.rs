@@ -7,6 +7,7 @@ use crate::analysis::access_paths::facts::AccessPathProjection;
 use crate::analysis::aliases::facts::{AliasOperand, AliasPrecision, AliasStatus};
 use crate::analysis::calls::validate::validate_calls;
 use crate::analysis::cfg::validate::validate_cfg;
+use crate::analysis::data_flow::validate::validate_output as validate_data_flow_output;
 use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::entrypoints::validate::validate_entrypoints;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, ValueFactId};
@@ -22,8 +23,8 @@ use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
 use crate::core::{
-    AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ResolvedImportId,
-    Span, SymbolId,
+    AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ReferenceId,
+    ResolvedImportId, Span, SymbolId,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::module_graph::topology::{
@@ -60,11 +61,27 @@ pub(crate) fn validate_fact_metadata(
     validate_entrypoints(db, &mut diagnostics);
     validate_type_value_alias(db, &mut diagnostics);
     validate_refined_calls(db, &mut diagnostics);
+    validate_data_flow(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
     diagnostics
+}
+
+fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let output = crate::analysis::data_flow::store::DataFlowOutput {
+        nodes: db.data_flow_nodes().to_vec(),
+        edges: db.data_flow_edges().to_vec(),
+        models: db.data_flow_models().to_vec(),
+        budgets: db.data_flow_budgets().to_vec(),
+    };
+    for issue in validate_data_flow_output(&output) {
+        diagnostics.push(internal_diagnostic(format!(
+            "Data-flow validation issue for `{}`: {}",
+            issue.stable_key, issue.reason
+        )));
+    }
 }
 
 fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
@@ -3174,6 +3191,11 @@ pub(crate) struct IdSets {
     functions: BTreeSet<FunctionId>,
     branches: BTreeSet<BranchId>,
     imports: BTreeSet<ImportId>,
+    bodies: BTreeSet<MirBodyId>,
+    operations: BTreeSet<MirOpId>,
+    places: BTreeSet<PlaceId>,
+    cfg_nodes: BTreeSet<crate::analysis::cfg::ids::CfgNodeId>,
+    call_sites: BTreeSet<crate::analysis::ids::CallSiteId>,
     resolved_imports: BTreeSet<ResolvedImportId>,
     module_nodes: BTreeSet<ModuleNodeId>,
     workspace_roots: BTreeSet<WorkspaceRootId>,
@@ -3181,6 +3203,7 @@ pub(crate) struct IdSets {
     source_sets: BTreeSet<SourceSetId>,
     dependency_requirements: BTreeSet<DependencyRequirementId>,
     symbols: BTreeSet<SymbolId>,
+    references: BTreeSet<ReferenceId>,
     scopes: BTreeSet<ScopeId>,
     exports: BTreeSet<ExportId>,
     semantic_import_stable_keys: BTreeSet<String>,
@@ -3196,6 +3219,11 @@ impl IdSets {
             functions: db.functions().iter().map(|fact| fact.id).collect(),
             branches: db.branches().iter().map(|fact| fact.id).collect(),
             imports: db.imports().iter().map(|fact| fact.id).collect(),
+            bodies: db.mir_bodies().iter().map(|fact| fact.id).collect(),
+            operations: db.mir_operations().iter().map(|fact| fact.id).collect(),
+            places: db.mir_places().iter().map(|fact| fact.id).collect(),
+            cfg_nodes: db.cfg_nodes().iter().map(|fact| fact.id).collect(),
+            call_sites: db.call_sites().iter().map(|fact| fact.id).collect(),
             resolved_imports: db.resolved_imports().iter().map(|fact| fact.id).collect(),
             module_nodes: db.module_nodes().iter().map(|fact| fact.id).collect(),
             workspace_roots: db.workspace_roots().iter().map(|fact| fact.id).collect(),
@@ -3207,6 +3235,7 @@ impl IdSets {
                 .map(|fact| fact.id)
                 .collect(),
             symbols: db.symbols().iter().map(|fact| fact.id).collect(),
+            references: db.references().iter().map(|fact| fact.id).collect(),
             scopes: db.scopes().iter().map(|fact| fact.id).collect(),
             exports: db.exports().iter().map(|fact| fact.id).collect(),
             semantic_import_stable_keys: db
@@ -3362,6 +3391,80 @@ fn validate_references(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diag
             run_id as u64,
             "CoverageFact.branch",
             fact.branch,
+        );
+    }
+    for fact in db.evidence_nodes() {
+        check_optional_ref(
+            diagnostics,
+            &ids.files,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.file",
+            fact.file,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.functions,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.function",
+            fact.function,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.bodies,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.body",
+            fact.body,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.operations,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.operation",
+            fact.operation,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.cfg_nodes,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.cfg_node",
+            fact.cfg_node,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.places,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.place",
+            fact.place,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.symbols,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.symbol",
+            fact.symbol,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.references,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.reference",
+            fact.reference,
+        );
+        check_optional_ref(
+            diagnostics,
+            &ids.call_sites,
+            FactFamily::EvidenceNode,
+            fact.id.0,
+            "EvidenceNodeFact.call_site",
+            fact.call_site,
         );
     }
     for (run_id, fact) in db.ts_components().iter().enumerate() {
@@ -3820,6 +3923,22 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
                 span: &fact.span,
             },
         );
+    }
+    for fact in db.evidence_nodes() {
+        if let Some(span) = &fact.span {
+            check_span(
+                db,
+                file_ids,
+                diagnostics,
+                SpanCheck {
+                    family: FactFamily::EvidenceNode,
+                    run_id: fact.id.0,
+                    field: "EvidenceNodeFact.span",
+                    owner_file: fact.file,
+                    span,
+                },
+            );
+        }
     }
     for symbol in db.symbols() {
         if let Some(span) = &symbol.primary_span {
@@ -5207,6 +5326,12 @@ fn evidence_order_key(diagnostic: &Diagnostic) -> String {
 #[cfg(test)]
 mod tests {
     use super::validate_fact_metadata;
+    use crate::analysis::evidence::facts::{
+        EvidenceConfidence, EvidenceNodeFact, EvidenceNodeKind, EvidencePrecision,
+        EvidenceProvenance, EvidenceStatus, EvidenceValidation,
+    };
+    use crate::analysis::evidence::store::EvidenceOutput;
+    use crate::analysis::ids::EvidenceNodeId;
     use crate::analysis_kernel::{
         AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
         ValidationStatus,
@@ -5420,6 +5545,63 @@ mod tests {
     }
 
     #[test]
+    fn metadata_validation_reports_evidence_external_reference_failures() {
+        let mut db = AnalysisDb::new();
+        db.replace_evidence_facts(EvidenceOutput {
+            nodes: vec![evidence_node(0, FileId(404))],
+            ..EvidenceOutput::empty()
+        })
+        .expect("evidence store accepts external refs for kernel validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let evidence_values = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("Fact metadata reference validation failed")
+            })
+            .flat_map(|diagnostic| {
+                diagnostic
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.label == "field")
+                    .map(|evidence| evidence.value.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert!(evidence_values.contains("EvidenceNodeFact.file"));
+    }
+
+    #[test]
+    fn metadata_validation_reports_evidence_span_failures() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "abc".to_string(),
+        );
+        let mut node = evidence_node(0, file);
+        node.span = Some(span(file, 1, 4));
+        db.replace_evidence_facts(EvidenceOutput {
+            nodes: vec![node],
+            ..EvidenceOutput::empty()
+        })
+        .expect("evidence store accepts spans for kernel validation");
+
+        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .starts_with("Fact metadata span validation failed")
+                && diagnostic.evidence.iter().any(|evidence| {
+                    evidence.label == "field" && evidence.value == "EvidenceNodeFact.span"
+                })
+        }));
+    }
+
+    #[test]
     fn metadata_validation_precision_ceiling_violations_name_provider_family_and_precision() {
         let mut db = AnalysisDb::new();
         db.fact_meta_mut_for_test().insert(
@@ -5549,6 +5731,32 @@ mod tests {
             start_col: start_byte + 1,
             end_line: 1,
             end_col: end_byte + 1,
+        }
+    }
+
+    fn evidence_node(id: u64, file: FileId) -> EvidenceNodeFact {
+        EvidenceNodeFact {
+            id: EvidenceNodeId(id),
+            kind: EvidenceNodeKind::Synthetic,
+            language: Language::TypeScript,
+            file: Some(file),
+            function: None,
+            body: None,
+            operation: None,
+            cfg_node: None,
+            place: None,
+            symbol: None,
+            reference: None,
+            call_site: None,
+            span: None,
+            status: EvidenceStatus::Present,
+            precision: EvidencePrecision::Syntax,
+            provenance: EvidenceProvenance::Native,
+            validation: EvidenceValidation::Native,
+            confidence: EvidenceConfidence::High,
+            compact_label: None,
+            source_fact_stable_keys: Vec::new(),
+            stable_key: format!("evidence:node:{id}"),
         }
     }
 

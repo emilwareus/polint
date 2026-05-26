@@ -111,6 +111,24 @@ pub(crate) struct DataFlowBudgetId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct DataFlowPathId(pub(crate) u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidenceNodeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidenceEdgeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidenceBundleId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidencePathId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidenceSliceId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct EvidenceOmittedRegionId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +192,12 @@ mod tests {
         assert_small_id_contract::<DataFlowModelId>();
         assert_small_id_contract::<DataFlowBudgetId>();
         assert_small_id_contract::<DataFlowPathId>();
+        assert_small_id_contract::<EvidenceNodeId>();
+        assert_small_id_contract::<EvidenceEdgeId>();
+        assert_small_id_contract::<EvidenceBundleId>();
+        assert_small_id_contract::<EvidencePathId>();
+        assert_small_id_contract::<EvidenceSliceId>();
+        assert_small_id_contract::<EvidenceOmittedRegionId>();
     }
 
     #[test]

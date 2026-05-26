@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{self, IsTerminal};
@@ -11,6 +11,62 @@ pub const POLINT_REPORT_JSON_SCHEMA_V1_URL: &str =
 pub(crate) const POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL: &str = "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-ai-friendly-v1.json";
 
 pub(crate) const AI_FRIENDLY_EXAMPLE_LIMIT: usize = 10;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_PATHS: usize = 64;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_EDGES_PER_PATH: usize = 512;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_UNKNOWNS: usize = 512;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS: usize = 512;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_NODES_PER_PATH: usize = 4096;
+pub(crate) const STRUCTURED_EVIDENCE_MAX_STRING_CHARS: usize = 4096;
+const EVIDENCE_STATUSES: &[&str] = &[
+    "Present",
+    "Partial",
+    "Unknown",
+    "Unsupported",
+    "SetupMissing",
+    "BudgetExceeded",
+    "Rejected",
+];
+const EVIDENCE_PRECISIONS: &[&str] = &[
+    "Exact",
+    "SetupAware",
+    "Syntax",
+    "Conservative",
+    "Heuristic",
+    "Unknown",
+];
+const EVIDENCE_PROVENANCES: &[&str] = &[
+    "Native",
+    "Summary",
+    "Extension",
+    "Model",
+    "Query",
+    "Synthetic",
+];
+const EVIDENCE_VALIDATIONS: &[&str] = &[
+    "Native",
+    "ReferentiallyValidated",
+    "ExtensionValidated",
+    "BudgetValidated",
+    "RendererValidated",
+    "Rejected",
+];
+const EVIDENCE_CONFIDENCES: &[&str] = &["High", "Medium", "Low"];
+const EVIDENCE_EDGE_KINDS: &[&str] = &[
+    "DataValue",
+    "DataTaint",
+    "DataAddress",
+    "Control",
+    "Call",
+    "Return",
+    "ParameterIn",
+    "ParameterOut",
+    "Summary",
+    "Model",
+    "Alias",
+    "Unknown",
+    "ExplanationOnly",
+];
+const EVIDENCE_EXPANSION_STATES: &[&str] = &["none", "expandable", "opaque", "external_model"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +138,628 @@ pub struct Evidence {
     pub value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StructuredEvidenceV1 {
+    value: serde_json::Value,
+}
+
+impl StructuredEvidenceV1 {
+    pub(crate) fn try_from_value(value: serde_json::Value) -> Result<Self, String> {
+        validate_structured_evidence_v1(&value)?;
+        Ok(Self { value })
+    }
+
+    pub(crate) fn as_value(&self) -> &serde_json::Value {
+        &self.value
+    }
+}
+
+impl Serialize for StructuredEvidenceV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StructuredEvidenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Self::try_from_value(value).map_err(de::Error::custom)
+    }
+}
+
+fn validate_structured_evidence_v1(value: &serde_json::Value) -> Result<(), String> {
+    let object = expect_object(value, "evidence_v1")?;
+    expect_allowed_keys(
+        object,
+        "evidence_v1",
+        &[
+            "version",
+            "bundle",
+            "paths",
+            "unknowns",
+            "omitted_regions",
+            "limits",
+        ],
+    )?;
+    expect_u64_field(object, "version", "evidence_v1").and_then(|version| {
+        if version == 1 {
+            Ok(())
+        } else {
+            Err("evidence_v1.version must be 1".to_string())
+        }
+    })?;
+    validate_evidence_bundle(expect_field(object, "bundle", "evidence_v1")?)?;
+    validate_evidence_paths(expect_field(object, "paths", "evidence_v1")?)?;
+    validate_evidence_unknowns(expect_field(object, "unknowns", "evidence_v1")?)?;
+    validate_evidence_omitted_regions(expect_field(object, "omitted_regions", "evidence_v1")?)?;
+    validate_evidence_limits(expect_field(object, "limits", "evidence_v1")?)?;
+    validate_evidence_count_invariants(object)?;
+    Ok(())
+}
+
+fn validate_evidence_bundle(value: &serde_json::Value) -> Result<(), String> {
+    let object = expect_object(value, "evidence_v1.bundle")?;
+    expect_allowed_keys(
+        object,
+        "evidence_v1.bundle",
+        &[
+            "id",
+            "stable_key",
+            "diagnostic_stable_key",
+            "status",
+            "precision",
+            "provenance",
+            "validation",
+            "confidence",
+            "replay_key",
+        ],
+    )?;
+    expect_u64_field(object, "id", "evidence_v1.bundle")?;
+    expect_bounded_string_field(object, "stable_key", "evidence_v1.bundle")?;
+    expect_bounded_string_field(object, "diagnostic_stable_key", "evidence_v1.bundle")?;
+    expect_enum_field(object, "status", "evidence_v1.bundle", EVIDENCE_STATUSES)?;
+    expect_enum_field(
+        object,
+        "precision",
+        "evidence_v1.bundle",
+        EVIDENCE_PRECISIONS,
+    )?;
+    expect_enum_field(
+        object,
+        "provenance",
+        "evidence_v1.bundle",
+        EVIDENCE_PROVENANCES,
+    )?;
+    expect_enum_field(
+        object,
+        "validation",
+        "evidence_v1.bundle",
+        EVIDENCE_VALIDATIONS,
+    )?;
+    expect_enum_field(
+        object,
+        "confidence",
+        "evidence_v1.bundle",
+        EVIDENCE_CONFIDENCES,
+    )?;
+    expect_optional_bounded_string_field(object, "replay_key", "evidence_v1.bundle")?;
+    Ok(())
+}
+
+fn validate_evidence_paths(value: &serde_json::Value) -> Result<(), String> {
+    let paths = expect_array(value, "evidence_v1.paths")?;
+    expect_len_at_most(
+        paths.len(),
+        STRUCTURED_EVIDENCE_MAX_PATHS,
+        "evidence_v1.paths",
+    )?;
+    for (index, path) in paths.iter().enumerate() {
+        let path_name = format!("evidence_v1.paths[{index}]");
+        let object = expect_object(path, &path_name)?;
+        expect_allowed_keys(
+            object,
+            &path_name,
+            &[
+                "id",
+                "stable_key",
+                "rank",
+                "status",
+                "hidden_node_count",
+                "nodes",
+                "edges",
+                "omitted_regions",
+                "total_edges",
+                "rendered_edges",
+                "edges_truncated",
+            ],
+        )?;
+        expect_u64_field(object, "id", &path_name)?;
+        expect_bounded_string_field(object, "stable_key", &path_name)?;
+        expect_u64_field(object, "rank", &path_name)?;
+        expect_enum_field(object, "status", &path_name, EVIDENCE_STATUSES)?;
+        expect_u64_field(object, "hidden_node_count", &path_name)?;
+        validate_u64_array(
+            expect_field(object, "nodes", &path_name)?,
+            &format!("{path_name}.nodes"),
+            STRUCTURED_EVIDENCE_MAX_NODES_PER_PATH,
+        )?;
+        validate_evidence_edges(expect_field(object, "edges", &path_name)?, &path_name)?;
+        validate_u64_array(
+            expect_field(object, "omitted_regions", &path_name)?,
+            &format!("{path_name}.omitted_regions"),
+            STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS,
+        )?;
+        expect_u64_field(object, "total_edges", &path_name)?;
+        expect_u64_field(object, "rendered_edges", &path_name)?;
+        expect_bool_field(object, "edges_truncated", &path_name)?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_edges(value: &serde_json::Value, path_name: &str) -> Result<(), String> {
+    let edges = expect_array(value, &format!("{path_name}.edges"))?;
+    expect_len_at_most(
+        edges.len(),
+        STRUCTURED_EVIDENCE_MAX_EDGES_PER_PATH,
+        &format!("{path_name}.edges"),
+    )?;
+    for (index, edge) in edges.iter().enumerate() {
+        let edge_name = format!("{path_name}.edges[{index}]");
+        let object = expect_object(edge, &edge_name)?;
+        expect_allowed_keys(
+            object,
+            &edge_name,
+            &[
+                "id",
+                "stable_key",
+                "kind",
+                "status",
+                "precision",
+                "provenance",
+                "validation",
+                "confidence",
+                "summary_stable_key",
+                "expansion",
+                "location",
+            ],
+        )?;
+        expect_u64_field(object, "id", &edge_name)?;
+        expect_bounded_string_field(object, "stable_key", &edge_name)?;
+        expect_enum_field(object, "kind", &edge_name, EVIDENCE_EDGE_KINDS)?;
+        expect_enum_field(object, "status", &edge_name, EVIDENCE_STATUSES)?;
+        expect_enum_field(object, "precision", &edge_name, EVIDENCE_PRECISIONS)?;
+        expect_enum_field(object, "provenance", &edge_name, EVIDENCE_PROVENANCES)?;
+        expect_enum_field(object, "validation", &edge_name, EVIDENCE_VALIDATIONS)?;
+        expect_enum_field(object, "confidence", &edge_name, EVIDENCE_CONFIDENCES)?;
+        expect_optional_bounded_string_field(object, "summary_stable_key", &edge_name)?;
+        validate_evidence_expansion(expect_field(object, "expansion", &edge_name)?, &edge_name)?;
+        if let Some(location) = object.get("location") {
+            validate_evidence_location(location, &format!("{edge_name}.location"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_evidence_expansion(value: &serde_json::Value, edge_name: &str) -> Result<(), String> {
+    let object = expect_object(value, &format!("{edge_name}.expansion"))?;
+    expect_allowed_keys(
+        object,
+        &format!("{edge_name}.expansion"),
+        &["state", "key", "reason", "model"],
+    )?;
+    expect_enum_field(
+        object,
+        "state",
+        &format!("{edge_name}.expansion"),
+        EVIDENCE_EXPANSION_STATES,
+    )?;
+    for key in ["key", "reason", "model"] {
+        expect_optional_bounded_string_field(object, key, &format!("{edge_name}.expansion"))?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_location(value: &serde_json::Value, name: &str) -> Result<(), String> {
+    let object = expect_object(value, name)?;
+    expect_allowed_keys(object, name, &["uri", "range"])?;
+    expect_bounded_string_field(object, "uri", name)?;
+    validate_text_range(
+        expect_field(object, "range", name)?,
+        &format!("{name}.range"),
+    )
+}
+
+fn validate_text_range(value: &serde_json::Value, name: &str) -> Result<(), String> {
+    let object = expect_object(value, name)?;
+    expect_allowed_keys(
+        object,
+        name,
+        &["start_line", "start_col", "end_line", "end_col"],
+    )?;
+    for key in ["start_line", "start_col", "end_line", "end_col"] {
+        expect_u64_field(object, key, name)?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_unknowns(value: &serde_json::Value) -> Result<(), String> {
+    let unknowns = expect_array(value, "evidence_v1.unknowns")?;
+    expect_len_at_most(
+        unknowns.len(),
+        STRUCTURED_EVIDENCE_MAX_UNKNOWNS,
+        "evidence_v1.unknowns",
+    )?;
+    for (index, unknown) in unknowns.iter().enumerate() {
+        let name = format!("evidence_v1.unknowns[{index}]");
+        let object = expect_object(unknown, &name)?;
+        expect_allowed_keys(object, &name, &["stable_key", "reason", "message", "edge"])?;
+        expect_bounded_string_field(object, "stable_key", &name)?;
+        expect_bounded_string_field(object, "reason", &name)?;
+        expect_bounded_string_field(object, "message", &name)?;
+        expect_optional_u64_field(object, "edge", &name)?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_omitted_regions(value: &serde_json::Value) -> Result<(), String> {
+    let regions = expect_array(value, "evidence_v1.omitted_regions")?;
+    expect_len_at_most(
+        regions.len(),
+        STRUCTURED_EVIDENCE_MAX_OMITTED_REGIONS,
+        "evidence_v1.omitted_regions",
+    )?;
+    for (index, region) in regions.iter().enumerate() {
+        let name = format!("evidence_v1.omitted_regions[{index}]");
+        let object = expect_object(region, &name)?;
+        expect_allowed_keys(
+            object,
+            &name,
+            &[
+                "id",
+                "stable_key",
+                "reason",
+                "hidden_node_count",
+                "hidden_edge_count",
+                "budget_label",
+            ],
+        )?;
+        expect_u64_field(object, "id", &name)?;
+        expect_bounded_string_field(object, "stable_key", &name)?;
+        expect_bounded_string_field(object, "reason", &name)?;
+        expect_u64_field(object, "hidden_node_count", &name)?;
+        expect_u64_field(object, "hidden_edge_count", &name)?;
+        expect_optional_bounded_string_field(object, "budget_label", &name)?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_limits(value: &serde_json::Value) -> Result<(), String> {
+    let object = expect_object(value, "evidence_v1.limits")?;
+    expect_allowed_keys(
+        object,
+        "evidence_v1.limits",
+        &[
+            "max_paths",
+            "max_edges_per_path",
+            "max_unknowns",
+            "max_omitted_regions",
+            "total_paths",
+            "rendered_paths",
+            "paths_truncated",
+            "total_unknowns",
+            "rendered_unknowns",
+            "unknowns_truncated",
+            "total_omitted_regions",
+            "rendered_omitted_regions",
+            "omitted_regions_truncated",
+        ],
+    )?;
+    for key in [
+        "max_paths",
+        "max_edges_per_path",
+        "max_unknowns",
+        "max_omitted_regions",
+        "total_paths",
+        "rendered_paths",
+        "total_unknowns",
+        "rendered_unknowns",
+        "total_omitted_regions",
+        "rendered_omitted_regions",
+    ] {
+        expect_u64_field(object, key, "evidence_v1.limits")?;
+    }
+    for key in [
+        "paths_truncated",
+        "unknowns_truncated",
+        "omitted_regions_truncated",
+    ] {
+        expect_bool_field(object, key, "evidence_v1.limits")?;
+    }
+    Ok(())
+}
+
+fn validate_evidence_count_invariants(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let paths = expect_array(
+        expect_field(object, "paths", "evidence_v1")?,
+        "evidence_v1.paths",
+    )?;
+    let unknowns = expect_array(
+        expect_field(object, "unknowns", "evidence_v1")?,
+        "evidence_v1.unknowns",
+    )?;
+    let omitted_regions = expect_array(
+        expect_field(object, "omitted_regions", "evidence_v1")?,
+        "evidence_v1.omitted_regions",
+    )?;
+    let limits = expect_object(
+        expect_field(object, "limits", "evidence_v1")?,
+        "evidence_v1.limits",
+    )?;
+
+    expect_count_consistency(CountConsistency {
+        name: "paths",
+        max: expect_u64_field(limits, "max_paths", "evidence_v1.limits")?,
+        total: expect_u64_field(limits, "total_paths", "evidence_v1.limits")?,
+        rendered: expect_u64_field(limits, "rendered_paths", "evidence_v1.limits")?,
+        actual_rendered: paths.len() as u64,
+        truncated: expect_bool_value_field(limits, "paths_truncated", "evidence_v1.limits")?,
+    })?;
+    expect_count_consistency(CountConsistency {
+        name: "unknowns",
+        max: expect_u64_field(limits, "max_unknowns", "evidence_v1.limits")?,
+        total: expect_u64_field(limits, "total_unknowns", "evidence_v1.limits")?,
+        rendered: expect_u64_field(limits, "rendered_unknowns", "evidence_v1.limits")?,
+        actual_rendered: unknowns.len() as u64,
+        truncated: expect_bool_value_field(limits, "unknowns_truncated", "evidence_v1.limits")?,
+    })?;
+    expect_count_consistency(CountConsistency {
+        name: "omitted_regions",
+        max: expect_u64_field(limits, "max_omitted_regions", "evidence_v1.limits")?,
+        total: expect_u64_field(limits, "total_omitted_regions", "evidence_v1.limits")?,
+        rendered: expect_u64_field(limits, "rendered_omitted_regions", "evidence_v1.limits")?,
+        actual_rendered: omitted_regions.len() as u64,
+        truncated: expect_bool_value_field(
+            limits,
+            "omitted_regions_truncated",
+            "evidence_v1.limits",
+        )?,
+    })?;
+
+    let max_edges = expect_u64_field(limits, "max_edges_per_path", "evidence_v1.limits")?;
+    for (index, path) in paths.iter().enumerate() {
+        let path_name = format!("evidence_v1.paths[{index}]");
+        let path_object = expect_object(path, &path_name)?;
+        let edges = expect_array(
+            expect_field(path_object, "edges", &path_name)?,
+            &format!("{path_name}.edges"),
+        )?;
+        expect_count_consistency(CountConsistency {
+            name: "edges",
+            max: max_edges,
+            total: expect_u64_field(path_object, "total_edges", &path_name)?,
+            rendered: expect_u64_field(path_object, "rendered_edges", &path_name)?,
+            actual_rendered: edges.len() as u64,
+            truncated: expect_bool_value_field(path_object, "edges_truncated", &path_name)?,
+        })
+        .map_err(|error| format!("{path_name}.{error}"))?;
+    }
+    Ok(())
+}
+
+struct CountConsistency {
+    name: &'static str,
+    max: u64,
+    total: u64,
+    rendered: u64,
+    actual_rendered: u64,
+    truncated: bool,
+}
+
+fn expect_count_consistency(counts: CountConsistency) -> Result<(), String> {
+    if counts.rendered != counts.actual_rendered {
+        return Err(format!(
+            "{} rendered count {} does not match rendered array length {}",
+            counts.name, counts.rendered, counts.actual_rendered
+        ));
+    }
+    if counts.rendered > counts.max {
+        return Err(format!(
+            "{} rendered count {} exceeds max {}",
+            counts.name, counts.rendered, counts.max
+        ));
+    }
+    if counts.total < counts.rendered {
+        return Err(format!(
+            "{} total count {} is less than rendered count {}",
+            counts.name, counts.total, counts.rendered
+        ));
+    }
+    let should_be_truncated = counts.total > counts.rendered;
+    if counts.truncated != should_be_truncated {
+        return Err(format!(
+            "{} truncation flag {} does not match total/rendered counts",
+            counts.name, counts.truncated
+        ));
+    }
+    Ok(())
+}
+
+fn validate_u64_array(value: &serde_json::Value, name: &str, max_len: usize) -> Result<(), String> {
+    let values = expect_array(value, name)?;
+    expect_len_at_most(values.len(), max_len, name)?;
+    for item in values {
+        if !item.is_u64() {
+            return Err(format!("{name} entries must be unsigned integers"));
+        }
+    }
+    Ok(())
+}
+
+fn expect_object<'a>(
+    value: &'a serde_json::Value,
+    name: &str,
+) -> Result<&'a serde_json::Map<String, serde_json::Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{name} must be an object"))
+}
+
+fn expect_array<'a>(
+    value: &'a serde_json::Value,
+    name: &str,
+) -> Result<&'a [serde_json::Value], String> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{name} must be an array"))
+}
+
+fn expect_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<&'a serde_json::Value, String> {
+    object
+        .get(key)
+        .ok_or_else(|| format!("{object_name}.{key} is required"))
+}
+
+fn expect_allowed_keys(
+    object: &serde_json::Map<String, serde_json::Value>,
+    object_name: &str,
+    allowed: &[&str],
+) -> Result<(), String> {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!(
+                "{object_name}.{key} is not a supported evidence_v1 field"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn expect_len_at_most(len: usize, max: usize, name: &str) -> Result<(), String> {
+    if len <= max {
+        Ok(())
+    } else {
+        Err(format!("{name} has {len} entries; maximum is {max}"))
+    }
+}
+
+fn expect_u64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<u64, String> {
+    expect_field(object, key, object_name)?
+        .as_u64()
+        .ok_or_else(|| format!("{object_name}.{key} must be an unsigned integer"))
+}
+
+fn expect_optional_u64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<(), String> {
+    match object.get(key) {
+        Some(value) if value.is_null() || value.is_u64() => Ok(()),
+        Some(_) => Err(format!(
+            "{object_name}.{key} must be an unsigned integer or null"
+        )),
+        None => Ok(()),
+    }
+}
+
+fn expect_bool_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<(), String> {
+    if expect_field(object, key, object_name)?.is_boolean() {
+        Ok(())
+    } else {
+        Err(format!("{object_name}.{key} must be a boolean"))
+    }
+}
+
+fn expect_bool_value_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<bool, String> {
+    expect_field(object, key, object_name)?
+        .as_bool()
+        .ok_or_else(|| format!("{object_name}.{key} must be a boolean"))
+}
+
+fn expect_bounded_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<(), String> {
+    let value = expect_field(object, key, object_name)?
+        .as_str()
+        .ok_or_else(|| format!("{object_name}.{key} must be a string"))?;
+    expect_bounded_string(value, &format!("{object_name}.{key}"))
+}
+
+fn expect_enum_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+    allowed: &[&str],
+) -> Result<(), String> {
+    let value = expect_field(object, key, object_name)?
+        .as_str()
+        .ok_or_else(|| format!("{object_name}.{key} must be a string"))?;
+    expect_bounded_string(value, &format!("{object_name}.{key}"))?;
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{object_name}.{key} must be one of: {}",
+            allowed.join(", ")
+        ))
+    }
+}
+
+fn expect_optional_bounded_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<(), String> {
+    match object.get(key) {
+        Some(value) if value.is_null() => Ok(()),
+        Some(value) => {
+            let string = value
+                .as_str()
+                .ok_or_else(|| format!("{object_name}.{key} must be a string or null"))?;
+            expect_bounded_string(string, &format!("{object_name}.{key}"))
+        }
+        None => Ok(()),
+    }
+}
+
+fn expect_bounded_string(value: &str, name: &str) -> Result<(), String> {
+    let char_count = value.chars().count();
+    if char_count <= STRUCTURED_EVIDENCE_MAX_STRING_CHARS {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name} has {char_count} characters; maximum is {STRUCTURED_EVIDENCE_MAX_STRING_CHARS}",
+        ))
+    }
+}
+
 /// Construct diagnostics with `Diagnostic::new`, `Diagnostic::error`,
 /// `Diagnostic::warning`, `Diagnostic::info`, and the fluent helpers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -95,9 +773,18 @@ pub struct Diagnostic {
     pub labels: Vec<Label>,
     pub help: Option<String>,
     pub evidence: Vec<Evidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) evidence_v1: Option<StructuredEvidenceV1>,
+    #[serde(skip)]
+    pub(crate) evidence_bundle: Option<EvidenceBundleRef>,
     pub suggestions: Vec<Suggestion>,
     pub fix: Option<Fix>,
     pub stable_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EvidenceBundleRef {
+    pub(crate) id: crate::analysis::ids::EvidenceBundleId,
 }
 
 #[derive(Deserialize)]
@@ -113,6 +800,8 @@ struct DiagnosticWire {
     help: Option<String>,
     #[serde(default)]
     evidence: Vec<Evidence>,
+    #[serde(default)]
+    evidence_v1: Option<StructuredEvidenceV1>,
     #[serde(default)]
     suggestions: Vec<Suggestion>,
     #[serde(default)]
@@ -142,6 +831,8 @@ impl<'de> Deserialize<'de> for Diagnostic {
             labels: wire.labels,
             help: wire.help,
             evidence: wire.evidence,
+            evidence_v1: wire.evidence_v1,
+            evidence_bundle: None,
             suggestions: wire.suggestions,
             fix: wire.fix,
             stable_fingerprint,
@@ -170,6 +861,8 @@ impl Diagnostic {
             labels: Vec::new(),
             help: None,
             evidence: Vec::new(),
+            evidence_v1: None,
+            evidence_bundle: None,
             suggestions: Vec::new(),
             fix: None,
             stable_fingerprint,
@@ -222,6 +915,35 @@ impl Diagnostic {
             value: value.into(),
         });
         self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Internal bundle refs are attached by Phase 39 render plumbing; tests verify fingerprint compatibility before rule-facing APIs exist."
+    )]
+    pub(crate) fn with_evidence_bundle_ref(
+        mut self,
+        id: crate::analysis::ids::EvidenceBundleId,
+    ) -> Self {
+        self.evidence_bundle = Some(EvidenceBundleRef { id });
+        self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Structured evidence attachment is wired for Phase 39 renderers and exercised through diagnostics tests before production call sites attach bundles."
+    )]
+    pub(crate) fn with_structured_evidence_v1(mut self, value: StructuredEvidenceV1) -> Self {
+        self.evidence_v1 = Some(value);
+        self
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Internal bundle refs are read by Phase 39 render plumbing; tests verify the side-table bridge without making it public SDK."
+    )]
+    pub(crate) fn evidence_bundle_ref(&self) -> Option<EvidenceBundleRef> {
+        self.evidence_bundle
     }
 
     pub fn with_suggestion(mut self, message: impl Into<String>) -> Self {
@@ -405,6 +1127,18 @@ struct PolintToolWire<'a> {
 pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_json::Error> {
     let report: PolintReport = serde_json::from_str(s)?;
     Ok(report.diagnostics)
+}
+
+/// Parse public diagnostics from an external rule-host JSON process.
+pub(crate) fn diagnostics_from_public_json_report(
+    s: &str,
+) -> Result<Vec<Diagnostic>, serde_json::Error> {
+    let mut diagnostics = diagnostics_from_json_report(s)?;
+    for diagnostic in &mut diagnostics {
+        diagnostic.evidence_v1 = None;
+        diagnostic.evidence_bundle = None;
+    }
+    Ok(diagnostics)
 }
 
 pub(crate) fn build_ai_friendly_report(
@@ -1284,6 +2018,8 @@ pub(crate) fn render_sarif(
         locations: Vec<SarifLocation>,
         #[serde(rename = "relatedLocations", skip_serializing_if = "Vec::is_empty")]
         related_locations: Vec<SarifRelatedLocation>,
+        #[serde(rename = "codeFlows", skip_serializing_if = "Vec::is_empty")]
+        code_flows: Vec<SarifCodeFlow>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fixes: Option<Vec<SarifFix>>,
     }
@@ -1307,6 +2043,29 @@ pub(crate) fn render_sarif(
 
     #[derive(Serialize)]
     struct SarifRelatedLocation {
+        #[serde(rename = "physicalLocation")]
+        physical_location: SarifPhysicalLocation,
+        message: SarifMessage,
+    }
+
+    #[derive(Serialize)]
+    struct SarifCodeFlow {
+        #[serde(rename = "threadFlows")]
+        thread_flows: Vec<SarifThreadFlow>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifThreadFlow {
+        locations: Vec<SarifThreadFlowLocation>,
+    }
+
+    #[derive(Serialize)]
+    struct SarifThreadFlowLocation {
+        location: SarifLocationWithMessage,
+    }
+
+    #[derive(Serialize)]
+    struct SarifLocationWithMessage {
         #[serde(rename = "physicalLocation")]
         physical_location: SarifPhysicalLocation,
         message: SarifMessage,
@@ -1438,6 +2197,32 @@ pub(crate) fn render_sarif(
                     }]
                 })
             });
+            let code_flows = diagnostic
+                .evidence_v1
+                .as_ref()
+                .map_or_else(Vec::new, |value| {
+                    let locations = crate::analysis::evidence::render::sarif_thread_flow_steps(
+                        value.as_value(),
+                    )
+                    .into_iter()
+                    .filter_map(|step| {
+                        let location = step.location?;
+                        Some(SarifThreadFlowLocation {
+                            location: SarifLocationWithMessage {
+                                physical_location: physical(&location.uri, location.range),
+                                message: SarifMessage { text: step.message },
+                            },
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                    if locations.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![SarifCodeFlow {
+                            thread_flows: vec![SarifThreadFlow { locations }],
+                        }]
+                    }
+                });
 
             SarifResult {
                 rule_id: diagnostic.rule_id.clone(),
@@ -1456,6 +2241,7 @@ pub(crate) fn render_sarif(
                     physical_location: physical(uri, diagnostic.range),
                 }],
                 related_locations,
+                code_flows,
                 fixes,
             }
         })
@@ -1531,6 +2317,45 @@ mod tests {
         }
     }
 
+    fn structured(value: serde_json::Value) -> StructuredEvidenceV1 {
+        StructuredEvidenceV1::try_from_value(value).expect("valid structured evidence")
+    }
+
+    fn minimal_structured_evidence_value() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "bundle": {
+                "id": 0,
+                "stable_key": "bundle:test",
+                "diagnostic_stable_key": "diag:test",
+                "status": "Partial",
+                "precision": "SetupAware",
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": "Medium",
+                "replay_key": null
+            },
+            "paths": [],
+            "unknowns": [],
+            "omitted_regions": [],
+            "limits": {
+                "max_paths": 5,
+                "max_edges_per_path": 96,
+                "max_unknowns": 32,
+                "max_omitted_regions": 32,
+                "total_paths": 0,
+                "rendered_paths": 0,
+                "paths_truncated": false,
+                "total_unknowns": 0,
+                "rendered_unknowns": 0,
+                "unknowns_truncated": false,
+                "total_omitted_regions": 0,
+                "rendered_omitted_regions": 0,
+                "omitted_regions_truncated": false
+            }
+        })
+    }
+
     #[test]
     fn sorting_is_deterministic() {
         let mut diagnostics = vec![
@@ -1542,6 +2367,170 @@ mod tests {
 
         assert_eq!(diagnostics[0].file, "a.go");
         assert_eq!(diagnostics[1].file, "b.go");
+    }
+
+    #[test]
+    fn diagnostic_can_carry_internal_bundle_without_fingerprint_change() {
+        let base = Diagnostic::warning("rule", "src/lib.rs", TextRange::point(1, 1), "message");
+        let fingerprint = base.stable_fingerprint.clone();
+
+        let diagnostic = base.with_evidence_bundle_ref(crate::analysis::ids::EvidenceBundleId(42));
+
+        assert_eq!(diagnostic.stable_fingerprint, fingerprint);
+        assert_eq!(
+            diagnostic.evidence_bundle_ref().expect("bundle").id,
+            crate::analysis::ids::EvidenceBundleId(42)
+        );
+    }
+
+    #[test]
+    fn structured_evidence_serializes_without_breaking_scalar_evidence() {
+        let diagnostic =
+            Diagnostic::warning("rule", "src/lib.rs", TextRange::point(1, 1), "message")
+                .with_evidence("symbol", "unsafe_api")
+                .with_structured_evidence_v1(structured(serde_json::json!({
+                    "version": 1,
+                    "bundle": {
+                        "id": 0,
+                        "stable_key": "bundle:test",
+                        "diagnostic_stable_key": "diag:test",
+                        "status": "Partial",
+                        "precision": "SetupAware",
+                        "provenance": "Query",
+                        "validation": "RendererValidated",
+                        "confidence": "Medium",
+                        "replay_key": null
+                    },
+                    "paths": [],
+                    "unknowns": [],
+                    "omitted_regions": [],
+                    "limits": {
+                        "max_paths": 5,
+                        "max_edges_per_path": 96,
+                        "max_unknowns": 32,
+                        "max_omitted_regions": 32,
+                        "total_paths": 0,
+                        "rendered_paths": 0,
+                        "paths_truncated": false,
+                        "total_unknowns": 0,
+                        "rendered_unknowns": 0,
+                        "unknowns_truncated": false,
+                        "total_omitted_regions": 0,
+                        "rendered_omitted_regions": 0,
+                        "omitted_regions_truncated": false
+                    }
+                })));
+
+        let value = serde_json::to_value(&diagnostic).expect("diagnostic serializes");
+
+        assert_eq!(value["evidence"][0]["label"], "symbol");
+        assert_eq!(value["evidence_v1"]["version"], 1);
+        assert_eq!(
+            diagnostic.stable_fingerprint,
+            diagnostic_fingerprint("rule", "src/lib.rs", TextRange::point(1, 1), "message")
+        );
+    }
+
+    #[test]
+    fn diagnostic_rejects_arbitrary_structured_evidence_json() {
+        let value = serde_json::json!({
+            "rule_id": "rule",
+            "severity": "warn",
+            "file": "src/lib.rs",
+            "range": {
+                "start_line": 1,
+                "start_col": 1,
+                "end_line": 1,
+                "end_col": 1
+            },
+            "message": "message",
+            "evidence_v1": {
+                "version": 1,
+                "unbounded": [{"anything": ["goes"]}]
+            }
+        });
+
+        let result = serde_json::from_value::<Diagnostic>(value);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn diagnostic_rejects_untyped_structured_evidence_taxonomy_values() {
+        let value = serde_json::json!({
+            "version": 1,
+            "bundle": {
+                "id": 0,
+                "stable_key": "bundle:test",
+                "diagnostic_stable_key": "diag:test",
+                "status": "Pretend",
+                "precision": "SetupAware",
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": "Medium",
+                "replay_key": null
+            },
+            "paths": [],
+            "unknowns": [],
+            "omitted_regions": [],
+            "limits": {
+                "max_paths": 5,
+                "max_edges_per_path": 96,
+                "max_unknowns": 32,
+                "max_omitted_regions": 32,
+                "total_paths": 0,
+                "rendered_paths": 0,
+                "paths_truncated": false,
+                "total_unknowns": 0,
+                "rendered_unknowns": 0,
+                "unknowns_truncated": false,
+                "total_omitted_regions": 0,
+                "rendered_omitted_regions": 0,
+                "omitted_regions_truncated": false
+            }
+        });
+
+        let err = StructuredEvidenceV1::try_from_value(value).unwrap_err();
+
+        assert!(err.contains("evidence_v1.bundle.status"));
+    }
+
+    #[test]
+    fn public_json_report_strips_structured_evidence_from_local_rule_output() {
+        let diagnostic = Diagnostic::warning(
+            "local/rule",
+            "src/lib.rs",
+            TextRange::point(1, 1),
+            "message",
+        )
+        .with_structured_evidence_v1(structured(minimal_structured_evidence_value()));
+        let json = render(OutputFormat::Json, &[diagnostic], test_opts());
+
+        let diagnostics = diagnostics_from_public_json_report(&json).expect("public diagnostics");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0].evidence_v1.is_none(),
+            "external rule-host JSON must not inject internal structured evidence"
+        );
+    }
+
+    #[test]
+    fn structured_evidence_string_limit_counts_characters_like_schema() {
+        let mut value = minimal_structured_evidence_value();
+        value["bundle"]["stable_key"] = serde_json::Value::String("é".repeat(4096));
+
+        StructuredEvidenceV1::try_from_value(value).expect("4096 unicode chars are schema-valid");
+    }
+
+    #[test]
+    fn structured_evidence_rejects_inconsistent_rendered_counts() {
+        let mut value = minimal_structured_evidence_value();
+        value["limits"]["rendered_paths"] = serde_json::json!(1);
+
+        let err = StructuredEvidenceV1::try_from_value(value).unwrap_err();
+
+        assert!(err.contains("paths rendered count"));
     }
 
     fn contract_diagnostic() -> Diagnostic {
@@ -1882,6 +2871,11 @@ mod tests {
             value["$id"].as_str().unwrap(),
             POLINT_REPORT_JSON_SCHEMA_V1_URL
         );
+        assert!(
+            value["$defs"]["diagnostic"]["properties"]
+                .get("evidence_v1")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1918,6 +2912,267 @@ mod tests {
             "polint"
         );
         assert!(parsed.pointer("/runs/0/tool/driver/rules/0/tags").is_none());
+    }
+
+    #[test]
+    fn render_sarif_projects_structured_evidence_to_code_flows() {
+        let diagnostic = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange::point(7, 3),
+            "policy failed",
+        )
+        .with_structured_evidence_v1(structured(serde_json::json!({
+            "version": 1,
+            "bundle": {
+                "id": 0,
+                "stable_key": "bundle:diag",
+                "diagnostic_stable_key": "diag:1",
+                "status": "Partial",
+                "precision": "SetupAware",
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": "Medium",
+                "replay_key": "replay:bundle"
+            },
+            "paths": [{
+                "id": 0,
+                "stable_key": "path:summary",
+                "rank": 0,
+                "status": "Partial",
+                "hidden_node_count": 0,
+                "nodes": [0, 1],
+                "edges": [{
+                    "id": 0,
+                    "stable_key": "edge:summary",
+                    "kind": "Summary",
+                    "status": "Partial",
+                    "precision": "SetupAware",
+                    "provenance": "Summary",
+                    "validation": "ReferentiallyValidated",
+                    "confidence": "Medium",
+                    "summary_stable_key": "summary:tito",
+                    "expansion": {"state": "opaque", "reason": "summary_status=Unknown"},
+                    "location": {
+                        "uri": "src/evidence.rs",
+                        "range": {
+                            "start_line": 3,
+                            "start_col": 5,
+                            "end_line": 3,
+                            "end_col": 11
+                        }
+                    }
+                }],
+                "omitted_regions": [],
+                "total_edges": 1,
+                "rendered_edges": 1,
+                "edges_truncated": false
+            }],
+            "unknowns": [{
+                "stable_key": "unknown:summary",
+                "reason": "OpaqueSummary",
+                "message": "opaque summary",
+                "edge": 0
+            }],
+            "omitted_regions": [{
+                "id": 0,
+                "stable_key": "omitted:compact",
+                "reason": "CompactRendering",
+                "hidden_node_count": 1,
+                "hidden_edge_count": 0,
+                "budget_label": "test"
+            }],
+            "limits": {
+                "max_paths": 5,
+                "max_edges_per_path": 96,
+                "max_unknowns": 32,
+                "max_omitted_regions": 32,
+                "total_paths": 1,
+                "rendered_paths": 1,
+                "paths_truncated": false,
+                "total_unknowns": 1,
+                "rendered_unknowns": 1,
+                "unknowns_truncated": false,
+                "total_omitted_regions": 1,
+                "rendered_omitted_regions": 1,
+                "omitted_regions_truncated": false
+            }
+        })));
+
+        let rendered = render_sarif(&[diagnostic], None);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let code_flows = &parsed["runs"][0]["results"][0]["codeFlows"];
+
+        assert_eq!(code_flows.as_array().expect("code flows").len(), 1);
+        let text = serde_json::to_string(code_flows).unwrap();
+        assert!(text.contains("Partial"));
+        assert!(text.contains("unknown"));
+        assert!(text.contains("omitted"));
+    }
+
+    #[test]
+    fn render_sarif_omits_code_flows_without_evidence_step_locations() {
+        let diagnostic = Diagnostic::warning(
+            "project/rule",
+            "src/lib.rs",
+            TextRange::point(7, 3),
+            "policy failed",
+        )
+        .with_structured_evidence_v1(structured(serde_json::json!({
+            "version": 1,
+            "bundle": {
+                "id": 0,
+                "stable_key": "bundle:diag",
+                "diagnostic_stable_key": "diag:1",
+                "status": "Partial",
+                "precision": "SetupAware",
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": "Medium",
+                "replay_key": "replay:bundle"
+            },
+            "paths": [{
+                "id": 0,
+                "stable_key": "path:summary",
+                "rank": 0,
+                "status": "Partial",
+                "hidden_node_count": 0,
+                "nodes": [0, 1],
+                "edges": [{
+                    "id": 0,
+                    "stable_key": "edge:summary",
+                    "kind": "Summary",
+                    "status": "Partial",
+                    "precision": "SetupAware",
+                    "provenance": "Summary",
+                    "validation": "ReferentiallyValidated",
+                    "confidence": "Medium",
+                    "summary_stable_key": "summary:tito",
+                    "expansion": {"state": "opaque", "reason": "summary_status=Unknown"}
+                }],
+                "omitted_regions": [],
+                "total_edges": 1,
+                "rendered_edges": 1,
+                "edges_truncated": false
+            }],
+            "unknowns": [],
+            "omitted_regions": [],
+            "limits": {
+                "max_paths": 5,
+                "max_edges_per_path": 96,
+                "max_unknowns": 32,
+                "max_omitted_regions": 32,
+                "total_paths": 1,
+                "rendered_paths": 1,
+                "paths_truncated": false,
+                "total_unknowns": 0,
+                "rendered_unknowns": 0,
+                "unknowns_truncated": false,
+                "total_omitted_regions": 0,
+                "rendered_omitted_regions": 0,
+                "omitted_regions_truncated": false
+            }
+        })));
+
+        let rendered = render_sarif(&[diagnostic], None);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert!(parsed.pointer("/runs/0/results/0/codeFlows").is_none());
+    }
+
+    #[test]
+    fn render_sarif_uses_evidence_step_locations_when_available() {
+        let diagnostic = Diagnostic::warning(
+            "project/rule",
+            "src/diagnostic.rs",
+            TextRange::point(7, 3),
+            "policy failed",
+        )
+        .with_structured_evidence_v1(structured(serde_json::json!({
+            "version": 1,
+            "bundle": {
+                "id": 0,
+                "stable_key": "bundle:diag",
+                "diagnostic_stable_key": "diag:1",
+                "status": "Partial",
+                "precision": "SetupAware",
+                "provenance": "Query",
+                "validation": "RendererValidated",
+                "confidence": "Medium",
+                "replay_key": "replay:bundle"
+            },
+            "paths": [{
+                "id": 0,
+                "stable_key": "path:summary",
+                "rank": 0,
+                "status": "Partial",
+                "hidden_node_count": 0,
+                "nodes": [0, 1],
+                "edges": [{
+                    "id": 0,
+                    "stable_key": "edge:summary",
+                    "kind": "Summary",
+                    "status": "Partial",
+                    "precision": "SetupAware",
+                    "provenance": "Summary",
+                    "validation": "ReferentiallyValidated",
+                    "confidence": "Medium",
+                    "summary_stable_key": "summary:tito",
+                    "expansion": {"state": "opaque", "reason": "summary_status=Unknown"},
+                    "location": {
+                        "uri": "src/evidence.rs",
+                        "range": {
+                            "start_line": 3,
+                            "start_col": 5,
+                            "end_line": 3,
+                            "end_col": 11
+                        }
+                    }
+                }],
+                "omitted_regions": [],
+                "total_edges": 1,
+                "rendered_edges": 1,
+                "edges_truncated": false
+            }],
+            "unknowns": [],
+            "omitted_regions": [],
+            "limits": {
+                "max_paths": 5,
+                "max_edges_per_path": 96,
+                "max_unknowns": 32,
+                "max_omitted_regions": 32,
+                "total_paths": 1,
+                "rendered_paths": 1,
+                "paths_truncated": false,
+                "total_unknowns": 0,
+                "rendered_unknowns": 0,
+                "unknowns_truncated": false,
+                "total_omitted_regions": 0,
+                "rendered_omitted_regions": 0,
+                "omitted_regions_truncated": false
+            }
+        })));
+
+        let rendered = render_sarif(&[diagnostic], None);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(
+            parsed.pointer("/runs/0/results/0/codeFlows/0/threadFlows/0/locations/0/location/physicalLocation/artifactLocation/uri"),
+            Some(&serde_json::json!("src/evidence.rs"))
+        );
+        assert_eq!(
+            parsed.pointer("/runs/0/results/0/codeFlows/0/threadFlows/0/locations/0/location/physicalLocation/region/startLine"),
+            Some(&serde_json::json!(3))
+        );
+        assert_eq!(
+            parsed
+                .pointer(
+                    "/runs/0/results/0/codeFlows/0/threadFlows/0/locations/0/location/message/text"
+                )
+                .and_then(serde_json::Value::as_str)
+                .map(|message| message.contains("confidence=Medium")),
+            Some(true)
+        );
     }
 
     #[test]

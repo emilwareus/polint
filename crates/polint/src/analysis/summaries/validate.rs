@@ -451,6 +451,7 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{stable_key}"),
+            tito_flows: Vec::new(),
             stable_key: stable_key.to_string(),
         }
     }

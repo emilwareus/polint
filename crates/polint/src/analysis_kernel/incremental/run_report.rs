@@ -203,6 +203,7 @@ mod tests {
                 "polint.type_value_alias",
                 "polint.refined_calls",
                 "polint.data_flow",
+                "polint.evidence",
                 "polint.metrics",
             ]
         );

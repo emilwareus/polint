@@ -1547,7 +1547,9 @@ invariant = { name = "kernel.synthetic", value = "true", mode = "exact", produce
 mod eval_native_fixture_runner_tests {
     use std::path::{Path, PathBuf};
 
-    use crate::eval::model::{ExpectedItem, FixtureArea, ObservedItem, ObservedStatus};
+    use crate::eval::model::{
+        ExpectedItem, FixtureArea, ObservedFact, ObservedItem, ObservedStatus,
+    };
     use crate::eval::report::{deterministic_output_hash, to_deterministic_json_pretty};
 
     use super::*;
@@ -1584,6 +1586,150 @@ mod eval_native_fixture_runner_tests {
         repo_root().join("tests/eval-fixtures/extension/rejection-delta")
     }
 
+    fn evidence_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/evidence")
+    }
+
+    #[test]
+    fn eval_native_fixture_runner_evidence_fixture_passes() {
+        let run = run_native_fixture_for_test(&evidence_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("evidence case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.area, FixtureArea::Evidence);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert!(
+            rendered.contains("EvidenceNode")
+                && rendered.contains("EvidenceEdge")
+                && rendered.contains("EvidenceBundle")
+                && rendered.contains("EvidencePath")
+                && rendered.contains("evidence.debug.counts.nodes")
+                && rendered.contains("evidence.debug.counts.paths"),
+            "evidence fixture must be backed by observed kernel evidence/debug rows: {rendered}"
+        );
+        assert!(!rendered.contains("/Users/"), "{rendered}");
+        assert!(!rendered.contains("raw source"), "{rendered}");
+    }
+
+    #[test]
+    fn eval_evidence_extension_fixture_passes() {
+        let observed = synthetic_evidence_observed_rows();
+
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:accepted"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:downgraded"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:rejected"
+                    && fact.payload.as_deref() == Some("1")
+        )));
+        assert!(observed.iter().any(|item| matches!(
+            item,
+            ObservedItem::Fact(fact)
+                if fact.stable_key == "evidence_extension_delta:native_edge_count"
+                    && fact.payload.as_deref() == Some("2")
+        )));
+    }
+
+    #[test]
+    fn eval_evidence_manifest_requires_kernel_observed_evidence_counts() {
+        let fixture = load_native_fixture(&evidence_fixture_dir()).unwrap();
+        assert_eq!(fixture.manifest.area, FixtureArea::Evidence);
+        assert!(
+            !fixture.manifest.synthetic_observed,
+            "evidence fixture must use kernel observation, not synthetic self-matching rows"
+        );
+
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Fact(fact)
+                if fact.family == "EvidenceNode"
+                    && fact.stable_key == "evidence.debug.counts.nodes"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Fact(fact)
+                if fact.family == "EvidenceEdge"
+                    && fact.stable_key == "evidence.debug.counts.edges"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Invariant(invariant)
+                if invariant.name == "evidence.debug.counts.nodes.nonzero"
+        )));
+        assert!(fixture.manifest.expected.iter().any(|item| matches!(
+            item,
+            ExpectedItem::Invariant(invariant)
+                if invariant.name == "evidence.debug.counts.edges.nonzero"
+        )));
+    }
+
+    fn synthetic_evidence_observed_rows() -> Vec<ObservedItem> {
+        let mut rows = vec![
+            ObservedItem::Path(crate::eval::model::ObservedPath {
+                path_id: "evidence.path.local_dependence".to_string(),
+                nodes: vec!["source".to_string(), "sink".to_string()],
+                mode: crate::eval::model::AssertionMode::Partial,
+                partial_truth: true,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("native".to_string()),
+                precision: Some("conservative".to_string()),
+                status: Some(ObservedStatus::Partial),
+            }),
+            ObservedItem::Path(crate::eval::model::ObservedPath {
+                path_id: "evidence.path.source_to_sink".to_string(),
+                nodes: vec![
+                    "source".to_string(),
+                    "summary".to_string(),
+                    "sink".to_string(),
+                ],
+                mode: crate::eval::model::AssertionMode::Partial,
+                partial_truth: true,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("summary".to_string()),
+                precision: Some("setup_aware".to_string()),
+                status: Some(ObservedStatus::Partial),
+            }),
+            ObservedItem::Fact(ObservedFact {
+                family: "evidence_debug".to_string(),
+                stable_key: "evidence.debug.hidden_nodes".to_string(),
+                mode: crate::eval::model::AssertionMode::Exact,
+                producer_id: Some("polint.evidence".to_string()),
+                provenance: Some("renderer".to_string()),
+                precision: Some("debug".to_string()),
+                status: Some(ObservedStatus::Present),
+                payload: Some("hidden_node_count=3;replay_key=replay:bundle".to_string()),
+            }),
+        ];
+        rows.extend(
+            crate::eval::observed::observed_extension_evidence_delta_rows(
+                &crate::analysis::evidence::validate::ExtensionEvidenceDelta {
+                    native_edge_count: 2,
+                    accepted: 1,
+                    downgraded: 1,
+                    candidate_only: 1,
+                    rejected: 1,
+                    representative_reasons: vec![
+                        "ExactClaimRequiresNativeAnchor".to_string(),
+                        "InvalidEndpoint".to_string(),
+                    ],
+                },
+            ),
+        );
+        rows
+    }
+
     fn extension_real_sink_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/extension/real-sink")
     }
@@ -1606,6 +1752,10 @@ mod eval_native_fixture_runner_tests {
 
     fn refined_calls_extension_model_fixture_dir() -> PathBuf {
         repo_root().join("tests/eval-fixtures/refined-calls/extension-model")
+    }
+
+    fn data_flow_core_fixture_dir() -> PathBuf {
+        repo_root().join("tests/eval-fixtures/data-flow/core")
     }
 
     #[test]
@@ -1650,7 +1800,8 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.13", "polint.type_value_alias"),
                 ("provider_order.14", "polint.refined_calls"),
                 ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.metrics"),
+                ("provider_order.16", "polint.evidence"),
+                ("provider_order.17", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
                     "abstract-domain-facts-1:1",
@@ -2113,6 +2264,57 @@ mod eval_native_fixture_runner_tests {
     }
 
     #[test]
+    fn eval_native_fixture_runner_data_flow_fixture_passes() {
+        let run = run_native_fixture_for_test(&data_flow_core_fixture_dir()).unwrap();
+        let case = run.cases.first().expect("data-flow case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(case.area, FixtureArea::DataFlow);
+        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
+        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
+        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
+    }
+
+    #[test]
+    fn eval_data_flow_fixture_uses_kernel_observed_rows() {
+        let fixture = load_native_fixture(&data_flow_core_fixture_dir()).unwrap();
+
+        assert!(
+            !fixture.manifest.synthetic_observed,
+            "data-flow fixture must be observed from the kernel, not synthetic self-matching rows"
+        );
+        assert!(
+            fixture.manifest.observed.is_empty(),
+            "data-flow fixture should not carry manifest observed rows when kernel-observed"
+        );
+    }
+
+    #[test]
+    fn eval_data_flow_manifests_cover_required_taxonomy() {
+        let fixture = load_native_fixture(&data_flow_core_fixture_dir()).unwrap();
+        assert_eq!(fixture.manifest.area, FixtureArea::DataFlow);
+
+        let expected = fixture
+            .manifest
+            .expected
+            .iter()
+            .map(expected_identity)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for marker in [
+            "Fact:DataFlowEdge:data-flow:local",
+            "Fact:DataFlowEdge:data-flow:direct-call",
+            "Fact:DataFlowEdge:data-flow:summary-projected",
+            "Fact:DataFlowEdge:data-flow:unknown",
+        ] {
+            assert!(
+                expected.iter().any(|identity| identity.contains(marker)),
+                "data-flow fixture must cover taxonomy marker {marker}; got {expected:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
         let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
         let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
@@ -2171,6 +2373,8 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Cache,
             FixtureArea::Extension,
             FixtureArea::RefinedCalls,
+            FixtureArea::DataFlow,
+            FixtureArea::Evidence,
         ] {
             assert!(
                 passing_by_area.contains_key(&required_area),

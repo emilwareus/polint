@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::facts::{
-    DataFlowBudgetFact, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowModelFact, DataFlowNodeFact,
-    DataFlowNodeKind, DataFlowProvenance, DataFlowStatus,
+    DataFlowBudgetFact, DataFlowBudgetReason, DataFlowEdgeFact, DataFlowEdgeKind,
+    DataFlowModelFact, DataFlowNodeFact, DataFlowNodeKind, DataFlowProvenance, DataFlowStatus,
 };
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::{
-    CallSiteId, DataFlowBudgetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, PlaceId,
+    CallSiteId, DataFlowBudgetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, MirOpId, PlaceId,
 };
 use crate::core::FunctionId;
 
@@ -134,8 +134,10 @@ pub(crate) struct DataFlowStore {
     by_node_kind: BTreeMap<DataFlowNodeKind, Vec<usize>>,
     by_edge_kind: BTreeMap<DataFlowEdgeKind, Vec<usize>>,
     by_status: BTreeMap<DataFlowStatus, Vec<usize>>,
+    by_budget_reason: BTreeMap<DataFlowBudgetReason, Vec<usize>>,
     by_provenance: BTreeMap<DataFlowProvenance, Vec<usize>>,
     by_place: BTreeMap<PlaceId, Vec<usize>>,
+    by_operation: BTreeMap<MirOpId, Vec<usize>>,
     by_call_site: BTreeMap<CallSiteId, Vec<usize>>,
     by_function: BTreeMap<FunctionId, Vec<usize>>,
     outgoing: BTreeMap<DataFlowNodeId, Vec<usize>>,
@@ -176,6 +178,9 @@ impl DataFlowStore {
             if let Some(place) = node.place {
                 store.by_place.entry(place).or_default().push(index);
             }
+            if let Some(operation) = node.operation {
+                store.by_operation.entry(operation).or_default().push(index);
+            }
             if let Some(call_site) = node.call_site {
                 store.by_call_site.entry(call_site).or_default().push(index);
             }
@@ -193,6 +198,13 @@ impl DataFlowStore {
                 .push(index);
             store.outgoing.entry(edge.from).or_default().push(index);
             store.incoming.entry(edge.to).or_default().push(index);
+        }
+        for (index, budget) in store.output.budgets.iter().enumerate() {
+            store
+                .by_budget_reason
+                .entry(budget.reason)
+                .or_default()
+                .push(index);
         }
         Ok(store)
     }
@@ -219,10 +231,46 @@ impl DataFlowStore {
 
     #[allow(
         dead_code,
+        reason = "Place index is part of the private data-flow query contract for later path slices."
+    )]
+    pub(crate) fn by_place(&self, place: PlaceId) -> Vec<&DataFlowNodeFact> {
+        self.node_refs(self.by_place.get(&place))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Operation index is consumed by validation/debug and later data-flow slices."
+    )]
+    pub(crate) fn by_operation(&self, operation: MirOpId) -> Vec<&DataFlowNodeFact> {
+        self.node_refs(self.by_operation.get(&operation))
+    }
+
+    #[allow(
+        dead_code,
         reason = "Private query indexes are exposed to later data-flow plan slices."
     )]
     pub(crate) fn by_edge_kind(&self, kind: DataFlowEdgeKind) -> Vec<&DataFlowEdgeFact> {
         self.edge_refs(self.by_edge_kind.get(&kind))
+    }
+
+    pub(crate) fn by_status(&self, status: DataFlowStatus) -> Vec<&DataFlowEdgeFact> {
+        self.edge_refs(self.by_status.get(&status))
+    }
+
+    pub(crate) fn budgets_by_reason(
+        &self,
+        reason: DataFlowBudgetReason,
+    ) -> Vec<&DataFlowBudgetFact> {
+        self.budget_refs(self.by_budget_reason.get(&reason))
+    }
+
+    fn node_refs(&self, indexes: Option<&Vec<usize>>) -> Vec<&DataFlowNodeFact> {
+        indexes.map_or_else(Vec::new, |indexes| {
+            indexes
+                .iter()
+                .map(|index| &self.output.nodes[*index])
+                .collect()
+        })
     }
 
     fn edge_refs(&self, indexes: Option<&Vec<usize>>) -> Vec<&DataFlowEdgeFact> {
@@ -230,6 +278,15 @@ impl DataFlowStore {
             indexes
                 .iter()
                 .map(|index| &self.output.edges[*index])
+                .collect()
+        })
+    }
+
+    fn budget_refs(&self, indexes: Option<&Vec<usize>>) -> Vec<&DataFlowBudgetFact> {
+        indexes.map_or_else(Vec::new, |indexes| {
+            indexes
+                .iter()
+                .map(|index| &self.output.budgets[*index])
                 .collect()
         })
     }
@@ -308,6 +365,20 @@ fn validate_references(output: &DataFlowOutput) -> Result<(), AnalysisError> {
                 ),
             });
         }
+        if matches!(
+            edge.status,
+            DataFlowStatus::BudgetExceeded | DataFlowStatus::Unknown | DataFlowStatus::Unsupported
+        ) && edge.kind == DataFlowEdgeKind::BudgetTruncated
+            && edge.budget.is_none()
+        {
+            return Err(AnalysisError::InvalidFact {
+                provider: "polint.data_flow",
+                reason: format!(
+                    "data-flow edge `{}` is budget-linked but has no budget row",
+                    edge.stable_key
+                ),
+            });
+        }
     }
 
     Ok(())
@@ -358,6 +429,10 @@ pub(crate) fn next_data_flow_edge_id(edges: &[DataFlowEdgeFact]) -> DataFlowEdge
 
 pub(crate) fn next_data_flow_model_id(models: &[DataFlowModelFact]) -> DataFlowModelId {
     DataFlowModelId(models.len() as u64)
+}
+
+pub(crate) fn next_data_flow_budget_id(budgets: &[DataFlowBudgetFact]) -> DataFlowBudgetId {
+    DataFlowBudgetId(budgets.len() as u64)
 }
 
 #[cfg(test)]
@@ -452,6 +527,46 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn store_indexes_budget_rows_and_unknown_edges() {
+        let mut budget_edge = edge(0, 0, 1, "edge:budget");
+        budget_edge.kind = DataFlowEdgeKind::BudgetTruncated;
+        budget_edge.status = DataFlowStatus::BudgetExceeded;
+        budget_edge.budget = Some(DataFlowBudgetId(5));
+
+        let store = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(0, "node:a"), node(1, "node:b")],
+            edges: vec![budget_edge],
+            models: Vec::new(),
+            budgets: vec![budget(5, "budget:path-depth")],
+        })
+        .expect("budget-linked store is valid");
+
+        assert_eq!(store.by_status(DataFlowStatus::BudgetExceeded).len(), 1);
+        assert_eq!(
+            store
+                .budgets_by_reason(DataFlowBudgetReason::PathDepth)
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn store_rejects_budget_truncated_edge_without_budget_row() {
+        let mut budget_edge = edge(0, 0, 1, "edge:budget-missing");
+        budget_edge.kind = DataFlowEdgeKind::BudgetTruncated;
+        budget_edge.status = DataFlowStatus::BudgetExceeded;
+
+        let result = DataFlowStore::from_output(DataFlowOutput {
+            nodes: vec![node(0, "node:a"), node(1, "node:b")],
+            edges: vec![budget_edge],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        });
+
+        assert!(result.is_err());
+    }
+
     fn node(id: u64, stable_key: &str) -> DataFlowNodeFact {
         DataFlowNodeFact {
             id: DataFlowNodeId(id),
@@ -510,6 +625,17 @@ mod tests {
             budget: None,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn budget(id: u64, stable_key: &str) -> DataFlowBudgetFact {
+        DataFlowBudgetFact {
+            id: DataFlowBudgetId(id),
+            reason: DataFlowBudgetReason::PathDepth,
+            limit: 1,
+            observed: 2,
+            status: DataFlowStatus::BudgetExceeded,
             stable_key: stable_key.to_string(),
         }
     }

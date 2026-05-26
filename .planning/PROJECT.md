@@ -109,6 +109,8 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [x] **SAE-SEM-03**: polint has a private semantic MIR and normalized place identity for Go and TS/JS function bodies, with deterministic lowering snapshots and explicit unsupported operations. Validated in Phase 28: Private Semantic MIR and Place Identity.
 - [x] **SAE-SEM-05**: polint records direct call-site, direct target, and unresolved-call facts with call indexes and debug snapshots while keeping public whole-program call graph views unsupported. Validated in Phase 30: Direct Call Facts.
 - [x] **SAE-INT-01**: polint has a P0 abstract-domain kernel with lattice/transfer traits, deterministic worklist solving, and first local domains for reachability, nilness/nullishness, truthiness, constants, simple strings, and cheap initializedness. Validated in Phase 31: P0 Abstract-Domain Kernel.
+- [x] **SAE-PREC-03**: polint has local and summary-projected data-flow facts, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search. Validated in Phase 38: Data-Flow Facts and Query-Scoped Path Search.
+- [x] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering. Validated in Phase 39: Slicing, Paths, and Evidence Bundles.
 
 ### Active
 
@@ -122,8 +124,6 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 - [ ] **SAE-INT-05**: polint models framework entrypoints, lifecycle callbacks, dispatch, jobs, CLIs, MCP tools/resources/prompts, tests, generated dispatch, and trust boundaries with Go and TS/JS defaults plus extension overlays.
 - [ ] **SAE-PREC-01**: polint has a P0 type/value/place/alias substrate with declared/inferred/narrowed type facts, value/allocation facts, access-path facts, local narrowing, and explicit alias statuses.
 - [ ] **SAE-PREC-02**: polint has opt-in refined call graph providers over direct calls, entrypoints, summaries, type/value facts, function tokens, receiver types, and bounded points-to constraints with explicit unresolved and budget-exceeded statuses.
-- [ ] **SAE-PREC-03**: polint has local and summary-projected data-flow facts, source/sink/sanitizer/barrier model sinks, budgets, unknown/havoc facts, and query-scoped path search.
-- [ ] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering.
 - [ ] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, and accepted/rejected extension facts.
 - [ ] **SAE-PROM-02**: Validated typed SDK query views and agent ergonomics are promoted only where contracts are proven, including bounded query builders and stable JSON for accepted public commands.
 
@@ -229,4 +229,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-21 after completing Phase 31 P0 Abstract-Domain Kernel*
+*Last updated: 2026-05-25 after completing Phase 39 Slicing, Paths, and Evidence Bundles*

@@ -336,6 +336,12 @@ fn process_recursive_scc(
                 )
             };
 
+            let tito_flows = if !budget_exceeded && fact.domain == SummaryDomainKind::DataFlowTito {
+                fact.tito_flows.clone()
+            } else {
+                Vec::new()
+            };
+
             result_summaries.push(SummaryFact {
                 id: SummaryId(0),
                 callable_stable_key: state.callable_stable_key.clone(),
@@ -345,6 +351,7 @@ fn process_recursive_scc(
                 precision,
                 provenance,
                 payload_digest: new_digest,
+                tito_flows,
                 stable_key: fact.stable_key.clone(),
             });
         }
@@ -591,6 +598,9 @@ fn join_callee_digests_into(
 
     for info in callee_info {
         for (domain, callee_digest) in &info.callee_digests {
+            if *domain == SummaryDomainKind::DataFlowTito {
+                continue;
+            }
             let entry = new_digests.entry(*domain).or_default();
             let mut parts = entry
                 .split(';')
@@ -622,10 +632,11 @@ fn compute_scc_digest(member_keys: &[String], summaries: &[SummaryFact]) -> Stri
         .iter()
         .map(|s| {
             format!(
-                "{}:{}:{}",
+                "{}:{}:{}:{:?}",
                 s.callable_stable_key,
                 s.domain.as_str(),
-                s.payload_digest
+                s.payload_digest,
+                s.tito_flows
             )
         })
         .collect();
@@ -818,6 +829,7 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}:{}", domain.as_str()),
+            tito_flows: Vec::new(),
             stable_key: format!("summary:{}:{callable_key}", domain.as_str()),
         }
     }
@@ -832,6 +844,7 @@ mod tests {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: "exit:Throws;async:Sync;cleanup:false".to_string(),
+            tito_flows: Vec::new(),
             stable_key: format!("summary:control_effects:{callable_key}"),
         }
     }
@@ -1254,6 +1267,36 @@ mod tests {
         let config = SccClosureConfig::default();
         assert_eq!(config.max_iterations, 100);
         assert!(config.enable_backdating);
+    }
+
+    #[test]
+    fn recursive_digest_join_does_not_propagate_unmapped_tito_summaries() {
+        let mut current = BTreeMap::new();
+        current.insert(SummaryDomainKind::DataFlowTito, "caller_tito".to_string());
+        current.insert(SummaryDomainKind::CallEffects, "caller_call".to_string());
+
+        let mut callee_digests = BTreeMap::new();
+        callee_digests.insert(SummaryDomainKind::DataFlowTito, "callee_tito".to_string());
+        callee_digests.insert(SummaryDomainKind::CallEffects, "callee_call".to_string());
+
+        let joined = join_callee_digests_into(
+            &current,
+            &[CalleeInfo {
+                callee_function: FunctionId(2),
+                callee_digests,
+                resolved: true,
+            }],
+        );
+
+        assert_eq!(
+            joined.get(&SummaryDomainKind::DataFlowTito),
+            Some(&"caller_tito".to_string())
+        );
+        assert!(
+            joined
+                .get(&SummaryDomainKind::CallEffects)
+                .is_some_and(|digest| digest.contains("callee_call"))
+        );
     }
 
     // -----------------------------------------------------------------------

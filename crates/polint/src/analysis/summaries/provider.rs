@@ -224,7 +224,7 @@ fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &s
 }
 
 #[allow(clippy::too_many_arguments)]
-fn direct_summaries_output_digest(
+pub(crate) fn direct_summaries_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     semantic_mir_output_digest: &Digest,
@@ -273,7 +273,7 @@ fn direct_summaries_output_digest(
     );
     parts.extend(output.summaries.iter().map(|row| {
         format!(
-            "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={}",
+            "summary={} callable={} domain={:?} status={:?} precision={:?} provenance={:?} payload={} tito_flows={:?}",
             row.stable_key,
             callable_keys
                 .get(&MirBodyId(row.function.0))
@@ -284,6 +284,7 @@ fn direct_summaries_output_digest(
             row.precision,
             row.provenance,
             row.payload_digest,
+            row.tito_flows,
         )
     }));
     parts.extend(output.events.iter().map(|row| {
@@ -319,7 +320,9 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn callable_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {
+pub(crate) fn callable_stable_key_map(
+    db: &AnalysisDb,
+) -> std::collections::BTreeMap<MirBodyId, String> {
     db.mir_bodies()
         .iter()
         .map(|body| (body.id, body.stable_key.clone()))
@@ -455,6 +458,7 @@ mod scc_closure_provider {
             precision: SummaryPrecision::Local,
             provenance: SummaryProvenance::NativeLocal,
             payload_digest: format!("digest:{callable_key}"),
+            tito_flows: Vec::new(),
             stable_key: format!("summary:control_effects:{callable_key}"),
         }
     }

@@ -1,0 +1,31 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "data-flow-core"
+area = "data-flow"
+synthetic_observed = false
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 10000
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:local:param-local-return", mode = "partial", producer_id = "polint.data_flow", precision = "syntax", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:direct-call:unknown-unresolved", mode = "partial", producer_id = "polint.data_flow", precision = "unknown", status = "unknown" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:summary-projected:tito", mode = "partial", producer_id = "polint.data_flow", precision = "syntax", status = "present" }
+
+[[expected]]
+fact = { family = "DataFlowEdge", stable_key = "data-flow:unknown:missing-summary", mode = "partial", producer_id = "polint.data_flow", precision = "unknown", status = "unknown" }
+
+[[expected]]
+invariant = { name = "data_flow.counts.local_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "data_flow.counts.summary_projected_edges.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+runtime_budget = { name = "data_flow.core", max_runtime_ms = 10000, mode = "exact" }

@@ -12,7 +12,7 @@ use crate::config::{LoadedConfig, default_config_toml, load_config};
 use crate::core::{AnalysisDb, Language, Rule, RuleOptions, rule_id_matches, run_rules};
 use crate::diagnostics::{
     AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
-    apply_report_filters, build_ai_friendly_report, diagnostics_from_json_report,
+    apply_report_filters, build_ai_friendly_report, diagnostics_from_public_json_report,
     limit_report_diagnostics, render_ai_friendly_stdout, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files;
@@ -1764,7 +1764,7 @@ fn run_local_rule_host(
             manifest.display()
         )
     })?;
-    diagnostics_from_json_report(&stdout).with_context(|| {
+    diagnostics_from_public_json_report(&stdout).with_context(|| {
         format!(
             "local rule host did not emit polint JSON report: {}",
             manifest.display()
