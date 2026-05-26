@@ -284,7 +284,17 @@ impl AnalysisPlan {
 
     #[cfg(test)]
     pub(crate) fn from_capability_names_for_test(names: &[&str]) -> Self {
-        Self::from_capability_names(names)
+        let rules = vec![PlannedRule {
+            id: "test/requested-capabilities".to_string(),
+            description: "Test rule".to_string(),
+            severity: Severity::Warn,
+            requested_capabilities: names.iter().map(|name| (*name).to_string()).collect(),
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            options_digest: deterministic_rule_options(&RuleOptions::default()),
+        }];
+        let capabilities = plan_capabilities(&rules);
+        Self::finish(rules, capabilities, Vec::new())
     }
 
     fn finish(
