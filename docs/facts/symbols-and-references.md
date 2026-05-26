@@ -79,6 +79,9 @@ Query methods:
 | `get(symbol)` | Returns one `SymbolFact` by stable `SymbolId`. |
 | `for_file(file)` | Iterates symbols owned by one source file. |
 | `by_name(name)` | Iterates symbols with the exact public name. |
+| `by_kind(kind)` | Iterates symbols with a specific `SymbolKind`. |
+| `exported_by_name(name)` | Iterates exported symbols with the exact public name. |
+| `definitions_in_file(file)` | Iterates definitions whose primary location is in one file. |
 | `definition(symbol)` | Returns the primary definition for a symbol, if known. |
 | `definitions(symbol)` | Iterates all definitions for a symbol. |
 | `exported()` | Iterates symbols marked exported by the provider. |
@@ -141,7 +144,11 @@ Query methods:
 | `iter()` | Iterates all reference facts. |
 | `to(symbol)` | Iterates resolved references to one `SymbolId`. |
 | `for_file(file)` | Iterates references in one source file. |
+| `resolved()` | Iterates references with `Resolved` status. |
+| `by_name(name)` | Iterates references with the exact public name. |
+| `to_any(symbols)` | Iterates references resolved to any symbol yielded by a symbol iterator. |
 | `unresolved()` | Iterates references with `Unresolved` status. |
+| `unresolved_by_name(name)` | Iterates unresolved references with the exact public name. |
 | `ambiguous()` | Iterates references with `Ambiguous` status. |
 
 `ReferenceFact` fields:

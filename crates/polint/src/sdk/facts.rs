@@ -9,7 +9,7 @@ use crate::core::{
     FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId,
     JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ReferenceFact,
     ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
-    TestFact, TsClassFact, TsComponentFact,
+    SymbolKind, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
 };
 use crate::symbol_graph::query;
 
@@ -122,6 +122,30 @@ impl<'a> FileMetrics<'a> {
             .iter()
             .filter(move |metric| metric.language == language)
     }
+
+    /// Iterates files whose total line count is greater than `max`.
+    pub fn over_line_count(self, max: u32) -> impl Iterator<Item = &'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .filter(move |metric| metric.line_count > max)
+    }
+
+    /// Iterates files whose byte count is greater than `max`.
+    pub fn over_byte_count(self, max: u32) -> impl Iterator<Item = &'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .filter(move |metric| metric.byte_count > max)
+    }
+
+    /// Iterates files whose derived function count is greater than `max`.
+    pub fn over_function_count(self, max: u32) -> impl Iterator<Item = &'a FileMetricFact> {
+        self.db
+            .file_metrics()
+            .iter()
+            .filter(move |metric| metric.function_count > max)
+    }
 }
 
 /// Function-size metric view. Requesting this view maps to the `function_metrics` capability.
@@ -155,6 +179,22 @@ impl<'a> FunctionMetrics<'a> {
             .function_metrics()
             .iter()
             .find(|metric| metric.function == function)
+    }
+
+    /// Iterates functions whose total line count is greater than `max`.
+    pub fn over_line_count(self, max: u32) -> impl Iterator<Item = &'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .filter(move |metric| metric.line_count > max)
+    }
+
+    /// Iterates functions whose byte count is greater than `max`.
+    pub fn over_byte_count(self, max: u32) -> impl Iterator<Item = &'a FunctionMetricFact> {
+        self.db
+            .function_metrics()
+            .iter()
+            .filter(move |metric| metric.byte_count > max)
     }
 }
 
@@ -197,6 +237,11 @@ impl<'a> ComplexityMetrics<'a> {
             .complexity_metrics()
             .iter()
             .filter(move |metric| metric.cyclomatic_complexity > max)
+    }
+
+    /// Alias for [`ComplexityMetrics::over`] that names the threshold explicitly.
+    pub fn over_complexity(self, max: u32) -> impl Iterator<Item = &'a ComplexityMetricFact> {
+        self.over(max)
     }
 }
 
@@ -259,6 +304,47 @@ impl<'a> ResolvedImports<'a> {
             .filter(move |resolved| resolved.from_file == file)
     }
 
+    /// Returns resolved imports for a source file.
+    pub fn resolved_for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.for_file(file)
+            .filter(|resolved| resolved.status == ResolutionStatus::Resolved)
+    }
+
+    /// Returns resolved import facts whose syntactic import path exactly matches `specifier`.
+    pub fn by_specifier(self, specifier: &str) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db.resolved_imports().iter().filter(move |resolved| {
+            self.db
+                .imports()
+                .iter()
+                .find(|import| import.id == resolved.import)
+                .is_some_and(|import| import.path == specifier)
+        })
+    }
+
+    /// Returns imports that could not be resolved to a target.
+    pub fn unresolved(self) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .filter(|resolved| resolved.status == ResolutionStatus::Unresolved)
+    }
+
+    /// Returns imports whose target is dynamic.
+    pub fn dynamic(self) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .filter(|resolved| resolved.status == ResolutionStatus::Dynamic)
+    }
+
+    /// Returns imports whose language or import form is unsupported.
+    pub fn unsupported(self) -> impl Iterator<Item = &'a ResolvedImportFact> {
+        self.db
+            .resolved_imports()
+            .iter()
+            .filter(|resolved| resolved.status == ResolutionStatus::Unsupported)
+    }
+
     /// Returns setup-missing, dynamic, unsupported, or unresolved imports for a source file.
     pub fn unresolved_for_file(self, file: FileId) -> impl Iterator<Item = &'a ResolvedImportFact> {
         self.for_file(file).filter(|resolved| {
@@ -305,6 +391,41 @@ impl<'a> ModuleGraphFacts<'a> {
             .iter()
             .find(|node| node.file == Some(file))
             .map(|node| node.id)
+    }
+
+    /// Returns graph nodes attached to a package name or label.
+    pub fn nodes_for_package(self, package_name: &str) -> impl Iterator<Item = &'a ModuleNode> {
+        self.db.module_nodes().iter().filter(move |node| {
+            node.label == package_name
+                || node
+                    .package
+                    .and_then(|package| {
+                        self.db
+                            .packages()
+                            .iter()
+                            .find(|candidate| candidate.id == package)
+                    })
+                    .is_some_and(|package| package.name == package_name)
+        })
+    }
+
+    /// Returns outgoing graph edges from the first file node for a source file.
+    pub fn edges_from_file(self, file: FileId) -> impl Iterator<Item = &'a ModuleEdge> {
+        let node = self.node_for_file(file);
+        self.db
+            .module_edges()
+            .iter()
+            .filter(move |edge| node.is_some_and(|node| edge.from == node))
+    }
+
+    /// Returns graph edges from one file node to another, if both files are present in the graph.
+    pub fn imports_between(self, from: FileId, to: FileId) -> impl Iterator<Item = &'a ModuleEdge> {
+        let from_node = self.node_for_file(from);
+        let to_node = self.node_for_file(to);
+        self.db.module_edges().iter().filter(move |edge| {
+            from_node.is_some_and(|from_node| edge.from == from_node)
+                && to_node.is_some_and(|to_node| edge.to == to_node)
+        })
     }
 
     /// Returns outgoing graph edges for a node without cloning facts.
@@ -389,6 +510,30 @@ impl<'a> Symbols<'a> {
         query::symbols_by_name(self.db, name)
     }
 
+    /// Returns symbol facts of a specific public symbol kind.
+    pub fn by_kind(self, kind: SymbolKind) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db
+            .symbols()
+            .iter()
+            .filter(move |symbol| symbol.kind == kind)
+    }
+
+    /// Returns exported symbols with the exact public name.
+    pub fn exported_by_name(self, name: &str) -> impl Iterator<Item = &'a SymbolFact> {
+        self.db
+            .symbols()
+            .iter()
+            .filter(move |symbol| symbol.is_exported && symbol.name == name)
+    }
+
+    /// Returns definitions whose primary location is in a source file.
+    pub fn definitions_in_file(self, file: FileId) -> impl Iterator<Item = &'a DefinitionFact> {
+        self.db
+            .definitions()
+            .iter()
+            .filter(move |definition| definition.file == Some(file))
+    }
+
     /// Returns the primary definition for a symbol, if one is known.
     pub fn definition(self, symbol: SymbolId) -> Option<&'a DefinitionFact> {
         self.db.definition_for_symbol(symbol)
@@ -440,6 +585,44 @@ impl<'a> References<'a> {
     /// Returns references explicitly marked ambiguous.
     pub fn ambiguous(self) -> impl Iterator<Item = &'a ReferenceFact> {
         query::ambiguous_references(self.db)
+    }
+
+    /// Returns references explicitly resolved to one target.
+    pub fn resolved(self) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db
+            .references()
+            .iter()
+            .filter(|reference| reference.status == SymbolResolutionStatus::Resolved)
+    }
+
+    /// Returns references with the exact public name.
+    pub fn by_name(self, name: &str) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.db
+            .references()
+            .iter()
+            .filter(move |reference| reference.name == name)
+    }
+
+    /// Returns references resolved to any symbol yielded by `symbols`.
+    pub fn to_any<I>(self, symbols: I) -> impl Iterator<Item = &'a ReferenceFact>
+    where
+        I: IntoIterator<Item = &'a SymbolFact>,
+    {
+        let targets = symbols
+            .into_iter()
+            .map(|symbol| symbol.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        self.db.references().iter().filter(move |reference| {
+            reference
+                .target
+                .is_some_and(|target| targets.contains(&target))
+        })
+    }
+
+    /// Returns unresolved references with the exact public name.
+    pub fn unresolved_by_name(self, name: &str) -> impl Iterator<Item = &'a ReferenceFact> {
+        self.unresolved()
+            .filter(move |reference| reference.name == name)
     }
 }
 
@@ -858,6 +1041,21 @@ mod tests {
             vec![ts_file]
         );
         assert_eq!(
+            files
+                .over_line_count(1)
+                .map(|metric| metric.file)
+                .collect::<Vec<_>>(),
+            vec![go_file]
+        );
+        assert_eq!(
+            files
+                .over_byte_count(27)
+                .map(|metric| metric.file)
+                .collect::<Vec<_>>(),
+            vec![go_file]
+        );
+        assert!(files.over_function_count(1).next().is_none());
+        assert_eq!(
             functions
                 .for_file(go_file)
                 .map(|metric| metric.name.as_str())
@@ -871,6 +1069,20 @@ mod tests {
             Some("Panel")
         );
         assert_eq!(
+            functions
+                .over_line_count(0)
+                .map(|metric| metric.function)
+                .collect::<Vec<_>>(),
+            vec![route_function, panel_function]
+        );
+        assert_eq!(
+            functions
+                .over_byte_count(20)
+                .map(|metric| metric.function)
+                .collect::<Vec<_>>(),
+            vec![panel_function]
+        );
+        assert_eq!(
             complexity
                 .for_file(ts_file)
                 .map(|metric| metric.cyclomatic_complexity)
@@ -880,6 +1092,13 @@ mod tests {
         assert_eq!(
             complexity
                 .over(1)
+                .map(|metric| metric.function)
+                .collect::<Vec<_>>(),
+            vec![panel_function]
+        );
+        assert_eq!(
+            complexity
+                .over_complexity(1)
                 .map(|metric| metric.function)
                 .collect::<Vec<_>>(),
             vec![panel_function]
@@ -972,6 +1191,29 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![local_import, missing_import]
         );
+        assert_eq!(
+            resolved
+                .resolved_for_file(source_file)
+                .map(|fact| fact.import)
+                .collect::<Vec<_>>(),
+            vec![local_import]
+        );
+        assert_eq!(
+            resolved
+                .by_specifier("./missing")
+                .map(|fact| fact.import)
+                .collect::<Vec<_>>(),
+            vec![missing_import]
+        );
+        assert_eq!(
+            resolved
+                .unresolved()
+                .map(|fact| fact.import)
+                .collect::<Vec<_>>(),
+            vec![missing_import]
+        );
+        assert!(resolved.dynamic().next().is_none());
+        assert!(resolved.unsupported().next().is_none());
         assert_eq!(
             resolved
                 .unresolved_for_file(source_file)
@@ -1129,6 +1371,27 @@ mod tests {
         assert_eq!(graph.nodes().len(), 4);
         assert_eq!(graph.edges().len(), 3);
         assert_eq!(graph.node_for_file(app_file), Some(ModuleNodeId(0)));
+        assert_eq!(
+            graph
+                .nodes_for_package("src/button.ts")
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![ModuleNodeId(1)]
+        );
+        assert_eq!(
+            graph
+                .edges_from_file(app_file)
+                .map(|edge| edge.id)
+                .collect::<Vec<_>>(),
+            vec![ModuleEdgeId(0), ModuleEdgeId(1)]
+        );
+        assert_eq!(
+            graph
+                .imports_between(app_file, button_file)
+                .map(|edge| edge.id)
+                .collect::<Vec<_>>(),
+            vec![ModuleEdgeId(0)]
+        );
         assert_eq!(
             graph
                 .outgoing(ModuleNodeId(0))
@@ -1307,6 +1570,27 @@ mod tests {
             vec![theme]
         );
         assert_eq!(
+            symbols
+                .by_kind(SymbolKind::Function)
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![button]
+        );
+        assert_eq!(
+            symbols
+                .exported_by_name("Button")
+                .map(|symbol| symbol.id)
+                .collect::<Vec<_>>(),
+            vec![button]
+        );
+        assert_eq!(
+            symbols
+                .definitions_in_file(app_file)
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>(),
+            vec![DefinitionId(30)]
+        );
+        assert_eq!(
             symbols.definition(button).map(|definition| definition.id),
             Some(DefinitionId(30))
         );
@@ -1342,6 +1626,27 @@ mod tests {
         );
         assert_eq!(
             references
+                .resolved()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40)]
+        );
+        assert_eq!(
+            references
+                .by_name("theme")
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40)]
+        );
+        assert_eq!(
+            references
+                .to_any(symbols.exported_by_name("theme"))
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(40)]
+        );
+        assert_eq!(
+            references
                 .for_file(app_file)
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
@@ -1350,6 +1655,13 @@ mod tests {
         assert_eq!(
             references
                 .unresolved()
+                .map(|reference| reference.id)
+                .collect::<Vec<_>>(),
+            vec![ReferenceId(50)]
+        );
+        assert_eq!(
+            references
+                .unresolved_by_name("missing")
                 .map(|reference| reference.id)
                 .collect::<Vec<_>>(),
             vec![ReferenceId(50)]

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-explain-v1.json",
+  "title": "polint explain report v1",
+  "type": "object",
+  "required": ["version", "schema", "tool", "scope", "rules", "public_capabilities"],
+  "properties": {
+    "version": { "const": 1 },
+    "schema": { "type": "string" },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "polint" },
+        "version": { "type": "string" }
+      }
+    },
+    "scope": { "type": "string" },
+    "rules": { "type": "array" },
+    "public_capabilities": { "type": "array" }
+  }
+}

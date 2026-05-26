@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-unknowns-v1.json",
+  "title": "polint unknowns report v1",
+  "type": "object",
+  "required": ["version", "schema", "tool", "capability", "rows"],
+  "properties": {
+    "version": { "const": 1 },
+    "schema": { "type": "string" },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "polint" },
+        "version": { "type": "string" }
+      }
+    },
+    "capability": { "type": "string" },
+    "rows": { "type": "array" }
+  }
+}

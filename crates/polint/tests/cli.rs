@@ -30,6 +30,28 @@ fn point_generated_rule_pack_at_local_polint(root: &Path) {
     uniquify_rule_pack_manifest(&manifest_path);
 }
 
+fn write_phase41_rule_pack(root: &Path, main_rs: &str, rule_rs: &str) {
+    let rules_dir = root.join(".polint/rules");
+    fs::create_dir_all(rules_dir.join("src")).unwrap();
+    write_file(&rules_dir.join("src/main.rs"), main_rs);
+    write_file(&rules_dir.join("src/rule.rs"), rule_rs);
+    write_file(
+        &rules_dir.join("Cargo.toml"),
+        r#"[package]
+name = "polint-local-rules"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = "0.0.0"
+
+[workspace]
+"#,
+    );
+    point_generated_rule_pack_at_local_polint(root);
+}
+
 fn path_str_ends_with(path: &str, suffix: &str) -> bool {
     path.replace('\\', "/").ends_with(suffix)
 }
@@ -45,13 +67,16 @@ fn top_level_help_only_lists_supported_public_commands() {
         "baseline",
         "cache",
         "inspect",
+        "facts",
+        "unknowns",
+        "explain",
         "test",
         "check",
         "ignores",
     ] {
         assert!(help.contains(command), "help should list {command}: {help}");
     }
-    for command in ["explain", "test-rules", "profile-rules", "graph"] {
+    for command in ["test-rules", "profile-rules", "graph"] {
         assert!(
             !help.contains(command),
             "help should not expose internal command {command}: {help}"
@@ -61,6 +86,604 @@ fn top_level_help_only_lists_supported_public_commands() {
         help.contains("polint check --format ai-friendly --fail-on none"),
         "top-level help should guide AI agents to compact output: {help}"
     );
+}
+
+#[test]
+fn facts_list_json_is_stable_and_public_only() {
+    let run = || {
+        stdout_string(
+            polint_cmd()
+                .args(["facts", "list", "--format", "json"])
+                .assert()
+                .success(),
+        )
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first, second);
+
+    let value: serde_json::Value = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("facts list stdout was not JSON: {error}\n{first}"));
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["tool"]["name"], "polint");
+    let views = value["views"].as_array().expect("views should be an array");
+    assert!(
+        views.iter().any(|view| {
+            view["capability"] == "resolved_imports" && view["stability"] == "stable"
+        })
+    );
+    assert!(
+        views
+            .iter()
+            .any(|view| { view["capability"] == "dataflow" && view["stability"] == "reserved" })
+    );
+
+    for marker in [
+        "polint.data_flow",
+        "polint.evidence",
+        "polint.refined_calls",
+        "analysis_kernel",
+        "output_hash",
+        "/Users/",
+    ] {
+        assert!(
+            !first.contains(marker),
+            "facts list JSON leaked private marker `{marker}`:\n{first}"
+        );
+    }
+}
+
+#[test]
+fn facts_sample_requires_or_applies_bounded_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "facts",
+                "sample",
+                "--cap",
+                "file_metrics",
+                "--limit",
+                "1",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["capability"], "file_metrics");
+    assert_eq!(value["limit"], 1);
+    assert_eq!(value["sampled"], 1);
+    assert_eq!(value["rows"][0]["file"], "src/app.ts");
+}
+
+#[test]
+fn unknowns_json_reports_public_setup_and_resolution_gaps() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "import missing from './missing';\nexport const answer = missing;\n",
+    );
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["unknowns", "--cap", "resolved_imports", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["capability"], "resolved_imports");
+
+    let unsupported = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["unknowns", "--cap", "dataflow", "--format", "json"])
+            .assert()
+            .code(2),
+    );
+    assert!(
+        unsupported.contains("\"status\": \"unsupported\""),
+        "{unsupported}"
+    );
+    assert!(
+        unsupported.contains("docs/facts/data-flow.md"),
+        "{unsupported}"
+    );
+}
+
+#[test]
+fn explain_json_reports_rule_capability_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-raw-colors"])
+        .assert()
+        .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let first = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "explain",
+                "--rule",
+                "custom/no-raw-colors",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success(),
+    );
+    let second = stdout_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "explain",
+                "--rule",
+                "custom/no-raw-colors",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(first, second);
+    let value: serde_json::Value = serde_json::from_str(&first)
+        .unwrap_or_else(|error| panic!("explain stdout was not JSON: {error}\n{first}"));
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["scope"], "custom/no-raw-colors");
+    assert_eq!(value["rules"][0]["rule_id"], "custom/no-raw-colors");
+    assert!(
+        value["public_capabilities"]
+            .as_array()
+            .is_some_and(|rows| { rows.iter().any(|row| row["capability"] == "references") })
+    );
+}
+
+#[test]
+fn phase41_public_promotion_baseline_no_leak() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let mut surface = String::new();
+    surface.push_str(&output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    ));
+    surface.push_str(&output_string(
+        polint_cmd().args(["--help"]).assert().success(),
+    ));
+    surface.push_str(&source_tree_text(
+        &repo_root().join("crates/polint/src/sdk"),
+    ));
+    surface.push_str(&source_tree_text(
+        &repo_root().join("crates/polint/src/runner"),
+    ));
+    surface
+        .push_str(&fs::read_to_string(repo_root().join("README.md")).expect("README should exist"));
+
+    for marker in [
+        "polint.data_flow",
+        "polint.evidence",
+        "polint.refined_calls",
+        "polint.direct_calls",
+        "polint.summary",
+        "polint.eval",
+        "EvidenceStore",
+        "DemandQueryEngine",
+        "RefinedCall",
+        "TypeValueAlias",
+        "BenchmarkAdapter",
+    ] {
+        assert!(
+            !surface.contains(marker),
+            "stable public surface leaked Phase 41 private marker `{marker}`"
+        );
+    }
+
+    let data_flow = fs::read_to_string(repo_root().join("docs/facts/data-flow.md")).unwrap();
+    let evidence = fs::read_to_string(repo_root().join("docs/facts/evidence.md")).unwrap();
+    assert!(data_flow.contains("reserved for a future SDK fact view"));
+    assert!(evidence.contains("not a public SDK fact view"));
+}
+
+#[test]
+fn generated_skills_describe_phase41_public_surface() {
+    for path in [
+        ".claude/skills/polint/SKILL.md",
+        ".agents/skills/polint/SKILL.md",
+        "crates/polint/src/cli/skill.rs",
+    ] {
+        let source = fs::read_to_string(repo_root().join(path)).unwrap();
+        for required in [
+            "use polint::sdk::prelude::*",
+            "polint inspect rule --format json",
+            "polint test --format json",
+            "polint facts list --format json",
+            "polint unknowns --cap references --format json",
+            "polint explain --rule",
+        ] {
+            assert!(
+                source.contains(required),
+                "{path} should mention `{required}`"
+            );
+        }
+        assert!(
+            !source.contains("use polint::core"),
+            "{path} should not promote direct core imports"
+        );
+        assert!(
+            !source.contains("analysis_kernel::"),
+            "{path} should not promote analysis kernel imports"
+        );
+        assert!(source.contains("DataFlow<'_>"));
+        assert!(source.contains("reserved"));
+    }
+}
+
+#[test]
+fn phase41_public_json_contracts_are_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-raw-colors"])
+        .assert()
+        .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["inspect", "rule", "--format", "json"],
+        vec!["test", "--format", "json"],
+        vec!["facts", "list", "--format", "json"],
+        vec![
+            "facts",
+            "sample",
+            "--cap",
+            "file_metrics",
+            "--limit",
+            "2",
+            "--format",
+            "json",
+        ],
+        vec!["unknowns", "--cap", "references", "--format", "json"],
+        vec![
+            "explain",
+            "--rule",
+            "custom/no-raw-colors",
+            "--format",
+            "json",
+        ],
+    ];
+
+    for command in commands {
+        let first = stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(&command)
+                .assert()
+                .success(),
+        );
+        let second = stdout_string(
+            polint_cmd()
+                .current_dir(temp.path())
+                .args(&command)
+                .assert()
+                .success(),
+        );
+        assert_eq!(first, second, "{command:?} should be deterministic");
+        let value: serde_json::Value = serde_json::from_str(&first)
+            .unwrap_or_else(|error| panic!("{command:?} stdout was not JSON: {error}\n{first}"));
+        assert_eq!(value["version"], 1, "{command:?}");
+        assert_eq!(value["tool"]["name"], "polint", "{command:?}");
+        assert!(value["schema"].as_str().is_some(), "{command:?}");
+
+        for marker in [
+            "polint.data_flow",
+            "polint.evidence",
+            "polint.refined_calls",
+            "analysis_kernel",
+            "output_hash",
+            "/Users/",
+        ] {
+            assert!(
+                !first.contains(marker),
+                "{command:?} JSON leaked private marker `{marker}`:\n{first}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inspect_rule_json_matches_schema_v1() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-raw-colors"])
+        .assert()
+        .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["tool"]["name"], "polint");
+    assert_eq!(
+        value["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-rule-inspect-v1.json"
+    );
+}
+
+#[test]
+fn polint_test_json_matches_schema_v1() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-raw-colors"])
+        .assert()
+        .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["tool"]["name"], "polint");
+    assert_eq!(
+        value["schema"],
+        "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-test-report-v1.json"
+    );
+}
+
+#[test]
+fn new_rule_generates_positive_and_negative_agent_fixtures() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "ts", "no-raw-colors"])
+        .assert()
+        .success();
+
+    assert!(
+        temp.path()
+            .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml")
+            .is_file()
+    );
+    assert!(
+        temp.path()
+            .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml")
+            .is_file()
+    );
+}
+
+#[test]
+fn phase41_metric_query_helpers_external_rule() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/metric-helper", description = "Metric helper", severity = "warn")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, files: FileMetrics<'_>, functions: FunctionMetrics<'_>, complexity: ComplexityMetrics<'_>) -> RuleResult {
+    if let Some(file) = files.over_line_count(0).next() {
+        ctx.warn(&Span::point(file.file, 1, 1), "file metric helper matched");
+    }
+    let _ = functions.over_byte_count(1).count();
+    let _ = complexity.over_complexity(0).count();
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export function answer(): number { return 42; }\n",
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics_for_rule(&json, "local/metric-helper").len(), 1);
+}
+
+#[test]
+fn phase41_relationship_query_helpers_external_rule() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/relationship-helper", description = "Relationship helper", severity = "warn")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, imports: ResolvedImports<'_>, graph: ModuleGraphFacts<'_>) -> RuleResult {
+    for unresolved in imports.unresolved() {
+        let _ = imports.by_specifier("./missing").count();
+        let _ = imports.dynamic().count();
+        let _ = imports.unsupported().count();
+        let _ = graph.edges_from_file(unresolved.from_file).count();
+        ctx.warn(&Span::point(unresolved.from_file, 1, 1), "relationship helper matched unresolved import");
+    }
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "import missing from './missing';\nexport const answer = missing;\n",
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostics_for_rule(&json, "local/relationship-helper").len(),
+        1
+    );
+}
+
+#[test]
+fn phase41_symbol_reference_query_helpers_external_rule() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/symbol-helper", description = "Symbol helper", severity = "warn")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, symbols: Symbols<'_>, references: References<'_>) -> RuleResult {
+    let exported = symbols.exported_by_name("forbidden").collect::<Vec<_>>();
+    let _ = symbols.by_kind(SymbolKind::Constant).count();
+    for reference in references.to_any(exported.iter().copied()) {
+        if reference.status == SymbolResolutionStatus::Resolved && !matches!(reference.precision, SymbolPrecision::Unsupported | SymbolPrecision::SetupMissing) {
+            let Some(span) = reference.primary_span.as_ref() else { continue; };
+            ctx.warn(span, "symbol helper matched forbidden reference");
+        }
+    }
+    let _ = references.resolved().count();
+    let _ = references.by_name("forbidden").count();
+    let _ = references.unresolved_by_name("missing").count();
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "export const forbidden = 1;\nexport const useIt = forbidden;\n",
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(diagnostics_for_rule(&json, "local/symbol-helper").len(), 1);
 }
 
 #[test]
@@ -763,13 +1386,17 @@ paths = [".polint/rules"]
     let rule_path = temp.path().join(".polint/rules/src/no_raw_colors.rs");
     let fixture_manifest = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/basic/polint-test.toml");
+        .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml");
     let fixture_source = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/basic/src/example.ts");
+        .join(".polint/tests/rules/no_raw_colors/negative/src/example.ts");
+    let positive_manifest = temp
+        .path()
+        .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml");
     assert!(rule_path.is_file());
     assert!(fixture_manifest.is_file());
     assert!(fixture_source.is_file());
+    assert!(positive_manifest.is_file());
 
     let generated_rule = fs::read_to_string(&rule_path).unwrap();
     assert!(generated_rule.contains("use polint::sdk::prelude::*;"));
@@ -815,7 +1442,7 @@ paths = [".polint/rules"]
     );
     let test_report: serde_json::Value = serde_json::from_str(&test_json)
         .unwrap_or_else(|error| panic!("test stdout was not JSON: {error}\n{test_json}"));
-    assert_eq!(test_report["summary"]["total"], 1);
+    assert_eq!(test_report["summary"]["total"], 2);
     assert_eq!(test_report["summary"]["failed"], 0);
 
     write_file(
@@ -1596,11 +2223,7 @@ const SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "mir.unsupported",
     "Mir<'_>",
     "Places<'_>",
-    "Cfg<'_>",
-    "CallGraph<'_>",
     "polint mir",
-    "polint facts",
-    "polint explain",
 ];
 
 fn assert_semantic_mir_public_rule_source(source: &str) {
@@ -2243,7 +2866,6 @@ const CFG_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "CfgControlDependence",
     "UnsupportedControlFlow",
     "analysis::cfg",
-    "Cfg<'_>",
 ];
 
 fn write_abstract_domains_public_rule_repo(root: &Path) {
@@ -5199,7 +5821,7 @@ fn new_rule_ts_creates_sdk_oriented_skeleton() {
     assert!(!module.contains("SourceFiles<'_>"));
     assert!(module.contains("literals: StringLiterals<'_>"));
     assert!(module.contains("jsx: JsxAttributes<'_>"));
-    assert!(module.contains("literals.iter().count()"));
+    assert!(module.contains("for literal in literals.iter()"));
     assert!(module.contains("jsx.iter().count()"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
@@ -7434,7 +8056,7 @@ mod capability_planning {
         assert!(
             diagnostic["help"]
                 .as_str()
-                .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
+                .is_some_and(|help| help.contains("docs/facts/capability-plans.md")),
             "{diagnostic:#?}"
         );
         assert!(diagnostic_has_evidence(
@@ -7476,7 +8098,7 @@ mod capability_planning {
         assert!(
             diagnostic["help"]
                 .as_str()
-                .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md")),
+                .is_some_and(|help| help.contains("docs/facts/capability-plans.md")),
             "{diagnostic:#?}"
         );
         assert!(diagnostic_has_evidence(

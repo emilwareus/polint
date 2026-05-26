@@ -25,6 +25,11 @@ Query methods:
 | `all()` | Returns all resolved import facts in deterministic database order. |
 | `iter()` | Iterates all resolved import facts. |
 | `for_file(file)` | Iterates resolved imports from one source file. |
+| `resolved_for_file(file)` | Iterates only `Resolved` imports from one source file. |
+| `by_specifier(specifier)` | Iterates resolved import facts whose syntactic import path exactly matches `specifier`. |
+| `unresolved()` | Iterates imports with `Unresolved` status. |
+| `dynamic()` | Iterates imports with `Dynamic` status. |
+| `unsupported()` | Iterates imports with `Unsupported` status. |
 | `unresolved_for_file(file)` | Iterates non-resolved imports from one source file. For running relationship rules this means `Unresolved`, `Dynamic`, or `Unsupported`; `SetupMissing` is reported as a capability diagnostic before rule execution. |
 | `for_import(import)` | Returns the resolved import fact for a syntactic `ImportId`. |
 
@@ -52,6 +57,9 @@ Query methods:
 | `nodes()` | Returns all `ModuleNode` records in deterministic order. |
 | `edges()` | Returns all `ModuleEdge` records in deterministic order. |
 | `node_for_file(file)` | Returns the first file node for a source file. |
+| `nodes_for_package(package_name)` | Iterates graph nodes whose label or source package name matches `package_name`. |
+| `edges_from_file(file)` | Iterates outgoing edges from the first file node for a source file. |
+| `imports_between(from, to)` | Iterates graph edges from one file node to another when both files have graph nodes. |
 | `outgoing(node)` | Iterates outgoing edges for a node. |
 | `incoming(node)` | Iterates incoming edges for a node. |
 | `dependency_status(edge)` | Returns the `ResolutionStatus` attached to an edge. |
