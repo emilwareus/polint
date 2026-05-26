@@ -244,6 +244,7 @@ mod tests {
                 comparison("polint", EvaluationMode::AdapterOnly),
             ],
             adaptation: None,
+            adaptation_delta: None,
             limitations: vec!["known limitation".to_string()],
             output_hash: String::new(),
         }

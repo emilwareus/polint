@@ -3608,6 +3608,7 @@ path = "repo"
             performance: None,
             comparison_rows: Vec::new(),
             adaptation: None,
+            adaptation_delta: None,
             limitations: Vec::new(),
             output_hash: String::new(),
         }

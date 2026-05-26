@@ -932,6 +932,7 @@ fn evaluation_run_for_fixture(
         performance: None,
         comparison_rows: Vec::new(),
         adaptation: None,
+        adaptation_delta: None,
         limitations: Vec::new(),
         output_hash: String::new(),
     };

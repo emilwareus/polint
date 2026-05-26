@@ -338,6 +338,7 @@ mod tests {
             }),
             comparison_rows: Vec::new(),
             adaptation: None,
+            adaptation_delta: None,
             limitations: Vec::new(),
             output_hash: hash.to_string(),
         }

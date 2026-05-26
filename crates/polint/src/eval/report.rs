@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::cache::stable_hash;
 use crate::eval::adaptation::AdaptationRecord;
 use crate::eval::competitors::BenchmarkComparisonRow;
+use crate::eval::delta::AdaptationDeltaReport;
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
 use crate::eval::model::{
     AssertionMode, EvaluationMode, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant,
@@ -33,6 +34,8 @@ pub(crate) struct EvaluationRun {
     pub(crate) comparison_rows: Vec<BenchmarkComparisonRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) adaptation: Option<AdaptationRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adaptation_delta: Option<AdaptationDeltaReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) limitations: Vec<String>,
     pub(crate) output_hash: String,
@@ -216,6 +219,9 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
     if let Some(performance) = &mut normalized.performance {
         performance.providers.sort();
         performance.demand_queries.sort();
+    }
+    if let Some(delta) = &mut normalized.adaptation_delta {
+        delta.normalize();
     }
     normalized
 }
@@ -705,6 +711,7 @@ mod tests {
             performance: None,
             comparison_rows: Vec::new(),
             adaptation: None,
+            adaptation_delta: None,
             limitations: Vec::new(),
             output_hash: String::new(),
         }
@@ -753,6 +760,7 @@ mod tests {
                 extension_digests: Vec::new(),
                 notes_path: "target/polint-eval/adaptation-notes.md".to_string(),
                 final_adapted_report_path: "target/polint-eval/adapted.json".to_string(),
+                no_change_reason: Some("report hash fixture uses metadata only".to_string()),
                 commands_run: Vec::new(),
             },
         }

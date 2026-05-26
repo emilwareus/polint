@@ -1,0 +1,37 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "extension-adaptation-delta"
+area = "extension"
+synthetic_observed = true
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 5000
+
+[[expected]]
+diagnostic = { rule_id = "extension.adaptation.source_model", relative_path = "src/app.ts", line = 4, mode = "tolerant" }
+
+[[expected]]
+fact = { family = "extension.adaptation", stable_key = "extension.adaptation.accepted_source", mode = "exact", producer_id = "polint.extension.adaptation", precision = "heuristic", status = "accepted" }
+
+[[expected]]
+fact = { family = "extension.adaptation", stable_key = "extension.adaptation.rejected_sink", mode = "exact", producer_id = "polint.extension.adaptation", precision = "heuristic", status = "rejected" }
+
+[[expected]]
+invariant = { name = "extension.adaptation.delta", value = "removed_fn=1,accepted=1,rejected=1", mode = "exact" }
+
+[[observed]]
+diagnostic = { rule_id = "extension.adaptation.source_model", relative_path = "src/app.ts", line = 5, fingerprint = "adaptation-source-model", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "heuristic", status = "present" }
+
+[[observed]]
+fact = { family = "extension.adaptation", stable_key = "extension.adaptation.accepted_source", mode = "exact", producer_id = "polint.extension.adaptation", provenance = "synthetic_observed", precision = "heuristic", status = "accepted" }
+
+[[observed]]
+fact = { family = "extension.adaptation", stable_key = "extension.adaptation.rejected_sink", mode = "exact", producer_id = "polint.extension.adaptation", provenance = "synthetic_observed", precision = "heuristic", status = "rejected" }
+
+[[observed]]
+invariant = { name = "extension.adaptation.delta", value = "removed_fn=1,accepted=1,rejected=1", mode = "exact", producer_id = "polint.eval", provenance = "synthetic_observed", precision = "exact", status = "present" }
+
+[[observed]]
+runtime_budget = { name = "extension.adaptation_delta", budget_passed = true, observed_runtime_ms = 12 }

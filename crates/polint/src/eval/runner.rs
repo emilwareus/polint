@@ -105,6 +105,7 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
         performance: None,
         comparison_rows: Vec::new(),
         adaptation: None,
+        adaptation_delta: None,
         limitations: plan.limitations.clone(),
         output_hash: String::new(),
     };
