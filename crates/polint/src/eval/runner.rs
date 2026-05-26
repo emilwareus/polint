@@ -523,7 +523,8 @@ mod tests {
 
         assert!(safe_join_workspace(root.path(), Path::new("inside")).is_ok());
         assert!(safe_join_workspace(root.path(), Path::new("../outside")).is_err());
-        assert!(safe_join_workspace(root.path(), Path::new("/tmp/outside")).is_err());
+        let absolute_outside = tempdir().unwrap();
+        assert!(safe_join_workspace(root.path(), absolute_outside.path()).is_err());
 
         #[cfg(unix)]
         {
