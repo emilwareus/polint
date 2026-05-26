@@ -42,7 +42,7 @@ Requirements for the Static Analysis Engine Implementation milestone. Each requi
 
 ### Promotion
 
-- [ ] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record comparable scanner baselines, polint baseline results, agent-adapted polint results, default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, accepted/rejected extension facts, and the exact adaptation prompt used for each agent-authored benchmark run.
+- [x] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record comparable scanner baselines, polint baseline results, agent-adapted polint results, default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, accepted/rejected extension facts, and the exact adaptation prompt used for each agent-authored benchmark run.
 - [ ] **SAE-PROM-02**: Validated typed SDK query views and agent ergonomics are promoted only where contracts are proven, including bounded query builders and stable JSON for accepted public commands.
 
 ## Future Requirements
@@ -87,7 +87,7 @@ Deferred until after this implementation sequence validates the internal engine 
 | SAE-PREC-02 | Phase 37 | Complete |
 | SAE-PREC-03 | Phase 38 | Complete |
 | SAE-PREC-04 | Phase 39 | Complete |
-| SAE-PROM-01 | Phase 40 | Pending |
+| SAE-PROM-01 | Phase 40 | Complete |
 | SAE-PROM-02 | Phase 41 | Pending |
 
 **Coverage:**

@@ -42,7 +42,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 37 | 6/6 | Complete   | 2026-05-25 |
 | 38 | 10/10 | Complete   | 2026-05-25 |
 | 39 | 7/7 | Complete    | 2026-05-25 |
-| 40 | External Benchmark Adapters and Promotion Gates | Add benchmark adapters and promotion reports for precision, recall, runtime, cache, and extension impact. | SAE-PROM-01 |
+| 40 | 1/8 | In Progress|  |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
 ## Phase Details
@@ -519,7 +519,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 40-01-PLAN.md - Eval suite manifest comparison and adaptation schema
+- [x] 40-01-PLAN.md - Eval suite manifest comparison and adaptation schema
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

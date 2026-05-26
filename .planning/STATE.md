@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: planning
-last_updated: "2026-05-26T06:58:11.239Z"
-last_activity: 2026-05-25
+status: executing
+last_updated: "2026-05-26T07:15:39.383Z"
+last_activity: 2026-05-26
 progress:
   total_phases: 22
   completed_phases: 20
-  total_plans: 123
+  total_plans: 131
   completed_plans: 123
   percent: 91
 ---
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 40 — external benchmark adapters and promotion gates
+**Current focus:** Phase 40 — external-benchmark-adapters-and-promotion-gates
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to plan
-Phase: 40
-Plan: Not started
-Last activity: 2026-05-25
+Status: Ready to execute
+Phase: 40 (external-benchmark-adapters-and-promotion-gates) — EXECUTING
+Plan: 2 of 8
+Last activity: 2026-05-26
 
 ## Phase Progress
 
