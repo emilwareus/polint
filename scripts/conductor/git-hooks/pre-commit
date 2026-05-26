@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${CONDUCTOR_SKIP_PRE_COMMIT:-}" == "1" ]]; then
+    echo "Conductor pre-commit hook skipped because CONDUCTOR_SKIP_PRE_COMMIT=1."
+    exit 0
+fi
+
+echo "Conductor pre-commit hook: running make lint"
+make lint

@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "setup": "./scripts/conductor/install-pre-commit-hook.sh"
+  }
+}
