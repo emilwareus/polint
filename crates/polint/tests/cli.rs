@@ -107,11 +107,17 @@ fn facts_list_json_is_stable_and_public_only() {
     assert_eq!(value["version"], 1);
     assert_eq!(value["tool"]["name"], "polint");
     let views = value["views"].as_array().expect("views should be an array");
-    assert!(
-        views.iter().any(|view| {
-            view["capability"] == "resolved_imports" && view["stability"] == "stable"
-        })
-    );
+    assert!(views.iter().any(|view| {
+        view["capability"] == "resolved_imports"
+            && view["stability"] == "stable"
+            && view["unknowns"] == true
+    }));
+    assert!(views.iter().any(|view| {
+        view["capability"] == "file_metrics"
+            && view["stability"] == "stable"
+            && view["sampling"] == true
+            && view["unknowns"] == false
+    }));
     assert!(
         views
             .iter()
@@ -214,6 +220,24 @@ exclude = []
     );
     assert_eq!(value["version"], 1);
     assert_eq!(value["capability"], "resolved_imports");
+    assert_eq!(value["rows"][0]["reason"], "not_found");
+    assert_eq!(value["rows"][0]["precision"], "none");
+
+    let unsupported_stable = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["unknowns", "--cap", "file_metrics", "--format", "json"])
+            .assert()
+            .code(2),
+    );
+    assert!(
+        unsupported_stable.contains("\"status\": \"unsupported\""),
+        "{unsupported_stable}"
+    );
+    assert!(
+        unsupported_stable.contains("docs/facts/metrics.md"),
+        "{unsupported_stable}"
+    );
 
     let unsupported = output_string(
         polint_cmd()
@@ -5815,6 +5839,32 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     assert!(!module.contains("impl Rule"));
     let internal_core_path = ["crate", "core"].join("::");
     assert!(!module.contains(&internal_core_path));
+}
+
+#[test]
+fn new_rule_go_generates_fixture_that_test_can_run() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "go", "branch-error-paths"])
+        .assert()
+        .success();
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["summary"]["total"], 2);
+    assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
 }
 
 #[test]

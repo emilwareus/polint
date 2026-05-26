@@ -914,7 +914,12 @@ fn rule_fixture_negative_source_template(language: &str) -> String {
     match language {
         "go" => r#"package main
 
-func replaceMe() {}
+func replaceMe(err error) error {
+	if err != nil {
+		return err
+	}
+	return nil
+}
 "#
         .to_string(),
         _ => r#"export const example = "replace me";
@@ -933,8 +938,12 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
     let query_example = match language {
         "go" => {
             r#"    for branch in branches.iter() {
-        let related_test_count = tests.related_for_file(branch.file).len();
-        let _ = related_test_count;
+        if branch.is_error_path && tests.related_for_file(branch.file).is_empty() {
+            ctx.warn(
+                &branch.decision_span,
+                "Project-specific policy: add nearby test evidence for this Go error branch.",
+            );
+        }
     }"#
         }
         "ts" | "tsx" | "js" | "jsx" => {
@@ -1069,13 +1078,12 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "resolved_imports" => db
             .resolved_imports()
             .iter()
-            .take(limit)
             .map(|fact| {
                 PublicFactSampleRow::new(
                     db.path_for(fact.from_file),
                     None,
                     status_label(fact.status),
-                    Some(format!("{:?}", fact.precision)),
+                    Some(resolution_precision_label(fact.precision).to_string()),
                     Some(format!("resolved_import:{}", fact.id.0)),
                 )
             })
@@ -1083,7 +1091,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "module_graph" => db
             .module_edges()
             .iter()
-            .take(limit)
             .map(|edge| {
                 PublicFactSampleRow::new(
                     "<module-graph>".to_string(),
@@ -1097,7 +1104,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "symbols" => db
             .symbols()
             .iter()
-            .take(limit)
             .map(|symbol| {
                 PublicFactSampleRow::new(
                     symbol
@@ -1114,7 +1120,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "references" => db
             .references()
             .iter()
-            .take(limit)
             .map(|reference| {
                 PublicFactSampleRow::new(
                     reference
@@ -1131,7 +1136,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "file_metrics" => db
             .file_metrics()
             .iter()
-            .take(limit)
             .map(|metric| {
                 PublicFactSampleRow::new(
                     db.path_for(metric.file),
@@ -1148,7 +1152,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "function_metrics" => db
             .function_metrics()
             .iter()
-            .take(limit)
             .map(|metric| {
                 PublicFactSampleRow::new(
                     db.path_for(metric.file),
@@ -1165,7 +1168,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
         "complexity_metrics" => db
             .complexity_metrics()
             .iter()
-            .take(limit)
             .map(|metric| {
                 PublicFactSampleRow::new(
                     db.path_for(metric.file),
@@ -1193,6 +1195,7 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                 right.stable_id.as_deref().unwrap_or_default(),
             ))
     });
+    rows.truncate(limit);
     let report = FactsSampleReport {
         version: 1,
         schema: POLINT_FACTS_JSON_SCHEMA_V1_URL.to_string(),
@@ -1210,7 +1213,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
     let support = public_fact_view(&args.capability);
     if support
         .as_ref()
-        .is_none_or(|view| view.stability != "stable")
+        .is_none_or(|view| view.stability != "stable" || !view.unknowns)
     {
         let report = UnknownsReport {
             version: 1,
@@ -1221,10 +1224,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
                 file: "<workspace>".to_string(),
                 span: None,
                 status: "unsupported".to_string(),
-                reason: Some(
-                    "Capability is reserved or unsupported for public unknown inspection."
-                        .to_string(),
-                ),
+                reason: Some("Capability does not support public unknown inspection.".to_string()),
                 precision: None,
                 docs_path: support
                     .map(|view| view.docs_path.to_string())
@@ -1251,8 +1251,10 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
                 file: db.path_for(fact.from_file),
                 span: None,
                 status: status_label(fact.status).to_string(),
-                reason: fact.reason.map(|reason| format!("{reason:?}")),
-                precision: Some(format!("{:?}", fact.precision)),
+                reason: fact
+                    .reason
+                    .map(|reason| unresolved_reason_label(reason).to_string()),
+                precision: Some(resolution_precision_label(fact.precision).to_string()),
                 docs_path: Some("docs/facts/resolved-imports.md".to_string()),
                 suggested_artifact: Some(artifact_for_resolution_status(fact.status).to_string()),
             })
@@ -1509,6 +1511,7 @@ struct PublicFactView {
     stability: &'static str,
     docs_path: &'static str,
     sampling: bool,
+    unknowns: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1645,6 +1648,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/resolved-imports.md",
             sampling: true,
+            unknowns: true,
         },
         "module_graph" => PublicFactView {
             capability: "module_graph",
@@ -1653,6 +1657,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/resolved-imports.md",
             sampling: true,
+            unknowns: false,
         },
         "symbols" => PublicFactView {
             capability: "symbols",
@@ -1661,6 +1666,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/symbols-and-references.md",
             sampling: true,
+            unknowns: true,
         },
         "references" => PublicFactView {
             capability: "references",
@@ -1669,6 +1675,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/symbols-and-references.md",
             sampling: true,
+            unknowns: true,
         },
         "file_metrics" => PublicFactView {
             capability: "file_metrics",
@@ -1677,6 +1684,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/metrics.md",
             sampling: true,
+            unknowns: false,
         },
         "function_metrics" => PublicFactView {
             capability: "function_metrics",
@@ -1685,6 +1693,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/metrics.md",
             sampling: true,
+            unknowns: false,
         },
         "complexity_metrics" => PublicFactView {
             capability: "complexity_metrics",
@@ -1693,6 +1702,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "stable",
             docs_path: "docs/facts/metrics.md",
             sampling: true,
+            unknowns: false,
         },
         "cfg" => PublicFactView {
             capability: "cfg",
@@ -1701,6 +1711,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "reserved",
             docs_path: "docs/facts/capability-plans.md",
             sampling: false,
+            unknowns: false,
         },
         "call_graph" => PublicFactView {
             capability: "call_graph",
@@ -1709,6 +1720,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "reserved",
             docs_path: "docs/facts/capability-plans.md",
             sampling: false,
+            unknowns: false,
         },
         "dataflow" => PublicFactView {
             capability: "dataflow",
@@ -1717,6 +1729,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "reserved",
             docs_path: "docs/facts/data-flow.md",
             sampling: false,
+            unknowns: false,
         },
         "coverage_facts" => PublicFactView {
             capability: "coverage_facts",
@@ -1725,6 +1738,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "reserved",
             docs_path: "docs/facts/capability-plans.md",
             sampling: false,
+            unknowns: false,
         },
         "test_suite_metrics" => PublicFactView {
             capability: "test_suite_metrics",
@@ -1733,6 +1747,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "reserved",
             docs_path: "docs/facts/capability-plans.md",
             sampling: false,
+            unknowns: false,
         },
         _ => return None,
     };
@@ -1802,6 +1817,28 @@ fn status_label(status: ResolutionStatus) -> &'static str {
         ResolutionStatus::SetupMissing => "setup_missing",
         ResolutionStatus::Dynamic => "dynamic",
         ResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'static str {
+    match precision {
+        crate::core::ResolutionPrecision::ExactFile => "exact_file",
+        crate::core::ResolutionPrecision::Package => "package",
+        crate::core::ResolutionPrecision::ExternalPackage => "external_package",
+        crate::core::ResolutionPrecision::Heuristic => "heuristic",
+        crate::core::ResolutionPrecision::None => "none",
+    }
+}
+
+fn unresolved_reason_label(reason: crate::core::UnresolvedReason) -> &'static str {
+    match reason {
+        crate::core::UnresolvedReason::NotFound => "not_found",
+        crate::core::UnresolvedReason::SetupMissing => "setup_missing",
+        crate::core::UnresolvedReason::DynamicExpression => "dynamic_expression",
+        crate::core::UnresolvedReason::UnsupportedLanguage => "unsupported_language",
+        crate::core::UnresolvedReason::UnsupportedImport => "unsupported_import",
+        crate::core::UnresolvedReason::ResolverError => "resolver_error",
+        crate::core::UnresolvedReason::OutsideWorkspace => "outside_workspace",
     }
 }
 

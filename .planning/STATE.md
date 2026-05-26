@@ -389,6 +389,7 @@ Last activity: 2026-05-26
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260526-uq2 | Fix Phase 41 review findings for generated fixtures and agent JSON contracts | 2026-05-26 | implemented | [260526-uq2-fix-phase-41-review-findings-for-generat](./quick/260526-uq2-fix-phase-41-review-findings-for-generat/) |
 | 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |
 | 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |
 | 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
