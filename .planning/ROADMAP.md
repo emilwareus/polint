@@ -42,7 +42,7 @@ The milestone should preserve public API discipline. New internals stay private 
 | 37 | 6/6 | Complete   | 2026-05-25 |
 | 38 | 10/10 | Complete   | 2026-05-25 |
 | 39 | 7/7 | Complete    | 2026-05-25 |
-| 40 | 1/8 | In Progress|  |
+| 40 | 2/8 | In Progress|  |
 | 41 | Public SDK Query Views and Agent Ergonomics | Promote only validated query views and agent workflows with stable docs and JSON contracts. | SAE-PROM-02 |
 
 ## Phase Details
@@ -523,7 +523,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 40-02-PLAN.md - Adapter trait and OWASP expected-results scoring
+- [x] 40-02-PLAN.md - Adapter trait and OWASP expected-results scoring
 
 **Wave 3** *(blocked on Wave 1 completion)*
 
