@@ -1,6 +1,6 @@
 # Algorithms: Scoring And Matching
 
-Pseudo-code is Python-ish and intentionally stripped down.
+Pseudo-code is intentionally stripped down.
 
 ## Diagnostic Matching
 
@@ -120,7 +120,7 @@ def metrics(counts):
         "f2": f_beta(precision, recall, beta=2),
         "f3": f_beta(precision, recall, beta=3),
         "fpr": fpr,
-        "owasp_score": recall - fpr,
+        "tpr_minus_fpr": recall - fpr,
     }
 
 def f_beta(precision, recall, beta):
@@ -130,7 +130,7 @@ def f_beta(precision, recall, beta):
     return safe_div((1 + b2) * precision * recall, b2 * precision + recall)
 ```
 
-OWASP-native score is useful for OWASP comparability. It should not replace precision/recall/F-score reporting.
+Suite-native scores can be useful for comparability. They should not replace precision/recall/F-score reporting.
 
 ## Fact Matching
 

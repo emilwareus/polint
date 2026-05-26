@@ -70,7 +70,7 @@ Last activity: 2026-05-26
 | 37 | Complete | 6/6 plans complete; refined-call providers, validation, real eval fixtures, public no-leak proof, review fixes, and final verification done; requirement SAE-PREC-02 |
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
-| 40 | Complete | 8/8 plans complete; external benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; requirement SAE-PROM-01 |
+| 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
 
 ## Accumulated Context
@@ -380,7 +380,7 @@ Last activity: 2026-05-26
 ## Session
 
 - Last session: 2026-05-26
-- Last activity: 2026-05-26 - Captured Phase 40 external benchmark adapters and promotion gates context.
+- Last activity: 2026-05-26 - Removed unsupported-language benchmark artifacts and limited benchmark scope to Go and TS/JS.
 - Stopped at: Phase 40 context gathered; ready to plan Phase 40.
 - Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
 
@@ -388,6 +388,7 @@ Last activity: 2026-05-26
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |
 | 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |
 | 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
 | 260525-d15 | Fix CI failures from PR 45 attached logs | 2026-05-25 | implemented | [260525-d15-fix-ci-failures-from-pr-45-attached-logs](./quick/260525-d15-fix-ci-failures-from-pr-45-attached-logs/) |

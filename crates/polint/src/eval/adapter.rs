@@ -86,7 +86,7 @@ mod tests {
         assert_eq!(prepared.case_id, "case-1");
         assert_eq!(
             prepared.workspace_root,
-            PathBuf::from("research/evaluation-harness/repos/BenchmarkJava")
+            PathBuf::from("research/evaluation-harness/repos/SecBench.js")
         );
         assert!(prepared.target_files.is_empty());
 
@@ -155,21 +155,20 @@ schema_version = "polint-eval-suite-1"
 id = "adapter-suite"
 name = "Adapter suite"
 kind = "scanner_vulnerability"
-languages = ["java"]
+languages = ["javascript"]
 adapter_id = "null"
 license = "license-review-needed"
 language_support = "adapter_only"
 
 [checkout]
 strategy = "local_clone"
-path = "research/evaluation-harness/repos/BenchmarkJava"
+path = "research/evaluation-harness/repos/SecBench.js"
 
 [expected]
-format = "owasp_expected_results_csv"
-path = "expectedresults-1.2.csv"
+format = "suite_native"
+path = "expected.json"
 
 [scoring]
-native = ["owasp_confusion_matrix"]
 unified = ["precision", "recall"]
 
 [tiers.fast]

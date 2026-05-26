@@ -18,9 +18,9 @@ boundary proof for SAE-PROM-01.
     `supported`, with deterministic fast/nightly/release tiers.
   - gosec samples at source commit `de65614d10a6`, language support
     `supported`, with deterministic fast/nightly/release tiers.
-- Adapter-only suite manifests exist for OWASP Java and BenchmarkPython. These
-  validate parser/scorer behavior only; they are not claimed as real polint
-  Java/Python scanner analysis.
+- Unsupported-language suite manifests and adapters have been removed from the
+  active benchmark scope. Current external benchmark manifests cover only Go and
+  TypeScript/JavaScript.
 - Adapted benchmark reports must include the exact adaptation prompt path/hash,
   declared budget, allowed/forbidden inputs, changed artifacts or no-change
   reason, changed rule/extension digests, and default-vs-adapted deltas.
@@ -58,7 +58,7 @@ query-view and eval/report promotion remains deferred to Phase 41.
 
 - Full external benchmark corpora are not vendored and must remain under
   gitignored local clones.
-- OWASP Java/Python support is adapter-only until polint has those language
-  adapters.
+- Benchmarks for languages without a polint frontend are excluded until a future
+  language-adapter phase adds that support.
 - The internal eval schema is intentionally unstable. Phase 41 owns any public
   SDK/query or CLI promotion.

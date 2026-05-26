@@ -550,7 +550,7 @@ mod tests {
         summary
             .sections
             .suite_native
-            .insert("owasp.tpr".to_string(), 0.75);
+            .insert("secbench_js.test_file_count".to_string(), 704.0);
 
         assert_eq!(summary.sections.graph.edges_expected, 1);
         assert_eq!(summary.sections.graph.edges_observed, 1);
@@ -560,7 +560,13 @@ mod tests {
             summary.sections.unknowns.by_status.get("setup_missing"),
             Some(&1)
         );
-        assert_eq!(summary.sections.suite_native.get("owasp.tpr"), Some(&0.75));
+        assert_eq!(
+            summary
+                .sections
+                .suite_native
+                .get("secbench_js.test_file_count"),
+            Some(&704.0)
+        );
     }
 
     fn summary(

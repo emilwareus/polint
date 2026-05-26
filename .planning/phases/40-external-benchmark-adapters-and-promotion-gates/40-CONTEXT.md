@@ -9,7 +9,7 @@
 
 Phase 40 delivers the internal benchmark adapter, reporting, and promotion-gate layer that turns the existing v1.2 analysis substrate into measured evidence. It should extend the current crate-private eval harness so polint can compare scanner outcomes, graph/fact/path quality, runtime/cache behavior, and default-vs-agent-adapted deltas across native fixtures and selected external suites.
 
-This phase does **not** promote stable public SDK query views, does not make `polint eval` a documented public CLI contract, does not vendor external benchmark corpora into the product repository, and does not add broad Java/Python language support. Phase 40 may implement adapter-only parsing/scoring for unsupported-language suites, but must label those as adapter/scoring validation rather than polint analysis results. Phase 41 owns public SDK/query ergonomics and any stable user-facing promotion of query views.
+This phase does **not** promote stable public SDK query views, does not make `polint eval` a documented public CLI contract, does not vendor external benchmark corpora into the product repository, and does not add new language support. Phase 40 benchmark adapters and manifests are limited to Go and TypeScript/JavaScript. Phase 41 owns public SDK/query ergonomics and any stable user-facing promotion of query views.
 
 </domain>
 
@@ -27,10 +27,10 @@ This phase does **not** promote stable public SDK query views, does not make `po
 ### Benchmark Families and First Targets
 
 - **D-06:** Phase 40 must measure more than vulnerability findings. It should report three families: scanner outcome benchmarks, graph/fact/path benchmarks, and engine/adaptation benchmarks.
-- **D-07:** Scanner outcome benchmarks answer whether the right finding was reported. Initial supported-language targets should prioritize a small SecBench.js TS/JS subset and Go-oriented gosec samples or CodeQL-inspired Go microcases, with OWASP Java/Python and RealVuln initially allowed as adapter/scoring-only where language support is missing.
+- **D-07:** Scanner outcome benchmarks answer whether the right finding was reported. Initial targets are limited to languages polint supports today: a small SecBench.js TS/JS subset and Go-oriented gosec samples or CodeQL-inspired Go microcases.
 - **D-08:** Graph/fact/path benchmarks answer whether internal analysis facts are correct. Native fixtures should cover CFG/control dependence, direct/refined call graphs, data-flow paths, evidence bundles, source/sink/sanitizer/barrier behavior, summaries, unknowns, budget truncation, and partial-truth graph matching.
 - **D-09:** Engine/adaptation benchmarks answer whether repo-local adaptation improves scanner accuracy honestly. They must report default-vs-adapted deltas, resolved unknowns, new unknowns, accepted/rejected extension facts, new true positives, new false positives, removed false positives, runtime overhead, cache invalidation scope, and provenance.
-- **D-10:** The first practical implementation slice should be native fixtures plus one supported-language external smoke suite plus OWASP expected-results adapter/scoring. For current polint, that likely means native fixture gates, SecBench.js smoke or gosec samples, and OWASP CSV parser/scorer marked adapter-only for Java/Python analysis.
+- **D-10:** The first practical implementation slice should be native fixtures plus supported-language external smoke suites. For current polint, that means native fixture gates, SecBench.js smoke, and gosec samples.
 
 ### Agent Adaptation Protocol
 
@@ -49,15 +49,15 @@ This phase does **not** promote stable public SDK query views, does not make `po
 - **D-20:** Add suite manifests that pin suite id, source URL, source commit, local clone path, license status, adapter kind, language support status, tier membership, case selector, expected-output paths, and whether the suite can run real polint analysis or only adapter/scoring validation.
 - **D-21:** External benchmark source repositories must stay out of git history. Commit only adapter code, manifests, small expected/schema samples where license-reviewed, generated summaries, and pinned source metadata.
 - **D-22:** Reports should produce deterministic JSON as the source of truth and generated Markdown/summary tables as derived artifacts. JSON should include schema version, suite metadata, cases, expected/observed rows, matches, metrics, provider stats, cache stats, adaptation record, competitor result records, output hash, and limitations.
-- **D-23:** Metric reporting should include suite-native metrics where available and polint-unified metrics across suites. Preserve OWASP-native TP/FN/TN/FP, TPR/FPR, and score where relevant, but do not use one suite-native score as the only product metric.
+- **D-23:** Metric reporting should include suite-native metrics where available and polint-unified metrics across suites. Do not use one suite-native score as the only product metric.
 
 ### Promotion Gates
 
 - **D-24:** Native fixtures remain the first promotion gate. External suite results do not replace engine invariants for provenance, precision, validation, extension merge, unknowns, cache invalidation, deterministic output, and public no-leak behavior.
-- **D-25:** Add tiered gates: fast CI for native fixtures and small smoke subsets, nightly for broader supported-language suites, release for full suite reports, and research for expensive or unsupported-language adapter experiments.
+- **D-25:** Add tiered gates: fast CI for native fixtures and small smoke subsets, nightly for broader supported-language suites, and release for full supported-suite reports.
 - **D-26:** Gate failures should be configurable per suite and should cover determinism drift, recall/precision/F-score regression, false-positive trap increase, new high-severity false positives, runtime/provider-time regression, cache invalidation expansion, changed extension rejection count, and missing adaptation artifacts.
 - **D-27:** Public precision claims are allowed only when tied to measured reports that identify suite version, polint version/commit, mode, competitor source, tier, case selection, limitations, and whether the result is baseline or adapted.
-- **D-28:** Adapter-only validation for unsupported languages is valuable but cannot be used as a public claim that polint analyzed that language. Reports must label these cases explicitly.
+- **D-28:** Unsupported-language benchmark suites are excluded from current scorecards, gates, baseline rows, and adapted-run rows until the corresponding language frontend exists.
 
 ### Public Boundary and Safety
 
@@ -170,7 +170,7 @@ This phase does **not** promote stable public SDK query views, does not make `po
 
 - Extend `eval::model` with suite manifests, external suite cases, competitor result records, evaluation modes, adaptation records, suite language/support status, tier metadata, and provider/cache/performance summaries.
 - Extend `eval::metrics` and `eval::report` with suite-native metric maps, unified metric groups, competitor comparison tables, graph/fact/path breakdowns, extension/adaptation deltas, and gate verdicts.
-- Add adapter traits and implementations under `eval` or a crate-private sibling module for native fixtures, OWASP expected-results CSV, supported-language smoke suites, and future RealVuln/SecBench.js/gosec/Jelly adapters.
+- Add adapter traits and implementations under `eval` or a crate-private sibling module for native fixtures, SecBench.js, gosec, and supported-language smoke suites.
 - Add hidden/unstable CLI or internal test/release entrypoints for running suites by manifest and tier, writing deterministic JSON, and generating Markdown summaries.
 - Add gate logic for fast/nightly/release/research tiers with deterministic subset selection and baseline comparison.
 - Add adaptation artifact support: prompt file, adaptation note, allowed/forbidden input record, changed files/digests, and default-vs-adapted report linking.
@@ -181,7 +181,7 @@ This phase does **not** promote stable public SDK query views, does not make `po
 ## Specific Ideas
 
 - Use the first supported-language external benchmark as a smoke path rather than trying to run every researched suite in one pass. For current polint, prioritize either a small SecBench.js subset for TS/JS or gosec/CodeQL-inspired Go cases for Go.
-- Keep OWASP Java/Python as the first adapter/scorer because the CSV shape is simple and externally recognized, but label Java/Python analysis as unsupported until language adapters exist.
+- Keep benchmark implementation focused on SecBench.js and gosec until more language frontends exist.
 - Add a report section named `comparison_table` with rows for suite/case selection and columns for other scanner/product, polint baseline, and polint agent-adapted.
 - Add an `adaptation.prompt_path` and `adaptation.prompt_hash` field so reports can prove which subagent prompt produced the adapted result.
 - Add fast CI gates over native fixtures for CFG/call/data-flow/evidence graph correctness before external suite gates, because external scanner benchmarks do not validate engine invariants.
@@ -194,9 +194,9 @@ This phase does **not** promote stable public SDK query views, does not make `po
 ## Deferred Ideas
 
 - Stable public `polint eval` CLI contract, public eval JSON schema, public `CallGraph<'_>`/`DataFlow<'_>`/`Evidence<'_>` SDK views, and bounded public query builders: Phase 41 or later after promotion gates prove the contracts.
-- Full Java/Python scanner execution on OWASP/RealVuln: future language-adapter work. Phase 40 may parse/score these suites but must label unsupported analysis honestly.
+- Benchmarks for languages without a polint frontend: future language-adapter work.
 - Full local reproduction for every competitor on every suite: release/research tier after the first supported-language comparisons work.
-- CrossCommitVuln temporal workflows, SecCodeBench agentic workflows, full DroidBench/CryptoAPI-Bench/SecuriBench Micro, and large real-repo release claims: future release/research tiers.
+- Large real-repo release claims: future release/research tiers after supported-suite smoke comparisons work.
 - In-process extension runtime optimizations for adapted mode: future work after process-isolated extension protocol and eval artifacts are stable.
 
 </deferred>

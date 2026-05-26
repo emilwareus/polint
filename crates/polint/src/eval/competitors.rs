@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn competitor_rows_distinguish_imported_and_locally_reproduced_results() {
         let imported = row(ResultSource::ImportedPublished {
-            source_name: "OWASP scoreboard".to_string(),
-            source_url: "https://owasp.org/benchmark".to_string(),
+            source_name: "SecBench.js paper table".to_string(),
+            source_url: "https://publications.cispa.saarland/3909/".to_string(),
             retrieved_at: "2026-05-26".to_string(),
         });
         let local = row(ResultSource::LocallyReproduced {
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn adapter_only_rows_require_limitations() {
         let row = row(ResultSource::AdapterOnly {
-            manifest_path: "research/evaluation-harness/suites/owasp-java.toml".to_string(),
+            manifest_path: "research/evaluation-harness/suites/secbench-js-smoke.toml".to_string(),
             reason: String::new(),
         });
 
@@ -402,20 +402,20 @@ mod tests {
         assert_eq!(row.metrics["precision"], 0.75);
 
         let suite_native = suite_native_reference_row(
-            SuiteId("owasp-java".to_string()),
-            Some("61b831658171".to_string()),
-            "OWASP BenchmarkUtils".to_string(),
-            imported_source("OWASP scorecard"),
+            SuiteId("secbench-js-smoke".to_string()),
+            Some("bc3156219138".to_string()),
+            "SecBench.js reference runner".to_string(),
+            imported_source("SecBench.js paper table"),
             metrics(),
             vec!["suite-native reference score".to_string()],
         );
         suite_native.validate().unwrap();
-        assert_eq!(suite_native.product.name, "OWASP BenchmarkUtils");
+        assert_eq!(suite_native.product.name, "SecBench.js reference runner");
     }
 
     fn row(result_source: ResultSource) -> BenchmarkComparisonRow {
         BenchmarkComparisonRow {
-            suite_id: SuiteId("owasp-java".to_string()),
+            suite_id: SuiteId("secbench-js-smoke".to_string()),
             suite_commit: Some("abc123".to_string()),
             mode: EvaluationMode::ImportedScanner,
             product: ProductIdentity {

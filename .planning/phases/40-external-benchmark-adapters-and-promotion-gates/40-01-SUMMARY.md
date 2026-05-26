@@ -74,7 +74,7 @@ completed: 2026-05-26
 ## Decisions Made
 
 - Kept all new benchmark metadata under crate-private `eval` modules; no public CLI, SDK, runner, or docs surface was promoted.
-- Used explicit `AdapterOnly` and `SuiteLanguageSupport::AdapterOnly` states so unsupported Java/Python suite adapters cannot imply real polint analysis.
+- Kept suite support states explicit; current scored benchmark suites are limited to Go and TS/JS.
 - Made adapted-run validation require both allowed and forbidden input lists, preventing score-only adaptation records without audit context.
 
 ## Deviations from Plan

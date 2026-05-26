@@ -58,7 +58,6 @@ pub(crate) enum LocalClonePolicy {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ExpectedSourceFormat {
     NativePolintToml,
-    OwaspExpectedResultsCsv,
     Sarif,
     Json,
     SuiteNative,
@@ -208,7 +207,7 @@ mod tests {
         let supported = manifest(SuiteLanguageSupport::Supported, "tests/eval-fixtures");
         let adapter_only = manifest(
             SuiteLanguageSupport::AdapterOnly,
-            "research/evaluation-harness/repos/BenchmarkJava",
+            "research/evaluation-harness/repos/SecBench.js",
         );
 
         supported.validate().unwrap();
@@ -223,8 +222,8 @@ mod tests {
 
     #[test]
     fn suite_manifest_rejects_unsafe_local_paths_by_default() {
-        let absolute = manifest(SuiteLanguageSupport::Supported, "/tmp/BenchmarkJava");
-        let parent = manifest(SuiteLanguageSupport::Supported, "../BenchmarkJava");
+        let absolute = manifest(SuiteLanguageSupport::Supported, "/tmp/SecBench.js");
+        let parent = manifest(SuiteLanguageSupport::Supported, "../SecBench.js");
 
         assert!(absolute.validate().is_err());
         assert!(parent.validate().is_err());
@@ -232,7 +231,7 @@ mod tests {
 
     #[test]
     fn suite_manifest_can_explicitly_allow_absolute_local_clone_paths() {
-        let mut manifest = manifest(SuiteLanguageSupport::ResearchOnly, "/tmp/BenchmarkJava");
+        let mut manifest = manifest(SuiteLanguageSupport::ResearchOnly, "/tmp/SecBench.js");
         manifest.checkout.local_clone_policy = LocalClonePolicy::AllowAbsolute;
 
         manifest.validate().unwrap();

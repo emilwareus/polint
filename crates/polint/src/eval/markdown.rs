@@ -185,7 +185,7 @@ mod tests {
 
         assert!(markdown.contains("adapter_only"));
         assert!(markdown.contains("imported: published table"));
-        assert!(markdown.contains("adapter-only: unsupported language"));
+        assert!(markdown.contains("adapter-only: adapter dry run"));
         assert!(markdown.contains("known limitation"));
     }
 
@@ -201,7 +201,7 @@ mod tests {
     fn report() -> EvaluationRun {
         EvaluationRun {
             schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
-            suite_id: "owasp-java".to_string(),
+            suite_id: "secbench-js-smoke".to_string(),
             mode: EvaluationMode::AdapterOnly,
             suite_manifest: Some(suite_manifest()),
             cases: Vec::new(),
@@ -253,27 +253,27 @@ mod tests {
     fn suite_manifest() -> SuiteManifest {
         SuiteManifest {
             schema_version: "polint-eval-suite-1".to_string(),
-            id: SuiteId("owasp-java".to_string()),
-            name: "OWASP Java".to_string(),
+            id: SuiteId("secbench-js-smoke".to_string()),
+            name: "SecBench.js smoke".to_string(),
             kind: SuiteKind::ScannerVulnerability,
-            languages: vec!["java".to_string()],
-            adapter_id: "owasp_expected_results_csv".to_string(),
+            languages: vec!["javascript".to_string()],
+            adapter_id: "secbench_js_tests".to_string(),
             source_url: None,
             source_commit: None,
             license: "license-review-needed".to_string(),
             language_support: SuiteLanguageSupport::AdapterOnly,
             checkout: SuiteCheckout {
                 strategy: SuiteCheckoutStrategy::LocalClone,
-                path: "research/evaluation-harness/repos/BenchmarkJava".to_string(),
+                path: "research/evaluation-harness/repos/SecBench.js".to_string(),
                 ignored_by_git: true,
                 local_clone_policy: crate::eval::suite::LocalClonePolicy::RepoRelativeOnly,
             },
             expected: ExpectedSource {
-                format: ExpectedSourceFormat::OwaspExpectedResultsCsv,
-                path: "expectedresults-1.2.csv".to_string(),
+                format: ExpectedSourceFormat::SuiteNative,
+                path: "test/exploitable-paths.json".to_string(),
             },
             scoring: SuiteScoring {
-                native: vec!["owasp_confusion_matrix".to_string()],
+                native: vec!["secbench_js.test_file_count".to_string()],
                 unified: vec!["precision".to_string()],
             },
             tiers: [(
@@ -318,7 +318,7 @@ mod tests {
 
     fn comparison(product: &str, mode: EvaluationMode) -> BenchmarkComparisonRow {
         BenchmarkComparisonRow {
-            suite_id: SuiteId("owasp-java".to_string()),
+            suite_id: SuiteId("secbench-js-smoke".to_string()),
             suite_commit: None,
             mode,
             product: ProductIdentity {
@@ -334,8 +334,9 @@ mod tests {
                 }
             } else {
                 ResultSource::AdapterOnly {
-                    manifest_path: "research/evaluation-harness/suites/owasp-java.toml".to_string(),
-                    reason: "unsupported language".to_string(),
+                    manifest_path: "research/evaluation-harness/suites/secbench-js-smoke.toml"
+                        .to_string(),
+                    reason: "adapter dry run".to_string(),
                 }
             },
             metrics: [("precision".to_string(), 0.5), ("recall".to_string(), 0.25)]

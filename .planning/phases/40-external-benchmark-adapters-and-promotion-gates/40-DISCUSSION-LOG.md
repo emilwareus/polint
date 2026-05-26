@@ -28,9 +28,9 @@ Rationale: This matches the product thesis discussed with the user. Polint must 
 
 Rationale: Vulnerability benchmarks prove user-facing findings; graph/fact/path benchmarks prove CFG/call/data-flow/evidence substrate correctness; adaptation benchmarks prove repo-local extension value.
 
-[auto] Q: "Which targets should come first?" → Selected: "Native fixtures plus one supported-language smoke suite, with OWASP adapter/scoring as a simple external parser/scorer." (recommended default)
+[auto] Q: "Which targets should come first?" → Selected: "Native fixtures plus supported-language smoke suites for TS/JS and Go." (recommended default)
 
-Rationale: Current polint supports Go and TS/JS. Java/Python benchmark suites are useful for adapter/scoring validation but cannot be claimed as real polint analysis until language support exists.
+Rationale: Current polint supports Go and TS/JS, so current benchmark scorecards and adaptation runs should stay inside those languages.
 
 ### Agent adaptation protocol
 
@@ -96,6 +96,5 @@ Rationale: Phase 40 generates evidence for promotion. Phase 41 decides which val
 ## Deferred Ideas
 
 - Stable public eval/query APIs and SDK views remain Phase 41 or later.
-- Full Java/Python scanner execution remains future language-adapter work.
+- Benchmarks for languages without a polint frontend remain future language-adapter work.
 - Full competitor reproduction and broad release-suite runs remain release/research tier after the first supported-language path works.
-

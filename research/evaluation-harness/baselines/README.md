@@ -10,7 +10,7 @@ tables. They must be small, sourceable, and reproducible.
   language support, tier, selector, and deterministic seed.
 - Markdown summaries that state product name, product version, command or source
   citation, retrieved date, metrics, and limitations.
-- Adapter-only summaries that clearly say they are parser/scorer validation, not
+- Adapter-only summaries for supported-suite dry runs, clearly labeled as not
   real polint scanner analysis.
 
 ## Do Not Commit
