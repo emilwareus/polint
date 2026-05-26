@@ -918,6 +918,8 @@ fn evaluation_run_for_fixture(
     let run = crate::eval::report::EvaluationRun {
         schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
         suite_id: "native-fixtures".to_string(),
+        mode: crate::eval::model::EvaluationMode::PolintBaseline,
+        suite_manifest: None,
         cases: vec![crate::eval::report::CaseResult {
             case_id: fixture.manifest.case_id.clone(),
             area: fixture.manifest.area,
@@ -927,6 +929,9 @@ fn evaluation_run_for_fixture(
             runtime,
         }],
         metrics,
+        comparison_rows: Vec::new(),
+        adaptation: None,
+        limitations: Vec::new(),
         output_hash: String::new(),
     };
     let mut run = crate::eval::report::normalize_run(&run);

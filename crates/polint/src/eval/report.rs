@@ -1,12 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cache::stable_hash;
+use crate::eval::adaptation::AdaptationRecord;
+use crate::eval::competitors::BenchmarkComparisonRow;
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
 use crate::eval::model::{
-    AssertionMode, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant, ExpectedItem, ExpectedPath,
-    ExpectedRuntimeBudget, FixtureArea, ObservedFact, ObservedGraphEdge, ObservedInvariant,
-    ObservedItem, ObservedPath, ObservedRuntimeBudget, ObservedStatus,
+    AssertionMode, EvaluationMode, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant,
+    ExpectedItem, ExpectedPath, ExpectedRuntimeBudget, FixtureArea, ObservedFact,
+    ObservedGraphEdge, ObservedInvariant, ObservedItem, ObservedPath, ObservedRuntimeBudget,
+    ObservedStatus,
 };
+use crate::eval::suite::SuiteManifest;
 
 pub(crate) const EVALUATION_SCHEMA_VERSION: &str = "polint-eval-internal-1";
 
@@ -15,8 +19,17 @@ pub(crate) const EVALUATION_SCHEMA_VERSION: &str = "polint-eval-internal-1";
 pub(crate) struct EvaluationRun {
     pub(crate) schema_version: String,
     pub(crate) suite_id: String,
+    pub(crate) mode: EvaluationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) suite_manifest: Option<SuiteManifest>,
     pub(crate) cases: Vec<CaseResult>,
     pub(crate) metrics: MetricSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) comparison_rows: Vec<BenchmarkComparisonRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adaptation: Option<AdaptationRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) limitations: Vec<String>,
     pub(crate) output_hash: String,
 }
 
@@ -117,6 +130,10 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
                 ))
         });
     }
+    normalized
+        .comparison_rows
+        .sort_by_cached_key(canonical_json_key);
+    normalized.limitations.sort();
     normalized
 }
 
@@ -371,12 +388,18 @@ fn status_key(status: ObservedStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::model::{
-        AssertionMode, ExpectedDiagnostic, ExpectedFact, ExpectedGraphEdge, ExpectedInvariant,
-        ExpectedItem, ExpectedPath, ExpectedRuntimeBudget, FixtureArea, ObservedDiagnostic,
-        ObservedFact, ObservedGraphEdge, ObservedInvariant, ObservedItem, ObservedPath,
-        ObservedRuntimeBudget, ObservedStatus,
+    use crate::eval::adaptation::{
+        ADAPTATION_SCHEMA_VERSION, AdaptationAgent, AdaptationBudget, AdaptationOutputs,
+        AdaptationRecord,
     };
+    use crate::eval::competitors::{BenchmarkComparisonRow, ProductIdentity, ResultSource};
+    use crate::eval::model::{
+        AssertionMode, EvaluationMode, ExpectedDiagnostic, ExpectedFact, ExpectedGraphEdge,
+        ExpectedInvariant, ExpectedItem, ExpectedPath, ExpectedRuntimeBudget, FixtureArea,
+        ObservedDiagnostic, ObservedFact, ObservedGraphEdge, ObservedInvariant, ObservedItem,
+        ObservedPath, ObservedRuntimeBudget, ObservedStatus,
+    };
+    use crate::eval::suite::SuiteId;
 
     #[test]
     fn eval_report_normalization_makes_json_order_independent() {
@@ -499,6 +522,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn eval_report_contains_separate_comparison_rows_for_three_benchmark_modes() {
+        let mut run = report_with_order(Ordering::Forward);
+        run.comparison_rows = vec![
+            comparison_row("Semgrep", EvaluationMode::ImportedScanner),
+            comparison_row("polint", EvaluationMode::PolintAgentAdapted),
+            comparison_row("polint", EvaluationMode::PolintBaseline),
+        ];
+
+        let json = to_deterministic_json_pretty(&run);
+
+        assert!(json.contains("\"mode\": \"imported_scanner\""));
+        assert!(json.contains("\"mode\": \"polint_baseline\""));
+        assert!(json.contains("\"mode\": \"polint_agent_adapted\""));
+        assert!(json.contains("\"product\""));
+    }
+
+    #[test]
+    fn eval_report_hash_includes_comparison_and_adaptation_metadata() {
+        let reference = report_with_order(Ordering::Forward);
+        let mut with_comparison = reference.clone();
+        with_comparison.comparison_rows = vec![comparison_row(
+            "CodeQL",
+            EvaluationMode::LocallyReproducedScanner,
+        )];
+        assert_ne!(
+            deterministic_output_hash(&reference),
+            deterministic_output_hash(&with_comparison)
+        );
+
+        let mut with_adaptation = reference.clone();
+        with_adaptation.mode = EvaluationMode::PolintAgentAdapted;
+        with_adaptation.adaptation = Some(adaptation_record("prompt-hash-a"));
+        assert_ne!(
+            deterministic_output_hash(&reference),
+            deterministic_output_hash(&with_adaptation)
+        );
+    }
+
     #[derive(Clone, Copy)]
     enum Ordering {
         Forward,
@@ -517,6 +579,8 @@ mod tests {
         EvaluationRun {
             schema_version: "polint-eval-internal-1".to_string(),
             suite_id: "deterministic-suite".to_string(),
+            mode: EvaluationMode::PolintBaseline,
+            suite_manifest: None,
             cases,
             metrics: MetricSummary {
                 true_positives: 3,
@@ -545,7 +609,58 @@ mod tests {
                 f3: Some(10.0 * 0.75 * 0.6 / (9.0 * 0.75 + 0.6)),
                 false_positive_rate: Some(1.0 / 6.0),
             },
+            comparison_rows: Vec::new(),
+            adaptation: None,
+            limitations: Vec::new(),
             output_hash: String::new(),
+        }
+    }
+
+    fn comparison_row(product: &str, mode: EvaluationMode) -> BenchmarkComparisonRow {
+        BenchmarkComparisonRow {
+            suite_id: SuiteId("deterministic-suite".to_string()),
+            suite_commit: Some("suite-commit".to_string()),
+            mode,
+            product: ProductIdentity {
+                name: product.to_string(),
+                version: Some("1.0.0".to_string()),
+                vendor: None,
+            },
+            result_source: ResultSource::PolintRun {
+                report_path: format!("target/polint-eval/{product}.json"),
+                config_digest: Some("config-digest".to_string()),
+            },
+            metrics: [("precision".to_string(), 0.8)].into_iter().collect(),
+            limitations: Vec::new(),
+        }
+    }
+
+    fn adaptation_record(prompt_hash: &str) -> AdaptationRecord {
+        AdaptationRecord {
+            schema_version: ADAPTATION_SCHEMA_VERSION.to_string(),
+            suite_id: SuiteId("deterministic-suite".to_string()),
+            case_selection: "fast".to_string(),
+            agent: AdaptationAgent {
+                kind: "subagent".to_string(),
+                model: "inherit".to_string(),
+                prompt_path: "research/evaluation-harness/prompts/default-adaptation-agent.md"
+                    .to_string(),
+                prompt_hash: prompt_hash.to_string(),
+                budget: AdaptationBudget {
+                    wall_time_minutes: 60,
+                    max_iterations: 5,
+                },
+            },
+            inputs_allowed: vec!["target repository source".to_string()],
+            inputs_forbidden: vec!["expected labels before adaptation".to_string()],
+            outputs: AdaptationOutputs {
+                rules_or_extensions_changed: Vec::new(),
+                rule_digests: Vec::new(),
+                extension_digests: Vec::new(),
+                notes_path: "target/polint-eval/adaptation-notes.md".to_string(),
+                final_adapted_report_path: "target/polint-eval/adapted.json".to_string(),
+                commands_run: Vec::new(),
+            },
         }
     }
 

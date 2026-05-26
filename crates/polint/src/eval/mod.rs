@@ -6,12 +6,15 @@
     )
 )]
 
+pub(crate) mod adaptation;
+pub(crate) mod competitors;
 pub(crate) mod fixtures;
 pub(crate) mod matcher;
 pub(crate) mod metrics;
 pub(crate) mod model;
 pub(crate) mod observed;
 pub(crate) mod report;
+pub(crate) mod suite;
 
 #[cfg(test)]
 mod direct_call_rows {

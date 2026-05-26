@@ -3540,6 +3540,8 @@ path = "repo"
         EvaluationRun {
             schema_version: "polint-eval-internal-1".to_string(),
             suite_id: "native-fixture".to_string(),
+            mode: crate::eval::model::EvaluationMode::PolintBaseline,
+            suite_manifest: None,
             cases: vec![CaseResult {
                 case_id: "provider-order".to_string(),
                 area: crate::eval::model::FixtureArea::Kernel,
@@ -3579,6 +3581,9 @@ path = "repo"
                 f3: None,
                 false_positive_rate: None,
             },
+            comparison_rows: Vec::new(),
+            adaptation: None,
+            limitations: Vec::new(),
             output_hash: String::new(),
         }
     }
