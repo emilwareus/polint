@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-26T17:59:31.152Z"
+status: milestone_complete
+last_updated: 2026-05-26T18:37:27.267Z
 last_activity: 2026-05-26
 progress:
   total_phases: 22
@@ -11,6 +11,7 @@ progress:
   total_plans: 136
   completed_plans: 136
   percent: 100
+stopped_at: Milestone complete (Phase 41 was final phase)
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 41 — public-sdk-query-views-and-agent-ergonomics
+**Current focus:** Milestone complete
 
 ## Current Status
 
@@ -41,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 41 (public-sdk-query-views-and-agent-ergonomics) — EXECUTING
-Plan: 2 of 5
+Status: Milestone complete
+Phase: 41
+Plan: Complete
 Last activity: 2026-05-26
 
 ## Phase Progress
@@ -71,7 +72,7 @@ Last activity: 2026-05-26
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
-| 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
+| 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
 
 ## Accumulated Context
 
