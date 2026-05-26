@@ -535,7 +535,7 @@ Plans:
 
 **Wave 5** *(blocked on Waves 2, 3, and 4 completion)*
 
-- [ ] 40-05-PLAN.md - Supported-language smoke suites and tier runner
+- [x] 40-05-PLAN.md - Supported-language smoke suites and tier runner
 
 **Wave 6** *(blocked on Waves 1, 3, and 5 completion)*
 
