@@ -1050,13 +1050,21 @@ fn facts_list(_args: &FactsListArgs) -> Result<u8> {
 
 fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
     let limit = args.limit.min(100);
+    let support = public_fact_view(args.capability.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown public fact capability `{}`", args.capability))?;
+    if !support.sampling {
+        anyhow::bail!(
+            "public fact capability `{}` is reserved and does not support sampling yet; see {}",
+            args.capability,
+            support.docs_path
+        );
+    }
     let db = analyze_for_agent_json(
         root,
         &args.paths,
         args.no_cache,
         &[args.capability.as_str()],
     )?;
-    let support = public_fact_view(args.capability.as_str());
     let mut rows = match args.capability.as_str() {
         "resolved_imports" => db
             .resolved_imports()
@@ -1185,9 +1193,6 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                 right.stable_id.as_deref().unwrap_or_default(),
             ))
     });
-    if support.is_none() {
-        anyhow::bail!("unknown public fact capability `{}`", args.capability);
-    }
     let report = FactsSampleReport {
         version: 1,
         schema: POLINT_FACTS_JSON_SCHEMA_V1_URL.to_string(),

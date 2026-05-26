@@ -171,6 +171,22 @@ exclude = []
     assert_eq!(value["limit"], 1);
     assert_eq!(value["sampled"], 1);
     assert_eq!(value["rows"][0]["file"], "src/app.ts");
+
+    let unsupported = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["facts", "sample", "--cap", "dataflow", "--format", "json"])
+            .assert()
+            .failure(),
+    );
+    assert!(
+        unsupported.contains("does not support sampling yet"),
+        "{unsupported}"
+    );
+    assert!(
+        unsupported.contains("docs/facts/data-flow.md"),
+        "{unsupported}"
+    );
 }
 
 #[test]
