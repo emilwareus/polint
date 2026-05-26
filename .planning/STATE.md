@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: executing
-last_updated: "2026-05-26T16:57:34.207Z"
-last_activity: 2026-05-26 -- Phase 41 planning complete
+last_updated: "2026-05-26T17:59:31.152Z"
+last_activity: 2026-05-26
 progress:
   total_phases: 22
-  completed_phases: 21
+  completed_phases: 22
   total_plans: 136
-  completed_plans: 131
-  percent: 95
+  completed_plans: 136
+  percent: 100
 ---
 
 # State: polint
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 Milestone: v1.2 Static Analysis Engine Implementation
 Status: Ready to execute
-Phase: 40 (external-benchmark-adapters-and-promotion-gates) — COMPLETE
-Plan: 8 of 8 complete
-Last activity: 2026-05-26 -- Phase 41 planning complete
+Phase: 41 (public-sdk-query-views-and-agent-ergonomics) — EXECUTING
+Plan: 2 of 5
+Last activity: 2026-05-26
 
 ## Phase Progress
 
