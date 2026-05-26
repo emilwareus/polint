@@ -7,7 +7,9 @@
 )]
 
 pub(crate) mod adaptation;
+pub(crate) mod adapter;
 pub(crate) mod competitors;
+pub(crate) mod external;
 pub(crate) mod fixtures;
 pub(crate) mod matcher;
 pub(crate) mod metrics;
