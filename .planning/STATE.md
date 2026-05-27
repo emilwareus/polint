@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: milestone_complete
-last_updated: 2026-05-27T05:48:50.000Z
+last_updated: 2026-05-27T07:32:55.560Z
 last_activity: 2026-05-27
 progress:
   total_phases: 22
@@ -381,7 +381,7 @@ Last activity: 2026-05-27
 ## Session
 
 - Last session: 2026-05-26
-- Last activity: 2026-05-26 - Removed unsupported-language benchmark artifacts and limited benchmark scope to Go and TS/JS.
+- Last activity: 2026-05-27 - Reconciled v1.2 milestone closeout artifacts before archival.
 - Stopped at: Phase 40 context gathered; ready to plan Phase 40.
 - Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
 
@@ -389,6 +389,7 @@ Last activity: 2026-05-27
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260527-d9f | Reconcile v1.2 milestone closeout artifacts before archival | 2026-05-27 | artifact-only | [260527-d9f-reconcile-v1-2-milestone-closeout-artifa](./quick/260527-d9f-reconcile-v1-2-milestone-closeout-artifa/) |
 | 260527-auc | Document public ResolvedImports and ModuleGraphFacts examples | 2026-05-27 | implemented | [260527-auc-document-public-resolvedimports-and-modu](./quick/260527-auc-document-public-resolvedimports-and-modu/) |
 | 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |
 | 260526-uq2 | Fix Phase 41 review findings for generated fixtures and agent JSON contracts | 2026-05-26 | implemented | [260526-uq2-fix-phase-41-review-findings-for-generat](./quick/260526-uq2-fix-phase-41-review-findings-for-generat/) |
