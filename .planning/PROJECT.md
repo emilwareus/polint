@@ -50,11 +50,27 @@ Archived milestone records:
 - `.planning/milestones/v1.2-MILESTONE-AUDIT.md`
 - `.planning/milestones/v1.2-phases/`
 
-## Current Planning Position
+## Current Milestone: v1.3 Graph Engine Precision
 
-v1.2 is shipped and archived. The next milestone should start from a fresh requirements pass with `/gsd-new-milestone`.
+**Goal:** Turn v1.2's isolated semantic facts (MIR, CFG, calls, types, points-to, data flow) into a unified semantic graph and solver core, and use it to raise Go x/tools RTA and Jelly JS/TS call-graph benchmark scores from <3% to >25-30% recall while keeping precision a first-class target.
 
-The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first; future milestones should continue promoting public SDK/CLI contracts only when fixtures and benchmark gates prove them.
+**Target features:**
+- Benchmark identity and span normalization (Go `RelString` and Jelly span renderers, deduplication, identity-vs-unsupported reporting categories)
+- Reachability and root semantics (explicit roots, reachable-graph scoring, mode-aware oracle alignment)
+- JS/TS function and callsite inventory with exact-span identity hardening (Oxc-backed enumeration matching Jelly expectations)
+- JS/TS scope, binding, imports, and module graph for tracking function flow
+- Go semantic frontend backed by `go/packages` and SSA-style facts (package loading, type checking, receiver types, init functions, method sets)
+- Shared semantic graph and unified call-graph solver consuming direct, refined, entrypoint, and summary facts
+- Go RTA / VTA provider (reachable functions, address-taken, dynamic dispatch, interface invoke matching, fixed-point iteration)
+- JS/TS function-token propagation solver (tokens through assignments, aliases, parameters, returns, closures)
+- JS/TS object, property, prototype, class, and `this` model with allocation-site abstraction and bounded computed handling
+- Adaptation model layer for validated repo-local framework and native models, consumed by the solver with accept/reject reporting
+- Cache and solver budgets threaded throughout (digest inputs, per-family caches, token/property/fanout budgets, cold/warm reporting)
+- Unsupported and unknown taxonomy across providers for trustworthy diagnostic queues
+
+**Source research:** `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md` — current baselines are Go x/tools RTA 10% precision / 2.7% recall and Jelly 25% precision / 0.63% recall. The architectural keystone is a single shared semantic graph / solver core with language-specific frontends feeding it.
+
+The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first; v1.3 should continue promoting public SDK/CLI contracts only when fixtures and benchmark gates prove them.
 
 ## Requirements
 
@@ -117,7 +133,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 
 ### Active
 
-No active v1.2 requirements remain. Next active requirements should be defined with the next milestone.
+v1.3 Graph Engine Precision active requirements are defined in `.planning/REQUIREMENTS.md`. They cover identity/span normalization, reachability and root semantics, JS/TS inventory and binding, Go semantic frontend and RTA, the shared semantic graph and unified call solver, JS/TS function-token propagation and object/property modeling, adaptation models, cache and solver budgets, and unsupported/unknown taxonomy.
 
 ### Out of Scope
 
@@ -201,7 +217,7 @@ No active v1.2 requirements remain. Next active requirements should be defined w
 
 ## Next Milestone Goals
 
-No next milestone has been scoped yet. Start the next cycle with `/gsd-new-milestone` so `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` can be regenerated for the next set of goals.
+v1.3 Graph Engine Precision is the active milestone. See the "Current Milestone" section above and `.planning/REQUIREMENTS.md` / `.planning/ROADMAP.md` for the scoped requirements and phase plan derived from `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md`.
 
 ## Evolution
 
@@ -221,4 +237,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-27 after v1.2 milestone completion*
+*Last updated: 2026-05-27 after v1.3 milestone start*
