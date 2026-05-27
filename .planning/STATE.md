@@ -2,27 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: milestone_complete
-last_updated: 2026-05-27T07:32:55.560Z
-last_activity: 2026-05-27
+status: Awaiting next milestone
+last_updated: "2026-05-27T07:49:08.759Z"
+last_activity: 2026-05-27 — Milestone v1.2 completed and archived
 progress:
   total_phases: 22
   completed_phases: 22
   total_plans: 136
   completed_plans: 136
   percent: 100
-stopped_at: Milestone complete (Phase 41 was final phase)
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-21)
+See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Milestone complete
+**Current focus:** Planning next milestone
 
 ## Current Status
 
@@ -31,8 +30,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 - v1.0 MVP was audited, archived, tagged, and closed on 2026-05-02.
 - v1.1 Capability Fulfillment completed the capability plan, resolved imports/module graph, and symbols/references foundations.
 - Static-analysis engine research completed on 2026-05-16 in `research/ROADMAP.md`.
-- v1.2 requirements are defined in `.planning/REQUIREMENTS.md`.
-- v1.2 roadmap is defined in `.planning/ROADMAP.md`.
+- v1.2 Static Analysis Engine Implementation was audited, archived, and closed on 2026-05-27.
+- v1.2 requirements and roadmap were archived to `.planning/milestones/`; a fresh `.planning/REQUIREMENTS.md` should be created by the next milestone.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
@@ -41,11 +40,101 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 ## Current Position
 
-Milestone: v1.2 Static Analysis Engine Implementation
-Status: Milestone complete
-Phase: 41
-Plan: Complete
-Last activity: 2026-05-27
+Phase: Milestone v1.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-05-27 — Milestone v1.2 completed and archived
+
+## Deferred Items
+
+Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are non-blocking closeout artifacts: legacy quick-task bookkeeping plus UAT audit false positives whose source UAT files are passed with zero open scenarios.
+
+| Category | Item | Status |
+|----------|------|--------|
+| quick_task | `260502-dql-remove-readme-note-that-the-repository-i` | missing |
+| quick_task | `260502-dto-improve-examples-with-real-minimal-linte` | missing |
+| quick_task | `260502-ehi-remove-built-in-rules-and-move-example-r` | missing |
+| quick_task | `260502-qsd-make-examples-self-contained-with-one-lo` | missing |
+| quick_task | `260503-a9n-add-clear-explanatory-comments-to-self-c` | missing |
+| quick_task | `260503-adu-rewrite-example-readmes-to-remove-meta-c` | missing |
+| quick_task | `260503-ba9-add-multi-rule-example-with-one-local-ru` | missing |
+| quick_task | `260503-l2p-publish-main-branch-cli-release-assets-a` | missing |
+| quick_task | `260503-l7c-update-publish-workflow-actions-to-node-` | missing |
+| quick_task | `260503-leg-build-macos-release-targets-from-the-ava` | missing |
+| quick_task | `260503-lht-fix-release-checksum-paths-for-installer` | missing |
+| quick_task | `260503-lwv-add-interactive-cli-skill-installer-for-` | missing |
+| quick_task | `260503-p7f-add-make-install-command-for-source-inst` | missing |
+| quick_task | `260505-e2y-add-readme-try-it-workflow-and-verify-it` | missing |
+| quick_task | `260505-ffu-make-polint-check-run-repo-local-rule-ho` | missing |
+| quick_task | `260506-iuu-fix-staged-review-findings-for-agent-qua` | missing |
+| quick_task | `260507-rap-rule-authoring-platform-hardening` | missing |
+| quick_task | `260509-h5x-fix-capability-roadmap-docs-and-add-real` | missing |
+| quick_task | `260509-ibk-implement-static-capability-derivation-r` | missing |
+| quick_task | `260509-ignores-feature` | missing |
+| quick_task | `260509-macro-rule-boundary-hardening` | missing |
+| quick_task | `260509-rul-remove-manual-rule-escape-hatch` | missing |
+| quick_task | `260509-typed-future-capability-contract` | unknown |
+| quick_task | `260510-check-stats` | missing |
+| quick_task | `260510-dbv-tighten-public-cli-surface-and-remove-in` | missing |
+| quick_task | `260510-dzr-implement-reusable-derived-metric-signal` | missing |
+| quick_task | `260510-eur-prompt-before-overwriting-existing-insta` | missing |
+| quick_task | `260510-f1n-review-and-harden-reusable-metric-signal` | missing |
+| quick_task | `260510-ffh-document-rust-skill-usage-in-agents` | missing |
+| quick_task | `260511-gyu-add-compact-yaml-baseline-and-central-ig` | missing |
+| quick_task | `260511-i7m-make-the-baseline-file-live-only-at-poli` | missing |
+| quick_task | `260512-aop-fix-review-findings-for-baseline-and-mod` | missing |
+| quick_task | `260512-h4g-fix-publish-script-to-be-idempotent-afte` | missing |
+| quick_task | `260512-tga-research-lifecycle-extensibility-archite` | unknown |
+| quick_task | `260512-yml-replace-unsound-serde-yml-dependency` | missing |
+| quick_task | `260513-fga-add-customer-facing-symbol-reference-exa` | completed |
+| quick_task | `260513-gld-fix-symbol-reference-pr-review-findings-` | unknown |
+| quick_task | `260513-hkw-fix-macos-ci-go-symbol-sidecar-test-fail` | unknown |
+| quick_task | `260513-jdo-support-go-1-24-for-the-go-symbols-sidec` | missing |
+| quick_task | `260513-oy0-research-and-design-monorepo-friendly-go` | missing |
+| quick_task | `260513-v1j-fix-final-pr-review-issues-for-monorepo-` | unknown |
+| quick_task | `260514-ci-fix-windows-sidecar-null-json` | unknown |
+| quick_task | `260514-jjl-speed-up-ci-integration-tests-by-reducin` | missing |
+| quick_task | `260515-awz-analyze-and-complete-github-issue-15-shi` | missing |
+| quick_task | `260518-lky-fix-phase-24-critical-review-findings-fo` | unknown |
+| quick_task | `260518-m6j-optimize-local-polint-rule-host-scan-spe` | missing |
+| quick_task | `260518-m7h-fix-follow-up-cache-review-findings-for-` | unknown |
+| quick_task | `260518-pu7-fix-ci-native-eval-layer-cache-runtime-b` | unknown |
+| quick_task | `260518-qzd-research-and-plan-ai-friendly-polint-che` | missing |
+| quick_task | `260519-ci-fix-phase-26-ci-failures` | unknown |
+| quick_task | `260519-fqg-fix-pr-review-findings-for-semantic-inde` | unknown |
+| quick_task | `260519-naj-fix-phase-27-topology-review-issues` | missing |
+| quick_task | `260519-qdf-fix-second-phase-27-topology-review-find` | missing |
+| quick_task | `260519-vl1-full-lockfile-based-package-manager-supp` | missing |
+| quick_task | `260520-9jr-fix-package-manager-topology-review-find` | missing |
+| quick_task | `260520-a6t-fix-pnpm-workspace-package-manager-revie` | missing |
+| quick_task | `260520-ai8-fix-package-manager-topology-review-find` | missing |
+| quick_task | `260520-c7k-fix-security-findings-around-repo-escape` | missing |
+| quick_task | `260520-da2-harden-core-trust-boundaries-and-run-sec` | missing |
+| quick_task | `260520-fpj-fix-remaining-go-work-repo-boundary-secu` | missing |
+| quick_task | `260520-h6j-fix-phase-28-local-mir-correctness-issue` | missing |
+| quick_task | `260520-iba-resolve-pr-33-merge-conflict-against-lat` | missing |
+| quick_task | `260520-ii6-merge-latest-main-security-fixes-into-pr` | missing |
+| quick_task | `260520-jho-speed-up-ci-with-rust-caching-and-lighte` | missing |
+| quick_task | `260521-a5k-fix-cfg-pr-review-findings` | missing |
+| quick_task | `260521-af1-fix-cfg-stored-reachability-for-syntheti` | missing |
+| quick_task | `260521-b38-fix-cfg-digest-payload-and-stable-unsupp` | missing |
+| quick_task | `260521-m9k-fix-critical-pr-review-findings-for-dire` | unknown |
+| quick_task | `260521-nem-add-realistic-structured-coverage-for-di` | unknown |
+| quick_task | `260522-no8-fix-phase-33-scc-closure-review-findings` | unknown |
+| quick_task | `260524-fix-phase35-review-findings` | unknown |
+| quick_task | `260524-fix-phase36-closeout-review-proof` | unknown |
+| quick_task | `260525-c1a-fix-final-review-findings-for-phase-37-r` | missing |
+| quick_task | `260525-d15-fix-ci-failures-from-pr-45-attached-logs` | missing |
+| quick_task | `260525-dtr-fix-pr-45-windows-platform-library-test-` | missing |
+| quick_task | `260525-fix-phase38-39-review-findings` | missing |
+| quick_task | `260525-otb-implement-tdd-data-flow-fixes-for-summar` | missing |
+| quick_task | `260525-refined-call-review-fixes` | unknown |
+| quick_task | `260526-eq9-remove-unsupported-language-benchmark-ar` | missing |
+| quick_task | `260526-fix-graph-review-findings` | unknown |
+| quick_task | `260526-fix-windows-platform-library-ci` | unknown |
+| quick_task | `260526-graph-engine-benchmark-research` | unknown |
+| uat_gap | `Phase 33 33-UAT.md` | passed, open_scenario_count=0 |
+| uat_gap | `Phase 34 34-UAT.md` | passed, open_scenario_count=0 |
 
 ## Phase Progress
 
@@ -427,3 +516,7 @@ Last activity: 2026-05-27
 ## Next Action
 
 Run `/gsd-discuss-phase 40 --auto` to gather context for external benchmark adapters and promotion gates for SAE-PROM-01.
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

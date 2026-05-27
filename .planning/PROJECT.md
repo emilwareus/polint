@@ -38,32 +38,23 @@ Phase 30 of v1.2 completed on 2026-05-21. polint now records private direct call
 
 Phase 31 of v1.2 completed on 2026-05-21. polint now has a private P0 abstract-domain kernel with law-tested lattice contracts, deterministic local solving over MIR/CFG/calls, conservative transfer behavior for uncertainty and budgets, provider/cache/validation/debug/eval wiring, native abstract-domain fixture coverage, and proof that abstract-domain internals do not leak through public SDK, CLI, runner, README, or docs/facts surfaces.
 
+v1.2 Static Analysis Engine Implementation shipped on 2026-05-27. It delivered the full private static-analysis engine substrate from the research roadmap: kernel scheduling, provenance, internal evaluation, cache identity and persistence, semantic backbone, MIR, CFG, calls, abstract domains, summaries, demand queries, extension sinks, framework/trust facts, type/value/alias precision layers, refined calls, data flow, slicing/evidence, benchmark promotion gates, and bounded public SDK/query ergonomics.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
 - `.planning/milestones/v1.0-REQUIREMENTS.md`
 - `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.2-ROADMAP.md`
+- `.planning/milestones/v1.2-REQUIREMENTS.md`
+- `.planning/milestones/v1.2-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.2-phases/`
 
-## Current Milestone: v1.2 Static Analysis Engine Implementation
+## Current Planning Position
 
-**Goal:** Turn the completed static-analysis research roadmap into a private, validated, cache-aware, agent-extensible analysis engine while preserving public API discipline.
+v1.2 is shipped and archived. The next milestone should start from a fresh requirements pass with `/gsd-new-milestone`.
 
-**Target features:**
-
-- Private analysis kernel facade and provider manifests for existing providers.
-- Provenance, precision, validation, stable-key, and merge metadata for fact families.
-- Internal evaluation harness with deterministic fixtures and promotion metrics.
-- Input snapshots, typed cache keys, persistent layer cache, and conservative invalidation.
-- Rule manifests, `polint inspect rule`, and first `polint test` fixture runner.
-- Deepened semantic index and layered module/package/topology graph.
-- Private semantic MIR, place identity, CFG/control dependence, and direct call facts.
-- Abstract-domain, summary, demand-query, and summary-SCC cache foundations.
-- Repo-local Rust extension/provider sink with validation, provenance, precision ceilings, and cache participation.
-- Framework entrypoint, lifecycle, dispatch, and trust-boundary facts.
-- P0 type/value/place/alias substrate, refined call graph providers, data-flow facts, slicing, paths, and evidence bundles.
-- Benchmark adapters, promotion gates, and validated SDK query/agent ergonomics.
-
-The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 should build the substrate first, keep internals private by default, and promote public SDK/CLI contracts only when fixtures and benchmark gates prove them.
+The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first; future milestones should continue promoting public SDK/CLI contracts only when fixtures and benchmark gates prove them.
 
 ## Requirements
 
@@ -210,7 +201,7 @@ No active v1.2 requirements remain. Next active requirements should be defined w
 
 ## Next Milestone Goals
 
-v1.2 Static Analysis Engine Implementation is active. See `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` for scoped requirements and phase mapping. `research/ROADMAP.md` remains the source of truth for the implementation order.
+No next milestone has been scoped yet. Start the next cycle with `/gsd-new-milestone` so `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` can be regenerated for the next set of goals.
 
 ## Evolution
 
@@ -230,4 +221,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-27 after reconciling v1.2 closeout artifacts*
+*Last updated: 2026-05-27 after v1.2 milestone completion*
