@@ -13,6 +13,14 @@ Rules request metric signals through typed fact views:
 polint derives these facts after the Go and TS/JS adapters have populated syntax
 facts and before rules run.
 
+Query helpers are intentionally small and bounded over stored facts:
+
+| View | Helpers |
+|------|---------|
+| `FileMetrics<'_>` | `iter()`, `get(file)`, `for_language(language)`, `over_line_count(max)`, `over_byte_count(max)`, `over_function_count(max)` |
+| `FunctionMetrics<'_>` | `iter()`, `for_file(file)`, `get(function)`, `over_line_count(max)`, `over_byte_count(max)` |
+| `ComplexityMetrics<'_>` | `iter()`, `for_file(file)`, `get(function)`, `over(max)`, `over_complexity(max)` |
+
 ## FileMetricFact
 
 | Field | Meaning |

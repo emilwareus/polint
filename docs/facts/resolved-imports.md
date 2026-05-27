@@ -25,6 +25,11 @@ Query methods:
 | `all()` | Returns all resolved import facts in deterministic database order. |
 | `iter()` | Iterates all resolved import facts. |
 | `for_file(file)` | Iterates resolved imports from one source file. |
+| `resolved_for_file(file)` | Iterates only `Resolved` imports from one source file. |
+| `by_specifier(specifier)` | Iterates resolved import facts whose syntactic import path exactly matches `specifier`. |
+| `unresolved()` | Iterates imports with `Unresolved` status. |
+| `dynamic()` | Iterates imports with `Dynamic` status. |
+| `unsupported()` | Iterates imports with `Unsupported` status. |
 | `unresolved_for_file(file)` | Iterates non-resolved imports from one source file. For running relationship rules this means `Unresolved`, `Dynamic`, or `Unsupported`; `SetupMissing` is reported as a capability diagnostic before rule execution. |
 | `for_import(import)` | Returns the resolved import fact for a syntactic `ImportId`. |
 
@@ -40,6 +45,46 @@ Query methods:
 | `precision` | `ResolutionPrecision` for the result. |
 | `reason` | Optional `UnresolvedReason` for uncertain results. |
 
+## Example: Report Unresolved Imports
+
+Use `ResolvedImports<'_>` when a policy cares about setup-aware resolution
+status instead of just the literal import text:
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-unresolved-imports",
+    description = "Require imports to resolve through project setup.",
+    severity = "warn"
+)]
+fn no_unresolved_imports(
+    ctx: &mut RuleCtx<'_>,
+    imports: ResolvedImports<'_>,
+) -> RuleResult {
+    for import in imports.iter() {
+        if matches!(
+            import.status,
+            ResolutionStatus::Resolved | ResolutionStatus::External
+        ) {
+            continue;
+        }
+
+        ctx.report(
+            Diagnostic::warning(
+                ctx.rule_id(),
+                ctx.file_path(import.from_file),
+                DiagnosticRange::point(1, 1),
+                "Import did not resolve through the configured project setup.",
+            )
+            .with_evidence("status", format!("{:?}", import.status))
+            .with_evidence("precision", format!("{:?}", import.precision)),
+        );
+    }
+    Ok(())
+}
+```
+
 ## ModuleGraphFacts<'_>
 
 `ModuleGraphFacts<'_>` is graph-centric. It exposes normalized file, package,
@@ -52,6 +97,9 @@ Query methods:
 | `nodes()` | Returns all `ModuleNode` records in deterministic order. |
 | `edges()` | Returns all `ModuleEdge` records in deterministic order. |
 | `node_for_file(file)` | Returns the first file node for a source file. |
+| `nodes_for_package(package_name)` | Iterates graph nodes whose label or source package name matches `package_name`. |
+| `edges_from_file(file)` | Iterates outgoing edges from the first file node for a source file. |
+| `imports_between(from, to)` | Iterates graph edges from one file node to another when both files have graph nodes. |
 | `outgoing(node)` | Iterates outgoing edges for a node. |
 | `incoming(node)` | Iterates incoming edges for a node. |
 | `dependency_status(edge)` | Returns the `ResolutionStatus` attached to an edge. |
@@ -79,6 +127,55 @@ Query methods:
 | `resolved_import` | `ResolvedImportId` when the edge came from a resolved import fact. |
 | `kind` | `Contains`, `Imports`, or `DependsOn`. |
 | `status` | Resolution status for dependency edges. |
+
+## Example: Disallow UI To Domain Edges
+
+Use `ModuleGraphFacts<'_>` when a policy is about relationships between files,
+packages, modules, or external dependencies:
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-ui-to-domain",
+    description = "Disallow UI files importing domain files directly.",
+    severity = "error"
+)]
+fn no_ui_to_domain(
+    ctx: &mut RuleCtx<'_>,
+    graph: ModuleGraphFacts<'_>,
+) -> RuleResult {
+    for edge in graph.edges() {
+        let Some(source) = graph.nodes().iter().find(|node| node.id == edge.from) else {
+            continue;
+        };
+        let Some(target) = graph.nodes().iter().find(|node| node.id == edge.to) else {
+            continue;
+        };
+
+        if !source.label.starts_with("src/ui/") || !target.label.starts_with("src/domain/") {
+            continue;
+        }
+
+        let file = source
+            .file
+            .map(|file| ctx.file_path(file))
+            .unwrap_or_else(|| source.label.clone());
+        ctx.report(
+            Diagnostic::error(
+                ctx.rule_id(),
+                file,
+                DiagnosticRange::point(1, 1),
+                "UI code must not import the domain layer directly.",
+            )
+            .with_evidence("source", source.label.clone())
+            .with_evidence("target", target.label.clone())
+            .with_evidence("status", format!("{:?}", graph.dependency_status(edge))),
+        );
+    }
+    Ok(())
+}
+```
 
 ## Status, Precision, And Reasons
 

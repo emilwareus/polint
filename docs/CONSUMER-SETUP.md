@@ -88,9 +88,21 @@ range_start_column = 21
 The JSON report schema is
 [`polint-test-report-v1.json`](schemas/polint-test-report-v1.json).
 
-`polint inspect rule` and `polint test` are the supported public authoring loop
-in this phase. Broad facts/unknowns/model/provider/cache inspect commands are
-not supported yet.
+Agents can also use bounded public inspection JSON:
+
+```bash
+polint facts list --format json
+polint facts sample --cap resolved_imports --limit 20 --format json
+polint unknowns --cap references --format json
+polint explain --rule custom/no-raw-colors --format json
+```
+
+`polint facts` lists stable and reserved public fact-view dispositions and
+samples only bounded public fields. `polint unknowns` reports setup and
+resolution gaps for supported public facts and returns an unsupported row for
+reserved capabilities. `polint explain` reports macro-derived fact views and
+capability support without exposing provider execution graphs, layer-cache
+internals, or eval/debug schemas.
 
 ## Environment variables
 

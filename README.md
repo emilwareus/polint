@@ -55,12 +55,20 @@ Expected output:
 polint init
 polint add-skill
 polint new-rule ts no-raw-colors
+polint test --format json
+polint inspect rule --format json
 polint check
 ```
 
 `polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/output/`, `.polint/.gitignore` (ignoring `cache/` and `output/`), and root `rust-toolchain.toml` when missing (see [Minimum Rust version](#minimum-rust-version)).
 `polint new-rule <go|ts|js|generic> <name>` adds a Rust rule module to your
 local rule pack. `polint check` discovers and runs that rule pack.
+Generated rules include positive and negative fixture cases under
+`.polint/tests/rules/`, so `polint test --format json` can verify the local
+policy loop before you run it across the workspace. `polint inspect rule
+--format json`, `polint facts list --format json`, `polint unknowns --cap
+references --format json`, and `polint explain --rule <id> --format json` are
+bounded, versioned JSON surfaces for agent workflows.
 
 Rule packs live in your repo:
 

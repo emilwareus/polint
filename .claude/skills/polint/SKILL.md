@@ -16,6 +16,8 @@ policy rules; every policy belongs to the repository that needs it.
 polint init
 polint new-rule go require-error-branch-tests
 polint new-rule ts no-raw-colors
+polint test --format json
+polint inspect rule --format json
 polint check --format ai-friendly --fail-on none
 ```
 
@@ -92,8 +94,29 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs` and wires it
-into `src/main.rs`. See `examples/multiple-rules` in the polint repo for several
-rules in one pack.
+into `src/main.rs`, then creates positive and negative fixture cases under
+`.polint/tests/rules/<name_with_underscores>/`. See `examples/multiple-rules` in
+the polint repo for several rules in one pack.
+
+## Agent JSON
+
+Use versioned, bounded JSON commands when deciding what a rule can request:
+
+```bash
+polint inspect rule --format json
+polint test --format json
+polint facts list --format json
+polint facts sample --cap resolved_imports --limit 20 --format json
+polint unknowns --cap references --format json
+polint explain --rule local/no-raw-colors --format json
+```
+
+`facts list` reports stable and reserved fact-view dispositions. `facts sample`
+requires a bounded limit and emits only public fact fields. `unknowns` reports
+public setup/resolution gaps for supported facts and unsupported rows for
+reserved capabilities such as dataflow. `explain` reports macro-derived fact
+views and capability support; it does not expose provider execution graphs,
+layer-cache internals, or eval/debug schemas.
 
 ## Writing A Rule
 
@@ -208,6 +231,7 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
+- Treat `Cfg<'_>`, `CallGraph<'_>`, `DataFlow<'_>`, `Evidence<'_>`, model packs, provider extensions, and `polint eval` as reserved/preview/internal unless public docs and temp-repo tests explicitly promote them.
 - Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.

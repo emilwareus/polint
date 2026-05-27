@@ -268,6 +268,20 @@ impl AnalysisPlan {
         }
     }
 
+    pub(crate) fn from_capability_names(names: &[&str]) -> Self {
+        let rules = vec![PlannedRule {
+            id: "polint/requested-capabilities".to_string(),
+            description: "Requested capability analysis".to_string(),
+            severity: Severity::Warn,
+            requested_capabilities: names.iter().map(|name| (*name).to_string()).collect(),
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            options_digest: deterministic_rule_options(&RuleOptions::default()),
+        }];
+        let capabilities = plan_capabilities(&rules);
+        Self::finish(rules, capabilities, Vec::new())
+    }
+
     #[cfg(test)]
     pub(crate) fn from_capability_names_for_test(names: &[&str]) -> Self {
         let rules = vec![PlannedRule {
@@ -525,7 +539,7 @@ fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagn
     let docs_path = capability
         .docs_path
         .as_deref()
-        .unwrap_or("docs/roadmap/00_ROADMAP.md");
+        .unwrap_or("docs/facts/capability-plans.md");
     let help = match capability.status {
         CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
         CapabilitySupportStatus::Unsupported => format!(
@@ -647,19 +661,25 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             CapabilitySupportStatus::Unsupported,
             Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
             Some("Use go_tests for current Go test evidence.".to_string()),
-            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+            Some("docs/facts/capability-plans.md".to_string()),
         ),
-        "cfg" | "call_graph" | "dataflow" | "coverage_facts" => (
+        "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is reserved for a later phase.".to_string()),
             None,
-            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+            Some("docs/facts/capability-plans.md".to_string()),
+        ),
+        "dataflow" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Capability is reserved until bounded public data-flow queries have docs, tests, and setup behavior.".to_string()),
+            None,
+            Some("docs/facts/data-flow.md".to_string()),
         ),
         _ => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is not recognized by this analysis plan schema.".to_string()),
             None,
-            Some("docs/roadmap/00_ROADMAP.md".to_string()),
+            Some("docs/facts/capability-plans.md".to_string()),
         ),
     };
 
@@ -1017,7 +1037,7 @@ mod tests {
                 && diagnostic
                     .help
                     .as_deref()
-                    .is_some_and(|help| help.contains("docs/roadmap/00_ROADMAP.md"))
+                    .is_some_and(|help| help.contains("docs/facts/capability-plans.md"))
                 && diagnostic.evidence.iter().any(|evidence| {
                     evidence.label == "rule" && evidence.value == "local/needs-metrics"
                 })
@@ -1050,7 +1070,7 @@ mod tests {
         );
         assert_eq!(
             accumulator.docs_path.as_deref(),
-            Some("docs/roadmap/00_ROADMAP.md")
+            Some("docs/facts/capability-plans.md")
         );
 
         let plan = AnalysisPlan::from_capability_names_for_test(&["call_graph"]);
@@ -1066,7 +1086,7 @@ mod tests {
         );
         assert_eq!(
             capability.docs_path.as_deref(),
-            Some("docs/roadmap/00_ROADMAP.md")
+            Some("docs/facts/capability-plans.md")
         );
     }
 

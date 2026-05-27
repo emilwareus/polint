@@ -9,7 +9,10 @@ use crate::cache::{
     CachePruneReport, CacheStatus, POLINT_CACHE_DIR_ENV,
 };
 use crate::config::{LoadedConfig, default_config_toml, load_config};
-use crate::core::{AnalysisDb, Language, Rule, RuleOptions, rule_id_matches, run_rules};
+use crate::core::{
+    AnalysisDb, Language, ResolutionStatus, Rule, RuleOptions, SymbolPrecision,
+    SymbolResolutionStatus, rule_id_matches, run_rules,
+};
 use crate::diagnostics::{
     AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
     apply_report_filters, build_ai_friendly_report, diagnostics_from_public_json_report,
@@ -170,6 +173,12 @@ enum Command {
     Cache(CacheArgs),
     /// Inspect polint configuration and repo-local rule manifests.
     Inspect(InspectArgs),
+    /// List or sample supported public fact views.
+    Facts(FactsArgs),
+    /// Report public setup and resolution unknowns.
+    Unknowns(UnknownsArgs),
+    /// Explain rule capability planning.
+    Explain(ExplainArgs),
     /// Run repo-local rule fixture tests.
     Test(TestArgs),
     /// Run enabled rules.
@@ -202,6 +211,72 @@ struct CacheArgs {
 struct InspectArgs {
     #[command(subcommand)]
     command: InspectCommand,
+}
+
+#[derive(Debug, Args, Clone)]
+struct FactsArgs {
+    #[command(subcommand)]
+    command: FactsCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+enum FactsCommand {
+    /// List supported and reserved public fact-view capabilities.
+    List(FactsListArgs),
+    /// Sample a bounded set of public facts for one capability.
+    Sample(FactsSampleArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct FactsListArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
+}
+
+#[derive(Debug, Args, Clone)]
+struct FactsSampleArgs {
+    /// Capability to sample, such as resolved_imports, symbols, references, or file_metrics.
+    #[arg(long = "cap", value_name = "CAPABILITY")]
+    capability: String,
+    /// Maximum number of rows to return.
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    limit: usize,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
+    /// Files or directories to analyze. Defaults to workspace config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Disable analysis/fact cache reads and writes.
+    #[arg(long)]
+    no_cache: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+struct UnknownsArgs {
+    /// Capability to inspect, such as resolved_imports, symbols, references, or dataflow.
+    #[arg(long = "cap", value_name = "CAPABILITY")]
+    capability: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
+    /// Files or directories to analyze. Defaults to workspace config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Disable analysis/fact cache reads and writes.
+    #[arg(long)]
+    no_cache: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+struct ExplainArgs {
+    /// Rule id to explain. When omitted, all discovered rules are included.
+    #[arg(long, value_name = "RULE_ID")]
+    rule: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -422,6 +497,11 @@ enum TestFormatArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum AgentJsonFormatArg {
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CacheStatusFormatArg {
     Human,
     Json,
@@ -466,6 +546,9 @@ pub(crate) fn run() -> Result<u8> {
         Command::Baseline(args) => baseline(std::env::current_dir()?, &args),
         Command::Cache(args) => cache_command(std::env::current_dir()?, &args),
         Command::Inspect(args) => inspect(std::env::current_dir()?, &args),
+        Command::Facts(args) => facts(std::env::current_dir()?, &args),
+        Command::Unknowns(args) => unknowns(std::env::current_dir()?, &args),
+        Command::Explain(args) => explain(std::env::current_dir()?, &args),
         Command::Test(args) => test(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
@@ -740,65 +823,108 @@ fn write_rule_fixture_skeleton(
     rule_name: &str,
     module: &str,
 ) -> Result<()> {
-    let case_dir = root.join(".polint/tests/rules").join(module).join("basic");
-    if case_dir.exists() {
+    let rule_tests_dir = root.join(".polint/tests/rules").join(module);
+    if rule_tests_dir.exists() {
         return Ok(());
     }
+    let fixture_file = match language {
+        "go" => "src/example.go",
+        _ => "src/example.ts",
+    };
+    write_rule_fixture_case(
+        &rule_tests_dir.join("positive"),
+        language,
+        &rule_fixture_positive_source_template(language),
+        &rule_fixture_manifest_template(rule_name, fixture_file, false),
+    )?;
+    write_rule_fixture_case(
+        &rule_tests_dir.join("negative"),
+        language,
+        &rule_fixture_negative_source_template(language),
+        &rule_fixture_manifest_template(rule_name, fixture_file, true),
+    )?;
+    Ok(())
+}
 
+fn write_rule_fixture_case(
+    case_dir: &Path,
+    language: &str,
+    source: &str,
+    manifest: &str,
+) -> Result<()> {
     let source_path = match language {
         "go" => case_dir.join("src/example.go"),
         _ => case_dir.join("src/example.ts"),
     };
-    fs::create_dir_all(source_path.parent().unwrap_or(&case_dir))
+    fs::create_dir_all(source_path.parent().unwrap_or(case_dir))
         .with_context(|| format!("failed to create {}", case_dir.display()))?;
-    let fixture_file = source_path
-        .strip_prefix(&case_dir)
-        .unwrap_or(&source_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    fs::write(
-        case_dir.join("polint-test.toml"),
-        rule_fixture_manifest_template(rule_name, &fixture_file),
-    )
-    .with_context(|| {
+    fs::write(case_dir.join("polint-test.toml"), manifest).with_context(|| {
         format!(
             "failed to write {}",
             case_dir.join("polint-test.toml").display()
         )
     })?;
-    fs::write(&source_path, rule_fixture_source_template(language))
+    fs::write(&source_path, source)
         .with_context(|| format!("failed to write {}", source_path.display()))?;
     Ok(())
 }
 
-fn rule_fixture_manifest_template(rule_name: &str, fixture_file: &str) -> String {
+fn rule_fixture_manifest_template(
+    rule_name: &str,
+    fixture_file: &str,
+    expect_diagnostic: bool,
+) -> String {
+    let expected = if expect_diagnostic {
+        format!(
+            r#"
+[[expect.diagnostic]]
+rule_id = "custom/{rule_name}"
+file = "{fixture_file}"
+severity = "warn"
+message_contains = "Project-specific policy"
+"#
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"rule = "custom/{rule_name}"
 paths = ["src/**"]
 
 [expect]
-# Uncomment after the rule reports diagnostics:
-# [[expect.diagnostic]]
-# rule_id = "custom/{rule_name}"
-# file = "{fixture_file}"
-# severity = "warn"
-# message_contains = "Project-specific policy"
+{expected}
 "#
     )
 }
 
-fn rule_fixture_source_template(language: &str) -> &'static str {
+fn rule_fixture_positive_source_template(language: &str) -> String {
     match language {
-        "go" => {
-            r#"package main
+        "go" => r#"package main
 
 func main() {}
 "#
-        }
-        _ => {
-            r#"export const example = "replace me";
+        .to_string(),
+        _ => r#"export const example = "allowed";
 "#
-        }
+        .to_string(),
+    }
+}
+
+fn rule_fixture_negative_source_template(language: &str) -> String {
+    match language {
+        "go" => r#"package main
+
+func replaceMe(err error) error {
+	if err != nil {
+		return err
+	}
+	return nil
+}
+"#
+        .to_string(),
+        _ => r#"export const example = "replace me";
+"#
+        .to_string(),
     }
 }
 
@@ -812,14 +938,22 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
     let query_example = match language {
         "go" => {
             r#"    for branch in branches.iter() {
-        let related_test_count = tests.related_for_file(branch.file).len();
-        let _ = related_test_count;
+        if branch.is_error_path && tests.related_for_file(branch.file).is_empty() {
+            ctx.warn(
+                &branch.decision_span,
+                "Project-specific policy (heuristic): add nearby test evidence for this Go error branch.",
+            );
+        }
     }"#
         }
         "ts" | "tsx" | "js" | "jsx" => {
-            r#"    let literal_count = literals.iter().count();
+            r#"    for literal in literals.iter() {
+        if literal.value == "replace me" {
+            ctx.warn(&literal.span, "Project-specific policy: replace this placeholder literal.");
+        }
+    }
     let attribute_count = jsx.iter().count();
-    let _ = (literal_count, attribute_count);"#
+    let _ = attribute_count;"#
         }
         _ => {
             r#"    let function_count = functions.iter().count();
@@ -834,11 +968,9 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
     description = "Project-specific policy: {rule_name}.",
     severity = "warn"
 )]
-pub(crate) fn {module}(_ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
+pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
-    // To report a diagnostic, call _ctx.warn(&some_fact.span, "message")
-    // or _ctx.report(Diagnostic::...). Custom TOML fields are in
-    // _ctx.options().settings.
+    let _ = ctx.options().settings.len();
     Ok(())
 }}
 "#
@@ -911,6 +1043,332 @@ fn inspect(root: PathBuf, args: &InspectArgs) -> Result<u8> {
     match &args.command {
         InspectCommand::Rule(rule_args) => inspect_rule(&root, rule_args),
     }
+}
+
+fn facts(root: PathBuf, args: &FactsArgs) -> Result<u8> {
+    match &args.command {
+        FactsCommand::List(list_args) => facts_list(list_args),
+        FactsCommand::Sample(sample_args) => facts_sample(&root, sample_args),
+    }
+}
+
+fn facts_list(_args: &FactsListArgs) -> Result<u8> {
+    println!("{}", serde_json::to_string_pretty(&FactsListReport::new())?);
+    Ok(0)
+}
+
+fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
+    let limit = args.limit.min(100);
+    let support = public_fact_view(args.capability.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown public fact capability `{}`", args.capability))?;
+    if !support.sampling {
+        anyhow::bail!(
+            "public fact capability `{}` is reserved and does not support sampling yet; see {}",
+            args.capability,
+            support.docs_path
+        );
+    }
+    let db = analyze_for_agent_json(
+        root,
+        &args.paths,
+        args.no_cache,
+        &[args.capability.as_str()],
+    )?;
+    let mut rows = match args.capability.as_str() {
+        "resolved_imports" => db
+            .resolved_imports()
+            .iter()
+            .map(|fact| {
+                PublicFactSampleRow::new(
+                    db.path_for(fact.from_file),
+                    None,
+                    status_label(fact.status),
+                    Some(resolution_precision_label(fact.precision).to_string()),
+                    Some(format!("resolved_import:{}", fact.id.0)),
+                )
+            })
+            .collect(),
+        "module_graph" => db
+            .module_edges()
+            .iter()
+            .map(|edge| {
+                PublicFactSampleRow::new(
+                    "<module-graph>".to_string(),
+                    None,
+                    status_label(edge.status),
+                    None,
+                    Some(format!("module_edge:{}", edge.id.0)),
+                )
+            })
+            .collect(),
+        "symbols" => db
+            .symbols()
+            .iter()
+            .map(|symbol| {
+                PublicFactSampleRow::new(
+                    symbol
+                        .file
+                        .map(|file| db.path_for(file))
+                        .unwrap_or_else(|| "<workspace>".to_string()),
+                    symbol.primary_span.as_ref().map(span_start),
+                    "present",
+                    Some(symbol_precision_label(symbol.precision).to_string()),
+                    Some(symbol.stable_key.clone()),
+                )
+            })
+            .collect(),
+        "references" => db
+            .references()
+            .iter()
+            .map(|reference| {
+                PublicFactSampleRow::new(
+                    reference
+                        .file
+                        .map(|file| db.path_for(file))
+                        .unwrap_or_else(|| "<workspace>".to_string()),
+                    reference.primary_span.as_ref().map(span_start),
+                    symbol_status_label(reference.status),
+                    Some(symbol_precision_label(reference.precision).to_string()),
+                    Some(reference.stable_key.clone()),
+                )
+            })
+            .collect(),
+        "file_metrics" => db
+            .file_metrics()
+            .iter()
+            .map(|metric| {
+                PublicFactSampleRow::new(
+                    db.path_for(metric.file),
+                    None,
+                    "present",
+                    None,
+                    Some(format!(
+                        "lines:{};bytes:{};functions:{}",
+                        metric.line_count, metric.byte_count, metric.function_count
+                    )),
+                )
+            })
+            .collect(),
+        "function_metrics" => db
+            .function_metrics()
+            .iter()
+            .map(|metric| {
+                PublicFactSampleRow::new(
+                    db.path_for(metric.file),
+                    Some(span_start(&metric.span)),
+                    "present",
+                    None,
+                    Some(format!(
+                        "function:{};lines:{};bytes:{}",
+                        metric.name, metric.line_count, metric.byte_count
+                    )),
+                )
+            })
+            .collect(),
+        "complexity_metrics" => db
+            .complexity_metrics()
+            .iter()
+            .map(|metric| {
+                PublicFactSampleRow::new(
+                    db.path_for(metric.file),
+                    Some(span_start(&metric.span)),
+                    "present",
+                    None,
+                    Some(format!(
+                        "function:{};cyclomatic_complexity:{}",
+                        metric.name, metric.cyclomatic_complexity
+                    )),
+                )
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    rows.sort_by(|left, right| {
+        (
+            left.file.as_str(),
+            left.span.as_ref().map(|span| (span.line, span.column)),
+            left.stable_id.as_deref().unwrap_or_default(),
+        )
+            .cmp(&(
+                right.file.as_str(),
+                right.span.as_ref().map(|span| (span.line, span.column)),
+                right.stable_id.as_deref().unwrap_or_default(),
+            ))
+    });
+    rows.truncate(limit);
+    let report = FactsSampleReport {
+        version: 1,
+        schema: POLINT_FACTS_JSON_SCHEMA_V1_URL.to_string(),
+        tool: polint_tool_info(),
+        capability: args.capability.clone(),
+        limit,
+        sampled: rows.len(),
+        rows,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(0)
+}
+
+fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
+    let support = public_fact_view(&args.capability);
+    if support
+        .as_ref()
+        .is_none_or(|view| view.stability != "stable" || !view.unknowns)
+    {
+        let report = UnknownsReport {
+            version: 1,
+            schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+            tool: polint_tool_info(),
+            capability: args.capability.clone(),
+            rows: vec![UnknownsRow {
+                file: "<workspace>".to_string(),
+                span: None,
+                status: "unsupported".to_string(),
+                reason: Some("Capability does not support public unknown inspection.".to_string()),
+                precision: None,
+                docs_path: support
+                    .map(|view| view.docs_path.to_string())
+                    .or_else(|| Some("docs/facts/capability-plans.md".to_string())),
+                suggested_artifact: Some("provider".to_string()),
+            }],
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(2);
+    }
+
+    let db = analyze_for_agent_json(
+        &root,
+        &args.paths,
+        args.no_cache,
+        &[args.capability.as_str()],
+    )?;
+    let mut rows = match args.capability.as_str() {
+        "resolved_imports" => db
+            .resolved_imports()
+            .iter()
+            .filter(|fact| fact.status != ResolutionStatus::Resolved)
+            .map(|fact| UnknownsRow {
+                file: db.path_for(fact.from_file),
+                span: None,
+                status: status_label(fact.status).to_string(),
+                reason: fact
+                    .reason
+                    .map(|reason| unresolved_reason_label(reason).to_string()),
+                precision: Some(resolution_precision_label(fact.precision).to_string()),
+                docs_path: Some("docs/facts/resolved-imports.md".to_string()),
+                suggested_artifact: Some(artifact_for_resolution_status(fact.status).to_string()),
+            })
+            .collect(),
+        "symbols" => db
+            .symbols()
+            .iter()
+            .filter(|symbol| {
+                matches!(
+                    symbol.precision,
+                    SymbolPrecision::Unresolved
+                        | SymbolPrecision::Ambiguous
+                        | SymbolPrecision::SetupMissing
+                        | SymbolPrecision::Unsupported
+                )
+            })
+            .map(|symbol| UnknownsRow {
+                file: symbol
+                    .file
+                    .map(|file| db.path_for(file))
+                    .unwrap_or_else(|| "<workspace>".to_string()),
+                span: symbol.primary_span.as_ref().map(span_start),
+                status: symbol_precision_label(symbol.precision).to_string(),
+                reason: Some("symbol precision is not exact".to_string()),
+                precision: Some(symbol_precision_label(symbol.precision).to_string()),
+                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
+                suggested_artifact: Some("model".to_string()),
+            })
+            .collect(),
+        "references" => db
+            .references()
+            .iter()
+            .filter(|reference| reference.status != SymbolResolutionStatus::Resolved)
+            .map(|reference| UnknownsRow {
+                file: reference
+                    .file
+                    .map(|file| db.path_for(file))
+                    .unwrap_or_else(|| "<workspace>".to_string()),
+                span: reference.primary_span.as_ref().map(span_start),
+                status: symbol_status_label(reference.status).to_string(),
+                reason: Some("reference did not resolve to exactly one public symbol".to_string()),
+                precision: Some(symbol_precision_label(reference.precision).to_string()),
+                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
+                suggested_artifact: Some("model".to_string()),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    rows.sort_by(|left, right| {
+        (
+            left.file.as_str(),
+            left.span.as_ref().map(|span| (span.line, span.column)),
+            left.status.as_str(),
+            left.reason.as_deref().unwrap_or_default(),
+        )
+            .cmp(&(
+                right.file.as_str(),
+                right.span.as_ref().map(|span| (span.line, span.column)),
+                right.status.as_str(),
+                right.reason.as_deref().unwrap_or_default(),
+            ))
+    });
+    let report = UnknownsReport {
+        version: 1,
+        schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+        tool: polint_tool_info(),
+        capability: args.capability.clone(),
+        rows,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(0)
+}
+
+fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
+    let manifests = discover_local_rule_hosts(&root)?;
+    let mut rules = Vec::new();
+    for manifest in &manifests {
+        let host_path = local_manifest_path(&root, manifest);
+        let report = run_local_rule_host_inspect(&root, manifest)?;
+        rules.extend(
+            report
+                .rules
+                .into_iter()
+                .map(|rule| rule.with_host_path(host_path.clone())),
+        );
+    }
+    if let Some(rule) = &args.rule {
+        rules.retain(|candidate| candidate.rule_id == *rule);
+        if rules.is_empty() {
+            anyhow::bail!("no registered rule matched `{rule}`");
+        }
+    }
+    let report = ExplainReport {
+        version: 1,
+        schema: POLINT_EXPLAIN_JSON_SCHEMA_V1_URL.to_string(),
+        tool: polint_tool_info(),
+        scope: args.rule.clone().unwrap_or_else(|| "all_rules".to_string()),
+        rules: rules
+            .into_iter()
+            .map(|rule| ExplainRuleRow {
+                rule_id: rule.rule_id,
+                host_path: rule.host_path,
+                fact_views: rule
+                    .fact_views
+                    .into_iter()
+                    .map(|view| view.view_type)
+                    .collect(),
+                capabilities: rule.capability_support,
+            })
+            .collect(),
+        public_capabilities: FactsListReport::new().views,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(0)
 }
 
 fn inspect_rule(root: &Path, args: &InspectRuleArgs) -> Result<u8> {
@@ -1036,6 +1494,384 @@ struct CacheStatusWire<'a> {
     schema: &'static str,
     #[serde(flatten)]
     status: &'a CacheStatus,
+}
+
+const POLINT_FACTS_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-facts-v1.json";
+const POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-unknowns-v1.json";
+const POLINT_EXPLAIN_JSON_SCHEMA_V1_URL: &str =
+    "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-explain-v1.json";
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicFactView {
+    capability: &'static str,
+    view_type: &'static str,
+    canonical_path: &'static str,
+    stability: &'static str,
+    docs_path: &'static str,
+    sampling: bool,
+    unknowns: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FactsListReport {
+    version: u32,
+    schema: String,
+    tool: crate::diagnostics::PolintToolInfo,
+    views: Vec<PublicFactView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FactsSampleReport {
+    version: u32,
+    schema: String,
+    tool: crate::diagnostics::PolintToolInfo,
+    capability: String,
+    limit: usize,
+    sampled: usize,
+    rows: Vec<PublicFactSampleRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicFactSampleRow {
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<PublicSpan>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stable_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnknownsReport {
+    version: u32,
+    schema: String,
+    tool: crate::diagnostics::PolintToolInfo,
+    capability: String,
+    rows: Vec<UnknownsRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnknownsRow {
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<PublicSpan>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    docs_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_artifact: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ExplainReport {
+    version: u32,
+    schema: String,
+    tool: crate::diagnostics::PolintToolInfo,
+    scope: String,
+    rules: Vec<ExplainRuleRow>,
+    public_capabilities: Vec<PublicFactView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ExplainRuleRow {
+    rule_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_path: Option<String>,
+    fact_views: Vec<String>,
+    capabilities: Vec<crate::rule_manifest::CapabilitySupportWire>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct PublicSpan {
+    line: u32,
+    column: u32,
+}
+
+impl PublicFactSampleRow {
+    fn new(
+        file: String,
+        span: Option<PublicSpan>,
+        status: impl Into<String>,
+        precision: Option<String>,
+        stable_id: Option<String>,
+    ) -> Self {
+        Self {
+            file,
+            span,
+            status: status.into(),
+            precision,
+            stable_id,
+        }
+    }
+}
+
+impl FactsListReport {
+    fn new() -> Self {
+        let mut views = vec![
+            public_fact_view("resolved_imports").unwrap(),
+            public_fact_view("module_graph").unwrap(),
+            public_fact_view("symbols").unwrap(),
+            public_fact_view("references").unwrap(),
+            public_fact_view("file_metrics").unwrap(),
+            public_fact_view("function_metrics").unwrap(),
+            public_fact_view("complexity_metrics").unwrap(),
+            public_fact_view("cfg").unwrap(),
+            public_fact_view("call_graph").unwrap(),
+            public_fact_view("dataflow").unwrap(),
+            public_fact_view("coverage_facts").unwrap(),
+            public_fact_view("test_suite_metrics").unwrap(),
+        ];
+        views.sort_by(|left, right| left.capability.cmp(right.capability));
+        Self {
+            version: 1,
+            schema: POLINT_FACTS_JSON_SCHEMA_V1_URL.to_string(),
+            tool: polint_tool_info(),
+            views,
+        }
+    }
+}
+
+fn public_fact_view(capability: &str) -> Option<PublicFactView> {
+    let view = match capability {
+        "resolved_imports" => PublicFactView {
+            capability: "resolved_imports",
+            view_type: "ResolvedImports",
+            canonical_path: "polint::sdk::facts::ResolvedImports<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/resolved-imports.md",
+            sampling: true,
+            unknowns: true,
+        },
+        "module_graph" => PublicFactView {
+            capability: "module_graph",
+            view_type: "ModuleGraphFacts",
+            canonical_path: "polint::sdk::facts::ModuleGraphFacts<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/resolved-imports.md",
+            sampling: true,
+            unknowns: false,
+        },
+        "symbols" => PublicFactView {
+            capability: "symbols",
+            view_type: "Symbols",
+            canonical_path: "polint::sdk::facts::Symbols<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/symbols-and-references.md",
+            sampling: true,
+            unknowns: true,
+        },
+        "references" => PublicFactView {
+            capability: "references",
+            view_type: "References",
+            canonical_path: "polint::sdk::facts::References<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/symbols-and-references.md",
+            sampling: true,
+            unknowns: true,
+        },
+        "file_metrics" => PublicFactView {
+            capability: "file_metrics",
+            view_type: "FileMetrics",
+            canonical_path: "polint::sdk::facts::FileMetrics<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/metrics.md",
+            sampling: true,
+            unknowns: false,
+        },
+        "function_metrics" => PublicFactView {
+            capability: "function_metrics",
+            view_type: "FunctionMetrics",
+            canonical_path: "polint::sdk::facts::FunctionMetrics<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/metrics.md",
+            sampling: true,
+            unknowns: false,
+        },
+        "complexity_metrics" => PublicFactView {
+            capability: "complexity_metrics",
+            view_type: "ComplexityMetrics",
+            canonical_path: "polint::sdk::facts::ComplexityMetrics<'_>",
+            stability: "stable",
+            docs_path: "docs/facts/metrics.md",
+            sampling: true,
+            unknowns: false,
+        },
+        "cfg" => PublicFactView {
+            capability: "cfg",
+            view_type: "Cfg",
+            canonical_path: "polint::sdk::facts::Cfg<'_>",
+            stability: "reserved",
+            docs_path: "docs/facts/capability-plans.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "call_graph" => PublicFactView {
+            capability: "call_graph",
+            view_type: "CallGraph",
+            canonical_path: "polint::sdk::facts::CallGraph<'_>",
+            stability: "reserved",
+            docs_path: "docs/facts/capability-plans.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "dataflow" => PublicFactView {
+            capability: "dataflow",
+            view_type: "DataFlow",
+            canonical_path: "polint::sdk::facts::DataFlow<'_>",
+            stability: "reserved",
+            docs_path: "docs/facts/data-flow.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "coverage_facts" => PublicFactView {
+            capability: "coverage_facts",
+            view_type: "CoverageFacts",
+            canonical_path: "polint::sdk::facts::CoverageFacts<'_>",
+            stability: "reserved",
+            docs_path: "docs/facts/capability-plans.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "test_suite_metrics" => PublicFactView {
+            capability: "test_suite_metrics",
+            view_type: "TestSuiteMetrics",
+            canonical_path: "polint::sdk::facts::TestSuiteMetrics<'_>",
+            stability: "reserved",
+            docs_path: "docs/facts/capability-plans.md",
+            sampling: false,
+            unknowns: false,
+        },
+        _ => return None,
+    };
+    Some(view)
+}
+
+fn polint_tool_info() -> crate::diagnostics::PolintToolInfo {
+    crate::diagnostics::PolintToolInfo {
+        name: "polint".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+fn analyze_for_agent_json(
+    root: &Path,
+    paths: &[PathBuf],
+    no_cache: bool,
+    capabilities: &[&str],
+) -> Result<AnalysisDb> {
+    let args = CheckArgs {
+        paths: paths.to_vec(),
+        profile: None,
+        format: FormatArg::Json,
+        color: ColorArg::Never,
+        no_cache,
+        fail_on: FailOn::None,
+        only_rule: None,
+        max_diagnostics: None,
+        stat: false,
+        shortstat: false,
+        baseline: false,
+        new_only: false,
+        ignore_comments: false,
+    };
+    let loaded = load_config_for_check(root, &args.paths)?;
+    let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
+    let config_digest = crate::cache::keys::config_hash(&loaded);
+    let rules: Vec<Rule> = Vec::new();
+    let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
+    let options = BTreeMap::<String, RuleOptions>::new();
+    let rule_digest = crate::cache::keys::rule_hash(&rules, enabled.as_ref(), &options);
+    let plan = AnalysisPlan::from_capability_names(capabilities);
+    let output = AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
+        parallel: true,
+    })?;
+    Ok(output.db)
+}
+
+fn span_start(span: &crate::core::Span) -> PublicSpan {
+    let range = span.diagnostic_range();
+    PublicSpan {
+        line: range.start_line,
+        column: range.start_col,
+    }
+}
+
+fn status_label(status: ResolutionStatus) -> &'static str {
+    match status {
+        ResolutionStatus::Resolved => "resolved",
+        ResolutionStatus::External => "external",
+        ResolutionStatus::Unresolved => "unresolved",
+        ResolutionStatus::SetupMissing => "setup_missing",
+        ResolutionStatus::Dynamic => "dynamic",
+        ResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'static str {
+    match precision {
+        crate::core::ResolutionPrecision::ExactFile => "exact_file",
+        crate::core::ResolutionPrecision::Package => "package",
+        crate::core::ResolutionPrecision::ExternalPackage => "external_package",
+        crate::core::ResolutionPrecision::Heuristic => "heuristic",
+        crate::core::ResolutionPrecision::None => "none",
+    }
+}
+
+fn unresolved_reason_label(reason: crate::core::UnresolvedReason) -> &'static str {
+    match reason {
+        crate::core::UnresolvedReason::NotFound => "not_found",
+        crate::core::UnresolvedReason::SetupMissing => "setup_missing",
+        crate::core::UnresolvedReason::DynamicExpression => "dynamic_expression",
+        crate::core::UnresolvedReason::UnsupportedLanguage => "unsupported_language",
+        crate::core::UnresolvedReason::UnsupportedImport => "unsupported_import",
+        crate::core::UnresolvedReason::ResolverError => "resolver_error",
+        crate::core::UnresolvedReason::OutsideWorkspace => "outside_workspace",
+    }
+}
+
+fn symbol_status_label(status: SymbolResolutionStatus) -> &'static str {
+    match status {
+        SymbolResolutionStatus::Resolved => "resolved",
+        SymbolResolutionStatus::Unresolved => "unresolved",
+        SymbolResolutionStatus::Ambiguous => "ambiguous",
+        SymbolResolutionStatus::SetupMissing => "setup_missing",
+        SymbolResolutionStatus::Unsupported => "unsupported",
+    }
+}
+
+fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+    match precision {
+        SymbolPrecision::ExactSemantic => "exact_semantic",
+        SymbolPrecision::ExactLocal => "exact_local",
+        SymbolPrecision::ModuleLinked => "module_linked",
+        SymbolPrecision::Heuristic => "heuristic",
+        SymbolPrecision::Unresolved => "unresolved",
+        SymbolPrecision::Ambiguous => "ambiguous",
+        SymbolPrecision::SetupMissing => "setup_missing",
+        SymbolPrecision::Unsupported => "unsupported",
+    }
+}
+
+fn artifact_for_resolution_status(status: ResolutionStatus) -> &'static str {
+    match status {
+        ResolutionStatus::SetupMissing => "fixture",
+        ResolutionStatus::Dynamic | ResolutionStatus::Unsupported => "provider",
+        ResolutionStatus::Unresolved => "model",
+        ResolutionStatus::External | ResolutionStatus::Resolved => "rule",
+    }
 }
 
 fn category_arg_to_prune_categories(

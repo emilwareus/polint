@@ -21,6 +21,36 @@ Public query-view promotion for call graph, data flow, evidence, benchmark
 execution, or eval reports is deferred to Phase 41 and must go through the same
 explicit visibility review as other SDK additions.
 
+## Phase 41 promotion audit
+
+Phase 41 promotion is evidence-gated, not roadmap-name-gated. A surface is
+stable only when the code, docs, temp-repo tests, bounded behavior, setup
+behavior, cache/input behavior, stable JSON contract where applicable, and
+no-leak proof all exist. Broad raw graph/database APIs stay deferred.
+
+| Surface | Disposition | Required gates and notes |
+|---|---|---|
+| `ResolvedImports<'_>` | stable | Documented in `docs/facts/resolved-imports.md`; temp-repo SDK tests; borrowed iterators; setup/dynamic/unsupported statuses; normal cache inputs; no-leak proof. |
+| `ModuleGraphFacts<'_>` | stable | Documented with resolved imports; temp-repo SDK tests; file/package helpers only; no raw topology store; normal cache inputs; no-leak proof. |
+| `Symbols<'_>` | stable | Documented in `docs/facts/symbols-and-references.md`; temp-repo SDK tests; precision remains visible; no internal semantic rows. |
+| `References<'_>` | stable | Documented in `docs/facts/symbols-and-references.md`; temp-repo SDK tests; status/precision-aware helpers; no raw semantic graph. |
+| Metric views | stable | `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` are documented in `docs/facts/metrics.md`; threshold helpers are bounded over stored facts. |
+| `Cfg<'_>` | defer | Reserved capability. Needs public fact design, docs, temp-repo tests, bounded queries, setup behavior, cache/input proof, and no-leak proof before support. |
+| `CallGraph<'_>` | defer | Reserved capability. A future API must separate direct/refined/unresolved/dynamic/unsupported/budgeted results. |
+| `DataFlow<'_>` | defer | Reserved capability documented in `docs/facts/data-flow.md`; future promotion requires explicit limits and unknown/budget evidence. |
+| `Evidence<'_>` | internal | Evidence remains diagnostic rendering data, not a rule-author SDK view; see `docs/facts/evidence.md`. |
+| Effects/Summaries | internal | Private analysis substrate; no public SDK, stable CLI JSON, or docs/facts contract yet. |
+| Types/Values/Aliases | internal | Private precision substrate; no public SDK, stable CLI JSON, or docs/facts contract yet. |
+| Model packs | preview | Agent-authoring concept only until a checked-in model-pack contract, fixtures, and cache inputs exist. |
+| Provider extensions | preview | Existing extension sink remains validated but not a broad public provider API. |
+| `polint inspect rule` | stable | Versioned JSON schema, deterministic rule ordering, rule metadata, derived fact views, support rows, docs paths. |
+| `polint test` | stable | Versioned JSON schema, deterministic case ordering, positive/negative fixture semantics, no temp-root leakage. |
+| `polint facts` | stable | `facts list` and bounded `facts sample` expose only supported public fact fields and reserved capability dispositions. |
+| `polint unknowns` | stable | Reports public setup/resolution gaps for supported facts and unsupported rows for reserved capabilities. |
+| `polint explain` | stable | Explains rule-derived fact views and capability support without provider execution graphs or layer-cache internals. |
+| `polint diff` | defer | No stable public contract in Phase 41. |
+| `polint eval` | internal | Evaluation and benchmark schemas remain internal; stable public `polint eval` is deferred. |
+
 ## Principles (execution checklist)
 
 1. **Default private** in new code; widen only on demand.

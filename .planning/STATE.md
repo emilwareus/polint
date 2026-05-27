@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
-status: executing
-last_updated: "2026-05-26T08:27:16Z"
-last_activity: 2026-05-26
+status: milestone_complete
+last_updated: 2026-05-27T05:48:50.000Z
+last_activity: 2026-05-27
 progress:
   total_phases: 22
-  completed_phases: 21
-  total_plans: 131
-  completed_plans: 130
-  percent: 99
+  completed_phases: 22
+  total_plans: 136
+  completed_plans: 136
+  percent: 100
+stopped_at: Milestone complete (Phase 41 was final phase)
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 41 — public-sdk-query-views-and-agent-ergonomics
+**Current focus:** Milestone complete
 
 ## Current Status
 
@@ -41,10 +42,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-21)
 ## Current Position
 
 Milestone: v1.2 Static Analysis Engine Implementation
-Status: Ready to execute
-Phase: 40 (external-benchmark-adapters-and-promotion-gates) — COMPLETE
-Plan: 8 of 8 complete
-Last activity: 2026-05-26
+Status: Milestone complete
+Phase: 41
+Plan: Complete
+Last activity: 2026-05-27
 
 ## Phase Progress
 
@@ -71,7 +72,7 @@ Last activity: 2026-05-26
 | 38 | Complete | 10/10 plans complete; local value-flow edges, summary projection, stored budget/unknown facts, data-flow eval fixtures, debug rows, public no-leak proof, and final verification done; requirement SAE-PREC-03 |
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
-| 41 | Pending | Public SDK query views and agent ergonomics; requirement SAE-PROM-02 |
+| 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
 
 ## Accumulated Context
 
@@ -388,6 +389,9 @@ Last activity: 2026-05-26
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260527-auc | Document public ResolvedImports and ModuleGraphFacts examples | 2026-05-27 | implemented | [260527-auc-document-public-resolvedimports-and-modu](./quick/260527-auc-document-public-resolvedimports-and-modu/) |
+| 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |
+| 260526-uq2 | Fix Phase 41 review findings for generated fixtures and agent JSON contracts | 2026-05-26 | implemented | [260526-uq2-fix-phase-41-review-findings-for-generat](./quick/260526-uq2-fix-phase-41-review-findings-for-generat/) |
 | 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |
 | 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |
 | 260525-dtr | Fix PR 45 Windows platform library test failure | 2026-05-25 | implemented | [260525-dtr-fix-pr-45-windows-platform-library-test-](./quick/260525-dtr-fix-pr-45-windows-platform-library-test-/) |
