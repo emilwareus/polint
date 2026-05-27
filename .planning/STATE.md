@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: milestone_complete
-last_updated: 2026-05-26T18:37:27.267Z
-last_activity: 2026-05-26
+last_updated: 2026-05-27T05:23:20.000Z
+last_activity: 2026-05-27
 progress:
   total_phases: 22
   completed_phases: 22
@@ -45,7 +45,7 @@ Milestone: v1.2 Static Analysis Engine Implementation
 Status: Milestone complete
 Phase: 41
 Plan: Complete
-Last activity: 2026-05-26
+Last activity: 2026-05-27
 
 ## Phase Progress
 
@@ -389,6 +389,7 @@ Last activity: 2026-05-26
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |
 | 260526-uq2 | Fix Phase 41 review findings for generated fixtures and agent JSON contracts | 2026-05-26 | implemented | [260526-uq2-fix-phase-41-review-findings-for-generat](./quick/260526-uq2-fix-phase-41-review-findings-for-generat/) |
 | 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |
 | 260526-c36 | Capture Phase 40 benchmark comparison and agent-adaptation prompt requirements | 2026-05-26 | implemented | [260526-c36-capture-phase-40-benchmark-comparison-an](./quick/260526-c36-capture-phase-40-benchmark-comparison-an/) |

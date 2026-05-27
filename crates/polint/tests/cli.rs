@@ -5835,6 +5835,7 @@ fn new_rule_go_creates_sdk_oriented_skeleton() {
     assert!(module.contains("branches: BranchObligations<'_>"));
     assert!(module.contains("tests.related_for_file(branch.file)"));
     assert!(module.contains("branches.iter()"));
+    assert!(module.contains("Project-specific policy (heuristic)"));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
     let internal_core_path = ["crate", "core"].join("::");

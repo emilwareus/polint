@@ -941,7 +941,7 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
         if branch.is_error_path && tests.related_for_file(branch.file).is_empty() {
             ctx.warn(
                 &branch.decision_span,
-                "Project-specific policy: add nearby test evidence for this Go error branch.",
+                "Project-specific policy (heuristic): add nearby test evidence for this Go error branch.",
             );
         }
     }"#
