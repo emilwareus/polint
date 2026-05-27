@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Static Analysis Engine Implementation
 status: milestone_complete
-last_updated: 2026-05-27T05:23:20.000Z
+last_updated: 2026-05-27T05:48:50.000Z
 last_activity: 2026-05-27
 progress:
   total_phases: 22
@@ -389,6 +389,7 @@ Last activity: 2026-05-27
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260527-auc | Document public ResolvedImports and ModuleGraphFacts examples | 2026-05-27 | implemented | [260527-auc-document-public-resolvedimports-and-modu](./quick/260527-auc-document-public-resolvedimports-and-modu/) |
 | 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |
 | 260526-uq2 | Fix Phase 41 review findings for generated fixtures and agent JSON contracts | 2026-05-26 | implemented | [260526-uq2-fix-phase-41-review-findings-for-generat](./quick/260526-uq2-fix-phase-41-review-findings-for-generat/) |
 | 260526-eq9 | Remove unsupported-language benchmark artifacts and update roadmap to benchmark only Go and TS/JS | 2026-05-26 | implemented | [260526-eq9-remove-unsupported-language-benchmark-ar](./quick/260526-eq9-remove-unsupported-language-benchmark-ar/) |

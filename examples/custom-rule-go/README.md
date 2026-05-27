@@ -27,8 +27,10 @@ func Authorize(err error) error {
 }
 ```
 
-The expected finding is `local/require-error-branch-tests`. A real fix would add
-a test that forces `Authorize` through the `err != nil` path.
+The expected finding is `local/require-error-branch-tests`. The rule is
+heuristic: it checks extracted branch and nearby test facts, not exact coverage.
+A real fix would add a test that forces `Authorize` through the `err != nil`
+path.
 
 ## Writing A Similar Rule
 
@@ -65,7 +67,8 @@ fn require_payment_error_tests(
                 branch.decision_span.diagnostic_range(),
                 "Add a test for this error branch.",
             )
-            .with_evidence("condition", branch.condition_text.clone()),
+            .with_evidence("condition", branch.condition_text.clone())
+            .with_help("This is heuristic and does not prove exact coverage."),
         );
     }
     Ok(())
