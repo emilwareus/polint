@@ -1,3 +1,9 @@
+---
+phase: 41-public-sdk-query-views-and-agent-ergonomics
+verified: 2026-05-26
+status: passed
+---
+
 # Phase 41 Verification
 
 Status: PASS
@@ -62,4 +68,3 @@ Not run:
 ## Review Gate
 
 Code review passed. One reserved-capability sampling contract gap was found and fixed in `97b520c`.
-

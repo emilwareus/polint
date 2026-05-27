@@ -1,3 +1,9 @@
+---
+phase: 40-external-benchmark-adapters-and-promotion-gates
+verified: 2026-05-26
+status: passed
+---
+
 # Phase 40 Verification: External Benchmark Adapters And Promotion Gates
 
 Completed: 2026-05-26
