@@ -106,39 +106,54 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IDENT-01 | TBD | Pending |
-| IDENT-02 | TBD | Pending |
-| IDENT-03 | TBD | Pending |
-| REACH-01 | TBD | Pending |
-| REACH-02 | TBD | Pending |
-| REACH-03 | TBD | Pending |
-| GRAPH-01 | TBD | Pending |
-| GRAPH-02 | TBD | Pending |
-| GRAPH-03 | TBD | Pending |
-| GRAPH-04 | TBD | Pending |
-| GRAPH-05 | TBD | Pending |
-| GO-01 | TBD | Pending |
-| GO-02 | TBD | Pending |
-| GO-03 | TBD | Pending |
-| GO-04 | TBD | Pending |
-| GO-05 | TBD | Pending |
-| JS-01 | TBD | Pending |
-| JS-02 | TBD | Pending |
-| JS-03 | TBD | Pending |
-| JS-04 | TBD | Pending |
-| JS-05 | TBD | Pending |
-| ADAPT-01 | TBD | Pending |
-| ADAPT-02 | TBD | Pending |
-| CACHE-01 | TBD | Pending |
-| CACHE-02 | TBD | Pending |
-| TAX-01 | TBD | Pending |
-| BENCH-01 | TBD | Pending |
+| IDENT-01 | Phase 42 | Pending |
+| IDENT-02 | Phase 42 | Pending |
+| IDENT-03 | Phase 42 | Pending |
+| REACH-01 | Phase 43 | Pending |
+| REACH-02 | Phase 43 | Pending |
+| REACH-03 | Phase 43 | Pending |
+| GRAPH-01 | Phase 44 | Pending |
+| GRAPH-02 | Phase 44 | Pending |
+| GRAPH-03 | Phase 47 | Pending |
+| GRAPH-04 | Phase 47 | Pending |
+| GRAPH-05 | Phase 52 | Pending |
+| GO-01 | Phase 46 | Pending |
+| GO-02 | Phase 46 | Pending |
+| GO-03 | Phase 46 | Pending |
+| GO-04 | Phase 46 | Pending |
+| GO-05 | Phase 48 | Pending |
+| JS-01 | Phase 45 | Pending |
+| JS-02 | Phase 45 | Pending |
+| JS-03 | Phase 45 | Pending |
+| JS-04 | Phase 49 | Pending |
+| JS-05 | Phase 50 | Pending |
+| ADAPT-01 | Phase 51 | Pending |
+| ADAPT-02 | Phase 51 | Pending |
+| CACHE-01 | Phase 53 | Pending |
+| CACHE-02 | Phase 53 | Pending |
+| TAX-01 | Phase 52 | Pending |
+| BENCH-01 | Phase 54 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 27 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 27
+- Mapped to phases: 27 (100%)
+- Unmapped: 0
+
+**Phase coverage breakdown:**
+- Phase 42: IDENT-01, IDENT-02, IDENT-03 (3 reqs)
+- Phase 43: REACH-01, REACH-02, REACH-03 (3 reqs)
+- Phase 44: GRAPH-01, GRAPH-02 (2 reqs)
+- Phase 45: JS-01, JS-02, JS-03 (3 reqs) — parallel-eligible with Phase 46
+- Phase 46: GO-01, GO-02, GO-03, GO-04 (4 reqs) — parallel-eligible with Phase 45
+- Phase 47: GRAPH-03, GRAPH-04 (2 reqs)
+- Phase 48: GO-05 (1 req) — parallel-eligible with Phase 49
+- Phase 49: JS-04 (1 req) — parallel-eligible with Phase 48
+- Phase 50: JS-05 (1 req)
+- Phase 51: ADAPT-01, ADAPT-02 (2 reqs)
+- Phase 52: GRAPH-05, TAX-01 (2 reqs)
+- Phase 53: CACHE-01, CACHE-02 (2 reqs)
+- Phase 54: BENCH-01 (1 req)
 
 ---
 *Requirements defined: 2026-05-27*
-*Last updated: 2026-05-27 after milestone v1.3 start*
+*Last updated: 2026-05-27 after milestone v1.3 roadmap completion (traceability filled)*
