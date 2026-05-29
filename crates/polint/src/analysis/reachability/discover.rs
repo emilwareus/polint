@@ -97,6 +97,17 @@ fn exported_root(db: &AnalysisDb, function: &FunctionFact) -> Option<Reachabilit
     if !function.is_exported {
         return None;
     }
+    // WR-03 dedup-guard note: for VALID Go, this guard is effectively dead — Go
+    // `main`/`init` are lowercase and are therefore never `is_exported`, so the
+    // `!function.is_exported` early-return above already excludes them and execution
+    // never reaches here for a real Go `main`/`init`. The guard is kept only as a
+    // defensive belt-and-suspenders against a hypothetical misclassification (e.g.
+    // a non-Go file mistakenly tagged `Language::Go` with `is_exported = true` and a
+    // name of `main`/`init`); in that degenerate case it still prevents a duplicate
+    // Exported root alongside the Main/Init root from `go_main_init_roots`. The
+    // `init` arm needs no package guard because `go_main_init_roots` emits an `Init`
+    // root for `init` in ANY package, whereas `main` is a Main root only in package
+    // `main`.
     if function.language == Language::Go
         && (function.name == "init"
             || (function.name == "main"
@@ -744,6 +755,29 @@ mod tests {
         assert_eq!(configured.len(), 1);
         assert_eq!(configured[0].status, RootStatus::Partial);
         assert_eq!(configured[0].precision, RootPrecision::Heuristic);
+    }
+
+    #[test]
+    fn exported_go_function_containing_main_or_init_substring_is_not_deduped() {
+        // WR-03: the main/init dedup guard must match the EXACT name, not a
+        // substring. Exported, capitalized `Initialize`/`MainHandler` are ordinary
+        // exported roots and must NOT be suppressed.
+        let mut db = AnalysisDb::new();
+        let file = add_go_file(&mut db, "pkg/svc/svc.go", "svc");
+        add_function(&mut db, file, 1, "Initialize", Language::Go, true);
+        add_function(&mut db, file, 2, "MainHandler", Language::Go, true);
+
+        let roots = discover_reachability_roots(&db, &[]);
+        let exported_count = roots
+            .iter()
+            .filter(|r| r.kind == RootKind::Exported)
+            .count();
+        assert_eq!(
+            exported_count, 2,
+            "both exported substring-named roots kept"
+        );
+        assert!(roots.iter().all(|r| r.kind != RootKind::Main));
+        assert!(roots.iter().all(|r| r.kind != RootKind::Init));
     }
 
     #[test]
