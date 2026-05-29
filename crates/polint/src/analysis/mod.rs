@@ -24,6 +24,7 @@ pub(crate) mod mir;
 pub(crate) mod places;
 pub(crate) mod points_to;
 pub(crate) mod provider;
+pub(crate) mod reachability;
 pub(crate) mod refined_calls;
 pub(crate) mod slicing;
 pub(crate) mod stable_key;

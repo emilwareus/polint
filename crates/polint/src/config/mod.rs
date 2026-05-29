@@ -32,6 +32,20 @@ pub(crate) struct PolintConfig {
     pub(crate) path_contexts: PathContextsConfig,
     #[serde(default)]
     pub(crate) ignores: IgnoreConfig,
+    #[serde(default)]
+    pub(crate) reachability: ReachabilityConfig,
+}
+
+/// Configured whole-program reachability roots (D-13).
+///
+/// Each entry is a repo-controlled string such as `"pkg/path.Func"` or
+/// `"src/x.ts#handler"` that discovery resolves against existing in-DB symbol
+/// facts. An unresolvable entry becomes a `RootStatus::Unresolved` root fact —
+/// never a silent drop and never a path-traversal read outside the repo.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ReachabilityConfig {
+    #[serde(default)]
+    pub(crate) roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,6 +446,27 @@ right_after_ctx = "/ports/"
         );
         assert_eq!(config.path_contexts.pairs.len(), 1);
         assert_eq!(config.path_contexts.pairs[0].name, "svc_ports");
+    }
+
+    #[test]
+    fn reachability_config_defaults_to_empty_roots() {
+        let config: PolintConfig = toml::from_str("").unwrap();
+        assert!(config.reachability.roots.is_empty());
+    }
+
+    #[test]
+    fn reachability_config_parses_configured_roots() {
+        let config: PolintConfig = toml::from_str(
+            r#"
+[reachability]
+roots = ["pkg/path.Func", "src/x.ts#handler"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.reachability.roots,
+            vec!["pkg/path.Func".to_string(), "src/x.ts#handler".to_string()]
+        );
     }
 
     #[test]
