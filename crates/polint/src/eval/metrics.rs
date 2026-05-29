@@ -527,8 +527,23 @@ fn jelly_graph_edge_observed(item: &ObservedItem) -> Option<(&str, &str)> {
 
 /// Extracts the source-file portion of a Jelly span string
 /// (`file:start_line:start_col:end_line:end_col`).
+///
+/// WR-05 path invariant: this `rsplitn(5, ':')` split from the right is only correct
+/// because Jelly spans are normalized to forward-slash, repo-relative paths with NO
+/// colon in the file portion. The renderer enforces exactly this — see
+/// `eval::observed::identity_render_invariants`, which asserts the rendered Jelly
+/// path is not absolute and never contains `:\` (no Windows drive letters or
+/// backslash separators). If that invariant ever regresses, a path containing a `:`
+/// would push the line/col tail past five pieces and mis-attribute the `file`
+/// segment, so the cheap debug assertion below pins the contract at the use site.
 fn jelly_span_file(span: &str) -> &str {
-    span.rsplitn(5, ':').last().unwrap_or(span)
+    let file = span.rsplitn(5, ':').last().unwrap_or(span);
+    debug_assert!(
+        !file.contains(":\\"),
+        "Jelly span file segment must be a colon-free forward-slash path \
+         (identity_render_invariants), got: {file:?} from span {span:?}"
+    );
+    file
 }
 
 fn status_label(status: crate::eval::model::ObservedStatus) -> &'static str {
