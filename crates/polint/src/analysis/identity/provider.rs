@@ -566,4 +566,71 @@ mod tests {
         );
         assert_eq!(first.output_digest, second.output_digest);
     }
+
+    #[test]
+    fn go_function_renders_package_qualified_through_real_provider() {
+        // End-to-end provider->renderer proof on a REAL Go FunctionFact (not a
+        // hand-built IdentityRecord): a `package foo` file with a Go PackageFact
+        // and a `Bar` function must render `foo.Bar` after running through
+        // `derive_identity_with_cache_stats`. This closes the verifier-flagged gap
+        // that no test exercised a record built by the real provider.
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/foo.go"),
+            "src/foo.go".to_string(),
+            "package foo\nfunc Bar() {}\n".to_string(),
+        );
+        db.push_package(PackageFact {
+            id: PackageId(0),
+            file,
+            name: "foo".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+        });
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "Bar".to_string(),
+            span: Span::point(file, 2, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.identity")
+            .expect("identity manifest");
+
+        let run = super::derive_identity_with_cache_stats(
+            &mut db,
+            &snapshot,
+            manifest,
+            Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
+        );
+        assert!(run.diagnostics.is_empty());
+
+        let record = db
+            .identity_records()
+            .iter()
+            .find(|record| record.kind == IdentityKind::Function)
+            .expect("a Function identity record exists");
+        assert_eq!(
+            crate::analysis::identity::render::go_relstring::render(record),
+            "foo.Bar"
+        );
+    }
 }

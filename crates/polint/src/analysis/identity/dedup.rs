@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::analysis::identity::facts::{
     IdentityKind, IdentityRecord, LanguageTag, SignatureDigest,
 };
+use crate::analysis::ids::{CallSiteId, CallTargetId};
 use crate::core::{FileId, Span};
 
 /// Comparable, hashable projection of a `Span` so it can participate in a
@@ -23,6 +24,32 @@ type DedupKey = (
     Option<(FileId, SpanKey)>,
 );
 
+/// Comparable projection used for deterministic output ordering: the locked
+/// six-field sort key (`record_sort_key`).
+type SortKey = (
+    LanguageTag,
+    Arc<str>,
+    Arc<str>,
+    FileId,
+    SpanKey,
+    IdentityKind,
+);
+
+/// Literal total-order projection: `SortKey` extended with the remaining record
+/// fields (`originating_call_site_id`, `originating_call_target_id`,
+/// `signature_digest`) so the comparison never ties on distinct records (CR-03).
+type TotalOrderKey = (
+    LanguageTag,
+    Arc<str>,
+    Arc<str>,
+    FileId,
+    SpanKey,
+    IdentityKind,
+    Option<CallSiteId>,
+    Option<CallTargetId>,
+    SignatureDigest,
+);
+
 fn span_key(span: &Span) -> SpanKey {
     (
         span.file,
@@ -39,16 +66,7 @@ fn span_key(span: &Span) -> SpanKey {
 /// ordering: `(language, package_or_module, container_path, file_id, span,
 /// kind)` per the CONTEXT.md established determinism pattern and the locked
 /// IdentityStore sort key.
-pub(crate) fn record_sort_key(
-    record: &IdentityRecord,
-) -> (
-    LanguageTag,
-    Arc<str>,
-    Arc<str>,
-    FileId,
-    SpanKey,
-    IdentityKind,
-) {
+pub(crate) fn record_sort_key(record: &IdentityRecord) -> SortKey {
     (
         record.language,
         Arc::clone(&record.package_or_module),
@@ -56,6 +74,35 @@ pub(crate) fn record_sort_key(
         record.file_id,
         span_key(&record.span),
         record.kind,
+    )
+}
+
+/// Total-order projection of an identity record (CR-03 / IDENT-01).
+///
+/// `record_sort_key` is NOT a total order: two records can tie on all six of its
+/// fields yet differ on `originating_call_site_id` / `originating_call_target_id`
+/// / `signature_digest`. That left canonical selection and final ordering
+/// input-order-dependent in same-span ties. This extends the key with the full
+/// remaining tuple `(originating_call_site_id, originating_call_target_id,
+/// signature_digest)` so the comparison is a literal total order — making both
+/// canonical selection on collision and the final output sort byte-stable
+/// regardless of input order (the contract Phase 43's determinism gate inherits).
+///
+/// `CallSiteId` / `CallTargetId` are `Ord`; `Option<T: Ord>` is `Ord`;
+/// `SignatureDigest` is `Ord` — so the whole tuple is `Ord`.
+pub(crate) fn record_total_order_key(record: &IdentityRecord) -> TotalOrderKey {
+    let (language, package_or_module, container_path, file_id, span, kind) =
+        record_sort_key(record);
+    (
+        language,
+        package_or_module,
+        container_path,
+        file_id,
+        span,
+        kind,
+        record.originating_call_site_id,
+        record.originating_call_target_id,
+        record.signature_digest,
     )
 }
 
@@ -73,12 +120,14 @@ pub(crate) fn dedup_identity_records(records: Vec<IdentityRecord>) -> Vec<Identi
         match collapsed.get_mut(&key) {
             Some(existing) => {
                 existing.multiplicity = existing.multiplicity.saturating_add(1);
-                // The canonical retained record must be order-independent (D-11):
-                // when a group collapses, keep the lexicographically-smallest
-                // record (by the locked sort key) so the result is byte-stable
-                // regardless of input order. Multiplicity is preserved across the
-                // swap.
-                if record_sort_key(&record) < record_sort_key(existing) {
+                // The canonical retained record must be order-independent (D-11,
+                // CR-03): when a group collapses, keep the lexicographically-smallest
+                // record by the TOTAL-ORDER key (record_sort_key extended with
+                // originating_call_site_id / originating_call_target_id /
+                // signature_digest) so the result is byte-stable even when records
+                // tie on every record_sort_key field. Multiplicity is preserved
+                // across the swap.
+                if record_total_order_key(&record) < record_total_order_key(existing) {
                     let multiplicity = existing.multiplicity;
                     *existing = record.clone_with_multiplicity(multiplicity);
                 }
@@ -90,7 +139,9 @@ pub(crate) fn dedup_identity_records(records: Vec<IdentityRecord>) -> Vec<Identi
     }
 
     let mut output = collapsed.into_values().collect::<Vec<_>>();
-    output.sort_by_key(record_sort_key);
+    // Final ordering uses the same TOTAL-ORDER key as canonical selection so the
+    // retained record and the output order agree and stay byte-stable (CR-03).
+    output.sort_by_key(record_total_order_key);
     output
 }
 
@@ -264,6 +315,26 @@ mod tests {
         let forward_json = serde_json::to_string(&forward).expect("serialize");
         let backward_json = serde_json::to_string(&backward).expect("serialize");
         assert_eq!(forward_json, backward_json);
+    }
+
+    #[test]
+    fn dedup_canonical_selection_is_total_order_on_call_site_id_tie() {
+        // CR-03: two records that tie on EVERY record_sort_key field (and on the
+        // dedup_key, so they collapse) but carry a different originating_call_site_id
+        // must dedup to byte-identical output regardless of input order.
+        // record_sort_key alone is not a total order here (it omits
+        // originating_call_site_id), so without a full-tuple tie-break the canonical
+        // retained record would be whichever arrived first — its
+        // originating_call_site_id would flip between input orders. The total-order
+        // tie-break makes canonical selection (and the final sort) order-independent,
+        // which is what Phase 43's byte-stability gate depends on.
+        let a = record(IdentityKind::Callsite, 0, 10, Some(1), "pkg", "pkg.Func");
+        let b = record(IdentityKind::Callsite, 0, 10, Some(2), "pkg", "pkg.Func");
+        let forward = serde_json::to_string(&dedup_identity_records(vec![a.clone(), b.clone()]))
+            .expect("serialize forward");
+        let reverse =
+            serde_json::to_string(&dedup_identity_records(vec![b, a])).expect("serialize reverse");
+        assert_eq!(forward, reverse);
     }
 
     #[test]
