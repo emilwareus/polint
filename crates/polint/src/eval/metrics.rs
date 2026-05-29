@@ -9,6 +9,8 @@ use crate::eval::report::{
     MatchSummary, MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
     ScannerMetricSection, UnknownMetricSection,
 };
+#[cfg(test)]
+use crate::eval::suite::ScoringMode;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -401,6 +403,72 @@ pub(crate) fn categorized_failures_from_db(
     }
 
     section
+}
+
+/// Builds the call-site-stable-key -> `in_reachable_graph` lookup from the live
+/// reachability marking (`db.reachability_marks()`), the composition-by-stable-key
+/// join the mode-aware scoring filter uses (mirrors the `categorized_failures_from_db`
+/// join discipline). A missing marking is recorded as absent (`None` from the
+/// returned map), never silently coerced to reachable/unreachable (threat
+/// T-43-02-02).
+///
+/// Consumed by the (test-facing) eval external-suite scoring path; the eval harness
+/// is internal and test-gated (no public CLI/SDK surface), so this scoring helper
+/// is `#[cfg(test)]` alongside it.
+#[cfg(test)]
+pub(crate) fn reachable_graph_lookup(
+    db: &crate::core::AnalysisDb,
+) -> std::collections::BTreeMap<String, bool> {
+    db.reachability_marks()
+        .iter()
+        .map(|mark| (mark.call_site_stable_key.clone(), mark.in_reachable_graph))
+        .collect()
+}
+
+/// Applies the D-17 mode-aware scoring filter to a set of scored call-graph edges,
+/// each tagged with its source call-site stable key.
+///
+/// WARNING (D-17 / Specific Ideas): getting `OracleRta` vs `OracleJelly` BACKWARDS
+/// silently tanks one suite's recall. The Go x/tools RTA oracle reports
+/// reachable-from-`main` edges ONLY, so `OracleRta` MUST filter the scored set to
+/// the reachable-from-roots edges; Jelly enumerates module-wide independent of
+/// main-reachability, so `OracleJelly` MUST NOT filter. Swapping the two would make
+/// polint score the wrong edge set against each oracle. The
+/// `oracle_rta_scored_set_is_subset_of_oracle_jelly` regression test guards this.
+///
+/// Semantics:
+/// - `OracleRta`: retain only edges whose source call site is in the reachable
+///   graph (look up `CallReachabilityFact.in_reachable_graph` by call-site stable
+///   key). Edges outside the reachable graph are EXCLUDED from scoring but remain
+///   present as facts (this function does not delete anything from the db). An edge
+///   with no marking is conservatively excluded (it cannot be proven reachable).
+/// - `OracleJelly` / `WholeRepo`: no filtering — every edge is scored.
+///
+/// `#[cfg(test)]` alongside the test-facing eval scoring path that consumes it.
+#[cfg(test)]
+pub(crate) fn filter_scored_edges_by_scoring_mode<T>(
+    edges: &[T],
+    call_site_key_of: impl Fn(&T) -> &str,
+    scoring_mode: ScoringMode,
+    reachable_by_call_site: &std::collections::BTreeMap<String, bool>,
+) -> Vec<usize> {
+    match scoring_mode {
+        // oracle-rta: filter to the reachable-from-roots edges (NOT the other way
+        // around — see the backwards-mode warning above).
+        ScoringMode::OracleRta => edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| {
+                reachable_by_call_site
+                    .get(call_site_key_of(edge))
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        // oracle-jelly / whole-repo: score the full enumerated set, no filtering.
+        ScoringMode::OracleJelly | ScoringMode::WholeRepo => (0..edges.len()).collect(),
+    }
 }
 
 /// Reconstructs the [`CategorizedFailureSection`] from the per-category observed
@@ -1013,6 +1081,205 @@ mod tests {
         // With no overlapping oracle the same record is a miss, not a wrong-identity.
         let empty = std::collections::BTreeSet::new();
         assert_eq!(categorized_failures_from_db(&db, &empty).wrong_identity, 0);
+    }
+
+    // -- Plan 43-02 Task 3: mode-aware scoring filter (D-17) ------------------
+
+    /// Scored call-graph edges over a fixture where some source functions are
+    /// outside the reachable graph: `e-A` and `e-B` are reachable, `e-C` and `e-D`
+    /// are out-of-graph.
+    fn scored_edges() -> Vec<&'static str> {
+        vec!["e-A", "e-B", "e-C", "e-D"]
+    }
+
+    fn reachable_lookup() -> std::collections::BTreeMap<String, bool> {
+        [
+            ("e-A".to_string(), true),
+            ("e-B".to_string(), true),
+            ("e-C".to_string(), false),
+            ("e-D".to_string(), false),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn oracle_rta_scores_only_reachable_source_edges() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        );
+        // Only the two reachable edges (e-A, e-B) are scored; e-C/e-D excluded.
+        assert_eq!(scored, vec![0, 1]);
+    }
+
+    #[test]
+    fn oracle_jelly_scores_the_full_enumerated_edge_set() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        );
+        // Reachability marking is recorded but does NOT filter — all four scored.
+        assert_eq!(scored, vec![0, 1, 2, 3]);
+        assert!(
+            scored.len() > {
+                // Strictly larger than the oracle-rta scored count on this fixture.
+                filter_scored_edges_by_scoring_mode(
+                    &edges,
+                    |edge| edge,
+                    ScoringMode::OracleRta,
+                    &lookup,
+                )
+                .len()
+            }
+        );
+    }
+
+    #[test]
+    fn whole_repo_scores_every_edge_without_filtering() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::WholeRepo,
+            &lookup,
+        );
+        assert_eq!(scored, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn oracle_rta_scored_set_is_subset_of_oracle_jelly() {
+        // Regression guard for the backwards-mode footgun (T-43-02-02): on a fixture
+        // with unreachable edges, the oracle-rta scored set must be a (strict or
+        // equal) subset of the oracle-jelly scored set. If the OracleRta/OracleJelly
+        // mapping were swapped, oracle-rta would score MORE than oracle-jelly and
+        // this assertion would fail.
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let rta: std::collections::BTreeSet<usize> = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        )
+        .into_iter()
+        .collect();
+        let jelly: std::collections::BTreeSet<usize> = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        )
+        .into_iter()
+        .collect();
+        assert!(rta.is_subset(&jelly));
+        // Strict subset on this fixture (there are unreachable edges).
+        assert!(rta.len() < jelly.len());
+    }
+
+    #[test]
+    fn unmarked_edges_are_excluded_under_oracle_rta_never_silently_included() {
+        // An edge with no marking cannot be proven reachable, so oracle-rta excludes
+        // it (fail-closed; threat T-43-02-02). oracle-jelly still scores it.
+        let edges = vec!["e-A", "e-unmarked"];
+        let mut lookup = std::collections::BTreeMap::new();
+        lookup.insert("e-A".to_string(), true);
+        let rta = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        );
+        assert_eq!(rta, vec![0]); // only e-A, the unmarked edge is excluded
+        let jelly = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        );
+        assert_eq!(jelly, vec![0, 1]);
+    }
+
+    #[test]
+    fn reachable_graph_lookup_joins_marks_by_call_site_stable_key() {
+        use crate::analysis::ids::ReachabilityRootId;
+        use crate::analysis::reachability::facts::{
+            CallReachabilityFact, CallReachabilityReason, ReachabilityRootFact, RootKind,
+            RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
+        };
+        use crate::analysis::reachability::store::ReachabilityProviderOutput;
+        use crate::core::AnalysisDb;
+
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("pkg/app.go"),
+            "pkg/app.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(1),
+            file,
+            name: "Root".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let root = ReachabilityRootFact {
+            id: ReachabilityRootId(0),
+            kind: RootKind::Exported,
+            language: Language::Go,
+            target_function: function,
+            target_symbol: None,
+            originating_entrypoint: None,
+            file,
+            span: Span::point(file, 1, 1),
+            precision: RootPrecision::ResolvedStatic,
+            provenance: RootProvenance::NativeDiscovery,
+            status: RootStatus::Resolved,
+            provider_id: "polint.reachability".to_string(),
+            stable_key: compute_reachability_root_stable_key(
+                RootKind::Exported,
+                Language::Go,
+                "pkg.Root",
+                file,
+                &Span::point(file, 1, 1),
+            ),
+        };
+        db.replace_reachability_facts(ReachabilityProviderOutput {
+            roots: vec![root],
+            marks: vec![
+                CallReachabilityFact::new(
+                    "site-in",
+                    true,
+                    CallReachabilityReason::RootSeed,
+                    "polint.reachability",
+                ),
+                CallReachabilityFact::new(
+                    "site-out",
+                    false,
+                    CallReachabilityReason::OutsideReachableGraph,
+                    "polint.reachability",
+                ),
+            ],
+        })
+        .expect("store reachability");
+
+        let lookup = reachable_graph_lookup(&db);
+        assert_eq!(lookup.get("site-in"), Some(&true));
+        assert_eq!(lookup.get("site-out"), Some(&false));
+        assert_eq!(lookup.get("site-missing"), None);
     }
 
     fn summary(
