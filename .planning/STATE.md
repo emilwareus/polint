@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: verifying
-last_updated: "2026-05-29T16:46:38.928Z"
+status: ready_to_plan
+last_updated: 2026-05-29T17:07:06.182Z
 last_activity: 2026-05-29
 progress:
   total_phases: 13
@@ -11,6 +11,7 @@ progress:
   total_plans: 8
   completed_plans: 8
   percent: 15
+stopped_at: Phase 43 complete (3/3) — ready to discuss Phase 44
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 43 — reachability-roots-per-suite-scoring-mode
+**Current focus:** Phase 44 — semantic graph skeleton & constraint vocabulary
 
 ## Current Status
 
@@ -40,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 43 (reachability-roots-per-suite-scoring-mode) — COMPLETE (3/3 plans)
-Plan: 3 of 3 (complete)
-Status: Phase complete — REACH-01/02/03 done; ready for verification (43-03: N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS CI job + phases 44-54 inheritance doc)
-Last activity: 2026-05-29 -- Completed 43-03-PLAN.md (REACH-03)
+Phase: 44
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-29
 
 ### Open repo-admin action (T-42-04-10)
 
