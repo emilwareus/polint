@@ -181,6 +181,7 @@ name = "Adapter suite"
 kind = "scanner_vulnerability"
 languages = ["javascript"]
 adapter_id = "null"
+scoring_mode = "whole-repo"
 license = "license-review-needed"
 language_support = "adapter_only"
 

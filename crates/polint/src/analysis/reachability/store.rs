@@ -72,6 +72,9 @@ pub(crate) struct ReachabilityStore {
     by_kind: BTreeMap<RootKind, Vec<usize>>,
     by_language: BTreeMap<Language, Vec<usize>>,
     by_function: BTreeMap<FunctionId, Vec<usize>>,
+    // Marking read index for the eval scoring filter (Task 3): call-site stable
+    // key -> index into `marks`. Built once per store from the normalized marks.
+    mark_by_call_site_stable_key: BTreeMap<String, usize>,
 }
 
 impl ReachabilityStore {
@@ -128,6 +131,15 @@ impl ReachabilityStore {
                 .push(index);
         }
 
+        for (index, mark) in store.marks.iter().enumerate() {
+            // The marking family carries exactly one mark per call site, so the
+            // last writer per key is the canonical one; in practice keys are
+            // unique because each call site has a single stable key.
+            store
+                .mark_by_call_site_stable_key
+                .insert(mark.call_site_stable_key.clone(), index);
+        }
+
         Ok(store)
     }
 
@@ -149,6 +161,18 @@ impl ReachabilityStore {
 
     pub(crate) fn roots_for_function(&self, function: FunctionId) -> &[usize] {
         self.by_function.get(&function).map_or(&[], Vec::as_slice)
+    }
+
+    /// Looks up the call-reachability mark for a call site by its stable key (the
+    /// composition-by-stable-key join the eval scoring filter uses, Task 3). Returns
+    /// `None` when no marking exists for the site.
+    pub(crate) fn mark_for_call_site(
+        &self,
+        call_site_stable_key: &str,
+    ) -> Option<&CallReachabilityFact> {
+        self.mark_by_call_site_stable_key
+            .get(call_site_stable_key)
+            .map(|&index| &self.marks[index])
     }
 }
 
@@ -286,5 +310,73 @@ mod tests {
         .expect("empty store");
         assert!(store.roots().is_empty());
         assert!(store.marks().is_empty());
+    }
+
+    #[test]
+    fn mark_by_call_site_stable_key_index_resolves_marks() {
+        use crate::analysis::reachability::facts::{CallReachabilityFact, CallReachabilityReason};
+        let output = ReachabilityProviderOutput {
+            roots: vec![root(1, RootKind::Main, None)],
+            marks: vec![
+                CallReachabilityFact::new(
+                    "site-A",
+                    true,
+                    CallReachabilityReason::RootSeed,
+                    REACHABILITY_PROVIDER_ID,
+                ),
+                CallReachabilityFact::new(
+                    "site-B",
+                    false,
+                    CallReachabilityReason::OutsideReachableGraph,
+                    REACHABILITY_PROVIDER_ID,
+                ),
+            ],
+        };
+        let store = ReachabilityStore::from_output(output, &function_ids(&[1]), &BTreeSet::new())
+            .expect("store");
+
+        assert!(
+            store
+                .mark_for_call_site("site-A")
+                .unwrap()
+                .in_reachable_graph
+        );
+        assert!(
+            !store
+                .mark_for_call_site("site-B")
+                .unwrap()
+                .in_reachable_graph
+        );
+        assert!(store.mark_for_call_site("missing").is_none());
+        // Marks are normalized (sorted by mark stable key) deterministically.
+        assert_eq!(store.marks().len(), 2);
+    }
+
+    #[test]
+    fn normalized_sorts_marks_insertion_order_independent() {
+        use crate::analysis::reachability::facts::{CallReachabilityFact, CallReachabilityReason};
+        let mark_a = CallReachabilityFact::new(
+            "site-A",
+            true,
+            CallReachabilityReason::RootSeed,
+            REACHABILITY_PROVIDER_ID,
+        );
+        let mark_b = CallReachabilityFact::new(
+            "site-B",
+            false,
+            CallReachabilityReason::OutsideReachableGraph,
+            REACHABILITY_PROVIDER_ID,
+        );
+        let first = ReachabilityProviderOutput {
+            roots: Vec::new(),
+            marks: vec![mark_a.clone(), mark_b.clone()],
+        }
+        .normalized();
+        let second = ReachabilityProviderOutput {
+            roots: Vec::new(),
+            marks: vec![mark_b, mark_a],
+        }
+        .normalized();
+        assert_eq!(first, second);
     }
 }

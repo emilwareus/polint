@@ -5,6 +5,7 @@ use crate::analysis::ids::ReachabilityRootId;
 use crate::analysis::reachability::cache_key::reachability_provider_parameter_digest;
 use crate::analysis::reachability::discover::discover_reachability_roots;
 use crate::analysis::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
+use crate::analysis::reachability::traverse::mark_call_reachability;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
@@ -42,17 +43,28 @@ pub(crate) fn derive_reachability_with_cache_stats(
 
     // Phase 1: extract roots from existing facts + configured input.
     let mut roots = discover_reachability_roots(db, configured_roots);
-    // Phase 2: no dedup needed (discovery does not emit duplicate roots).
-    // Phase 3: normalize, then assign dense IDs from the normalized order (D-06).
+    // Phase 2: mark call reachability — BFS/DFS over resolved direct-call edges
+    // from the discovered roots, keyed by call-site stable key (composition, never
+    // mutating analysis::calls; D-18). Seeded only by roots whose target is a real
+    // function (configured-unresolvable roots carry a sentinel target).
+    let real_roots: Vec<_> = roots
+        .iter()
+        .filter(|root| db.functions().iter().any(|f| f.id == root.target_function))
+        .cloned()
+        .collect();
+    let marks = mark_call_reachability(db, &real_roots);
+    // Phase 3: normalize roots+marks, then assign dense IDs from the normalized
+    // order (D-06). normalized() sorts both families by their locked sort keys.
     let mut output = ReachabilityProviderOutput {
         roots: std::mem::take(&mut roots),
-        marks: Vec::new(),
+        marks: marks.clone(),
     }
     .normalized();
     for (index, root) in output.roots.iter_mut().enumerate() {
         root.id = ReachabilityRootId(index as u64);
     }
-    // Phase 4: digest over stable payloads (never dense IDs).
+    // Phase 4: digest over stable payloads (never dense IDs). marks now flow into
+    // the digest parts (Plan 01 already lists `mark={stable_payload}` parts).
     let output_digest = reachability_output_digest(
         manifest,
         input_snapshot,
@@ -70,15 +82,11 @@ pub(crate) fn derive_reachability_with_cache_stats(
     // Phase 5: store. Configured-unresolvable roots carry a sentinel target the
     // referential store rejects, so keep them out of the validated store while
     // still reporting them via discovery/eval (D-13). Resolved roots (every
-    // root whose target is a real function) are the ones stored.
+    // root whose target is a real function) are the ones stored, alongside the
+    // call-reachability marks.
     let storable = ReachabilityProviderOutput {
-        roots: output
-            .roots
-            .iter()
-            .filter(|root| db.functions().iter().any(|f| f.id == root.target_function))
-            .cloned()
-            .collect(),
-        marks: Vec::new(),
+        roots: real_roots,
+        marks,
     };
 
     match db.replace_reachability_facts(storable) {

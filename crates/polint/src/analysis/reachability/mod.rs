@@ -25,4 +25,5 @@ pub(crate) mod discover;
 pub(crate) mod facts;
 pub(crate) mod provider;
 pub(crate) mod store;
+pub(crate) mod traverse;
 pub(crate) mod validate;
