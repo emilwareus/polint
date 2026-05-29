@@ -55,7 +55,10 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Each suite manifest declares a `scoring_mode` (`oracle-rta`, `oracle-jelly`, `whole-repo`) and the gate fails if it is missing; unreachable direct calls remain facts but are marked outside the reachable graph.
   3. Determinism gate fixture passes: 10 shuffled provider-order runs produce byte-identical observed JSON, identical solver step counts, and identical budget-exceeded reasons.
   4. The determinism gate is wired so every subsequent solver-introducing phase inherits it as an acceptance gate.
-**Plans**: TBD
+**Plans**: 3 total
+- [ ] 43-01-PLAN.md — analysis::reachability module + ReachabilityRootFact/RootKind + root discovery (Go main/init/exported, entrypoint bridge, configured roots) + polint.reachability provider/cache + kernel splice (REACH-01)
+- [ ] 43-02-PLAN.md — required scoring_mode field + 4 suite manifest updates + reachable-set BFS/DFS + CallReachabilityFact marking + mode-aware scoring filter (REACH-02)
+- [ ] 43-03-PLAN.md — reserved solver_step_count/budget_exceeded_reasons section + N=10 determinism-gate harness + Go/TS fixtures + fast-CI Linux+macOS job + inheritance contract (REACH-03)
 
 ### Phase 44: Semantic Graph Skeleton & Constraint Vocabulary
 **Goal**: polint has a private shared semantic graph with stable identities, typed edges, and a closed constraint vocabulary that language frontends emit into — the architectural keystone for the unified solver.
@@ -194,7 +197,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
 | 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
-| 43 | Reachability, Roots & Per-Suite Scoring Mode | 0/0 | Not started | - |
+| 43 | Reachability, Roots & Per-Suite Scoring Mode | 0/3 | Planned | - |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
 | 46 | Go Semantic Frontend & Sidecar | 0/0 | Not started | - |
