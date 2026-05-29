@@ -666,8 +666,15 @@ fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem>
     let mut all_workspace_relative = true;
     for record in db.identity_records() {
         // Both renderers participate so the leak gate (Plan 04) and downstream
-        // consumers see them exercised end-to-end on real records.
-        let _ = go_relstring::render(record);
+        // consumers see them exercised end-to-end on real records. The Go
+        // RelString output is asserted (not discarded) so a renderer regression
+        // that produced an empty name would fail here rather than pass silently.
+        let go_rel = go_relstring::render(record);
+        assert!(
+            !go_rel.is_empty(),
+            "go_relstring render must be non-empty for {}",
+            record.stable_key
+        );
         let Some(source) = files.get(&record.file_id) else {
             continue;
         };

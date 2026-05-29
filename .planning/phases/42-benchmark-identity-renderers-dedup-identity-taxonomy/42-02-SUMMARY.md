@@ -215,10 +215,10 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-- IDENT-02 fully addressed: both renderers exist as pure `pub(crate)` functions with the exact Go RelString and Jelly span formats; CRLF normalization is at render time with a byte-identical fixture; both eval adapters consume the renderers as the single source of truth; `MetricSections.jelly_oracle_coverage` is populated; the oracle coverage fixture asserts >=0.99.
+- IDENT-02 status (reconciled by Plan 05 — the original wording here overstated the Go half): the Jelly half is fully delivered end-to-end — the Jelly span renderer is a pure `pub(crate)` function consumed by the eval adapter as the single source of truth, CRLF normalization is at render time with a byte-identical fixture, `MetricSections.jelly_oracle_coverage` is populated, and the oracle coverage fixture asserts >=0.99 (>=99% coverage). The Go RelString renderer now produces package-NAME-qualified output (`pkg.Func`) on real records (closed by Plan 05: the provider resolves the Go `PackageFact` name, proven by a provider-level test). However the FULL Go module import-path RelString (`module/path/pkg.Func`) and its consumption in the Go RTA oracle scoring path are deferred to Phase 46 (Go Semantic Frontend & Sidecar), which supplies the package/import path the v1.2 substrate lacks; the Go RTA oracle key intentionally stays on `display_name` until then.
 - Plan 03 (identity taxonomy) can sibling `categorized_failures` next to `jelly_oracle_coverage` on `MetricSections` (population sites listed above) and reference the renderer signatures above without re-exploring.
 - Plan 04 (public-surface-leak gate) can rely on the renderer functions being `pub(crate)` (no-leak smoke returns 0).
-- The cache-key trip-wires `go_relstring_v1` / `jelly_span_v1` (Plan 01) must be bumped if either renderer's logic changes.
+- The cache-key trip-wires `go_relstring_v2` / `jelly_span_v1` must be bumped if either renderer's logic changes (the Go trip-wire was bumped `v1` -> `v2` in Plan 05 when the provider switched Go `package_or_module` from the file path to the package name).
 
 ## Self-Check: PASSED
 

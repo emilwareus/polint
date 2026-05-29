@@ -145,10 +145,21 @@ fn go_rta_oracle_identity(
 ) -> String {
     match records.iter().find(|record| record.span == *span) {
         Some(record) => {
-            // Exercise the renderer as the single source of truth (D-05); the
-            // RelString participates in the Plan 03 identity taxonomy. The RTA
-            // oracle key itself is the bare display name with `main.` stripped.
-            let _rel_string = crate::analysis::identity::render::go_relstring::render(record);
+            // Exercise the renderer as the single source of truth (D-05) and
+            // assert it produced a non-empty RelString rather than discarding the
+            // output. The RelString currently carries Go package-NAME qualification
+            // (`foo.Bar`) after Plan 05.
+            let rel_string = crate::analysis::identity::render::go_relstring::render(record);
+            debug_assert!(
+                !rel_string.is_empty(),
+                "go_relstring render must be non-empty for {}",
+                record.stable_key
+            );
+            // NOTE: full-import-path RelString consumption in the Go RTA oracle
+            // scoring path is deferred to Phase 46 (Go semantic frontend); the
+            // oracle key intentionally stays on display_name here. Wiring the
+            // package-name-only RelString into the oracle key now would regress
+            // benchmark matching against the x/tools RTA `WANT:` bare-name oracle.
             go_x_tools_function_identity(record.display_name.as_ref())
         }
         None => go_x_tools_function_identity(fallback_name),

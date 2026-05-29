@@ -44,10 +44,13 @@ impl LanguageTag {
     }
 }
 
-/// SHA-256-style signature digest truncated to 16 bytes (D-03).
+/// Length-prefixed two-pass FNV-1a 16-byte signature digest (D-03).
 ///
-/// Rendered as 32 lowercase hex characters through serde. The byte array is the
-/// canonical form; hex is only the wire/serde representation.
+/// FNV-1a was the deliberate no-new-dependency choice (T-42-SC); each field
+/// component is length-prefixed before hashing so the digest is deterministic and
+/// cross-platform byte-identical. Rendered as 32 lowercase hex characters through
+/// serde. The byte array is the canonical form; hex is only the wire/serde
+/// representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct SignatureDigest(pub(crate) [u8; 16]);
 
