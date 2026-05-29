@@ -7,7 +7,7 @@ use crate::eval::model::{ExpectedItem, ObservedItem};
 use crate::eval::report::{
     CategorizedFailureSection, GraphMetricSection, JellyOracleCoverageSection, JellyUnmatchedSpan,
     MatchSummary, MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
-    ScannerMetricSection, UnknownMetricSection,
+    ScannerMetricSection, SolverMetricSection, UnknownMetricSection,
 };
 #[cfg(test)]
 use crate::eval::suite::ScoringMode;
@@ -82,6 +82,11 @@ impl From<ComputedMetrics> for MetricSummary {
             adaptation: None,
             jelly_oracle_coverage: JellyOracleCoverageSection::default(),
             categorized_failures: CategorizedFailureSection::default(),
+            // RESERVED (D-23): defaulted to step_count = 0 / empty reasons in
+            // Phase 43 so the observed/report JSON surfaces the `solver` section
+            // now and the N=10 determinism gate stays byte-stable across the
+            // milestone. Phase 47+ populates real values without changing shape.
+            solver: SolverMetricSection::default(),
         };
         Self {
             true_positives: metrics.true_positives,

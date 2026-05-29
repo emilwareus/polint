@@ -109,6 +109,8 @@ pub(crate) struct MetricSections {
     pub(crate) jelly_oracle_coverage: JellyOracleCoverageSection,
     #[serde(default)]
     pub(crate) categorized_failures: CategorizedFailureSection,
+    #[serde(default)]
+    pub(crate) solver: SolverMetricSection,
 }
 
 /// One Jelly oracle span that no identity record renders, surfaced for
@@ -175,6 +177,27 @@ impl CategorizedFailureSection {
             }
         }
     }
+}
+
+/// RESERVED solver metrics, defaulted to zero/empty in Phase 43 (D-23).
+///
+/// `solver_step_count` (default `0`) and `budget_exceeded_reasons` (default
+/// empty) reserve the JSON shape the unified call-graph solver introduced in
+/// **Phase 47+** will populate. They live here on [`MetricSections`] — a
+/// `#[serde(default)]` sibling of [`CategorizedFailureSection`] — and NOT on the
+/// frozen [`MetricSummary`] (which is layout-locked by
+/// `metric_summary_layout_unchanged`). Reserving the shape now keeps the N=10
+/// byte-identical determinism gate (`eval::determinism_gate`) stable across the
+/// whole v1.3 milestone: when Phase 47+ starts emitting real values, the
+/// observed-JSON shape does not change, only the values, so no fixture or gate
+/// breaks merely because the section appeared. `#[serde(default)]` on the
+/// `MetricSections` field keeps older v1.2 report JSON (which lacks the `solver`
+/// section entirely) deserializable (Pattern M, threat T-43-03-02).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct SolverMetricSection {
+    pub(crate) solver_step_count: u64,
+    pub(crate) budget_exceeded_reasons: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -718,6 +741,79 @@ mod tests {
         assert_eq!(section.unsupported_edge, 0);
         assert_eq!(section.unresolved_edge, 0);
         assert_eq!(section.package_load_limitation, 0);
+    }
+
+    #[test]
+    fn solver_metric_section_defaults_to_zero_and_empty() {
+        // D-23: a fresh SolverMetricSection serializes with solver_step_count = 0
+        // and budget_exceeded_reasons = []. This default-serialization byte string
+        // is the downstream lock contract the determinism gate inherits.
+        let section = SolverMetricSection::default();
+        assert_eq!(section.solver_step_count, 0);
+        assert!(section.budget_exceeded_reasons.is_empty());
+
+        let default_json = serde_json::to_string(&SolverMetricSection::default()).unwrap();
+        assert_eq!(
+            default_json,
+            r#"{"solver_step_count":0,"budget_exceeded_reasons":[]}"#
+        );
+    }
+
+    #[test]
+    fn solver_metric_section_serde_round_trip() {
+        let section = SolverMetricSection {
+            solver_step_count: 42,
+            budget_exceeded_reasons: vec!["fanout_budget".to_string(), "token_budget".to_string()],
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        let restored: SolverMetricSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, restored);
+    }
+
+    #[test]
+    fn v1_2_metric_sections_json_without_solver_section_reverse_compat() {
+        // A v1.2 (and Phase 42) MetricSections JSON carries no `solver` section at
+        // all; #[serde(default)] on the MetricSections field must default it in so
+        // older report JSON still deserializes (Pattern M, threat T-43-03-02).
+        let older_json = serde_json::json!({
+            "scanner": {
+                "true_positives": 0,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "true_negatives": 0,
+                "precision": null,
+                "recall": null,
+                "f1": null,
+                "f2": null,
+                "f3": null,
+                "false_positive_rate": null
+            },
+            "graph": { "edges_expected": 0, "edges_observed": 0, "edges_unconfirmed": 0 },
+            "paths": { "paths_expected": 0, "paths_observed": 0, "paths_unconfirmed": 0 },
+            "unknowns": { "total": 0, "by_status": {} },
+            "performance": {
+                "runtime_budget_passed": 0,
+                "runtime_budget_failed": 0,
+                "cache_hits": 0,
+                "cache_misses": 0
+            },
+            "suite_native": {}
+        });
+        let sections: MetricSections = serde_json::from_value(older_json).unwrap();
+        assert_eq!(sections.solver, SolverMetricSection::default());
+    }
+
+    #[test]
+    fn solver_metric_section_layout_unchanged() {
+        // Destructure layout-lock mirroring metric_summary_layout_unchanged: the
+        // SolverMetricSection field set is reserved as exactly solver_step_count +
+        // budget_exceeded_reasons. Adding a field forces this test to update,
+        // signaling a deliberate shape change of the reserved solver JSON (D-23).
+        let section = SolverMetricSection::default();
+        let SolverMetricSection {
+            solver_step_count: _,
+            budget_exceeded_reasons: _,
+        } = section;
     }
 
     #[test]
