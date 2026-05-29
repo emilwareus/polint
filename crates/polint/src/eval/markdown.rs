@@ -258,6 +258,7 @@ mod tests {
             kind: SuiteKind::ScannerVulnerability,
             languages: vec!["javascript".to_string()],
             adapter_id: "secbench_js_tests".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::WholeRepo,
             source_url: None,
             source_commit: None,
             license: "license-review-needed".to_string(),

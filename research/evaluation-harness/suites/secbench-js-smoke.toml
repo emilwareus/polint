@@ -4,6 +4,7 @@ name = "SecBench.js smoke"
 kind = "scanner_vulnerability"
 languages = ["javascript", "typescript"]
 adapter_id = "secbench_js_smoke"
+scoring_mode = "whole-repo"
 source_url = "https://github.com/SecBench/SecBench.js"
 source_commit = "bc3156219138"
 license = "license-review-needed"

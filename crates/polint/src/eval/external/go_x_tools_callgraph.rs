@@ -629,6 +629,7 @@ package main
             kind: SuiteKind::CallGraphPrecision,
             languages: vec!["go".to_string()],
             adapter_id: "go_x_tools_rta_callgraph".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::OracleRta,
             source_url: Some("https://github.com/golang/tools".to_string()),
             source_commit: Some("7743a285e3d261ca235408e013ec5c14cb5170e4".to_string()),
             license: "BSD-3-Clause".to_string(),

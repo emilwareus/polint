@@ -526,6 +526,7 @@ mod tests {
             kind: SuiteKind::CallGraphPrecision,
             languages: vec!["javascript".to_string(), "typescript".to_string()],
             adapter_id: "jelly_callgraph_micro".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::OracleJelly,
             source_url: Some("https://github.com/cs-au-dk/jelly".to_string()),
             source_commit: Some("b799ed4f0d68c670fe398830aaa51dd5c628cf74".to_string()),
             license: "Apache-2.0".to_string(),
