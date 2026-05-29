@@ -111,6 +111,8 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
         .collect::<Vec<_>>();
     let mut metrics = crate::eval::report::MetricSummary::from(compute_metrics(&all_matches));
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
         suite_id: manifest.id.0.clone(),
@@ -215,6 +217,8 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
         .collect::<Vec<_>>();
     let mut metrics = crate::eval::report::MetricSummary::from(compute_metrics(&all_matches));
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
 
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
@@ -605,6 +609,90 @@ mod tests {
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
         let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
         assert_eq!(first.output_hash, second.output_hash);
+    }
+
+    #[test]
+    fn identity_jelly_oracle_coverage_fixture() {
+        // D-20, D-21, D-22: the Jelly oracle-span coverage over the Jelly micro
+        // fixture set must be >= 0.99 on the current host platform. The Jelly
+        // adapter renders every observed edge span through the single-source-of-
+        // truth jelly_span renderer (D-05); this test asserts the deterministic
+        // matched/total ratio meets the threshold and that each unmatched span
+        // (if any) carries debuggable file/span/reason fields.
+        use crate::eval::external::jelly_callgraph::JellyCallgraphAdapter;
+        use crate::eval::model::EvaluationMode;
+        use crate::eval::suite::{
+            CaseSelector, ExpectedSource, ExpectedSourceFormat, LocalClonePolicy, SuiteCheckout,
+            SuiteCheckoutStrategy, SuiteId, SuiteKind, SuiteScoring, SuiteTier,
+        };
+
+        let repo = repo_root().join("tests/eval-fixtures/identity/jelly_oracle_coverage/repo");
+        let manifest = SuiteManifest {
+            schema_version: "polint-eval-suite-1".to_string(),
+            id: SuiteId("identity-jelly-oracle-coverage".to_string()),
+            name: "Identity Jelly oracle coverage".to_string(),
+            kind: SuiteKind::CallGraphPrecision,
+            languages: vec!["javascript".to_string(), "typescript".to_string()],
+            adapter_id: "jelly_callgraph_micro".to_string(),
+            source_url: None,
+            source_commit: None,
+            license: "Apache-2.0".to_string(),
+            language_support: SuiteLanguageSupport::Supported,
+            checkout: SuiteCheckout {
+                strategy: SuiteCheckoutStrategy::LocalClone,
+                path: repo.to_string_lossy().to_string(),
+                ignored_by_git: false,
+                local_clone_policy: LocalClonePolicy::AllowAbsolute,
+            },
+            expected: ExpectedSource {
+                format: ExpectedSourceFormat::SuiteNative,
+                path: "suite-native-jelly-oracle-coverage".to_string(),
+            },
+            scoring: SuiteScoring {
+                native: Vec::new(),
+                unified: vec!["precision".to_string(), "recall".to_string()],
+            },
+            tiers: std::collections::BTreeMap::from([(
+                SuiteTier::Fast,
+                CaseSelector {
+                    enabled: true,
+                    selector: "all".to_string(),
+                    max_cases: None,
+                    deterministic_seed: Some("jelly-oracle-coverage".to_string()),
+                },
+            )]),
+        };
+
+        let output_dir = tempdir().unwrap();
+        let artifacts = run_external_suite_for_test(
+            &JellyCallgraphAdapter,
+            &manifest,
+            SuiteTier::Fast,
+            EvaluationMode::PolintBaseline,
+            output_dir.path(),
+        )
+        .unwrap();
+
+        let run: crate::eval::report::EvaluationRun =
+            serde_json::from_str(&std::fs::read_to_string(&artifacts.json_path).unwrap()).unwrap();
+        let coverage = &run.metrics.sections.jelly_oracle_coverage;
+        assert!(
+            coverage.total > 0,
+            "oracle coverage fixture must enumerate at least one oracle span"
+        );
+        assert!(
+            coverage.ratio >= 0.99,
+            "jelly oracle coverage ratio {} (matched {}/{}) below 0.99; unmatched: {:?}",
+            coverage.ratio,
+            coverage.matched,
+            coverage.total,
+            coverage.unmatched
+        );
+        for unmatched in &coverage.unmatched {
+            assert!(!unmatched.file.is_empty());
+            assert!(!unmatched.span.is_empty());
+            assert!(!unmatched.reason.is_empty());
+        }
     }
 
     #[test]

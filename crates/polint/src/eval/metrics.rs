@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
+use crate::eval::model::{ExpectedItem, ObservedItem};
 use crate::eval::report::{
-    GraphMetricSection, MatchSummary, MetricSections, MetricSummary, PathMetricSection,
-    PerformanceMetricSection, ScannerMetricSection, UnknownMetricSection,
+    GraphMetricSection, JellyOracleCoverageSection, JellyUnmatchedSpan, MatchSummary,
+    MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
+    ScannerMetricSection, UnknownMetricSection,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -76,6 +78,7 @@ impl From<ComputedMetrics> for MetricSummary {
             },
             suite_native: std::collections::BTreeMap::new(),
             adaptation: None,
+            jelly_oracle_coverage: JellyOracleCoverageSection::default(),
         };
         Self {
             true_positives: metrics.true_positives,
@@ -246,6 +249,115 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     );
 
     metrics
+}
+
+/// Computes deterministic Jelly oracle-span coverage (D-20, D-21).
+///
+/// Every distinct Jelly graph-edge endpoint span in the `expected` (oracle) set
+/// is checked against the `observed` (renderer-produced) endpoint span set. A
+/// span counts as `matched` when at least one observed Jelly graph edge renders
+/// that exact span string; unmatched oracle spans are surfaced individually for
+/// debuggability. `ratio = matched / total`, or `1.0` when there are no oracle
+/// spans (an empty oracle is vacuously fully covered, so it never drags a
+/// suite-wide ratio below the 0.99 threshold).
+///
+/// The renderer-produced observed spans are the single source of truth (D-05):
+/// the eval adapter populates `observed` via
+/// `analysis::identity::render::jelly_span::render`, so this function never
+/// re-renders — it counts agreement between the oracle and the rendered spans.
+pub(crate) fn jelly_oracle_coverage(
+    expected: &[ExpectedItem],
+    observed: &[ObservedItem],
+) -> JellyOracleCoverageSection {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let observed_spans: BTreeSet<&str> = observed
+        .iter()
+        .filter_map(jelly_graph_edge_observed)
+        .flat_map(|edge| [edge.0, edge.1])
+        .collect();
+
+    // Deterministic distinct oracle spans, keyed by span string -> source file
+    // (the file portion before the first `:` of the Jelly span shape).
+    let mut oracle_spans: BTreeMap<&str, &str> = BTreeMap::new();
+    for edge in expected.iter().filter_map(jelly_graph_edge_expected) {
+        for span in [edge.0, edge.1] {
+            oracle_spans
+                .entry(span)
+                .or_insert_with(|| jelly_span_file(span));
+        }
+    }
+
+    let total = oracle_spans.len() as u32;
+    let mut matched = 0u32;
+    let mut unmatched = Vec::new();
+    for (span, file) in &oracle_spans {
+        if observed_spans.contains(span) {
+            matched += 1;
+        } else {
+            unmatched.push(JellyUnmatchedSpan {
+                file: (*file).to_string(),
+                span: (*span).to_string(),
+                reason: "no identity record renders this span".to_string(),
+            });
+        }
+    }
+
+    let ratio = if total == 0 {
+        1.0
+    } else {
+        f64::from(matched) / f64::from(total)
+    };
+
+    JellyOracleCoverageSection {
+        matched,
+        total,
+        ratio,
+        unmatched,
+    }
+}
+
+/// Aggregates Jelly oracle-span coverage across an entire suite run (D-20,
+/// D-22). The per-platform aggregate is the deterministic union of every case's
+/// oracle spans matched against every case's observed rendered spans; there is
+/// no cross-platform averaging — each platform's CI run computes this
+/// independently and asserts the threshold on its own host.
+pub(crate) fn jelly_oracle_coverage_for_cases(
+    cases: &[crate::eval::report::CaseResult],
+) -> JellyOracleCoverageSection {
+    let expected = cases
+        .iter()
+        .flat_map(|case| case.expected.iter().cloned())
+        .collect::<Vec<_>>();
+    let observed = cases
+        .iter()
+        .flat_map(|case| case.observed.iter().cloned())
+        .collect::<Vec<_>>();
+    jelly_oracle_coverage(&expected, &observed)
+}
+
+fn jelly_graph_edge_expected(item: &ExpectedItem) -> Option<(&str, &str)> {
+    match item {
+        ExpectedItem::GraphEdge(edge) if edge.graph.starts_with("jelly.call_graph.") => {
+            Some((edge.from.as_str(), edge.to.as_str()))
+        }
+        _ => None,
+    }
+}
+
+fn jelly_graph_edge_observed(item: &ObservedItem) -> Option<(&str, &str)> {
+    match item {
+        ObservedItem::GraphEdge(edge) if edge.graph.starts_with("jelly.call_graph.") => {
+            Some((edge.from.as_str(), edge.to.as_str()))
+        }
+        _ => None,
+    }
+}
+
+/// Extracts the source-file portion of a Jelly span string
+/// (`file:start_line:start_col:end_line:end_col`).
+fn jelly_span_file(span: &str) -> &str {
+    span.rsplitn(5, ':').last().unwrap_or(span)
 }
 
 fn status_label(status: crate::eval::model::ObservedStatus) -> &'static str {

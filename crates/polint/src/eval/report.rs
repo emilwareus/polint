@@ -104,6 +104,31 @@ pub(crate) struct MetricSections {
     pub(crate) suite_native: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) adaptation: Option<AdaptationMetricSection>,
+    #[serde(default)]
+    pub(crate) jelly_oracle_coverage: JellyOracleCoverageSection,
+}
+
+/// One Jelly oracle span that no identity record renders, surfaced for
+/// debuggability (D-21).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct JellyUnmatchedSpan {
+    pub(crate) file: String,
+    pub(crate) span: String,
+    pub(crate) reason: String,
+}
+
+/// Deterministic Jelly oracle-span coverage over the Jelly micro fixture set
+/// (D-20, D-21). `ratio = matched / total` (or `1.0` when `total == 0`); the
+/// `unmatched` list carries one entry per oracle span that no identity record
+/// renders.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct JellyOracleCoverageSection {
+    pub(crate) matched: u32,
+    pub(crate) total: u32,
+    pub(crate) ratio: f64,
+    pub(crate) unmatched: Vec<JellyUnmatchedSpan>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -496,6 +521,101 @@ mod tests {
         RuntimeStatsSummary,
     };
     use crate::eval::suite::SuiteId;
+
+    #[test]
+    fn jelly_oracle_coverage_serde_round_trip() {
+        let section = JellyOracleCoverageSection {
+            matched: 98,
+            total: 99,
+            ratio: 98.0 / 99.0,
+            unmatched: vec![JellyUnmatchedSpan {
+                file: "tests/micro/app.js".to_string(),
+                span: "tests/micro/app.js:7:1:9:2".to_string(),
+                reason: "no identity record renders this span".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        let restored: JellyOracleCoverageSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, restored);
+
+        let default = JellyOracleCoverageSection::default();
+        let default_json = serde_json::to_string(&default).unwrap();
+        let default_restored: JellyOracleCoverageSection =
+            serde_json::from_str(&default_json).unwrap();
+        assert_eq!(default, default_restored);
+    }
+
+    #[test]
+    fn v1_2_metric_sections_json_reverse_compat_jelly() {
+        // A v1.2 MetricSections JSON has no `jelly_oracle_coverage` field; it must
+        // still deserialize, defaulting the new section (Pattern M, #[serde(default)]).
+        let v1_2_json = serde_json::json!({
+            "scanner": {
+                "true_positives": 0,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "true_negatives": 0,
+                "precision": null,
+                "recall": null,
+                "f1": null,
+                "f2": null,
+                "f3": null,
+                "false_positive_rate": null
+            },
+            "graph": { "edges_expected": 0, "edges_observed": 0, "edges_unconfirmed": 0 },
+            "paths": { "paths_expected": 0, "paths_observed": 0, "paths_unconfirmed": 0 },
+            "unknowns": { "total": 0, "by_status": {} },
+            "performance": {
+                "runtime_budget_passed": 0,
+                "runtime_budget_failed": 0,
+                "cache_hits": 0,
+                "cache_misses": 0
+            },
+            "suite_native": {}
+        });
+        let sections: MetricSections = serde_json::from_value(v1_2_json).unwrap();
+        assert_eq!(
+            sections.jelly_oracle_coverage,
+            JellyOracleCoverageSection::default()
+        );
+    }
+
+    #[test]
+    fn metric_summary_layout_unchanged() {
+        // Compile-time + structural lock on the MetricSummary field set
+        // (WARNING #1): downstream gates lock this shape. Extensions live on
+        // MetricSections only. Destructuring with every current field name fails
+        // to compile if a field is added or removed.
+        let summary = report_with_order(Ordering::Forward).metrics;
+        let MetricSummary {
+            true_positives: _,
+            false_positives: _,
+            false_negatives: _,
+            true_negatives: _,
+            unconfirmed: _,
+            false_positive_trap_hits: _,
+            forbidden_hits: _,
+            unknown_count: _,
+            facts_present: _,
+            facts_accepted: _,
+            facts_rejected: _,
+            graph_edges_expected: _,
+            graph_edges_observed: _,
+            graph_edges_unconfirmed: _,
+            paths_expected: _,
+            paths_observed: _,
+            paths_unconfirmed: _,
+            runtime_budget_passed: _,
+            runtime_budget_failed: _,
+            precision: _,
+            recall: _,
+            f1: _,
+            f2: _,
+            f3: _,
+            false_positive_rate: _,
+            sections: _,
+        } = summary;
+    }
 
     #[test]
     fn eval_report_normalization_makes_json_order_independent() {

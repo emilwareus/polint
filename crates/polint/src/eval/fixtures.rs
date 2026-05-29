@@ -912,8 +912,10 @@ fn evaluation_run_for_fixture(
         &observed,
         crate::eval::matcher::MatcherConfig::default(),
     );
-    let metrics: crate::eval::report::MetricSummary =
+    let mut metrics: crate::eval::report::MetricSummary =
         crate::eval::metrics::compute_metrics(&matches).into();
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage(&fixture.manifest.expected, &observed);
     let runtime = runtime_observation(&fixture.manifest, &observed);
     let run = crate::eval::report::EvaluationRun {
         schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),

@@ -1,0 +1,32 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "identity-jelly-oracle-coverage"
+area = "graphs"
+
+# Jelly oracle-span coverage fixture (D-20, D-21, D-22).
+#
+# This fixture drives the Jelly micro suite under `repo/tests/` through the
+# existing `JellyCallgraphAdapter`, whose `normalize_kernel_output` renders every
+# observed call-graph edge span via the single-source-of-truth
+# `analysis::identity::render::jelly_span::render` (D-05). The oracle JSON under
+# `repo/tests/micro/app.json` enumerates the expected Jelly graph edges; the
+# runner test `identity_jelly_oracle_coverage_fixture` asserts that
+# `eval::report::MetricSections.jelly_oracle_coverage.ratio >= 0.99` over the
+# enumerated case set on the current host platform.
+#
+# Per D-22 the threshold is asserted per-platform with no cross-platform
+# averaging: Linux and macOS CI each run this fixture and assert >= 0.99
+# independently. Per D-20 the coverage is a deterministic count
+# (`matched / total`), never a probabilistic sample.
+#
+# producer_id = "polint.identity"; the coverage assertion mode is "partial"
+# (matching v1.2 fixture convention — the oracle is the existing micro suite,
+# not a hand-authored exact snapshot).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+# jelly_oracle_coverage threshold asserted by identity_jelly_oracle_coverage_fixture:
+#   jelly_oracle_coverage.matched / jelly_oracle_coverage.total >= 0.99
