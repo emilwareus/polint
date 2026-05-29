@@ -132,6 +132,33 @@ jobs:
       - name: run public-surface-leak gate
         run: cargo test --package polint --test public_surface_leak --locked
 
+  determinism-gate:
+    # V1.3 DETERMINISM GATE — see Phase 43 Plan 03, D-20, D-21, D-22, D-24, D-25.
+    # Runs the N=10 seeded-permutation byte-identity gate on every PR on Linux AND
+    # macOS. fail-fast: false means each platform reports INDEPENDENTLY — a Linux
+    # pass + macOS fail still blocks the PR (no averaging, no skipping either
+    # platform, D-24, mirroring the leak-gate contract). Every subsequent
+    # solver-introducing phase (44-54) INHERITS this gate as a precondition for
+    # landing: a new provider auto-enrolls via provider_manifests() (D-22), and
+    # the determinism fixtures must stay green as a named acceptance gate (D-25).
+    # This is a fast-CI (PR-blocking) job, not nightly.
+    name: determinism gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: run determinism gate (N=10 seeded permutations)
+        run: cargo test -p polint --lib eval::determinism_gate --locked
+
   install-smoke:
     name: cargo install smoke (ubuntu)
     runs-on: ubuntu-latest
