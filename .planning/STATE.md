@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T07:07:06.357Z"
-last_activity: 2026-05-29 -- Phase 42 Plan 02 complete
+last_updated: "2026-05-29T07:23:33.197Z"
+last_activity: 2026-05-29 -- Phase 42 Plan 04 complete (public-surface-leak CI gate)
 progress:
   total_phases: 13
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # State: polint
@@ -41,9 +41,13 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — EXECUTING
-Plan: 3 of 4
-Status: Executing Phase 42 (Plans 01-02 complete; ready for Plan 03)
-Last activity: 2026-05-29 -- Phase 42 Plan 02 complete (benchmark identity renderers)
+Plan: Plans 01, 02, 04 complete; Plan 03 (identity taxonomy) pending
+Status: Executing Phase 42 (3 of 4 plans complete; Plan 03 remaining)
+Last activity: 2026-05-29 -- Phase 42 Plan 04 complete (public-surface-leak CI gate on Linux + macOS)
+
+### Open repo-admin action (T-42-04-10)
+
+Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (macos-latest)` to GitHub branch protection required checks on `main` and `release/*`. Only a repo admin can configure branch protection; until then a PR can merge with the v1.3 leak gate failing. Source: Phase 42 Plan 04 (`crates/polint/tests/public_surface_leak.rs`).
 
 ## Deferred Items
 
@@ -401,6 +405,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: CRLF->LF normalization happens at render time only; a multi-line CRLF/LF fixture proves byte-identical Jelly output (D-12, D-13, D-25).
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Both eval adapters consume the renderers as the single source of truth; the inline jelly_span_identity formatter is deleted (D-05).
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: MetricSections gains jelly_oracle_coverage (#[serde(default)]); MetricSummary shape is frozen and locked by a destructure test; coverage is a deterministic matched/total count >=0.99 (D-15, D-20, D-22).
+- [Phase ?]: [Phase 42-04] v1.3 public-surface-leak gate installed: excluded no_implicit_prelude probe + locked ALLOWED_PRELUDE (97 entries) snapshot-checked vs sdk/mod.rs; Approach B (no trybuild); leak-gate CI on ubuntu+macos fail-fast:false (D-18)
+- [Phase ?]: [Phase 42-04] Leak-gate test relocated to crates/polint/tests/public_surface_leak.rs (workspace-root tests/ is not a crate; --package polint --test only resolves there); probe import is use ::polint::sdk::prelude::*; (leading :: required under no_implicit_prelude); probe carries its own committed Cargo.lock for --locked CI
+- [Phase ?]: [Phase 42-04] Negative control proved both layers: Rust E0365 forbids pub use of a pub(crate) type into the public prelude; allowlist_matches_prelude_source catches a genuinely-pub addition with an UNSANCTIONED diff. Phases 43-54 must extend ALLOWED_PRELUDE + bump count(97) + add a probe witness to ship any new public type
 
 ## Execution Metrics
 

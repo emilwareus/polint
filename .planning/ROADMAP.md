@@ -43,8 +43,8 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Per-benchmark renderers produce Go `RelString`-style names and Jelly `file:start_line:start_col:end_line:end_col` spans with ≥99% Jelly oracle-span coverage on micro fixtures across Linux + macOS CI.
   3. CRLF/LF normalization fixture passes and produces byte-identical renderer output.
   4. Evaluation output reports distinct categories `wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`.
-  5. Public-surface-leak CI gate is installed: external rule crate compiles against `polint::sdk::prelude::*` and reaches zero v1.3 solver types.
-**Plans**: TBD
+  5. Public-surface-leak CI gate is installed: external rule crate compiles against `polint::sdk::prelude::*` and reaches zero v1.3 solver types. ✅ Addressed by Plan 04 (leak-gate job on Linux + macOS; locked ALLOWED_PRELUDE = 97 entries).
+**Plans**: 4 total — 01 (identity substrate) ✅, 02 (renderers) ✅, 03 (identity taxonomy) pending, 04 (public-surface-leak CI gate) ✅
 
 ### Phase 43: Reachability, Roots & Per-Suite Scoring Mode
 **Goal**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate, scores each benchmark suite in the mode its oracle expects, and inherits a determinism gate every subsequent solver phase must pass.
@@ -193,7 +193,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
-| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 2/4 | In Progress|  |
+| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 3/4 | In Progress|  |
 | 43 | Reachability, Roots & Per-Suite Scoring Mode | 0/0 | Not started | - |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
