@@ -166,6 +166,20 @@ pub(crate) fn run_native_fixture_for_test(
     Ok(evaluation_run_for_fixture(&fixture, observed))
 }
 
+/// Builds the normalized [`EvaluationRun`] for `fixture` from a CALLER-SUPPLIED
+/// observed-item vector. The determinism gate (`eval::determinism_gate`) uses
+/// this to feed seeded-permuted observed rows through the exact same
+/// `normalize_run` + `deterministic_output_hash` path the live fixture runner
+/// uses, proving the normalized observed JSON is byte-identical regardless of
+/// row-insertion order (D-20/D-21).
+#[cfg(test)]
+pub(crate) fn evaluation_run_for_fixture_with_observed_for_test(
+    fixture: &NativeFixture,
+    observed: Vec<crate::eval::model::ObservedItem>,
+) -> crate::eval::report::EvaluationRun {
+    evaluation_run_for_fixture(fixture, observed)
+}
+
 #[cfg(test)]
 pub(crate) fn run_cache_current_determinism_fixture_for_test(
     fixture_dir: &Path,
