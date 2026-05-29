@@ -45,11 +45,11 @@ pub(crate) fn discover_reachability_roots(
 
     roots.extend(configured_roots_for(db, configured_roots));
 
-    // Assign placeholder dense IDs; the provider re-assigns them after the
-    // sort+normalize step (D-06). Discovery output IDs are never persisted.
-    for (index, root) in roots.iter_mut().enumerate() {
-        root.id = ReachabilityRootId(index as u64);
-    }
+    // IN-01: discovery does NOT assign dense IDs. Every constructor leaves
+    // `id: ReachabilityRootId(0)`; the provider assigns the only dense IDs that
+    // matter, AFTER the sort+normalize step and AFTER the output digest (D-06).
+    // Assigning placeholder IDs here would falsely signal that IDs are meaningful
+    // at discovery time when they are never persisted.
     roots
 }
 
