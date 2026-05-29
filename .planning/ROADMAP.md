@@ -193,7 +193,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
-| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 4/4 | Complete   | 2026-05-29 |
+| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
 | 43 | Reachability, Roots & Per-Suite Scoring Mode | 0/0 | Not started | - |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |

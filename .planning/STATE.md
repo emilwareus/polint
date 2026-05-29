@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: executing
-last_updated: "2026-05-29T07:45:18Z"
-last_activity: 2026-05-29 -- Phase 42 Plan 03 complete (identity taxonomy + categorized_failures); Phase 42 done (4/4 plans)
+status: completed
+last_updated: "2026-05-29T10:45:00.000Z"
+last_activity: 2026-05-29 -- Phase 42 Plan 05 complete (gap closure: Go package-NAME qualification via PackageFact, go_relstring_v2 cache bump, dedup literal total order; IDENT-02 Go half + IDENT-01 determinism)
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 5
+  completed_plans: 5
   percent: 8
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — COMPLETE
-Plan: Plans 01, 02, 03, 04 all complete
-Status: Phase 42 complete (4 of 4 plans); IDENT-01/02/03 addressed; ready for Phase 43
-Last activity: 2026-05-29 -- Phase 42 Plan 03 complete (closed IdentityCategory taxonomy + categorized_failures counter map on MetricSections)
+Plan: Plans 01, 02, 03, 04, 05 all complete
+Status: Phase 42 complete (5 of 5 plans); IDENT-01/02/03 addressed; Plan 05 closed the IDENT-02 Go-RelString-half gap (package-NAME qualification on real records) + IDENT-01 dedup determinism (CR-03); ready for Phase 43
+Last activity: 2026-05-29 -- Phase 42 Plan 05 complete (gap closure: Go package-NAME qualification via PackageFact, go_relstring_v2 cache bump, dedup literal total order)
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -166,7 +166,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
-| 42 | Complete | 4/4 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, and public-surface-leak CI gate done; requirements IDENT-01/02/03 |
+| 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
 
 ## Accumulated Context
 
@@ -414,6 +414,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] MetricSections gains categorized_failures: CategorizedFailureSection (#[serde(default)]) sibling AFTER jelly_oracle_coverage; MetricSummary shape frozen (destructure layout-lock test green); five u32 snake_case counters with deny_unknown_fields; record_category uses saturating_add (T-42-03-05).
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] categorized_failures threads from the live AnalysisDb (O(n) per-fact projection) through per-category observed invariants into the report section across all eval build paths; the fixture asserts byte-stable .nonzero booleans for determinism-gate safety.
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] Native syntactic Go/TS emits only unsupported_edge/unresolved_edge; the fixture proves those two from real source and eval::metrics unit tests drive categorized_failures_from_db for wrong_identity/package_load_limitation/model_missing (BLOCKER #4 fallback) so all FIVE counters are non-zero across the corpus (D-15, no scope reduction).
+- [Phase 42-05]: Go identity records resolve the PackageFact package-clause NAME (foo.Bar) via package_or_module_for_record; non-Go keeps db.path_for byte-identical. Full module import path deferred to Phase 46.
+- [Phase 42-05]: Dedup canonical selection + final sort use record_total_order_key (record_sort_key extended with originating_call_site_id, originating_call_target_id, signature_digest) for a literal total order; byte-stable across input order (CR-03 closed for Phase 43).
+- [Phase 42-05]: Go RTA oracle key stays on display_name with an inline Phase 46 deferral note; cache trip-wire bumped go_relstring_v1 -> go_relstring_v2.
 
 ## Execution Metrics
 
