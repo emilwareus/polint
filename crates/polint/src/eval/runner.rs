@@ -585,6 +585,29 @@ mod tests {
     }
 
     #[test]
+    fn identity_dedup_fixture() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/dedup");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-dedup");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "dedup fixture expected rows must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
+    fn identity_dedup_fixture_determinism() {
+        // The dedup snapshot must be byte-stable across repeated runs (D-11): the
+        // determinism gate Phase 43 inherits relies on this invariant.
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/dedup");
+        let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(first.output_hash, second.output_hash);
+    }
+
+    #[test]
     fn phase40_promotion_fixture_gates_pass_deterministically() {
         let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();

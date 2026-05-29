@@ -383,6 +383,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(provider_output_invariants(&output.run_report));
     observed.extend(layer_cache_invariants(&output.run_report));
     observed.extend(type_value_alias_facts(&output.db));
+    observed.extend(identity_invariants(&output.db));
     observed.extend(extension_facts(&output.db));
     observed.extend(extension_invariants(&output.db));
     if let Some(budget) = &fixture.manifest.budget {
@@ -555,6 +556,25 @@ fn layer_key_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
         "layer_key.polint.ts.syntax.has_config_digest",
         bool_string(has_ts_output && component_present(&run_report.input_snapshot.config)),
         "kernel.run_report.layer_key_inputs",
+    )]
+}
+
+#[cfg(test)]
+fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    // Surfaces the deduplicated identity record set so the dedup snapshot fixture
+    // can assert the maximum collapse multiplicity deterministically (D-10,
+    // D-11). The dedup determinism contract itself is proven by the co-located
+    // tests in analysis::identity::dedup.
+    let records = db.identity_records();
+    let max_multiplicity = records
+        .iter()
+        .map(|record| record.multiplicity)
+        .max()
+        .unwrap_or(0);
+    vec![observed_invariant(
+        "identity.dedup.multiplicity",
+        max_multiplicity.to_string(),
+        "kernel.run_report.identity_records",
     )]
 }
 
@@ -3601,15 +3621,16 @@ path = "repo"
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
                 ("provider_order.8", "polint.calls"),
-                ("provider_order.9", "polint.abstract_domains"),
-                ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.entrypoints"),
-                ("provider_order.12", "polint.extensions"),
-                ("provider_order.13", "polint.type_value_alias"),
-                ("provider_order.14", "polint.refined_calls"),
-                ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.evidence"),
-                ("provider_order.17", "polint.metrics"),
+                ("provider_order.9", "polint.identity"),
+                ("provider_order.10", "polint.abstract_domains"),
+                ("provider_order.11", "polint.direct_summaries"),
+                ("provider_order.12", "polint.entrypoints"),
+                ("provider_order.13", "polint.extensions"),
+                ("provider_order.14", "polint.type_value_alias"),
+                ("provider_order.15", "polint.refined_calls"),
+                ("provider_order.16", "polint.data_flow"),
+                ("provider_order.17", "polint.evidence"),
+                ("provider_order.18", "polint.metrics"),
             ]
         );
     }

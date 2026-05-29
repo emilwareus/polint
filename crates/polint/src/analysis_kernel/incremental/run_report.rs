@@ -196,6 +196,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",

@@ -41,6 +41,9 @@ use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactP
 use crate::analysis::extensions::store::{
     AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
 };
+use crate::analysis::identity::facts::IdentityRecord;
+use crate::analysis::identity::provider::valid_call_site_ids;
+use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
@@ -687,6 +690,8 @@ pub struct AnalysisDb {
     call_targets: Vec<CallTargetFact>,
     unresolved_calls: Vec<UnresolvedCallFact>,
     call_store: Option<CallStore>,
+    identity_records: Vec<IdentityRecord>,
+    identity_store: Option<IdentityStore>,
     refined_call_edges: Vec<RefinedCallEdgeFact>,
     refined_call_store: Option<RefinedCallStore>,
     data_flow_nodes: Vec<DataFlowNodeFact>,
@@ -1054,6 +1059,40 @@ impl AnalysisDb {
         self.call_store = Some(store);
         self.refresh_call_metadata();
         Ok(())
+    }
+
+    pub(crate) fn replace_identity_facts(
+        &mut self,
+        output: IdentityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_sites = valid_call_site_ids(self);
+        let valid_targets = self
+            .call_targets
+            .iter()
+            .map(|target| target.id)
+            .collect::<BTreeSet<_>>();
+        let store = IdentityStore::from_output(output, &valid_sites, &valid_targets)?;
+        self.identity_records = store.records().to_vec();
+        self.identity_store = Some(store);
+        Ok(())
+    }
+
+    pub(crate) fn identity_records(&self) -> &[IdentityRecord] {
+        &self.identity_records
+    }
+
+    /// Injects identity records directly, bypassing store-level reference
+    /// validation, so validation diagnostics (the defense-in-depth layer) can be
+    /// exercised even for records that the store would have rejected.
+    #[cfg(test)]
+    pub(crate) fn set_identity_records_for_test(&mut self, records: Vec<IdentityRecord>) {
+        self.identity_records = records;
+        self.identity_store = None;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn identity_store(&self) -> Option<&IdentityStore> {
+        self.identity_store.as_ref()
     }
 
     pub(crate) fn replace_refined_call_facts(
