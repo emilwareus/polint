@@ -109,6 +109,29 @@ jobs:
       - name: cargo test
         run: cargo test -p polint --lib --all-features --locked
 
+  leak-gate:
+    # V1.3 PUBLIC-SURFACE-LEAK GATE — see Phase 42 D-17, D-18, D-19.
+    # Runs on every PR on Linux AND macOS. fail-fast: false means each platform
+    # reports independently — a Linux pass + macOS fail still blocks the PR (no
+    # averaging, no skipping either platform, D-18). Every subsequent v1.3 phase
+    # (43-54) inherits this gate as a precondition for landing public types.
+    name: public surface leak gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: run public-surface-leak gate
+        run: cargo test --package polint --test public_surface_leak --locked
+
   install-smoke:
     name: cargo install smoke (ubuntu)
     runs-on: ubuntu-latest
