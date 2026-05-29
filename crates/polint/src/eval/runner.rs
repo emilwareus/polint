@@ -608,6 +608,86 @@ mod tests {
     }
 
     #[test]
+    fn identity_crlf_normalization_fixture() {
+        // D-12, D-13: the Jelly renderer normalizes CRLF -> LF at render time so
+        // a `\n` checkout and a `\r\n` checkout of the same logical source
+        // produce byte-identical rendered spans. The eval fixture pins the LF
+        // case as observed; this test proves the byte-for-byte equality by
+        // loading BOTH repos and comparing rendered identity spans.
+        use crate::analysis::identity::render::jelly_span;
+
+        let fixture_root = repo_root().join("tests/eval-fixtures/identity/crlf_normalization");
+        let lf_output =
+            crate::eval::observed::run_kernel_for_repo_for_test(&fixture_root.join("repo-lf"))
+                .unwrap();
+        let crlf_output =
+            crate::eval::observed::run_kernel_for_repo_for_test(&fixture_root.join("repo-crlf"))
+                .unwrap();
+
+        let render_by_relative_path = |output: &crate::analysis_kernel::KernelOutput| {
+            let files = output
+                .db
+                .files()
+                .iter()
+                .map(|file| (file.id, file.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let mut rendered = std::collections::BTreeMap::new();
+            for record in output.db.identity_records() {
+                let Some(source) = files.get(&record.file_id) else {
+                    continue;
+                };
+                // Key by (relative path, stable container/display) so the two
+                // encodings line up despite differing byte offsets on disk.
+                let key = format!(
+                    "{}|{}|{}|{:?}",
+                    source.relative_path.replace('\\', "/"),
+                    record.container_path,
+                    record.display_name,
+                    record.kind,
+                );
+                rendered.insert(key, jelly_span::render(record, source));
+            }
+            rendered
+        };
+
+        let lf_rendered = render_by_relative_path(&lf_output);
+        let crlf_rendered = render_by_relative_path(&crlf_output);
+
+        assert!(
+            !lf_rendered.is_empty(),
+            "LF repo must produce at least one identity record"
+        );
+        assert_eq!(
+            lf_rendered.keys().collect::<Vec<_>>(),
+            crlf_rendered.keys().collect::<Vec<_>>(),
+            "LF and CRLF repos must expose the same identity record set"
+        );
+        for (key, lf_span) in &lf_rendered {
+            let crlf_span = crlf_rendered.get(key).expect("matching CRLF record");
+            assert_eq!(
+                lf_span, crlf_span,
+                "CRLF and LF rendered Jelly spans must be byte-identical for {key}"
+            );
+            assert!(!lf_span.starts_with("/Users/"));
+            assert!(!lf_span.starts_with("/home/"));
+            assert!(!lf_span.contains(":\\"));
+        }
+    }
+
+    #[test]
+    fn identity_crlf_normalization_fixture_observed_through_eval_harness() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/crlf_normalization");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-crlf-normalization");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "CRLF fixture render invariants must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
     fn phase40_promotion_fixture_gates_pass_deterministically() {
         let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();

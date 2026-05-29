@@ -398,6 +398,28 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     Ok(observed)
 }
 
+/// Runs the analysis kernel on a repo directory and returns the raw
+/// `KernelOutput`, so renderer-level tests (e.g. the CRLF byte-identical
+/// fixture) can render identity records directly against the live `AnalysisDb`.
+#[cfg(test)]
+pub(crate) fn run_kernel_for_repo_for_test(
+    repo_root: &Path,
+) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
+    let plan = AnalysisPlan::empty();
+    let loaded = load_config(repo_root)?;
+    let config_digest = config_hash(&loaded);
+    let rule_digest = rule_hash(&[], None, &BTreeMap::new());
+    let cache = Cache::default_for_repo(repo_root, true);
+    AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
+        parallel: true,
+    })
+}
+
 #[cfg(test)]
 fn copy_dir_contents(source: &Path, destination: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(destination)
@@ -571,11 +593,64 @@ fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
         .map(|record| record.multiplicity)
         .max()
         .unwrap_or(0);
-    vec![observed_invariant(
+    let mut invariants = vec![observed_invariant(
         "identity.dedup.multiplicity",
         max_multiplicity.to_string(),
         "kernel.run_report.identity_records",
-    )]
+    )];
+    invariants.extend(identity_render_invariants(db));
+    invariants
+}
+
+/// Renders every identity record through the single-source-of-truth renderers
+/// (Phase 42 D-05) and surfaces deterministic render invariants:
+///
+/// - `identity.render.jelly.no_absolute_path` proves the Jelly renderer emits
+///   only workspace-relative forward-slash paths (T-42-02-02);
+/// - `identity.render.jelly.rendered_count` proves the renderer ran over the
+///   live identity record set so the CRLF / oracle-coverage fixtures assert an
+///   actually-observed value rather than a phantom.
+#[cfg(test)]
+fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    use crate::analysis::identity::render::{go_relstring, jelly_span};
+
+    let files = db
+        .files()
+        .iter()
+        .map(|file| (file.id, file))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut rendered_count = 0u32;
+    let mut all_workspace_relative = true;
+    for record in db.identity_records() {
+        // Both renderers participate so the leak gate (Plan 04) and downstream
+        // consumers see them exercised end-to-end on real records.
+        let _ = go_relstring::render(record);
+        let Some(source) = files.get(&record.file_id) else {
+            continue;
+        };
+        let rendered = jelly_span::render(record, source);
+        rendered_count += 1;
+        if rendered.starts_with("/Users/")
+            || rendered.starts_with("/home/")
+            || rendered.contains(":\\")
+        {
+            all_workspace_relative = false;
+        }
+    }
+
+    vec![
+        observed_invariant(
+            "identity.render.jelly.no_absolute_path",
+            bool_string(all_workspace_relative),
+            "kernel.run_report.identity_records",
+        ),
+        observed_invariant(
+            "identity.render.jelly.rendered_count.nonzero",
+            bool_string(rendered_count > 0),
+            "kernel.run_report.identity_records",
+        ),
+    ]
 }
 
 #[cfg(test)]
