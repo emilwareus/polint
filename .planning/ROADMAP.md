@@ -57,7 +57,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   4. The determinism gate is wired so every subsequent solver-introducing phase inherits it as an acceptance gate.
 **Plans**: 3 total
 - [x] 43-01-PLAN.md — analysis::reachability module + ReachabilityRootFact/RootKind + root discovery (Go main/init/exported, entrypoint bridge, configured roots) + polint.reachability provider/cache + kernel splice (REACH-01)
-- [ ] 43-02-PLAN.md — required scoring_mode field + 4 suite manifest updates + reachable-set BFS/DFS + CallReachabilityFact marking + mode-aware scoring filter (REACH-02)
+- [x] 43-02-PLAN.md — required scoring_mode field + 4 suite manifest updates + reachable-set BFS/DFS + CallReachabilityFact marking + mode-aware scoring filter (REACH-02)
 - [ ] 43-03-PLAN.md — reserved solver_step_count/budget_exceeded_reasons section + N=10 determinism-gate harness + Go/TS fixtures + fast-CI Linux+macOS job + inheritance contract (REACH-03)
 
 ### Phase 44: Semantic Graph Skeleton & Constraint Vocabulary
@@ -197,7 +197,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
 | 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
-| 43 | Reachability, Roots & Per-Suite Scoring Mode | 1/3 | In Progress|  |
+| 43 | Reachability, Roots & Per-Suite Scoring Mode | 2/3 | In Progress|  |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
 | 46 | Go Semantic Frontend & Sidecar | 0/0 | Not started | - |

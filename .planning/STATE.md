@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T15:32:02.650Z"
+last_updated: "2026-05-29T16:18:55.304Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
   percent: 8
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 43 (reachability-roots-per-suite-scoring-mode) — EXECUTING
-Plan: 2 of 3
-Status: Ready to execute (43-01 complete: reachability roots + polint.reachability provider)
-Last activity: 2026-05-29 -- Completed 43-01-PLAN.md (REACH-01)
+Plan: 3 of 3
+Status: Ready to execute (43-02 complete: required ScoringMode field + reachable-graph marking + mode-aware scoring filter)
+Last activity: 2026-05-29 -- Completed 43-02-PLAN.md (REACH-02)
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -419,6 +419,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 42-05]: Go RTA oracle key stays on display_name with an inline Phase 46 deferral note; cache trip-wire bumped go_relstring_v1 -> go_relstring_v2.
 - [Phase ?]: [Phase 43-01]: reachability enums use pinned order + serde rename (no repr(u8)); polint.reachability runs after polint.entrypoints with SetupAware ceiling; configured-unresolvable roots become Unresolved.
 - [Phase ?]: [Phase 43-01]: [reachability] roots config lives in crates/polint/src/config/mod.rs; configured roots passed to discovery as &[String] from LoadedConfig since InputSnapshot carries only digests.
+- [Phase 43-02]: ScoringMode uses per-variant serde rename for kebab wire strings (oracle-rta/oracle-jelly/whole-repo), not rename_all; the required non-Option scoring_mode field gates structurally (deny_unknown_fields) + via an explicit validate() guard.
+- [Phase 43-02]: Reachable-set BFS extends the frontier only on Resolved direct-call targets; the CallReachabilityFact marking is composed by call-site stable key and analysis::calls is never mutated; the provider seeds the traversal with explicit real-function roots before storing.
+- [Phase 43-02]: oracle-rta filters scored edges to the reachable-from-roots set (unmarked edges fail closed); oracle-jelly/whole-repo score the full set; the backwards-mode footgun is guarded by an oracle-rta-subset-of-oracle-jelly regression test.
 
 ## Execution Metrics
 
