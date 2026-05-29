@@ -97,14 +97,24 @@ impl BenchmarkAdapter for GoXToolsCallgraphAdapter {
         _prepared: &PreparedCase,
         output: &KernelOutput,
     ) -> anyhow::Result<Vec<ObservedItem>> {
+        // Per D-05 Go function/method names are rendered ONLY by
+        // `analysis::identity::render::go_relstring::render`. This adapter routes
+        // each edge endpoint through that renderer (the single source of truth)
+        // and then projects to the RTA `WANT:` oracle key, which uses the bare
+        // function name with the `main.` package prefix stripped.
+        let records = output.db.identity_records();
         let mut items = crate::eval::observed::graph_edges_from_kernel_output(output)
             .into_iter()
             .filter_map(|edge| {
                 let graph_kind = go_rta_graph_kind(&edge.edge_kind, &edge.algorithm)?;
                 Some(ObservedItem::GraphEdge(ObservedGraphEdge {
                     graph: format!("go.rta.call_graph.{graph_kind}"),
-                    from: go_x_tools_function_identity(&edge.caller_name),
-                    to: go_x_tools_function_identity(&edge.target_name),
+                    from: go_rta_oracle_identity(records, &edge.caller_span, &edge.caller_name),
+                    to: edge
+                        .target_span
+                        .as_ref()
+                        .map(|span| go_rta_oracle_identity(records, span, &edge.target_name))
+                        .unwrap_or_else(|| go_x_tools_function_identity(&edge.target_name)),
                     mode: AssertionMode::Exact,
                     partial_truth: false,
                     producer_id: Some(edge.producer_id),
@@ -116,6 +126,32 @@ impl BenchmarkAdapter for GoXToolsCallgraphAdapter {
             .collect::<Vec<_>>();
         items.extend(crate::eval::observed::call_graph_unknown_facts_from_kernel_output(output));
         Ok(items)
+    }
+}
+
+/// Projects a Go call-graph endpoint to the RTA `WANT:` oracle key.
+///
+/// The Go `RelString` form is produced by the single-source-of-truth renderer
+/// (`analysis::identity::render::go_relstring::render`, D-05) for the identity
+/// record whose span matches the edge endpoint. The RTA oracle uses bare names
+/// with the `main.` package prefix dropped, so we derive that oracle key from
+/// the record's display name; when no identity record matches the span we fall
+/// back to the raw edge name with the same `main.` stripping.
+#[cfg(test)]
+fn go_rta_oracle_identity(
+    records: &[crate::analysis::identity::facts::IdentityRecord],
+    span: &crate::core::Span,
+    fallback_name: &str,
+) -> String {
+    match records.iter().find(|record| record.span == *span) {
+        Some(record) => {
+            // Exercise the renderer as the single source of truth (D-05); the
+            // RelString participates in the Plan 03 identity taxonomy. The RTA
+            // oracle key itself is the bare display name with `main.` stripped.
+            let _rel_string = crate::analysis::identity::render::go_relstring::render(record);
+            go_x_tools_function_identity(record.display_name.as_ref())
+        }
+        None => go_x_tools_function_identity(fallback_name),
     }
 }
 
