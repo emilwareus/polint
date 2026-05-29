@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T06:39:32.949Z"
-last_activity: 2026-05-29 -- Phase 42 Plan 01 complete
+last_updated: "2026-05-29T07:07:06.357Z"
+last_activity: 2026-05-29 -- Phase 42 Plan 02 complete
 progress:
   total_phases: 13
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # State: polint
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — EXECUTING
-Plan: 2 of 4
-Status: Executing Phase 42 (Plan 01 complete; ready for Plan 02)
-Last activity: 2026-05-29 -- Phase 42 Plan 01 complete (identity substrate)
+Plan: 3 of 4
+Status: Executing Phase 42 (Plans 01-02 complete; ready for Plan 03)
+Last activity: 2026-05-29 -- Phase 42 Plan 02 complete (benchmark identity renderers)
 
 ## Deferred Items
 
@@ -397,6 +397,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Arc<str> serde uses a field-level adapter because the serde rc feature is not enabled.
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Dedup collapse is order-independent — the canonical retained record is the smallest by sort key (D-11).
 - [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: polint.identity manifest slots between polint.calls and polint.abstract_domains (D-23); IDENTITY_SCHEMA_LABEL = identity-facts-1.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Identity renderers are pure pub(crate) functions over &IdentityRecord (+ &SourceFile for Jelly); renderer shape is driven by container_path encoding (D-06, D-07).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: CRLF->LF normalization happens at render time only; a multi-line CRLF/LF fixture proves byte-identical Jelly output (D-12, D-13, D-25).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Both eval adapters consume the renderers as the single source of truth; the inline jelly_span_identity formatter is deleted (D-05).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: MetricSections gains jelly_oracle_coverage (#[serde(default)]); MetricSummary shape is frozen and locked by a destructure test; coverage is a deterministic matched/total count >=0.99 (D-15, D-20, D-22).
 
 ## Execution Metrics
 
@@ -471,6 +475,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 35-framework-entrypoints-and-trust-boundaries | 07 | recorded | 2 | recorded |
 | 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 01 | 8h 9m | 2 | 22 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 02 | 1h 5m | 3 | 20 |
 
 ## Session
 
