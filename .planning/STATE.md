@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T12:01:47.075Z"
-last_activity: 2026-05-29 -- Phase 43 planning complete
+last_updated: "2026-05-29T12:02:59.058Z"
+last_activity: 2026-05-29 -- Phase 43 execution started
 progress:
   total_phases: 13
   completed_phases: 1
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 42 complete (identity substrate, renderers, taxonomy, leak gate) — ready for Phase 43
+**Current focus:** Phase 43 — reachability-roots-per-suite-scoring-mode
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — COMPLETE
-Plan: Plans 01, 02, 03, 04, 05 all complete
-Status: Ready to execute
-Last activity: 2026-05-29 -- Phase 43 planning complete
+Phase: 43 (reachability-roots-per-suite-scoring-mode) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 43
+Last activity: 2026-05-29 -- Phase 43 execution started
 
 ### Open repo-admin action (T-42-04-10)
 
