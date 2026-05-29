@@ -92,7 +92,11 @@ fn extract_identity_records(db: &AnalysisDb) -> Vec<IdentityRecord> {
 
 fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<IdentityRecord> {
     let language = language_tag(function.language)?;
-    let package_or_module: Arc<str> = Arc::from(package_or_module_for_file(db, function.file));
+    let package_or_module: Arc<str> = Arc::from(package_or_module_for_record(
+        db,
+        function.language,
+        function.file,
+    ));
     let container_path: Arc<str> = Arc::from(function.name.as_str());
     let display_name: Arc<str> = Arc::from(function.name.as_str());
     Some(build_record(
@@ -109,7 +113,8 @@ fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<
 
 fn callsite_identity_record(db: &AnalysisDb, site: &CallSiteFact) -> Option<IdentityRecord> {
     let language = language_tag(site.language)?;
-    let package_or_module: Arc<str> = Arc::from(package_or_module_for_file(db, site.file));
+    let package_or_module: Arc<str> =
+        Arc::from(package_or_module_for_record(db, site.language, site.file));
     let container_path: Arc<str> = Arc::from(callsite_container_path(db, site));
     let display_name: Arc<str> = Arc::from(callsite_display_name(site));
     Some(build_record(
@@ -192,6 +197,43 @@ fn callsite_display_name(site: &CallSiteFact) -> String {
         CallCallee::FunctionValue { .. } => "<function-value>".to_string(),
         CallCallee::Unknown { .. } => "<unknown>".to_string(),
     }
+}
+
+/// Resolves the `package_or_module` string for a record's language and file.
+///
+/// For `Language::Go` records this resolves the Go package-clause NAME (`foo`)
+/// from the matching [`PackageFact`] so the Go `RelString` renderer produces
+/// `foo.Bar` instead of the file path `src/main.go.Bar` (CR-01 / IDENT-02). When
+/// no Go `PackageFact` exists for the file it falls back to the workspace-relative
+/// file path so panic-free behavior is preserved. Every other language keeps
+/// `db.path_for(file)` exactly as before (byte-identical non-Go behavior).
+///
+/// This delivers package-NAME qualification only; the full Go module import path
+/// (`github.com/org/...`) requires the Phase 46 Go semantic frontend and is out
+/// of scope here.
+fn package_or_module_for_record(
+    db: &AnalysisDb,
+    language: Language,
+    file: crate::core::FileId,
+) -> String {
+    match language {
+        Language::Go => package_name_for_go_file(db, file)
+            .unwrap_or_else(|| package_or_module_for_file(db, file)),
+        _ => package_or_module_for_file(db, file),
+    }
+}
+
+/// Returns the Go package-clause name (e.g. `main` / `foo`) for a file by
+/// scanning `db.packages()` for the first Go [`PackageFact`] on that file.
+///
+/// This is the package NAME, not the import path — the v1.2 substrate's
+/// `PackageFact.name` carries only the package clause; the import path is a
+/// Phase 46 deliverable.
+fn package_name_for_go_file(db: &AnalysisDb, file: crate::core::FileId) -> Option<String> {
+    db.packages()
+        .iter()
+        .find(|package| package.file == file && package.language == Language::Go)
+        .map(|package| package.name.clone())
 }
 
 fn package_or_module_for_file(db: &AnalysisDb, file: crate::core::FileId) -> String {
@@ -282,10 +324,91 @@ mod tests {
     use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
-    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::core::{
+        AnalysisDb, FileId, FunctionFact, FunctionId, Language, PackageFact, PackageId, Span,
+    };
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    /// Builds a single-file db with one Go function and (optionally) a matching
+    /// Go `PackageFact`, returning the function's identity record straight from
+    /// the real provider builder (`function_identity_record`).
+    fn go_function_record(package_name: Option<&str>) -> IdentityRecord {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package foo\nfunc Bar() {}\n".to_string(),
+        );
+        if let Some(name) = package_name {
+            db.push_package(PackageFact {
+                id: PackageId(0),
+                file,
+                name: name.to_string(),
+                span: Span::point(file, 1, 1),
+                language: Language::Go,
+            });
+        }
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "Bar".to_string(),
+            span: Span::point(file, 2, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let function = db.functions().first().expect("pushed function").clone();
+        super::function_identity_record(&db, &function).expect("Go function builds a record")
+    }
+
+    #[test]
+    fn go_function_with_package_resolves_package_name() {
+        let record = go_function_record(Some("foo"));
+        assert_eq!(record.package_or_module.as_ref(), "foo");
+    }
+
+    #[test]
+    fn go_function_without_package_falls_back_to_path() {
+        let record = go_function_record(None);
+        assert_eq!(record.package_or_module.as_ref(), "src/main.go");
+    }
+
+    #[test]
+    fn typescript_function_keeps_file_path_regardless_of_package_fact() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function bar() {}\n".to_string(),
+        );
+        // A stray PackageFact must not redirect a non-Go record to a package name.
+        db.push_package(PackageFact {
+            id: PackageId(0),
+            file,
+            name: "should-be-ignored".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+        });
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "bar".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let function = db.functions().first().expect("pushed function").clone();
+        let record =
+            super::function_identity_record(&db, &function).expect("TS function builds a record");
+        assert_eq!(record.package_or_module.as_ref(), "src/app.ts");
+    }
 
     fn identity_record(id: u64, container: &str, multiplicity: u32) -> IdentityRecord {
         let language = LanguageTag::Go;
