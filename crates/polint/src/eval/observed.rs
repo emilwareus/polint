@@ -3749,12 +3749,13 @@ path = "repo"
                 ("provider_order.10", "polint.abstract_domains"),
                 ("provider_order.11", "polint.direct_summaries"),
                 ("provider_order.12", "polint.entrypoints"),
-                ("provider_order.13", "polint.extensions"),
-                ("provider_order.14", "polint.type_value_alias"),
-                ("provider_order.15", "polint.refined_calls"),
-                ("provider_order.16", "polint.data_flow"),
-                ("provider_order.17", "polint.evidence"),
-                ("provider_order.18", "polint.metrics"),
+                ("provider_order.13", "polint.reachability"),
+                ("provider_order.14", "polint.extensions"),
+                ("provider_order.15", "polint.type_value_alias"),
+                ("provider_order.16", "polint.refined_calls"),
+                ("provider_order.17", "polint.data_flow"),
+                ("provider_order.18", "polint.evidence"),
+                ("provider_order.19", "polint.metrics"),
             ]
         );
     }

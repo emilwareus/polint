@@ -202,6 +202,11 @@ const ENTRYPOINTS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const REACHABILITY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::reachability::cache_key::REACHABILITY_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const TYPE_VALUE_ALIAS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::types::cache_key::TYPE_VALUE_ALIAS_SCHEMA_LABEL,
     version: 1,
@@ -525,6 +530,27 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.reachability",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+            "entrypoints",
+            "identity_records",
+            "exports",
+        ],
+        outputs: &["reachability_roots", "call_reachability"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: REACHABILITY_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.extensions",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -748,6 +774,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -776,6 +803,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -831,6 +859,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -1140,6 +1169,24 @@ mod tests {
                         "dispatch_edges",
                         "unresolved_framework",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.reachability",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                        "entrypoints",
+                        "identity_records",
+                        "exports",
+                    ],
+                    outputs: vec!["reachability_roots", "call_reachability"],
                 },
                 ProviderOrderRow {
                     id: "polint.extensions",

@@ -200,6 +200,7 @@ mod tests {
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
