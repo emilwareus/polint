@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::analysis::reachability::facts::ReachabilityRootFact;
+use crate::analysis::reachability::facts::{ReachabilityRootFact, RootStatus};
 use crate::analysis::reachability::store::REACHABILITY_PROVIDER_ID;
 use crate::analysis_kernel::FactPrecision;
 use crate::core::AnalysisDb;
@@ -57,7 +57,13 @@ fn validate_root(
     files: &BTreeSet<crate::core::FileId>,
     entrypoints: &BTreeSet<crate::analysis::ids::EntrypointId>,
 ) {
-    if !functions.contains(&root.target_function) {
+    // IN-04: an unresolved configured root carries sentinel target/file ids by
+    // design (it resolved to no real function/file). Skip the referential dangling
+    // checks for it — the sentinels are intentional, not dangling references.
+    // (These roots are filtered out before storage today; this keeps validation
+    // correct if a later phase chooses to store them.)
+    let is_unresolved = root.status == RootStatus::Unresolved;
+    if !is_unresolved && !functions.contains(&root.target_function) {
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
@@ -88,7 +94,7 @@ fn validate_root(
             "dangling reachability root originating entrypoint reference",
         );
     }
-    if !files.contains(&root.file) {
+    if !is_unresolved && !files.contains(&root.file) {
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
@@ -319,5 +325,71 @@ mod tests {
     fn precision_ceiling_allows_setup_aware() {
         assert!(reject_exact_precision(FactPrecision::SetupAware, "k").is_none());
         assert!(reject_exact_precision(FactPrecision::Heuristic, "k").is_none());
+    }
+
+    #[test]
+    fn unresolved_configured_root_with_sentinel_ids_is_not_flagged_dangling() {
+        // IN-04: an Unresolved configured root carries sentinel target/file ids by
+        // design (FunctionId(u64::MAX) / FileId(u32::MAX)). validate_root must NOT
+        // report those as dangling references — they are intentional, not real refs.
+        // The SAME sentinel values on a Resolved root MUST still be flagged, proving
+        // the skip is gated on RootStatus::Unresolved, not unconditional.
+        let functions: BTreeSet<FunctionId> = BTreeSet::new();
+        let symbols: BTreeSet<crate::core::SymbolId> = BTreeSet::new();
+        let files: BTreeSet<FileId> = BTreeSet::new();
+        let entrypoints: BTreeSet<crate::analysis::ids::EntrypointId> = BTreeSet::new();
+
+        let sentinel_file = FileId(u32::MAX);
+        let sentinel_span = span(sentinel_file, 0, 0);
+        let mut root = ReachabilityRootFact {
+            id: ReachabilityRootId(0),
+            kind: RootKind::ConfiguredEntrypoint,
+            language: Language::Unknown,
+            target_function: FunctionId(u64::MAX),
+            target_symbol: None,
+            originating_entrypoint: None,
+            file: sentinel_file,
+            span: sentinel_span.clone(),
+            precision: RootPrecision::Unknown,
+            provenance: RootProvenance::Configured,
+            status: RootStatus::Unresolved,
+            provider_id: REACHABILITY_PROVIDER_ID.to_string(),
+            stable_key: compute_reachability_root_stable_key(
+                RootKind::ConfiguredEntrypoint,
+                Language::Unknown,
+                "configured:does/not.Resolve",
+                sentinel_file,
+                &sentinel_span,
+            ),
+        };
+
+        let mut diagnostics = Vec::new();
+        validate_root(
+            &mut diagnostics,
+            &root,
+            &functions,
+            &symbols,
+            &files,
+            &entrypoints,
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "unresolved root sentinels must not be flagged: {diagnostics:?}"
+        );
+
+        root.status = RootStatus::Resolved;
+        let mut diagnostics = Vec::new();
+        validate_root(
+            &mut diagnostics,
+            &root,
+            &functions,
+            &symbols,
+            &files,
+            &entrypoints,
+        );
+        assert!(
+            !diagnostics.is_empty(),
+            "a Resolved root with sentinel target/file ids must still be flagged dangling"
+        );
     }
 }

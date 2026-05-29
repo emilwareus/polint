@@ -16,6 +16,14 @@ use crate::core::{AnalysisDb, FunctionFact, Language};
 /// reporting them (never a silent drop, D-13).
 const UNRESOLVED_TARGET: crate::core::FunctionId = crate::core::FunctionId(u64::MAX);
 
+/// Sentinel file id for a configured root that resolves to no function. `FileId(0)`
+/// is a legitimate (first-added) file id, so using it for an unresolved root would
+/// alias a real file — and the validator's file-reference check would pass for it
+/// spuriously if the root were ever stored (IN-04). A max-valued sentinel keeps the
+/// unresolved root's file reference recognizably non-real; the validator skips the
+/// file-reference check for `RootStatus::Unresolved` roots.
+const UNRESOLVED_FILE: crate::core::FileId = crate::core::FileId(u32::MAX);
+
 /// Discovers every whole-program reachability root by projecting EXISTING facts
 /// only — no parsing, no AST, no tree-sitter/Oxc invocation (D-07).
 ///
@@ -195,7 +203,7 @@ fn configured_roots_for(db: &AnalysisDb, configured: &[String]) -> Vec<Reachabil
                     RootKind::ConfiguredEntrypoint,
                     Language::Unknown,
                     &format!("configured:{entry}"),
-                    crate::core::FileId(0),
+                    UNRESOLVED_FILE,
                     &unresolved_span(),
                 );
                 ReachabilityRootFact {
@@ -205,7 +213,7 @@ fn configured_roots_for(db: &AnalysisDb, configured: &[String]) -> Vec<Reachabil
                     target_function: UNRESOLVED_TARGET,
                     target_symbol: None,
                     originating_entrypoint: None,
-                    file: crate::core::FileId(0),
+                    file: UNRESOLVED_FILE,
                     span: unresolved_span(),
                     precision: RootPrecision::Unknown,
                     provenance: RootProvenance::Configured,
@@ -395,9 +403,13 @@ fn split_configured_entry(entry: &str) -> (&str, &str) {
 }
 
 /// Returns true when a configured prefix (`pkg/path` or `pkg`) plausibly refers to
-/// the given function: either the function's repo-relative file path contains the
-/// prefix as a substring, or (for Go) the package-clause name equals the prefix's
-/// final path segment. Projection over existing facts only — no filesystem reads.
+/// the given function: either the prefix appears as a contiguous run of path
+/// segments in the function's repo-relative file path, or (for Go) the
+/// package-clause name equals the prefix's final path segment. Projection over
+/// existing facts only — no filesystem reads.
+///
+/// WR-02: the path match is on `/`-segment boundaries, NOT a raw substring, so
+/// `pkg/a` matches `.../pkg/a/x.go` but does NOT falsely match `.../pkg/abc/x.go`.
 fn prefix_matches(db: &AnalysisDb, function: &FunctionFact, prefix: &str) -> bool {
     let prefix = prefix.trim_matches('/');
     if prefix.is_empty() {
@@ -405,7 +417,7 @@ fn prefix_matches(db: &AnalysisDb, function: &FunctionFact, prefix: &str) -> boo
     }
     let path_matches = db
         .file(function.file)
-        .map(|file| file.relative_path.contains(prefix))
+        .map(|file| path_segments_contain(&file.relative_path, prefix))
         .unwrap_or(false);
     let package_matches = go_package_name(db, function)
         .map(|package| {
@@ -414,6 +426,22 @@ fn prefix_matches(db: &AnalysisDb, function: &FunctionFact, prefix: &str) -> boo
         })
         .unwrap_or(false);
     path_matches || package_matches
+}
+
+/// True iff the `/`-separated `prefix` segments appear as a contiguous run of
+/// `/`-separated segments within `path` (segment-boundary match, never a raw
+/// substring). `pkg/a` matches `pkg/a/x.go` and `services/pkg/a/x.go`, but not
+/// `pkg/abc/x.go` or `pkga/x.go` (WR-02). Empty segments (leading/trailing/double
+/// slashes) are ignored on both sides.
+fn path_segments_contain(path: &str, prefix: &str) -> bool {
+    let path_segments: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
+    let prefix_segments: Vec<&str> = prefix.split('/').filter(|seg| !seg.is_empty()).collect();
+    if prefix_segments.is_empty() || prefix_segments.len() > path_segments.len() {
+        return false;
+    }
+    path_segments
+        .windows(prefix_segments.len())
+        .any(|window| window == prefix_segments.as_slice())
 }
 
 fn bridge_precision(precision: EntrypointPrecision) -> RootPrecision {
@@ -437,7 +465,7 @@ fn bridge_status(status: EntrypointStatus) -> RootStatus {
 }
 
 fn unresolved_span() -> crate::core::Span {
-    crate::core::Span::point(crate::core::FileId(0), 0, 0)
+    crate::core::Span::point(UNRESOLVED_FILE, 0, 0)
 }
 
 #[cfg(test)]
@@ -797,5 +825,41 @@ mod tests {
                 .iter()
                 .all(|r| r.kind != RootKind::Main && r.kind != RootKind::Init)
         );
+    }
+
+    #[test]
+    fn configured_root_prefix_match_is_segment_bounded_not_substring() {
+        // WR-02: `pkg/a` must resolve to the function under `pkg/a/` and must NOT be
+        // treated as matching `pkg/abc/` — the raw-substring footgun, where the
+        // literal "pkg/a" IS a substring of "pkg/abc/abc.go". Under the old
+        // `.contains()` match both candidates matched -> Ambiguous; with
+        // segment-boundary matching only the pkg/a candidate matches, so the root is
+        // honestly Resolved to the intended function.
+        let mut db = AnalysisDb::new();
+        let file_a = add_go_file(&mut db, "pkg/a/a.go", "a");
+        let file_abc = add_go_file(&mut db, "pkg/abc/abc.go", "abc");
+        let a_handle = add_function(&mut db, file_a, 1, "Handle", Language::Go, true);
+        add_function(&mut db, file_abc, 2, "Handle", Language::Go, true);
+
+        let roots = discover_reachability_roots(&db, &["pkg/a.Handle".to_string()]);
+        let configured: Vec<_> = roots
+            .iter()
+            .filter(|r| r.kind == RootKind::ConfiguredEntrypoint)
+            .collect();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].status, RootStatus::Resolved);
+        assert_eq!(configured[0].target_function, a_handle);
+    }
+
+    #[test]
+    fn path_segments_contain_matches_on_segment_boundaries_only() {
+        // WR-02 unit: a contiguous run of `/`-segments, never a raw substring.
+        assert!(path_segments_contain("pkg/a/x.go", "pkg/a"));
+        assert!(path_segments_contain("services/pkg/a/x.go", "pkg/a")); // contiguous mid-path
+        assert!(path_segments_contain("pkg/a/x.go", "a")); // single segment
+        assert!(!path_segments_contain("pkg/abc/x.go", "pkg/a")); // substring footgun
+        assert!(!path_segments_contain("pkga/x.go", "pkg/a"));
+        assert!(!path_segments_contain("pkg/x.go", "pkg/a"));
+        assert!(!path_segments_contain("pkg/a/x.go", "")); // empty prefix never matches
     }
 }
