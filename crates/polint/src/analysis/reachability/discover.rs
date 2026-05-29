@@ -162,32 +162,24 @@ fn configured_roots_for(db: &AnalysisDb, configured: &[String]) -> Vec<Reachabil
     configured
         .iter()
         .map(|entry| match resolve_configured_function(db, entry) {
-            Some(function) => {
-                let function_identity = function_identity_for(db, function);
-                let stable_key = compute_reachability_root_stable_key(
-                    RootKind::ConfiguredEntrypoint,
-                    function.language,
-                    &function_identity,
-                    function.file,
-                    &function.span,
-                );
-                ReachabilityRootFact {
-                    id: ReachabilityRootId(0),
-                    kind: RootKind::ConfiguredEntrypoint,
-                    language: function.language,
-                    target_function: function.id,
-                    target_symbol: None,
-                    originating_entrypoint: None,
-                    file: function.file,
-                    span: function.span.clone(),
-                    precision: RootPrecision::SetupAware,
-                    provenance: RootProvenance::Configured,
-                    status: RootStatus::Resolved,
-                    provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                    stable_key,
-                }
-            }
-            None => {
+            ConfiguredResolution::Resolved(function) => configured_resolved_root(
+                db,
+                function,
+                RootStatus::Resolved,
+                RootPrecision::SetupAware,
+            ),
+            // WR-02: a name-only match across the whole repo (path/package prefix
+            // discarded), or one of several same-named candidates, is NOT an
+            // honest Resolved/SetupAware fact — the chosen function may be the wrong
+            // one. Downgrade to Partial/Heuristic so the label does not over-claim
+            // (D-07/D-13: honest labels, no fabricated Resolved roots).
+            ConfiguredResolution::Ambiguous(function) => configured_resolved_root(
+                db,
+                function,
+                RootStatus::Partial,
+                RootPrecision::Heuristic,
+            ),
+            ConfiguredResolution::Unresolved => {
                 let stable_key = compute_reachability_root_stable_key(
                     RootKind::ConfiguredEntrypoint,
                     Language::Unknown,
@@ -213,6 +205,37 @@ fn configured_roots_for(db: &AnalysisDb, configured: &[String]) -> Vec<Reachabil
             }
         })
         .collect()
+}
+
+fn configured_resolved_root(
+    db: &AnalysisDb,
+    function: &FunctionFact,
+    status: RootStatus,
+    precision: RootPrecision,
+) -> ReachabilityRootFact {
+    let function_identity = function_identity_for(db, function);
+    let stable_key = compute_reachability_root_stable_key(
+        RootKind::ConfiguredEntrypoint,
+        function.language,
+        &function_identity,
+        function.file,
+        &function.span,
+    );
+    ReachabilityRootFact {
+        id: ReachabilityRootId(0),
+        kind: RootKind::ConfiguredEntrypoint,
+        language: function.language,
+        target_function: function.id,
+        target_symbol: None,
+        originating_entrypoint: None,
+        file: function.file,
+        span: function.span.clone(),
+        precision,
+        provenance: RootProvenance::Configured,
+        status,
+        provider_id: REACHABILITY_PROVIDER_ID.to_string(),
+        stable_key,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,24 +305,104 @@ fn go_package_name(db: &AnalysisDb, function: &FunctionFact) -> Option<String> {
         .map(|package| package.name.clone())
 }
 
-/// Resolves a configured root string against existing function facts only.
-/// Accepts `pkg.Name`, `path#name`, or a bare `name`; matches the trailing
-/// identifier against `FunctionFact.name`.
-fn resolve_configured_function<'a>(db: &'a AnalysisDb, entry: &str) -> Option<&'a FunctionFact> {
-    let needle = configured_function_name(entry);
-    db.functions()
-        .iter()
-        .find(|function| function.name == needle)
+/// Outcome of resolving a configured root string against existing function facts.
+///
+/// WR-02 honesty: only a match that is genuinely unambiguous — a unique candidate,
+/// or a configured path/package prefix that disambiguates to exactly one of several
+/// same-named candidates — is reported `Resolved`. A name-only match where the
+/// prefix is absent or fails to disambiguate is `Ambiguous` (reported
+/// Partial/Heuristic, never Resolved/SetupAware), so the label never over-claims.
+enum ConfiguredResolution<'a> {
+    /// Exactly one candidate, or a prefix that uniquely identifies one.
+    Resolved(&'a FunctionFact),
+    /// A trailing-name match that could not be honestly confirmed: the prefix was
+    /// absent and multiple candidates share the name, or the prefix did not narrow
+    /// to a single candidate. The first candidate in deterministic
+    /// `db.functions()` order is carried so the root is still actionable, but it is
+    /// flagged Partial/Heuristic rather than silently stamped Resolved.
+    Ambiguous(&'a FunctionFact),
+    /// No function matches the trailing identifier at all.
+    Unresolved,
 }
 
-fn configured_function_name(entry: &str) -> &str {
-    if let Some((_, name)) = entry.rsplit_once('#') {
-        name
-    } else if let Some((_, name)) = entry.rsplit_once('.') {
-        name
-    } else {
-        entry
+/// Resolves a configured root string against existing function facts only.
+/// Accepts `pkg/path.Name`, `path#name`, or a bare `name`. The trailing identifier
+/// selects candidates by `FunctionFact.name`; the leading prefix (when present) is
+/// honored to disambiguate same-named candidates rather than discarded.
+fn resolve_configured_function<'a>(db: &'a AnalysisDb, entry: &str) -> ConfiguredResolution<'a> {
+    let (prefix, needle) = split_configured_entry(entry);
+
+    let candidates: Vec<&FunctionFact> = db
+        .functions()
+        .iter()
+        .filter(|function| function.name == needle)
+        .collect();
+
+    match candidates.as_slice() {
+        [] => ConfiguredResolution::Unresolved,
+        [only] => {
+            // A single candidate. If a prefix was configured, only treat it as
+            // honestly Resolved when the prefix actually matches that candidate's
+            // package/path; otherwise the prefix points elsewhere and the match is
+            // a bare-name coincidence (Ambiguous/Heuristic).
+            if prefix.is_empty() || prefix_matches(db, only, prefix) {
+                ConfiguredResolution::Resolved(only)
+            } else {
+                ConfiguredResolution::Ambiguous(only)
+            }
+        }
+        many => {
+            // Multiple same-named candidates. A configured prefix may disambiguate
+            // to exactly one; otherwise the choice is arbitrary and must not be
+            // stamped Resolved (WR-02). `db.functions()` order is deterministic, so
+            // the carried fallback is stable, but it is flagged Ambiguous.
+            if !prefix.is_empty() {
+                let matching: Vec<&FunctionFact> = many
+                    .iter()
+                    .copied()
+                    .filter(|function| prefix_matches(db, function, prefix))
+                    .collect();
+                if let [unique] = matching.as_slice() {
+                    return ConfiguredResolution::Resolved(unique);
+                }
+            }
+            ConfiguredResolution::Ambiguous(many[0])
+        }
     }
+}
+
+/// Splits a configured entry into `(prefix, trailing-identifier)`. The prefix is
+/// everything before the final `#` or `.` separator (empty for a bare name).
+fn split_configured_entry(entry: &str) -> (&str, &str) {
+    if let Some((prefix, name)) = entry.rsplit_once('#') {
+        (prefix, name)
+    } else if let Some((prefix, name)) = entry.rsplit_once('.') {
+        (prefix, name)
+    } else {
+        ("", entry)
+    }
+}
+
+/// Returns true when a configured prefix (`pkg/path` or `pkg`) plausibly refers to
+/// the given function: either the function's repo-relative file path contains the
+/// prefix as a substring, or (for Go) the package-clause name equals the prefix's
+/// final path segment. Projection over existing facts only — no filesystem reads.
+fn prefix_matches(db: &AnalysisDb, function: &FunctionFact, prefix: &str) -> bool {
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return false;
+    }
+    let path_matches = db
+        .file(function.file)
+        .map(|file| file.relative_path.contains(prefix))
+        .unwrap_or(false);
+    let package_matches = go_package_name(db, function)
+        .map(|package| {
+            let prefix_tail = prefix.rsplit('/').next().unwrap_or(prefix);
+            package == prefix_tail || package == prefix
+        })
+        .unwrap_or(false);
+    path_matches || package_matches
 }
 
 fn bridge_precision(precision: EntrypointPrecision) -> RootPrecision {
@@ -575,6 +678,72 @@ mod tests {
         assert_eq!(configured.len(), 1);
         assert_eq!(configured[0].provenance, RootProvenance::Configured);
         assert_eq!(configured[0].target_function, handle_id);
+        // A confirmed-by-prefix unique candidate is setup-aware, not heuristic.
+        assert_eq!(configured[0].precision, RootPrecision::SetupAware);
+    }
+
+    #[test]
+    fn configured_root_name_only_match_with_two_same_named_functions_is_flagged_not_resolved() {
+        // WR-02: two functions named `Handle` in different packages. A bare-name
+        // configured root must NOT be silently stamped Resolved as the first by
+        // insertion order — it is honestly flagged Partial/Heuristic.
+        let mut db = AnalysisDb::new();
+        let file_a = add_go_file(&mut db, "pkg/a/a.go", "a");
+        let file_z = add_go_file(&mut db, "pkg/z/z.go", "z");
+        add_function(&mut db, file_a, 1, "Handle", Language::Go, true);
+        add_function(&mut db, file_z, 2, "Handle", Language::Go, true);
+
+        let roots = discover_reachability_roots(&db, &["Handle".to_string()]);
+        let configured: Vec<_> = roots
+            .iter()
+            .filter(|r| r.kind == RootKind::ConfiguredEntrypoint)
+            .collect();
+        assert_eq!(configured.len(), 1);
+        // Honest label: ambiguous name-only match is NOT Resolved/SetupAware.
+        assert_eq!(configured[0].status, RootStatus::Partial);
+        assert_eq!(configured[0].precision, RootPrecision::Heuristic);
+        assert_eq!(configured[0].provenance, RootProvenance::Configured);
+    }
+
+    #[test]
+    fn configured_root_prefix_disambiguates_two_same_named_functions() {
+        // WR-02: with a path/package prefix, the configured root resolves to the
+        // INTENDED candidate (not the first by insertion order) and is honestly
+        // Resolved.
+        let mut db = AnalysisDb::new();
+        let file_a = add_go_file(&mut db, "pkg/a/a.go", "a");
+        let file_z = add_go_file(&mut db, "pkg/z/z.go", "z");
+        add_function(&mut db, file_a, 1, "Handle", Language::Go, true);
+        let z_handle = add_function(&mut db, file_z, 2, "Handle", Language::Go, true);
+
+        let roots = discover_reachability_roots(&db, &["pkg/z.Handle".to_string()]);
+        let configured: Vec<_> = roots
+            .iter()
+            .filter(|r| r.kind == RootKind::ConfiguredEntrypoint)
+            .collect();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].status, RootStatus::Resolved);
+        assert_eq!(configured[0].precision, RootPrecision::SetupAware);
+        // Resolved to the prefix-matched candidate in pkg/z, not the first (pkg/a).
+        assert_eq!(configured[0].target_function, z_handle);
+    }
+
+    #[test]
+    fn configured_root_single_candidate_with_wrong_prefix_is_flagged_heuristic() {
+        // A bare-name coincidence: the configured prefix points elsewhere than the
+        // sole candidate, so the match is not honestly Resolved.
+        let mut db = AnalysisDb::new();
+        let file = add_go_file(&mut db, "pkg/svc/svc.go", "svc");
+        add_function(&mut db, file, 1, "Handle", Language::Go, true);
+
+        let roots = discover_reachability_roots(&db, &["totally/other.Handle".to_string()]);
+        let configured: Vec<_> = roots
+            .iter()
+            .filter(|r| r.kind == RootKind::ConfiguredEntrypoint)
+            .collect();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].status, RootStatus::Partial);
+        assert_eq!(configured[0].precision, RootPrecision::Heuristic);
     }
 
     #[test]
