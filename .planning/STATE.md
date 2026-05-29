@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T12:02:59.058Z"
-last_activity: 2026-05-29 -- Phase 43 execution started
+last_updated: "2026-05-29T15:32:02.650Z"
+last_activity: 2026-05-29
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 8
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 43 (reachability-roots-per-suite-scoring-mode) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 43
-Last activity: 2026-05-29 -- Phase 43 execution started
+Plan: 2 of 3
+Status: Ready to execute (43-01 complete: reachability roots + polint.reachability provider)
+Last activity: 2026-05-29 -- Completed 43-01-PLAN.md (REACH-01)
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -417,6 +417,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 42-05]: Go identity records resolve the PackageFact package-clause NAME (foo.Bar) via package_or_module_for_record; non-Go keeps db.path_for byte-identical. Full module import path deferred to Phase 46.
 - [Phase 42-05]: Dedup canonical selection + final sort use record_total_order_key (record_sort_key extended with originating_call_site_id, originating_call_target_id, signature_digest) for a literal total order; byte-stable across input order (CR-03 closed for Phase 43).
 - [Phase 42-05]: Go RTA oracle key stays on display_name with an inline Phase 46 deferral note; cache trip-wire bumped go_relstring_v1 -> go_relstring_v2.
+- [Phase ?]: [Phase 43-01]: reachability enums use pinned order + serde rename (no repr(u8)); polint.reachability runs after polint.entrypoints with SetupAware ceiling; configured-unresolvable roots become Unresolved.
+- [Phase ?]: [Phase 43-01]: [reachability] roots config lives in crates/polint/src/config/mod.rs; configured roots passed to discovery as &[String] from LoadedConfig since InputSnapshot carries only digests.
 
 ## Execution Metrics
 
