@@ -65,6 +65,16 @@ pub(crate) fn derive_reachability_with_cache_stats(
     // Phase 3: mark call reachability — BFS/DFS over resolved direct-call edges
     // from the storable roots, keyed by call-site stable key (composition, never
     // mutating analysis::calls; D-18).
+    //
+    // WR-04 forward-compat note: these marks are computed and stored in PRODUCTION
+    // here, but their only readers in v1.3 (`reachable_graph_lookup`,
+    // `filter_scored_edges_by_scoring_mode`, `scored_call_graph_edges_for_db`) are
+    // `#[cfg(test)]` — the eval harness that consumes them is internal/test-facing
+    // with no public CLI/SDK surface. The production marking is INTENTIONAL per D-18
+    // (the REACH-02 deliverable): phases 47/48 swap the direct-call edge set for
+    // solver-derived edges behind this SAME marking contract and read the marks in
+    // production. Do NOT remove the production marking to chase "dead computation" —
+    // the produced-but-unread state in v1.3 production is deliberate forward-compat.
     let marks = mark_call_reachability(db, &real_roots);
     // Phase 4: normalize the STORABLE set (real roots + marks). The digest is
     // computed over exactly this set so it certifies what actually lands in the db;
