@@ -129,7 +129,12 @@ pub(crate) struct EvidenceSliceId(pub(crate) u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct EvidenceOmittedRegionId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+// `Default` is required because `ReachabilityRootFact.id` carries `#[serde(skip)]`
+// (D-19: dense IDs must never enter a serialized stable-payload / digest part); serde
+// reconstructs the skipped field via `Default`, yielding `ReachabilityRootId(0)`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub(crate) struct ReachabilityRootId(pub(crate) u64);
 
 #[cfg(test)]

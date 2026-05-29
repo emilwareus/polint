@@ -15,6 +15,13 @@ use crate::core::{FileId, FunctionId, Language, Span, SymbolId};
 /// `Test`/`FrameworkEntrypoint` bridge roots (D-12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ReachabilityRootFact {
+    // The dense `id` is a run-local post-store read concern only — it MUST NOT
+    // enter any serialized stable payload that feeds the output digest (D-06/D-19:
+    // "digest over stable payloads, never dense IDs"). `#[serde(skip)]` strips it
+    // from the digest `root=...` parts so two runs that differ only in dense-ID
+    // assignment produce a byte-identical digest. Deserialization restores it via
+    // `ReachabilityRootId::default()` (= 0).
+    #[serde(skip)]
     pub(crate) id: ReachabilityRootId,
     pub(crate) kind: RootKind,
     pub(crate) language: Language,
