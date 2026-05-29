@@ -19,4 +19,9 @@
 //!
 //! Never reuse the `polint.domain.reachability` id or module for this work.
 
+pub(crate) mod cache_key;
+pub(crate) mod debug;
+pub(crate) mod discover;
 pub(crate) mod facts;
+pub(crate) mod store;
+pub(crate) mod validate;

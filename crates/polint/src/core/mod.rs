@@ -52,6 +52,8 @@ use crate::analysis::points_to::facts::{
     PointsToConstraintFact, PointsToPrecision, PointsToSetFact, PointsToStatus,
 };
 use crate::analysis::points_to::store::PointsToStore;
+use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
 use crate::analysis::refined_calls::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
@@ -726,6 +728,8 @@ pub struct AnalysisDb {
     dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
     unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
     entrypoint_store: Option<EntrypointStore>,
+    reachability_roots: Vec<ReachabilityRootFact>,
+    reachability_marks: Vec<CallReachabilityFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
     value_facts: Vec<ValueFact>,
@@ -1359,6 +1363,39 @@ impl AnalysisDb {
 
     pub(crate) fn entrypoint_facts(&self) -> &[EntrypointFact] {
         &self.entrypoint_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability fact replacement is wired into the kernel provider in the next Phase 43 plan-01 task (provider/kernel splice)."
+    )]
+    pub(crate) fn replace_reachability_facts(
+        &mut self,
+        output: ReachabilityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_function_ids = self.functions.iter().map(|row| row.id).collect();
+        let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
+        let store =
+            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
+        self.reachability_roots = store.roots().to_vec();
+        self.reachability_marks = store.marks().to_vec();
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in Phase 43 plan-01."
+    )]
+    pub(crate) fn reachability_roots(&self) -> &[ReachabilityRootFact] {
+        &self.reachability_roots
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability marks are populated by the marking traversal in Phase 43 plan-02 and read by debug/eval."
+    )]
+    pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
+        &self.reachability_marks
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {

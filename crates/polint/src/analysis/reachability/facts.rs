@@ -131,9 +131,29 @@ impl RootProvenance {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CallReachabilityFact (marks)
+// ---------------------------------------------------------------------------
+
+/// One reachability mark over a call site, keyed by the call-site stable key
+/// (composition, not mutation of `analysis::calls`).
+///
+/// This plan defines the typed shape so the provider output and store carry a
+/// stable `marks` slot; the marking traversal that populates `marks` (BFS/DFS
+/// from roots over direct-call edges) lands in Plan 02. Until then `marks` is
+/// always empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CallReachabilityFact {
+    pub(crate) call_site_stable_key: String,
+    pub(crate) in_reachable_graph: bool,
+    pub(crate) reason: String,
+    pub(crate) provider_id: String,
+    pub(crate) stable_key: String,
+}
+
 /// Stable lowercase label for the broader `core::Language` enum, used in stable
 /// keys and digest payloads.
-fn language_label(language: Language) -> &'static str {
+pub(crate) fn language_label(language: Language) -> &'static str {
     match language {
         Language::Go => "go",
         Language::TypeScript => "typescript",
