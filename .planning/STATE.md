@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: executing
-last_updated: "2026-05-29T16:18:55.304Z"
+status: verifying
+last_updated: "2026-05-29T16:46:38.928Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 13
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 8
+  completed_plans: 8
+  percent: 15
 ---
 
 # State: polint
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 43 (reachability-roots-per-suite-scoring-mode) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute (43-02 complete: required ScoringMode field + reachable-graph marking + mode-aware scoring filter)
-Last activity: 2026-05-29 -- Completed 43-02-PLAN.md (REACH-02)
+Phase: 43 (reachability-roots-per-suite-scoring-mode) — COMPLETE (3/3 plans)
+Plan: 3 of 3 (complete)
+Status: Phase complete — REACH-01/02/03 done; ready for verification (43-03: N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS CI job + phases 44-54 inheritance doc)
+Last activity: 2026-05-29 -- Completed 43-03-PLAN.md (REACH-03)
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -422,6 +422,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 43-02]: ScoringMode uses per-variant serde rename for kebab wire strings (oracle-rta/oracle-jelly/whole-repo), not rename_all; the required non-Option scoring_mode field gates structurally (deny_unknown_fields) + via an explicit validate() guard.
 - [Phase 43-02]: Reachable-set BFS extends the frontier only on Resolved direct-call targets; the CallReachabilityFact marking is composed by call-site stable key and analysis::calls is never mutated; the provider seeds the traversal with explicit real-function roots before storing.
 - [Phase 43-02]: oracle-rta filters scored edges to the reachable-from-roots set (unmarked edges fail closed); oracle-jelly/whole-repo score the full set; the backwards-mode footgun is guarded by an oracle-rta-subset-of-oracle-jelly regression test.
+- [Phase 43-03]: SolverMetricSection (solver_step_count/budget_exceeded_reasons) reserved on a #[serde(default)] MetricSections section, NOT the frozen MetricSummary, defaulted 0/empty for Phase 47+ so the byte-identity determinism gate stays stable across the milestone (D-23).
+- [Phase 43-03]: The determinism gate runs N=10 seeded permutations of provider-enumeration order + observed row-insertion order through the live normalize_run path, driven by provider_manifests() so phases 44-54 auto-enroll (D-22), with per-fixture >=1 root / >=1 call site / >=1 in_reachable_graph=false invariants (D-24).
+- [Phase 43-03]: determinism-gate CI job mirrors leak-gate (ubuntu+macos, fail-fast false, independent passes); the Go fixture's unreachable mark needs only tree-sitter call sites so the gate passes without a Go toolchain, matching the no-Go leak-gate analog (D-24/D-25).
 
 ## Execution Metrics
 
@@ -498,12 +501,13 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 01 | 8h 9m | 2 | 22 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 02 | 1h 5m | 3 | 20 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 03 | 18m | 2 | 11 |
+| 43-reachability-roots-per-suite-scoring-mode | 03 | 19m | 4 | 14 |
 
 ## Session
 
 - Last session: 2026-05-29
-- Last activity: 2026-05-29 - Completed Phase 42 Plan 03 (closed IdentityCategory taxonomy + categorized_failures on MetricSections); Phase 42 complete (4/4 plans).
-- Stopped at: Completed 42-03-PLAN.md; Phase 42 done; ready for Phase 43.
+- Last activity: 2026-05-29 - Completed Phase 43 Plan 03 (N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS determinism-gate CI job + phases 44-54 inheritance doc); Phase 43 complete (3/3 plans); REACH-03.
+- Stopped at: Completed 43-03-PLAN.md; Phase 43 done (REACH-01/02/03); ready for Phase 43 verification / Phase 44.
 - Resume file: None
 
 ### Quick Tasks Completed

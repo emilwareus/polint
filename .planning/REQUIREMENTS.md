@@ -18,7 +18,7 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 - [x] **IDENT-03**: polint reports identity-vs-unsupported categories distinctly (`wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`) in evaluation output.
 - [x] **REACH-01**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate (`main`, `init`, exported, tests, configured repo entrypoints) and exposes them as typed facts.
 - [x] **REACH-02**: polint scores benchmark suites in the mode each oracle expects via a `scoring_mode` field (`oracle-rta`, `oracle-jelly`, `whole-repo`) on suite manifests; unreachable direct calls remain facts but are marked outside the reachable graph.
-- [ ] **REACH-03**: polint enforces a determinism gate (10 shuffled provider-order runs produce byte-identical observed JSON) before any solver phase lands and the gate is inherited by every subsequent solver phase.
+- [x] **REACH-03**: polint enforces a determinism gate (10 shuffled provider-order runs produce byte-identical observed JSON) before any solver phase lands and the gate is inherited by every subsequent solver phase.
 
 ### Shared Semantic Graph & Unified Solver
 
@@ -111,7 +111,7 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | IDENT-03 | Phase 42 | Complete |
 | REACH-01 | Phase 43 | Complete |
 | REACH-02 | Phase 43 | Complete |
-| REACH-03 | Phase 43 | Pending |
+| REACH-03 | Phase 43 | Complete |
 | GRAPH-01 | Phase 44 | Pending |
 | GRAPH-02 | Phase 44 | Pending |
 | GRAPH-03 | Phase 47 | Pending |
