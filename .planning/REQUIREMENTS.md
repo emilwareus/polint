@@ -15,7 +15,7 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 
 - [x] **IDENT-01**: polint emits stable internal identity records `(file, span, language, package/module, container, display, signature digest)` for every function and callsite, deduplicated by semantic identity before scoring.
 - [x] **IDENT-02**: polint provides per-benchmark identity renderers — Go `RelString`-style function/method names and Jelly `file:start_line:start_col:end_line:end_col` callsite/function spans — with ≥99% Jelly oracle-span coverage on micro fixtures and CRLF/LF normalization.
-- [ ] **IDENT-03**: polint reports identity-vs-unsupported categories distinctly (`wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`) in evaluation output.
+- [x] **IDENT-03**: polint reports identity-vs-unsupported categories distinctly (`wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`) in evaluation output.
 - [ ] **REACH-01**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate (`main`, `init`, exported, tests, configured repo entrypoints) and exposes them as typed facts.
 - [ ] **REACH-02**: polint scores benchmark suites in the mode each oracle expects via a `scoring_mode` field (`oracle-rta`, `oracle-jelly`, `whole-repo`) on suite manifests; unreachable direct calls remain facts but are marked outside the reachable graph.
 - [ ] **REACH-03**: polint enforces a determinism gate (10 shuffled provider-order runs produce byte-identical observed JSON) before any solver phase lands and the gate is inherited by every subsequent solver phase.
@@ -108,7 +108,7 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 |-------------|-------|--------|
 | IDENT-01 | Phase 42 | Complete |
 | IDENT-02 | Phase 42 | Complete |
-| IDENT-03 | Phase 42 | Pending |
+| IDENT-03 | Phase 42 | Complete |
 | REACH-01 | Phase 43 | Pending |
 | REACH-02 | Phase 43 | Pending |
 | REACH-03 | Phase 43 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-29T07:23:33.197Z"
-last_activity: 2026-05-29 -- Phase 42 Plan 04 complete (public-surface-leak CI gate)
+last_updated: "2026-05-29T07:45:18Z"
+last_activity: 2026-05-29 -- Phase 42 Plan 03 complete (identity taxonomy + categorized_failures); Phase 42 done (4/4 plans)
 progress:
   total_phases: 13
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 8
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 42 — benchmark-identity-renderers-dedup-identity-taxonomy
+**Current focus:** Phase 42 complete (identity substrate, renderers, taxonomy, leak gate) — ready for Phase 43
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — EXECUTING
-Plan: Plans 01, 02, 04 complete; Plan 03 (identity taxonomy) pending
-Status: Executing Phase 42 (3 of 4 plans complete; Plan 03 remaining)
-Last activity: 2026-05-29 -- Phase 42 Plan 04 complete (public-surface-leak CI gate on Linux + macOS)
+Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — COMPLETE
+Plan: Plans 01, 02, 03, 04 all complete
+Status: Phase 42 complete (4 of 4 plans); IDENT-01/02/03 addressed; ready for Phase 43
+Last activity: 2026-05-29 -- Phase 42 Plan 03 complete (closed IdentityCategory taxonomy + categorized_failures counter map on MetricSections)
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -166,6 +166,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
+| 42 | Complete | 4/4 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, and public-surface-leak CI gate done; requirements IDENT-01/02/03 |
 
 ## Accumulated Context
 
@@ -408,6 +409,11 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: [Phase 42-04] v1.3 public-surface-leak gate installed: excluded no_implicit_prelude probe + locked ALLOWED_PRELUDE (97 entries) snapshot-checked vs sdk/mod.rs; Approach B (no trybuild); leak-gate CI on ubuntu+macos fail-fast:false (D-18)
 - [Phase ?]: [Phase 42-04] Leak-gate test relocated to crates/polint/tests/public_surface_leak.rs (workspace-root tests/ is not a crate; --package polint --test only resolves there); probe import is use ::polint::sdk::prelude::*; (leading :: required under no_implicit_prelude); probe carries its own committed Cargo.lock for --locked CI
 - [Phase ?]: [Phase 42-04] Negative control proved both layers: Rust E0365 forbids pub use of a pub(crate) type into the public prelude; allowlist_matches_prelude_source catches a genuinely-pub addition with an UNSANCTIONED diff. Phases 43-54 must extend ALLOWED_PRELUDE + bump count(97) + add a probe witness to ship any new public type
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] IdentityCategory is a closed five-variant enum (WrongIdentity, UnsupportedEdge, UnresolvedEdge, PackageLoadLimitation, ModelMissing) in pinned source order with #[repr(u8)] explicit ordinals; declaration order defines serde + Ord byte-stability (D-14, D-25); no Other/Unknown, no #[non_exhaustive].
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] categorize maps every UnresolvedCallReason/CallTargetStatus variant explicitly (exhaustive match, no wildcard) so a new upstream variant is a compile error (Pattern H); it is a tag on existing facts (CategorizeReason) with zero new fact families (D-16).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] MetricSections gains categorized_failures: CategorizedFailureSection (#[serde(default)]) sibling AFTER jelly_oracle_coverage; MetricSummary shape frozen (destructure layout-lock test green); five u32 snake_case counters with deny_unknown_fields; record_category uses saturating_add (T-42-03-05).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] categorized_failures threads from the live AnalysisDb (O(n) per-fact projection) through per-category observed invariants into the report section across all eval build paths; the fixture asserts byte-stable .nonzero booleans for determinism-gate safety.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] Native syntactic Go/TS emits only unsupported_edge/unresolved_edge; the fixture proves those two from real source and eval::metrics unit tests drive categorized_failures_from_db for wrong_identity/package_load_limitation/model_missing (BLOCKER #4 fallback) so all FIVE counters are non-zero across the corpus (D-15, no scope reduction).
 
 ## Execution Metrics
 
@@ -483,12 +489,13 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 01 | 8h 9m | 2 | 22 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 02 | 1h 5m | 3 | 20 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 03 | 18m | 2 | 11 |
 
 ## Session
 
 - Last session: 2026-05-29
-- Last activity: 2026-05-29 - Completed Phase 42 Plan 01 (identity substrate); persisted Task 2 after a disk-full interruption.
-- Stopped at: Completed 42-01-PLAN.md; ready to execute 42-02.
+- Last activity: 2026-05-29 - Completed Phase 42 Plan 03 (closed IdentityCategory taxonomy + categorized_failures on MetricSections); Phase 42 complete (4/4 plans).
+- Stopped at: Completed 42-03-PLAN.md; Phase 42 done; ready for Phase 43.
 - Resume file: None
 
 ### Quick Tasks Completed
