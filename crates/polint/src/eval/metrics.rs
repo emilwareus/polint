@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
 use crate::eval::model::{ExpectedItem, ObservedItem};
 use crate::eval::report::{
-    GraphMetricSection, JellyOracleCoverageSection, JellyUnmatchedSpan, MatchSummary,
-    MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
+    CategorizedFailureSection, GraphMetricSection, JellyOracleCoverageSection, JellyUnmatchedSpan,
+    MatchSummary, MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
     ScannerMetricSection, UnknownMetricSection,
 };
 
@@ -79,6 +79,7 @@ impl From<ComputedMetrics> for MetricSummary {
             suite_native: std::collections::BTreeMap::new(),
             adaptation: None,
             jelly_oracle_coverage: JellyOracleCoverageSection::default(),
+            categorized_failures: CategorizedFailureSection::default(),
         };
         Self {
             true_positives: metrics.true_positives,
@@ -334,6 +335,103 @@ pub(crate) fn jelly_oracle_coverage_for_cases(
         .flat_map(|case| case.observed.iter().cloned())
         .collect::<Vec<_>>();
     jelly_oracle_coverage(&expected, &observed)
+}
+
+/// Projects the live analysis facts into the closed [`CategorizedFailureSection`]
+/// counter map (D-15, D-16; Plan 42-03).
+///
+/// Each failing fact is categorized at most once via direct dispatch — the pass
+/// is O(n) over the fact tables, no nested loops (threat T-42-03-06):
+///
+/// - every `unresolved_calls` fact carries an `UnresolvedCallReason` ->
+///   [`category_for_unresolved`];
+/// - every `call_targets` fact with a non-`Resolved`/non-`Ambiguous`
+///   `CallTargetStatus` -> [`category_for_unsupported`] (`None` skips success
+///   and ambiguity, which are not failures);
+/// - every callsite identity record whose `(file_id, span)` overlaps an oracle
+///   entry's span without matching its container/digest is a wrong-identity
+///   event -> [`category_for_wrong_identity`].
+///
+/// `oracle_overlap` is computed here by comparing observed callsite spans to the
+/// `oracle_callsite_spans` set the caller derives from the expected (oracle)
+/// items. When that set is empty (no oracle, e.g. native fixtures) no
+/// wrong-identity events fire — a callsite with no overlapping oracle entry is a
+/// miss, not a wrong-identity (D-16).
+pub(crate) fn categorized_failures_from_db(
+    db: &crate::core::AnalysisDb,
+    oracle_callsite_spans: &std::collections::BTreeSet<(u32, u32, u32)>,
+) -> CategorizedFailureSection {
+    use crate::analysis::calls::facts::CallTargetStatus;
+    use crate::analysis::identity::categorize::{
+        category_for_unresolved, category_for_unsupported, category_for_wrong_identity,
+    };
+    use crate::analysis::identity::facts::IdentityKind;
+
+    let mut section = CategorizedFailureSection::default();
+
+    for unresolved in db.unresolved_calls() {
+        section.record_category(category_for_unresolved(unresolved.reason));
+    }
+
+    for target in db.call_targets() {
+        if !matches!(
+            target.status,
+            CallTargetStatus::Resolved | CallTargetStatus::Ambiguous
+        ) && let Some(category) = category_for_unsupported(target.status)
+        {
+            section.record_category(category);
+        }
+    }
+
+    if !oracle_callsite_spans.is_empty() {
+        for record in db.identity_records() {
+            if record.kind != IdentityKind::Callsite {
+                continue;
+            }
+            let key = (
+                record.file_id.0,
+                record.span.start_byte,
+                record.span.end_byte,
+            );
+            let oracle_overlap = oracle_callsite_spans.contains(&key);
+            if let Some(category) = category_for_wrong_identity(record, oracle_overlap) {
+                section.record_category(category);
+            }
+        }
+    }
+
+    section
+}
+
+/// Reconstructs the [`CategorizedFailureSection`] from the per-category observed
+/// invariants emitted by `eval::observed::identity_categorized_failure_invariants`.
+///
+/// The observation layer computes the section from the live `AnalysisDb`; this
+/// rehydrates it into the report shape so the section appears in the report JSON
+/// for a native fixture. Missing or unparsable invariants default to `0`.
+pub(crate) fn categorized_failures_from_observed(
+    observed: &[ObservedItem],
+) -> CategorizedFailureSection {
+    let mut section = CategorizedFailureSection::default();
+    for item in observed {
+        let ObservedItem::Invariant(invariant) = item else {
+            continue;
+        };
+        let Ok(value) = invariant.value.parse::<u32>() else {
+            continue;
+        };
+        match invariant.name.as_str() {
+            "identity.categorized_failures.wrong_identity" => section.wrong_identity = value,
+            "identity.categorized_failures.unsupported_edge" => section.unsupported_edge = value,
+            "identity.categorized_failures.unresolved_edge" => section.unresolved_edge = value,
+            "identity.categorized_failures.package_load_limitation" => {
+                section.package_load_limitation = value;
+            }
+            "identity.categorized_failures.model_missing" => section.model_missing = value,
+            _ => {}
+        }
+    }
+    section
 }
 
 fn jelly_graph_edge_expected(item: &ExpectedItem) -> Option<(&str, &str)> {
@@ -679,6 +777,242 @@ mod tests {
                 .get("secbench_js.test_file_count"),
             Some(&704.0)
         );
+    }
+
+    // -- Plan 42-03 categorized-failures pass over synthetic live facts --------
+    //
+    // These exercise `categorized_failures_from_db` end-to-end (the real
+    // projection logic, not just `record_category`) for the three categories the
+    // syntactic frontend does not naturally emit on native fixtures:
+    // `wrong_identity` (needs oracle span overlap, D-16), `package_load_limitation`
+    // (needs CallTargetStatus::SetupMissing), and `model_missing` (needs
+    // CallTargetStatus::Rejected). Together with the categorized-failures fixture
+    // (which proves `unsupported_edge` + `unresolved_edge` from real source) all
+    // FIVE counters are proven non-zero across the test corpus (BLOCKER #4, D-15).
+
+    use crate::analysis::calls::facts::{
+        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+        CallSyntaxKind, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+    };
+    use crate::analysis::identity::facts::{
+        IdentityKind, IdentityRecord, IdentityRecordId, LanguageTag, compute_signature_digest,
+    };
+    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+
+    fn db_with_one_site() -> (AnalysisDb, FileId, CallSiteFact) {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() {}\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "main".to_string(),
+            span: Span::point(file, 2, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let site = CallSiteFact {
+            id: CallSiteId(0),
+            language: Language::Go,
+            file,
+            caller: FunctionId(0),
+            owner_symbol: None,
+            body: MirBodyId(0),
+            operation: MirOpId(0),
+            span: Span::point(file, 2, 5),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: None,
+                name: "callee".to_string(),
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Unresolved,
+            precision: CallPrecision::Unknown,
+            stable_key: "call-site:synthetic".to_string(),
+        };
+        (db, file, site)
+    }
+
+    fn target_with_status(site: CallSiteId, status: CallTargetStatus) -> CallTargetFact {
+        CallTargetFact {
+            id: CallTargetId(0),
+            site,
+            caller: FunctionId(0),
+            target_function: None,
+            target_symbol: None,
+            edge_kind: CallEdgeKind::Unknown,
+            algorithm: CallAlgorithm::Unsupported,
+            status,
+            reason: None,
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Unsupported,
+            stable_key: format!("call-target:synthetic:{status:?}"),
+        }
+    }
+
+    fn callsite_identity_at(file: FileId, span: Span) -> IdentityRecord {
+        let language = LanguageTag::Go;
+        IdentityRecord {
+            id: IdentityRecordId(0),
+            kind: IdentityKind::Callsite,
+            file_id: file,
+            span,
+            language,
+            package_or_module: std::sync::Arc::from("src/main.go"),
+            container_path: std::sync::Arc::from("main"),
+            display_name: std::sync::Arc::from("callee"),
+            signature_digest: compute_signature_digest(
+                language,
+                "src/main.go",
+                "main",
+                "callee",
+                None,
+                None,
+            ),
+            multiplicity: 1,
+            stable_key: "identity|callsite|synthetic".to_string(),
+            originating_call_site_id: None,
+            originating_call_target_id: None,
+        }
+    }
+
+    #[test]
+    fn categorized_failures_unresolved_and_unsupported_from_unresolved_calls() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let unresolved = vec![
+            UnresolvedCallFact {
+                site: site.id,
+                caller: FunctionId(0),
+                status: CallTargetStatus::Unresolved,
+                reason: UnresolvedCallReason::DynamicProperty,
+                algorithm: CallAlgorithm::Unsupported,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Unknown,
+                stable_key: "unresolved:dynamic".to_string(),
+            },
+            UnresolvedCallFact {
+                site: site.id,
+                caller: FunctionId(0),
+                status: CallTargetStatus::Unsupported,
+                reason: UnresolvedCallReason::Reflection,
+                algorithm: CallAlgorithm::Unsupported,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Unsupported,
+                stable_key: "unresolved:reflection".to_string(),
+            },
+        ];
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved,
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.unresolved_edge, 1);
+        assert_eq!(section.unsupported_edge, 1);
+        assert_eq!(section.package_load_limitation, 0);
+        assert_eq!(section.model_missing, 0);
+        assert_eq!(section.wrong_identity, 0);
+    }
+
+    #[test]
+    fn categorized_failures_package_load_limitation_fires_on_setup_missing() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let target = target_with_status(site.id, CallTargetStatus::SetupMissing);
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.package_load_limitation, 1);
+        assert_eq!(section.model_missing, 0);
+        assert_eq!(section.unresolved_edge, 0);
+        assert_eq!(section.unsupported_edge, 0);
+    }
+
+    #[test]
+    fn categorized_failures_model_missing_fires_on_rejected_target() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let target = target_with_status(site.id, CallTargetStatus::Rejected);
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.model_missing, 1);
+        assert_eq!(section.package_load_limitation, 0);
+        assert_eq!(section.unresolved_edge, 0);
+        assert_eq!(section.unsupported_edge, 0);
+    }
+
+    #[test]
+    fn categorized_failures_resolved_and_ambiguous_targets_are_not_failures() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let resolved = CallTargetFact {
+            id: CallTargetId(0),
+            stable_key: "call-target:resolved".to_string(),
+            ..target_with_status(site.id, CallTargetStatus::Resolved)
+        };
+        let ambiguous = CallTargetFact {
+            id: CallTargetId(1),
+            stable_key: "call-target:ambiguous".to_string(),
+            ..target_with_status(site.id, CallTargetStatus::Ambiguous)
+        };
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![resolved, ambiguous],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section, CategorizedFailureSection::default());
+    }
+
+    #[test]
+    fn categorized_failures_wrong_identity_fires_on_oracle_span_overlap() {
+        let (mut db, file, _site) = db_with_one_site();
+        let span = Span {
+            file,
+            start_byte: 20,
+            end_byte: 30,
+            start_line: 2,
+            start_col: 5,
+            end_line: 2,
+            end_col: 15,
+        };
+        db.set_identity_records_for_test(vec![callsite_identity_at(file, span.clone())]);
+
+        // An oracle entry overlapping the observed callsite's (file, span) makes it
+        // a wrong-identity event (D-16). The key matches the (file_id, start_byte,
+        // end_byte) tuple `categorized_failures_from_db` derives.
+        let oracle = std::collections::BTreeSet::from([(file.0, span.start_byte, span.end_byte)]);
+        let section = categorized_failures_from_db(&db, &oracle);
+        assert_eq!(section.wrong_identity, 1);
+
+        // With no overlapping oracle the same record is a miss, not a wrong-identity.
+        let empty = std::collections::BTreeSet::new();
+        assert_eq!(categorized_failures_from_db(&db, &empty).wrong_identity, 0);
     }
 
     fn summary(

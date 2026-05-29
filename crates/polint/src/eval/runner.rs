@@ -113,6 +113,7 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
     metrics.sections.jelly_oracle_coverage =
         crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
+    metrics.sections.categorized_failures = categorized_failures_for_cases(&case_results);
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
         suite_id: manifest.id.0.clone(),
@@ -129,6 +130,20 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
     };
     run.output_hash = deterministic_output_hash(&run);
     Ok(normalize_run(&run))
+}
+
+/// Aggregates the categorized-failure counters across every case's observed
+/// items (Plan 42-03). Each case's observation layer emits per-category invariants
+/// from the live `AnalysisDb`; this sums them into the suite-wide section so the
+/// report JSON carries the `categorized_failures` counter map (D-15).
+fn categorized_failures_for_cases(
+    cases: &[CaseResult],
+) -> crate::eval::report::CategorizedFailureSection {
+    let observed = cases
+        .iter()
+        .flat_map(|case| case.observed.iter().cloned())
+        .collect::<Vec<_>>();
+    crate::eval::metrics::categorized_failures_from_observed(&observed)
 }
 
 #[cfg(test)]
@@ -219,6 +234,7 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
     metrics.sections.jelly_oracle_coverage =
         crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
+    metrics.sections.categorized_failures = categorized_failures_for_cases(&case_results);
 
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
@@ -599,6 +615,47 @@ mod tests {
             "dedup fixture expected rows must all be observed"
         );
         assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
+    fn identity_categorized_failures_fixture() {
+        // Plan 42-03 (D-15, D-16): the categorized-failures fixture exercises the
+        // closed IdentityCategory counter map from real source. `unsupported_edge`
+        // and `unresolved_edge` fire naturally from the Go + TS fixture sources;
+        // the report's `categorized_failures` section carries the counts, and the
+        // `.nonzero` invariants prove the two real-source categories are non-zero.
+        // The remaining three categories are proven by the eval::metrics unit tests
+        // (wrong_identity / package_load_limitation / model_missing) and the
+        // eval::report `drive_record_category_model_missing` test (BLOCKER #4).
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/categorized_failures");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-categorized-failures");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "categorized-failures fixture expected rows must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+
+        let section = &run.metrics.sections.categorized_failures;
+        assert!(
+            section.unsupported_edge > 0,
+            "unsupported_edge must fire from real source: {section:?}"
+        );
+        assert!(
+            section.unresolved_edge > 0,
+            "unresolved_edge must fire from real source: {section:?}"
+        );
+    }
+
+    #[test]
+    fn identity_categorized_failures_fixture_determinism() {
+        // The taxonomy snapshot must be byte-stable across repeated runs (D-11) so
+        // the Phase 43 determinism gate inherits it unchanged.
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/categorized_failures");
+        let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(first.output_hash, second.output_hash);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::analysis::identity::categorize::IdentityCategory;
 use crate::cache::stable_hash;
 use crate::eval::adaptation::AdaptationRecord;
 use crate::eval::competitors::BenchmarkComparisonRow;
@@ -106,6 +107,8 @@ pub(crate) struct MetricSections {
     pub(crate) adaptation: Option<AdaptationMetricSection>,
     #[serde(default)]
     pub(crate) jelly_oracle_coverage: JellyOracleCoverageSection,
+    #[serde(default)]
+    pub(crate) categorized_failures: CategorizedFailureSection,
 }
 
 /// One Jelly oracle span that no identity record renders, surfaced for
@@ -129,6 +132,49 @@ pub(crate) struct JellyOracleCoverageSection {
     pub(crate) total: u32,
     pub(crate) ratio: f64,
     pub(crate) unmatched: Vec<JellyUnmatchedSpan>,
+}
+
+/// Closed identity-vs-unsupported failure counter map (D-14, D-15).
+///
+/// Exactly five `u32` counters, one per [`IdentityCategory`] variant, with
+/// snake_case discriminators matching the enum's serde representation. Placed as
+/// a sibling of [`JellyOracleCoverageSection`] on [`MetricSections`] (Plan 42-03
+/// BLOCKER #3). `#[serde(default)]` on the `MetricSections` field keeps older
+/// v1.2 JSON deserializable (Pattern M).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct CategorizedFailureSection {
+    pub(crate) wrong_identity: u32,
+    pub(crate) unsupported_edge: u32,
+    pub(crate) unresolved_edge: u32,
+    pub(crate) package_load_limitation: u32,
+    pub(crate) model_missing: u32,
+}
+
+impl CategorizedFailureSection {
+    /// Increments the counter for `category`. Uses `saturating_add` so a hostile
+    /// repo with tens of millions of failing edges saturates at `u32::MAX`
+    /// instead of wrapping (threat T-42-03-05). Exhaustive `match`, no wildcard
+    /// arm (Pattern H consistency).
+    pub(crate) fn record_category(&mut self, category: IdentityCategory) {
+        match category {
+            IdentityCategory::WrongIdentity => {
+                self.wrong_identity = self.wrong_identity.saturating_add(1);
+            }
+            IdentityCategory::UnsupportedEdge => {
+                self.unsupported_edge = self.unsupported_edge.saturating_add(1);
+            }
+            IdentityCategory::UnresolvedEdge => {
+                self.unresolved_edge = self.unresolved_edge.saturating_add(1);
+            }
+            IdentityCategory::PackageLoadLimitation => {
+                self.package_load_limitation = self.package_load_limitation.saturating_add(1);
+            }
+            IdentityCategory::ModelMissing => {
+                self.model_missing = self.model_missing.saturating_add(1);
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -578,6 +624,100 @@ mod tests {
             sections.jelly_oracle_coverage,
             JellyOracleCoverageSection::default()
         );
+    }
+
+    #[test]
+    fn categorized_failures_serde_round_trip() {
+        let section = CategorizedFailureSection {
+            wrong_identity: 1,
+            unsupported_edge: 2,
+            unresolved_edge: 3,
+            package_load_limitation: 4,
+            model_missing: 5,
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        let restored: CategorizedFailureSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, restored);
+
+        // Default-serialization byte string is the downstream lock contract.
+        let default_json = serde_json::to_string(&CategorizedFailureSection::default()).unwrap();
+        assert_eq!(
+            default_json,
+            r#"{"wrong_identity":0,"unsupported_edge":0,"unresolved_edge":0,"package_load_limitation":0,"model_missing":0}"#
+        );
+    }
+
+    #[test]
+    fn v1_2_metric_sections_json_reverse_compat() {
+        // A v1.2 MetricSections JSON carries neither `jelly_oracle_coverage` nor
+        // `categorized_failures`; both must default in (Pattern M).
+        let v1_2_json = serde_json::json!({
+            "scanner": {
+                "true_positives": 0,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "true_negatives": 0,
+                "precision": null,
+                "recall": null,
+                "f1": null,
+                "f2": null,
+                "f3": null,
+                "false_positive_rate": null
+            },
+            "graph": { "edges_expected": 0, "edges_observed": 0, "edges_unconfirmed": 0 },
+            "paths": { "paths_expected": 0, "paths_observed": 0, "paths_unconfirmed": 0 },
+            "unknowns": { "total": 0, "by_status": {} },
+            "performance": {
+                "runtime_budget_passed": 0,
+                "runtime_budget_failed": 0,
+                "cache_hits": 0,
+                "cache_misses": 0
+            },
+            "suite_native": {}
+        });
+        let sections: MetricSections = serde_json::from_value(v1_2_json).unwrap();
+        assert_eq!(
+            sections.categorized_failures,
+            CategorizedFailureSection::default()
+        );
+    }
+
+    #[test]
+    fn record_category_increments_each_counter() {
+        let mut section = CategorizedFailureSection::default();
+        section.record_category(IdentityCategory::WrongIdentity);
+        section.record_category(IdentityCategory::UnsupportedEdge);
+        section.record_category(IdentityCategory::UnresolvedEdge);
+        section.record_category(IdentityCategory::PackageLoadLimitation);
+        section.record_category(IdentityCategory::ModelMissing);
+        assert_eq!(
+            section,
+            CategorizedFailureSection {
+                wrong_identity: 1,
+                unsupported_edge: 1,
+                unresolved_edge: 1,
+                package_load_limitation: 1,
+                model_missing: 1,
+            }
+        );
+
+        // A second WrongIdentity event bumps only that counter.
+        section.record_category(IdentityCategory::WrongIdentity);
+        assert_eq!(section.wrong_identity, 2);
+    }
+
+    #[test]
+    fn drive_record_category_model_missing() {
+        // BLOCKER #4: prove the fifth (ModelMissing) counter's wiring directly so
+        // it is non-zero in the test suite even if v1.2 source never naturally
+        // emits CallTargetStatus::Rejected on the fixture repos.
+        let mut section = CategorizedFailureSection::default();
+        section.record_category(IdentityCategory::ModelMissing);
+        assert_eq!(section.model_missing, 1);
+        assert_eq!(section.wrong_identity, 0);
+        assert_eq!(section.unsupported_edge, 0);
+        assert_eq!(section.unresolved_edge, 0);
+        assert_eq!(section.package_load_limitation, 0);
     }
 
     #[test]

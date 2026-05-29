@@ -599,6 +599,48 @@ fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
         "kernel.run_report.identity_records",
     )];
     invariants.extend(identity_render_invariants(db));
+    invariants.extend(identity_categorized_failure_invariants(db));
+    invariants
+}
+
+/// Surfaces the closed `IdentityCategory` counter map computed from the live
+/// analysis facts (Plan 42-03, D-15) as deterministic observed invariants so the
+/// categorized-failures fixture can assert each counter directly.
+///
+/// Native fixtures carry no benchmark oracle, so `wrong_identity` (which requires
+/// oracle span overlap, D-16) never fires here — the empty oracle-span set is
+/// passed through `categorized_failures_from_db` and the wrong-identity pass is
+/// skipped. The fixture exercises the four naturally-emitted categories; the
+/// fifth-category wiring is proven by the `drive_record_category_model_missing`
+/// unit test (BLOCKER #4).
+#[cfg(test)]
+fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    let section =
+        crate::eval::metrics::categorized_failures_from_db(db, &std::collections::BTreeSet::new());
+    // Exact per-category counts (rehydrated into the report's
+    // `categorized_failures` section by `categorized_failures_from_observed`) plus
+    // byte-stable `.nonzero` booleans the fixture asserts (exact counts are
+    // brittle for the Phase 43 determinism gate; the boolean is order-stable).
+    let counters = [
+        ("wrong_identity", section.wrong_identity),
+        ("unsupported_edge", section.unsupported_edge),
+        ("unresolved_edge", section.unresolved_edge),
+        ("package_load_limitation", section.package_load_limitation),
+        ("model_missing", section.model_missing),
+    ];
+    let mut invariants = Vec::with_capacity(counters.len() * 2);
+    for (name, value) in counters {
+        invariants.push(observed_invariant(
+            format!("identity.categorized_failures.{name}"),
+            value.to_string(),
+            "kernel.run_report.identity_records",
+        ));
+        invariants.push(observed_invariant(
+            format!("identity.categorized_failures.{name}.nonzero"),
+            bool_string(value > 0),
+            "kernel.run_report.identity_records",
+        ));
+    }
     invariants
 }
 
