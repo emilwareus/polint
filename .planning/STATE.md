@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-28T21:56:19.639Z"
-last_activity: 2026-05-28 -- Phase 42 planning complete
+last_updated: "2026-05-29T06:39:32.949Z"
+last_activity: 2026-05-29 -- Phase 42 Plan 01 complete
 progress:
   total_phases: 13
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 25
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Planning next milestone
+**Current focus:** Phase 42 — benchmark-identity-renderers-dedup-identity-taxonomy
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-05-28 -- Phase 42 planning complete
+Phase: 42 (benchmark-identity-renderers-dedup-identity-taxonomy) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 42 (Plan 01 complete; ready for Plan 02)
+Last activity: 2026-05-29 -- Phase 42 Plan 01 complete (identity substrate)
 
 ## Deferred Items
 
@@ -393,6 +393,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Entrypoint fact accessors promoted from #[cfg(test)] to production visibility for validation pipeline access.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Extension framework facts use FrameworkPrecisionCeiling rejection reason separate from MissingProvenance for Exact precision violations.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Conflicting entrypoint registrations detected by same target_function with different framework_ids produce warning diagnostics.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: SignatureDigest uses a deterministic length-prefixed two-pass FNV-1a 16-byte digest with a local hex codec instead of sha2/hex (no new deps per T-42-SC; cross-platform byte-identical per D-25; length-prefixed per T-42-01).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Arc<str> serde uses a field-level adapter because the serde rc feature is not enabled.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Dedup collapse is order-independent — the canonical retained record is the smallest by sort key (D-11).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: polint.identity manifest slots between polint.calls and polint.abstract_domains (D-23); IDENTITY_SCHEMA_LABEL = identity-facts-1.
 
 ## Execution Metrics
 
@@ -466,13 +470,14 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 35-framework-entrypoints-and-trust-boundaries | 06 | 8 min | 2 | 6 |
 | 35-framework-entrypoints-and-trust-boundaries | 07 | recorded | 2 | recorded |
 | 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 01 | 8h 9m | 2 | 22 |
 
 ## Session
 
-- Last session: 2026-05-26
-- Last activity: 2026-05-27 - Reconciled v1.2 milestone closeout artifacts before archival.
-- Stopped at: Phase 40 context gathered; ready to plan Phase 40.
-- Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
+- Last session: 2026-05-29
+- Last activity: 2026-05-29 - Completed Phase 42 Plan 01 (identity substrate); persisted Task 2 after a disk-full interruption.
+- Stopped at: Completed 42-01-PLAN.md; ready to execute 42-02.
+- Resume file: None
 
 ### Quick Tasks Completed
 
