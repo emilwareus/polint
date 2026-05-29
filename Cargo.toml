@@ -19,6 +19,10 @@ members = [
     "examples/ts-design-tokens/.polint/rules",
     "examples/ts-no-raw-api-calls/.polint/rules",
 ]
+# V1.3 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19.
+# Keep the leak-gate probe OUT of normal workspace builds, lints, and tests; it
+# is compiled in isolation only by crates/polint/tests/public_surface_leak.rs.
+exclude = ["tests/fixtures/public-surface-leak-probe"]
 resolver = "3"
 
 [workspace.package]
