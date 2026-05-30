@@ -26,6 +26,7 @@
 //! deferred to Phase 47. Do not couple the two enums in code here; document the
 //! conceptual map only.
 
+pub(crate) mod build;
 pub(crate) mod constraints;
 pub(crate) mod facts;
 pub(crate) mod store;
