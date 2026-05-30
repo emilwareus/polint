@@ -1410,10 +1410,6 @@ impl AnalysisDb {
     /// ID assignment) and referentially validates every edge endpoint and constraint
     /// node reference — a dangling reference returns [`AnalysisError::InvalidFact`] so
     /// the db is never left holding a malformed graph.
-    #[allow(
-        dead_code,
-        reason = "Wired into the kernel run splice in 44-03 Task 2 (provider pipeline); used by validate tests in Task 1."
-    )]
     pub(crate) fn replace_semantic_graph_facts(
         &mut self,
         output: SemanticGraphOutput,

@@ -212,6 +212,11 @@ const TYPE_VALUE_ALIAS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const SEMANTIC_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::semantic_graph::cache_key::SEMANTIC_GRAPH_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const REFINED_CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::refined_calls::cache_key::REFINED_CALLS_SCHEMA_LABEL,
     version: 1,
@@ -619,6 +624,37 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.semantic_graph",
+        kind: ProviderKind::WholeRepoDerived,
+        // SC3 dependency-index inputs — PRESENT-NOW vs DEFERRED-AND-WHY (D-17),
+        // mirroring the note in semantic_graph::cache_key. The families listed below
+        // are the SC3 inputs that have producers today (semantic index via
+        // symbols/scopes/references, module/topology, direct calls, types, value,
+        // entrypoints, extensions). DEFERRED inputs have NO producer yet and are
+        // therefore intentionally absent from this slice (not silently dropped):
+        // MIR / CFG / summaries (Phase 47), accepted adaptation models (Phase 49),
+        // and solver budgets (Phase 51/53). Each enters this slice only when its
+        // producer lands. Comment-only; the slice contains ONLY today's families.
+        inputs: &[
+            "functions",
+            "packages",
+            "scopes",
+            "call_sites",
+            "value_facts",
+            "access_paths",
+            "type_facts",
+            "symbols",
+            "references",
+            "entrypoints",
+            "extension_facts",
+        ],
+        outputs: &["semantic_nodes", "semantic_edges", "semantic_constraints"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: SEMANTIC_GRAPH_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.refined_calls",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -777,6 +813,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -806,6 +843,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -862,6 +900,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -1249,6 +1288,25 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.semantic_graph",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "functions",
+                        "packages",
+                        "scopes",
+                        "call_sites",
+                        "value_facts",
+                        "access_paths",
+                        "type_facts",
+                        "symbols",
+                        "references",
+                        "entrypoints",
+                        "extension_facts",
+                    ],
+                    outputs: vec!["semantic_nodes", "semantic_edges", "semantic_constraints"],
                 },
                 ProviderOrderRow {
                     id: "polint.refined_calls",

@@ -16,6 +16,7 @@ use crate::analysis::points_to::facts::{
     PointsToBudgetStatus, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
 };
 use crate::analysis::refined_calls::validate::validate_refined_calls;
+use crate::analysis::semantic_graph::validate::validate_semantic_graph;
 use crate::analysis::summaries::validate::validate_summaries;
 use crate::analysis::types::facts::{TypePrecision, TypeShape, TypeStatus, TypeSubject};
 use crate::analysis::validate::validate_semantic_mir;
@@ -62,6 +63,7 @@ pub(crate) fn validate_fact_metadata(
     validate_summaries(db, &mut diagnostics);
     validate_entrypoints(db, &mut diagnostics);
     validate_type_value_alias(db, &mut diagnostics);
+    validate_semantic_graph(db, &mut diagnostics);
     validate_refined_calls(db, &mut diagnostics);
     validate_data_flow(db, &mut diagnostics);
     validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
