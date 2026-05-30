@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: verifying
-last_updated: "2026-05-30T10:55:36.978Z"
+status: ready_to_plan
+last_updated: 2026-05-30T11:45:28.555Z
 last_activity: 2026-05-30
 progress:
   total_phases: 13
@@ -11,6 +11,7 @@ progress:
   total_plans: 11
   completed_plans: 11
   percent: 23
+stopped_at: Phase 44 complete (3/3) — ready to discuss Phase 45
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 44 — Semantic Graph Skeleton & Constraint Vocabulary
+**Current focus:** Phase 45 — js/ts inventory, scope, bindings, module graph & direct calls
 
 ## Current Status
 
@@ -40,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 44 (Semantic Graph Skeleton & Constraint Vocabulary) — READY FOR VERIFICATION
-Plan: 3 of 3 (all complete)
-Status: Phase complete — ready for verification
-Last activity: 2026-05-30 -- Completed 44-03 (polint.semantic_graph provider pipeline + output digest + cache key, validate_semantic_graph wired in-sequence, AnalysisDb store path, manifest registered between type_value_alias and refined_calls in all order vectors + report row, Go + TS/JS byte-stable snapshot fixtures, determinism gate green via auto-enrollment, public-surface-leak gate green unmodified); GRAPH-01 + GRAPH-02 done
+Phase: 45
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-30
 
 ### Open repo-admin action (T-42-04-10)
 
