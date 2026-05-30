@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: executing
-last_updated: "2026-05-30T10:33:23.043Z"
+status: verifying
+last_updated: "2026-05-30T10:55:36.978Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 13
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
-  completed_plans: 10
-  percent: 15
+  completed_plans: 11
+  percent: 23
 ---
 
 # State: polint
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 44 (Semantic Graph Skeleton & Constraint Vocabulary) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-05-30 -- Completed 44-02 (ConstraintKind vocabulary + ConstraintFact + SemanticConstraintId; store carries/indexes/validates constraints; build_semantic_graph projects a real-but-minimal graph from existing facts); GRAPH-02 done
+Phase: 44 (Semantic Graph Skeleton & Constraint Vocabulary) — READY FOR VERIFICATION
+Plan: 3 of 3 (all complete)
+Status: Phase complete — ready for verification
+Last activity: 2026-05-30 -- Completed 44-03 (polint.semantic_graph provider pipeline + output digest + cache key, validate_semantic_graph wired in-sequence, AnalysisDb store path, manifest registered between type_value_alias and refined_calls in all order vectors + report row, Go + TS/JS byte-stable snapshot fixtures, determinism gate green via auto-enrollment, public-surface-leak gate green unmodified); GRAPH-01 + GRAPH-02 done
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -434,11 +434,15 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 44-02]: ModelEdge is a fieldless reserved variant emitting zero constraints (no producer until Phase 49); build_semantic_graph also emits zero Alloc/Field/Type constraints honestly (no endpoint bridge) rather than fabricating nodes to inflate recall (D-07).
 - [Phase 44-02]: normalized() remaps constraint payload node references to the post-sort dense node numbering (mirroring the edge-endpoint remap); the store builds a constraints-by-ConstraintKind index and rejects dangling constraint node refs.
 - [Phase 44-02]: build_semantic_graph is a read-only projection over functions/packages/scopes/call_sites/values, composing stable keys from referenced identity (D-06) and mutating no upstream family (D-13).
+- [Phase 44-03]: polint.semantic_graph provider folds every consumed upstream provider output digest + schema/parameter into its output digest with an empty-output sentinel (D-17); deferred SC3 inputs (MIR/CFG/summaries/adaptation-models/solver-budgets) are self-documented and digested as zero until Phases 47/49/51/53 land producers.
+- [Phase 44-03]: semantic-graph precision ceiling rejects the exact-equivalent tier (SemanticPrecision::ResolvedStatic) since the graph precision enums carry no literal Exact variant; replace_semantic_graph_facts routes through SemanticGraphStore::from_output for normalize + referential validation.
+- [Phase 44-03]: the provider auto-enrolls into the Phase 43 determinism gate via provider_manifests() (no gate edit); a dedicated eval::semantic_graph_snapshot gate proves byte-stable Go + TS/JS constraint emission, and the Phase 42 public-surface-leak gate stays green unmodified.
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 44-semantic-graph-skeleton-constraint-vocabulary | 03 | 15 min | 3 | 13 |
 | 44-semantic-graph-skeleton-constraint-vocabulary | 02 | 13 min | 3 | 5 |
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
