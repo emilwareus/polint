@@ -1,22 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::error::AnalysisError;
-use crate::analysis::ids::{SemanticEdgeId, SemanticNodeId};
+use crate::analysis::ids::{SemanticConstraintId, SemanticEdgeId, SemanticNodeId};
+use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
 use crate::analysis::semantic_graph::facts::{
     EdgeKind, NodeKind, SemanticEdgeFact, SemanticNodeFact,
 };
 
 pub(crate) const SEMANTIC_GRAPH_PROVIDER_ID: &str = "polint.semantic_graph";
 
-/// Provider output for `polint.semantic_graph` — the normalized node and edge sets.
+/// Provider output for `polint.semantic_graph` — the normalized node, edge, and
+/// constraint sets.
 ///
-/// The constraint vocabulary arrives in Plan 02; this struct is intentionally left
-/// extensible but does NOT carry a `constraints` field yet, so Plan 02 can add it
-/// without churning a contract this plan would otherwise pin prematurely.
+/// The constraint vocabulary (GRAPH-02) arrives in Plan 02 via the `constraints`
+/// field: the closed `ConstraintKind`/`ConstraintFact` rows that the Phase 47
+/// unified solver folds over.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SemanticGraphOutput {
     pub(crate) nodes: Vec<SemanticNodeFact>,
     pub(crate) edges: Vec<SemanticEdgeFact>,
+    pub(crate) constraints: Vec<ConstraintFact>,
 }
 
 impl SemanticGraphOutput {
@@ -57,7 +60,77 @@ impl SemanticGraphOutput {
         for (index, edge) in self.edges.iter_mut().enumerate() {
             edge.id = SemanticEdgeId(index as u64);
         }
+        // Rewrite every `SemanticNodeId` a constraint payload references to the
+        // post-sort node numbering (the same discipline as edge endpoints), then
+        // sort+densify constraints exactly as nodes/edges (D-05). Without this, a
+        // constraint's node references would point at stale pre-sort node IDs after
+        // re-densification.
+        for constraint in &mut self.constraints {
+            remap_constraint_nodes(&mut constraint.kind, &remap);
+        }
+        self.constraints.sort_by(|left, right| {
+            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+        });
+        for (index, constraint) in self.constraints.iter_mut().enumerate() {
+            constraint.id = SemanticConstraintId(index as u64);
+        }
         self
+    }
+}
+
+/// Rewrites every `SemanticNodeId` carried by a constraint payload through the
+/// node-densification remap, mirroring the edge-endpoint remap so constraint node
+/// references stay consistent with the post-sort node numbering.
+fn remap_constraint_nodes(
+    kind: &mut ConstraintKind,
+    remap: &BTreeMap<SemanticNodeId, SemanticNodeId>,
+) {
+    let remap_one = |node: &mut SemanticNodeId| {
+        if let Some(&new_id) = remap.get(node) {
+            *node = new_id;
+        }
+    };
+    match kind {
+        ConstraintKind::CopyEdge { dst, src } => {
+            remap_one(dst);
+            remap_one(src);
+        }
+        ConstraintKind::Alloc { dst, object } => {
+            remap_one(dst);
+            remap_one(object);
+        }
+        ConstraintKind::FieldLoad { dst, base, .. } => {
+            remap_one(dst);
+            remap_one(base);
+        }
+        ConstraintKind::FieldStore { base, src, .. } => {
+            remap_one(base);
+            remap_one(src);
+        }
+        ConstraintKind::CallConstraint { callsite } => {
+            remap_one(callsite);
+        }
+        ConstraintKind::TypeConstraint { node, .. } => {
+            remap_one(node);
+        }
+        // `ModelEdge` carries no node payload and emits zero rows (D-11); nothing to
+        // remap.
+        ConstraintKind::ModelEdge => {}
+    }
+}
+
+/// Collects every `SemanticNodeId` referenced by a constraint payload for the
+/// referential validation pass. `TypeConstraint.type_fact` (a `TypeFactId` from the
+/// type substrate, not a graph node) is intentionally excluded.
+fn constraint_referenced_nodes(kind: &ConstraintKind) -> Vec<SemanticNodeId> {
+    match kind {
+        ConstraintKind::CopyEdge { dst, src } => vec![*dst, *src],
+        ConstraintKind::Alloc { dst, object } => vec![*dst, *object],
+        ConstraintKind::FieldLoad { dst, base, .. } => vec![*dst, *base],
+        ConstraintKind::FieldStore { base, src, .. } => vec![*base, *src],
+        ConstraintKind::CallConstraint { callsite } => vec![*callsite],
+        ConstraintKind::TypeConstraint { node, .. } => vec![*node],
+        ConstraintKind::ModelEdge => Vec::new(),
     }
 }
 
@@ -70,8 +143,11 @@ impl SemanticGraphOutput {
 pub(crate) struct SemanticGraphStore {
     nodes: Vec<SemanticNodeFact>,
     edges: Vec<SemanticEdgeFact>,
+    constraints: Vec<ConstraintFact>,
     nodes_by_kind: BTreeMap<&'static str, Vec<usize>>,
     edges_by_kind: BTreeMap<EdgeKind, Vec<usize>>,
+    /// Constraints indexed by their `ConstraintKind` snake_case tag (D-14).
+    constraints_by_kind: BTreeMap<&'static str, Vec<usize>>,
     /// Forward/outgoing adjacency: edge source node -> edge IDs leaving it.
     outgoing: BTreeMap<SemanticNodeId, Vec<SemanticEdgeId>>,
     /// Backward/incoming adjacency: edge target node -> edge IDs entering it.
@@ -109,9 +185,28 @@ impl SemanticGraphStore {
             }
         }
 
+        // Referentially validate every `SemanticNodeId` a constraint references
+        // against the stored node set (dangling -> InvalidFact), mirroring the
+        // edge-endpoint check. `TypeConstraint.type_fact` references the type
+        // substrate (a different family) and is intentionally NOT checked here.
+        for constraint in &output.constraints {
+            for node in constraint_referenced_nodes(&constraint.kind) {
+                if !node_ids.contains(&node) {
+                    return Err(AnalysisError::InvalidFact {
+                        provider: SEMANTIC_GRAPH_PROVIDER_ID,
+                        reason: format!(
+                            "dangling constraint node {:?} for semantic constraint `{}`",
+                            node, constraint.stable_key
+                        ),
+                    });
+                }
+            }
+        }
+
         let mut store = Self {
             nodes: output.nodes,
             edges: output.edges,
+            constraints: output.constraints,
             ..Self::default()
         };
 
@@ -135,6 +230,16 @@ impl SemanticGraphStore {
                 .push(index);
             store.outgoing.entry(edge.source).or_default().push(edge.id);
             store.incoming.entry(edge.target).or_default().push(edge.id);
+        }
+
+        // Constraints are already sorted by (stable_key, id), so each per-kind index
+        // vector is appended in stable order.
+        for (index, constraint) in store.constraints.iter().enumerate() {
+            store
+                .constraints_by_kind
+                .entry(constraint.kind.as_str())
+                .or_default()
+                .push(index);
         }
 
         Ok(store)
@@ -168,12 +273,25 @@ impl SemanticGraphStore {
     pub(crate) fn incoming_edges(&self, node: SemanticNodeId) -> &[SemanticEdgeId] {
         self.incoming.get(&node).map_or(&[], Vec::as_slice)
     }
+
+    pub(crate) fn constraints(&self) -> &[ConstraintFact] {
+        &self.constraints
+    }
+
+    /// Indices into [`Self::constraints`] for every constraint of the given kind
+    /// tag (the `ConstraintKind::as_str()` snake_case label).
+    pub(crate) fn constraints_for_kind(&self, kind: &ConstraintKind) -> &[usize] {
+        self.constraints_by_kind
+            .get(kind.as_str())
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, ObjectTokenId};
+    use crate::analysis::ids::{CallSiteId, ObjectTokenId, SemanticConstraintId};
+    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
     use crate::analysis::semantic_graph::facts::SemanticPrecision;
     use crate::core::FunctionId;
 
@@ -203,14 +321,32 @@ mod tests {
         }
     }
 
+    fn constraint(id: u64, kind: ConstraintKind, stable_key: &str) -> ConstraintFact {
+        ConstraintFact {
+            id: SemanticConstraintId(id),
+            kind,
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::FlowInsensitive,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
     fn sample_output() -> SemanticGraphOutput {
-        // Two nodes and one edge from node-A (source) to node-B (target).
+        // Two nodes and one edge from node-A (source) to node-B (target), plus one
+        // CallConstraint anchored at node-B.
         SemanticGraphOutput {
             nodes: vec![
                 node(0, NodeKind::Function(FunctionId(1)), "node|function|a"),
                 node(1, NodeKind::Callsite(CallSiteId(2)), "node|callsite|b"),
             ],
             edges: vec![edge(0, 0, 1, EdgeKind::Call, "edge|call|a|b")],
+            constraints: vec![constraint(
+                0,
+                ConstraintKind::CallConstraint {
+                    callsite: SemanticNodeId(1),
+                },
+                "constraint|call_constraint|b",
+            )],
         }
     }
 
@@ -222,6 +358,7 @@ mod tests {
                 node(7, NodeKind::Function(FunctionId(1)), "node|function|a"),
             ],
             edges: Vec::new(),
+            constraints: Vec::new(),
         }
         .normalized();
         // Sorted by stable_key: "node|callsite|z" < "node|function|a" ('c' < 'f'),
@@ -329,10 +466,120 @@ mod tests {
             )],
             // Edge targets node id 5 which does not resolve to a stored node.
             edges: vec![edge(0, 0, 5, EdgeKind::Call, "edge|call|a|missing")],
+            constraints: Vec::new(),
         };
         let error =
             SemanticGraphStore::from_output(output).expect_err("dangling endpoint rejected");
         assert!(error.to_string().contains("dangling edge target"));
+        assert!(error.to_string().contains("polint.semantic_graph"));
+    }
+
+    #[test]
+    fn from_output_builds_constraints_by_kind_index() {
+        let store = SemanticGraphStore::from_output(sample_output()).expect("store");
+        assert_eq!(store.constraints().len(), 1);
+        // The CallConstraint is indexed by its snake_case tag.
+        assert_eq!(
+            store
+                .constraints_for_kind(&ConstraintKind::CallConstraint {
+                    callsite: SemanticNodeId(0),
+                })
+                .len(),
+            1
+        );
+        // A kind with no rows resolves to an empty slice.
+        assert!(
+            store
+                .constraints_for_kind(&ConstraintKind::ModelEdge)
+                .is_empty()
+        );
+        // The stored constraint's callsite was remapped to the post-sort node id of
+        // the callsite node (which sorts to index 0 since "node|callsite|b" <
+        // "node|function|a").
+        let callsite_node = store
+            .nodes()
+            .iter()
+            .find(|n| n.stable_key == "node|callsite|b")
+            .expect("callsite node")
+            .id;
+        match &store.constraints()[0].kind {
+            ConstraintKind::CallConstraint { callsite } => {
+                assert_eq!(*callsite, callsite_node);
+            }
+            other => panic!("expected call_constraint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalized_constraints_are_shuffle_stable() {
+        // Two constraints with distinct stable keys; shuffling input order must yield
+        // byte-identical normalized output and identical dense IDs.
+        let base = SemanticGraphOutput {
+            nodes: vec![
+                node(0, NodeKind::Function(FunctionId(1)), "node|function|a"),
+                node(1, NodeKind::Callsite(CallSiteId(2)), "node|callsite|b"),
+            ],
+            edges: Vec::new(),
+            constraints: vec![
+                constraint(
+                    5,
+                    ConstraintKind::CallConstraint {
+                        callsite: SemanticNodeId(1),
+                    },
+                    "constraint|call_constraint|b",
+                ),
+                constraint(
+                    9,
+                    ConstraintKind::CopyEdge {
+                        dst: SemanticNodeId(0),
+                        src: SemanticNodeId(1),
+                    },
+                    "constraint|copy_edge|a|b",
+                ),
+            ],
+        };
+        let mut shuffled = base.clone();
+        shuffled.nodes.reverse();
+        shuffled.constraints.reverse();
+
+        let a = base.normalized();
+        let b = shuffled.normalized();
+
+        let a_constraints = serde_json::to_string(&a.constraints).expect("serialize a constraints");
+        let b_constraints = serde_json::to_string(&b.constraints).expect("serialize b constraints");
+        assert_eq!(a_constraints, b_constraints);
+        assert_eq!(
+            a.constraints.iter().map(|c| c.id).collect::<Vec<_>>(),
+            b.constraints.iter().map(|c| c.id).collect::<Vec<_>>()
+        );
+        // Dense IDs were reassigned by index after the (stable_key, id) sort.
+        assert_eq!(a.constraints[0].id, SemanticConstraintId(0));
+        assert_eq!(a.constraints[1].id, SemanticConstraintId(1));
+    }
+
+    #[test]
+    fn from_output_rejects_dangling_constraint_node_ref() {
+        let output = SemanticGraphOutput {
+            nodes: vec![node(
+                0,
+                NodeKind::Function(FunctionId(1)),
+                "node|function|a",
+            )],
+            edges: Vec::new(),
+            // The CopyEdge references node id 7 which does not resolve to a stored
+            // node.
+            constraints: vec![constraint(
+                0,
+                ConstraintKind::CopyEdge {
+                    dst: SemanticNodeId(0),
+                    src: SemanticNodeId(7),
+                },
+                "constraint|copy_edge|a|missing",
+            )],
+        };
+        let error =
+            SemanticGraphStore::from_output(output).expect_err("dangling constraint ref rejected");
+        assert!(error.to_string().contains("dangling constraint node"));
         assert!(error.to_string().contains("polint.semantic_graph"));
     }
 
@@ -342,5 +589,6 @@ mod tests {
             SemanticGraphStore::from_output(SemanticGraphOutput::empty()).expect("empty store");
         assert!(store.nodes().is_empty());
         assert!(store.edges().is_empty());
+        assert!(store.constraints().is_empty());
     }
 }
