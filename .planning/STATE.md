@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-30T10:15:38.961Z"
+last_updated: "2026-05-30T10:33:23.043Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 13
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 15
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 44 (Semantic Graph Skeleton & Constraint Vocabulary) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
-Last activity: 2026-05-30 -- Completed 44-01 (semantic graph skeleton: NodeKind/EdgeKind, fact families, dense IDs, store indexes); GRAPH-01 done
+Last activity: 2026-05-30 -- Completed 44-02 (ConstraintKind vocabulary + ConstraintFact + SemanticConstraintId; store carries/indexes/validates constraints; build_semantic_graph projects a real-but-minimal graph from existing facts); GRAPH-02 done
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -430,11 +430,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: [Phase 44-semantic-graph-skeleton]: normalized() assigns dense SemanticNodeId/SemanticEdgeId only after the stable-key sort and remaps edge endpoints to the post-sort node numbering (D-05).
 - [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphStore builds both outgoing (source) and incoming (target) adjacency in one post-normalization pass; the incoming index feeds the Phase 47 solver fixpoint (D-14).
 - [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphOutput carries nodes+edges only; the constraints field is deferred to Plan 02.
+- [Phase 44-02]: ConstraintFact mirrors PointsToConstraintFact and reuses points_to PointsToStatus/PointsToPrecision field types (D-10); ConstraintKind stays separate from PointsToConstraintKind with no import/merge (D-09; folding deferred to Phase 47).
+- [Phase 44-02]: ModelEdge is a fieldless reserved variant emitting zero constraints (no producer until Phase 49); build_semantic_graph also emits zero Alloc/Field/Type constraints honestly (no endpoint bridge) rather than fabricating nodes to inflate recall (D-07).
+- [Phase 44-02]: normalized() remaps constraint payload node references to the post-sort dense node numbering (mirroring the edge-endpoint remap); the store builds a constraints-by-ConstraintKind index and rejects dangling constraint node refs.
+- [Phase 44-02]: build_semantic_graph is a read-only projection over functions/packages/scopes/call_sites/values, composing stable keys from referenced identity (D-06) and mutating no upstream family (D-13).
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 44-semantic-graph-skeleton-constraint-vocabulary | 02 | 13 min | 3 | 5 |
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
 | 21-provenance-precision-and-validation-metadata | 01 | 9h 8m | 2 | 3 |
@@ -510,9 +515,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-05-29
-- Last activity: 2026-05-29 - Completed Phase 43 Plan 03 (N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS determinism-gate CI job + phases 44-54 inheritance doc); Phase 43 complete (3/3 plans); REACH-03.
-- Stopped at: Completed 43-03-PLAN.md; Phase 43 done (REACH-01/02/03); ready for Phase 43 verification / Phase 44.
+- Last session: 2026-05-30
+- Last activity: 2026-05-30 - Completed Phase 44 Plan 02 (ConstraintKind vocabulary + ConstraintFact + SemanticConstraintId; SemanticGraphOutput/Store carries/indexes/validates constraints; build_semantic_graph projects a real-but-minimal graph from existing facts); GRAPH-02 done.
+- Stopped at: Completed 44-02-PLAN.md; Phase 44 at 2/3 plans; ready for Phase 44 Plan 03 (provider/cache/validation wiring + Go/TS snapshot fixtures).
 - Resume file: None
 
 ### Quick Tasks Completed
