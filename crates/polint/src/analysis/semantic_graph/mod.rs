@@ -29,6 +29,8 @@
 pub(crate) mod build;
 pub(crate) mod cache_key;
 pub(crate) mod constraints;
+#[cfg(test)]
+pub(crate) mod debug;
 pub(crate) mod facts;
 pub(crate) mod provider;
 pub(crate) mod store;

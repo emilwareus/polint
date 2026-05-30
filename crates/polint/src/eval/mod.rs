@@ -23,6 +23,8 @@ pub(crate) mod observed;
 pub(crate) mod performance;
 pub(crate) mod report;
 pub(crate) mod runner;
+#[cfg(test)]
+pub(crate) mod semantic_graph_snapshot;
 pub(crate) mod suite;
 pub(crate) mod tiers;
 

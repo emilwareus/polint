@@ -1,0 +1,130 @@
+#![cfg(test)]
+
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::analysis::semantic_graph::constraints::ConstraintFact;
+use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+use crate::core::AnalysisDb;
+
+/// Produces a byte-stable debug JSON snapshot of all stored semantic-graph facts.
+///
+/// Rows use the composed stable keys and label strings — never run-local dense IDs
+/// as identity, never raw source, never absolute paths. Total-ordered by stable key
+/// per family so the snapshot is byte-identical across provider-order / row-order
+/// shuffles. Used by the Plan 03 snapshot fixtures.
+pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
+    let report = SemanticGraphDebugReport {
+        counts: counts(db),
+        nodes: node_rows(db),
+        edges: edge_rows(db),
+        constraints: constraint_rows(db),
+    };
+    serde_json::to_value(report).expect("semantic graph debug report should serialize")
+}
+
+#[derive(Serialize)]
+struct SemanticGraphDebugReport {
+    counts: SemanticGraphCounts,
+    nodes: Vec<NodeRow>,
+    edges: Vec<EdgeRow>,
+    constraints: Vec<ConstraintRow>,
+}
+
+#[derive(Default, Serialize)]
+struct SemanticGraphCounts {
+    total_nodes: usize,
+    total_edges: usize,
+    total_constraints: usize,
+    nodes_by_kind: BTreeMap<String, usize>,
+    edges_by_kind: BTreeMap<String, usize>,
+    constraints_by_kind: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct NodeRow {
+    kind: String,
+    precision: String,
+    stable_key: String,
+}
+
+#[derive(Serialize)]
+struct EdgeRow {
+    kind: String,
+    precision: String,
+    stable_key: String,
+}
+
+#[derive(Serialize)]
+struct ConstraintRow {
+    kind: String,
+    status: String,
+    stable_key: String,
+}
+
+fn counts(db: &AnalysisDb) -> SemanticGraphCounts {
+    let mut counts = SemanticGraphCounts {
+        total_nodes: db.semantic_nodes().len(),
+        total_edges: db.semantic_edges().len(),
+        total_constraints: db.semantic_constraints().len(),
+        ..Default::default()
+    };
+    for node in db.semantic_nodes() {
+        increment(&mut counts.nodes_by_kind, node.kind.as_str());
+    }
+    for edge in db.semantic_edges() {
+        increment(&mut counts.edges_by_kind, edge.kind.as_str());
+    }
+    for constraint in db.semantic_constraints() {
+        increment(&mut counts.constraints_by_kind, constraint.kind.as_str());
+    }
+    counts
+}
+
+fn node_rows(db: &AnalysisDb) -> Vec<NodeRow> {
+    let mut rows: Vec<NodeRow> = db
+        .semantic_nodes()
+        .iter()
+        .map(|node: &SemanticNodeFact| NodeRow {
+            kind: node.kind.as_str().to_string(),
+            precision: node.precision.as_str().to_string(),
+            stable_key: node.stable_key.clone(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows
+}
+
+fn edge_rows(db: &AnalysisDb) -> Vec<EdgeRow> {
+    let mut rows: Vec<EdgeRow> = db
+        .semantic_edges()
+        .iter()
+        .map(|edge: &SemanticEdgeFact| EdgeRow {
+            kind: edge.kind.as_str().to_string(),
+            precision: edge.precision.as_str().to_string(),
+            stable_key: edge.stable_key.clone(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows
+}
+
+fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
+    let mut rows: Vec<ConstraintRow> = db
+        .semantic_constraints()
+        .iter()
+        .map(|constraint: &ConstraintFact| ConstraintRow {
+            kind: constraint.kind.as_str().to_string(),
+            status: format!("{:?}", constraint.status),
+            stable_key: constraint.stable_key.clone(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows
+}
+
+fn increment(counts: &mut BTreeMap<String, usize>, key: &str) {
+    *counts.entry(key.to_string()).or_default() += 1;
+}

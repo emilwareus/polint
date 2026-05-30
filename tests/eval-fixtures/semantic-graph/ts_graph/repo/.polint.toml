@@ -1,0 +1,7 @@
+[workspace]
+include = ["src/**"]
+exclude = ["**/node_modules/**"]
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"
