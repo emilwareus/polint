@@ -203,6 +203,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
