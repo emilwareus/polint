@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: planning
-last_updated: "2026-05-27T13:11:44.347Z"
-last_activity: 2026-05-27
+status: ready_to_plan
+last_updated: 2026-05-29T17:07:06.182Z
+last_activity: 2026-05-29
 progress:
-  total_phases: 0
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 13
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 8
+  percent: 15
+stopped_at: Phase 43 complete (3/3) — ready to discuss Phase 44
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Planning next milestone
+**Current focus:** Phase 44 — semantic graph skeleton & constraint vocabulary
 
 ## Current Status
 
@@ -40,10 +41,14 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-05-27 — Milestone v1.3 started
+Phase: 44
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-05-29
+
+### Open repo-admin action (T-42-04-10)
+
+Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (macos-latest)` to GitHub branch protection required checks on `main` and `release/*`. Only a repo admin can configure branch protection; until then a PR can merge with the v1.3 leak gate failing. Source: Phase 42 Plan 04 (`crates/polint/tests/public_surface_leak.rs`).
 
 ## Deferred Items
 
@@ -162,6 +167,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 39 | Complete | 7/7 plans complete; private evidence substrate, local slices, bounded/ranked paths, summary context expansion, diagnostic rendering, extension evidence validation, eval fixtures, public no-leak proof, and final verification done; requirement SAE-PREC-04 |
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
+| 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
 
 ## Accumulated Context
 
@@ -393,6 +399,33 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Entrypoint fact accessors promoted from #[cfg(test)] to production visibility for validation pipeline access.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Extension framework facts use FrameworkPrecisionCeiling rejection reason separate from MissingProvenance for Exact precision violations.
 - [Phase 35-framework-entrypoints-and-trust-boundaries]: Conflicting entrypoint registrations detected by same target_function with different framework_ids produce warning diagnostics.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: SignatureDigest uses a deterministic length-prefixed two-pass FNV-1a 16-byte digest with a local hex codec instead of sha2/hex (no new deps per T-42-SC; cross-platform byte-identical per D-25; length-prefixed per T-42-01).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Arc<str> serde uses a field-level adapter because the serde rc feature is not enabled.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Dedup collapse is order-independent — the canonical retained record is the smallest by sort key (D-11).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: polint.identity manifest slots between polint.calls and polint.abstract_domains (D-23); IDENTITY_SCHEMA_LABEL = identity-facts-1.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Identity renderers are pure pub(crate) functions over &IdentityRecord (+ &SourceFile for Jelly); renderer shape is driven by container_path encoding (D-06, D-07).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: CRLF->LF normalization happens at render time only; a multi-line CRLF/LF fixture proves byte-identical Jelly output (D-12, D-13, D-25).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: Both eval adapters consume the renderers as the single source of truth; the inline jelly_span_identity formatter is deleted (D-05).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: MetricSections gains jelly_oracle_coverage (#[serde(default)]); MetricSummary shape is frozen and locked by a destructure test; coverage is a deterministic matched/total count >=0.99 (D-15, D-20, D-22).
+- [Phase ?]: [Phase 42-04] v1.3 public-surface-leak gate installed: excluded no_implicit_prelude probe + locked ALLOWED_PRELUDE (97 entries) snapshot-checked vs sdk/mod.rs; Approach B (no trybuild); leak-gate CI on ubuntu+macos fail-fast:false (D-18)
+- [Phase ?]: [Phase 42-04] Leak-gate test relocated to crates/polint/tests/public_surface_leak.rs (workspace-root tests/ is not a crate; --package polint --test only resolves there); probe import is use ::polint::sdk::prelude::*; (leading :: required under no_implicit_prelude); probe carries its own committed Cargo.lock for --locked CI
+- [Phase ?]: [Phase 42-04] Negative control proved both layers: Rust E0365 forbids pub use of a pub(crate) type into the public prelude; allowlist_matches_prelude_source catches a genuinely-pub addition with an UNSANCTIONED diff. Phases 43-54 must extend ALLOWED_PRELUDE + bump count(97) + add a probe witness to ship any new public type
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] IdentityCategory is a closed five-variant enum (WrongIdentity, UnsupportedEdge, UnresolvedEdge, PackageLoadLimitation, ModelMissing) in pinned source order with #[repr(u8)] explicit ordinals; declaration order defines serde + Ord byte-stability (D-14, D-25); no Other/Unknown, no #[non_exhaustive].
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] categorize maps every UnresolvedCallReason/CallTargetStatus variant explicitly (exhaustive match, no wildcard) so a new upstream variant is a compile error (Pattern H); it is a tag on existing facts (CategorizeReason) with zero new fact families (D-16).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] MetricSections gains categorized_failures: CategorizedFailureSection (#[serde(default)]) sibling AFTER jelly_oracle_coverage; MetricSummary shape frozen (destructure layout-lock test green); five u32 snake_case counters with deny_unknown_fields; record_category uses saturating_add (T-42-03-05).
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] categorized_failures threads from the live AnalysisDb (O(n) per-fact projection) through per-category observed invariants into the report section across all eval build paths; the fixture asserts byte-stable .nonzero booleans for determinism-gate safety.
+- [Phase 42-benchmark-identity-renderers-dedup-identity-taxonomy]: [42-03] Native syntactic Go/TS emits only unsupported_edge/unresolved_edge; the fixture proves those two from real source and eval::metrics unit tests drive categorized_failures_from_db for wrong_identity/package_load_limitation/model_missing (BLOCKER #4 fallback) so all FIVE counters are non-zero across the corpus (D-15, no scope reduction).
+- [Phase 42-05]: Go identity records resolve the PackageFact package-clause NAME (foo.Bar) via package_or_module_for_record; non-Go keeps db.path_for byte-identical. Full module import path deferred to Phase 46.
+- [Phase 42-05]: Dedup canonical selection + final sort use record_total_order_key (record_sort_key extended with originating_call_site_id, originating_call_target_id, signature_digest) for a literal total order; byte-stable across input order (CR-03 closed for Phase 43).
+- [Phase 42-05]: Go RTA oracle key stays on display_name with an inline Phase 46 deferral note; cache trip-wire bumped go_relstring_v1 -> go_relstring_v2.
+- [Phase ?]: [Phase 43-01]: reachability enums use pinned order + serde rename (no repr(u8)); polint.reachability runs after polint.entrypoints with SetupAware ceiling; configured-unresolvable roots become Unresolved.
+- [Phase ?]: [Phase 43-01]: [reachability] roots config lives in crates/polint/src/config/mod.rs; configured roots passed to discovery as &[String] from LoadedConfig since InputSnapshot carries only digests.
+- [Phase 43-02]: ScoringMode uses per-variant serde rename for kebab wire strings (oracle-rta/oracle-jelly/whole-repo), not rename_all; the required non-Option scoring_mode field gates structurally (deny_unknown_fields) + via an explicit validate() guard.
+- [Phase 43-02]: Reachable-set BFS extends the frontier only on Resolved direct-call targets; the CallReachabilityFact marking is composed by call-site stable key and analysis::calls is never mutated; the provider seeds the traversal with explicit real-function roots before storing.
+- [Phase 43-02]: oracle-rta filters scored edges to the reachable-from-roots set (unmarked edges fail closed); oracle-jelly/whole-repo score the full set; the backwards-mode footgun is guarded by an oracle-rta-subset-of-oracle-jelly regression test.
+- [Phase 43-03]: SolverMetricSection (solver_step_count/budget_exceeded_reasons) reserved on a #[serde(default)] MetricSections section, NOT the frozen MetricSummary, defaulted 0/empty for Phase 47+ so the byte-identity determinism gate stays stable across the milestone (D-23).
+- [Phase 43-03]: The determinism gate runs N=10 seeded permutations of provider-enumeration order + observed row-insertion order through the live normalize_run path, driven by provider_manifests() so phases 44-54 auto-enroll (D-22), with per-fixture >=1 root / >=1 call site / >=1 in_reachable_graph=false invariants (D-24).
+- [Phase 43-03]: determinism-gate CI job mirrors leak-gate (ubuntu+macos, fail-fast false, independent passes); the Go fixture's unreachable mark needs only tree-sitter call sites so the gate passes without a Go toolchain, matching the no-Go leak-gate analog (D-24/D-25).
 
 ## Execution Metrics
 
@@ -466,13 +499,17 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 35-framework-entrypoints-and-trust-boundaries | 06 | 8 min | 2 | 6 |
 | 35-framework-entrypoints-and-trust-boundaries | 07 | recorded | 2 | recorded |
 | 35-framework-entrypoints-and-trust-boundaries | 08 | recorded | 1 | 2 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 01 | 8h 9m | 2 | 22 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 02 | 1h 5m | 3 | 20 |
+| 42-benchmark-identity-renderers-dedup-identity-taxonomy | 03 | 18m | 2 | 11 |
+| 43-reachability-roots-per-suite-scoring-mode | 03 | 19m | 4 | 14 |
 
 ## Session
 
-- Last session: 2026-05-26
-- Last activity: 2026-05-27 - Reconciled v1.2 milestone closeout artifacts before archival.
-- Stopped at: Phase 40 context gathered; ready to plan Phase 40.
-- Resume file: `.planning/phases/40-external-benchmark-adapters-and-promotion-gates/40-CONTEXT.md`
+- Last session: 2026-05-29
+- Last activity: 2026-05-29 - Completed Phase 43 Plan 03 (N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS determinism-gate CI job + phases 44-54 inheritance doc); Phase 43 complete (3/3 plans); REACH-03.
+- Stopped at: Completed 43-03-PLAN.md; Phase 43 done (REACH-01/02/03); ready for Phase 43 verification / Phase 44.
+- Resume file: None
 
 ### Quick Tasks Completed
 

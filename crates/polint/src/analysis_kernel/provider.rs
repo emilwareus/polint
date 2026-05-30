@@ -182,6 +182,11 @@ const CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const IDENTITY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::identity::cache_key::IDENTITY_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const ABSTRACT_DOMAINS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "abstract-domain-facts-1",
     version: 1,
@@ -194,6 +199,11 @@ const DIRECT_SUMMARIES_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 
 const ENTRYPOINTS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: "entrypoints-facts-1",
+    version: 1,
+}];
+
+const REACHABILITY_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::reachability::cache_key::REACHABILITY_SCHEMA_LABEL,
     version: 1,
 }];
 
@@ -421,6 +431,22 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.identity",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+        ],
+        outputs: &["identity_records"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: IDENTITY_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.abstract_domains",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -501,6 +527,27 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: ENTRYPOINTS_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
+        id: "polint.reachability",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "source_files",
+            "functions",
+            "symbols",
+            "references",
+            "call_sites",
+            "call_targets",
+            "unresolved_calls",
+            "entrypoints",
+            "identity_records",
+            "exports",
+        ],
+        outputs: &["reachability_roots", "call_reachability"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: REACHABILITY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
@@ -723,9 +770,11 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -750,9 +799,11 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -804,9 +855,11 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -1031,6 +1084,19 @@ mod tests {
                     outputs: vec!["call_sites", "call_targets", "unresolved_calls"],
                 },
                 ProviderOrderRow {
+                    id: "polint.identity",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                    ],
+                    outputs: vec!["identity_records"],
+                },
+                ProviderOrderRow {
                     id: "polint.abstract_domains",
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
@@ -1103,6 +1169,24 @@ mod tests {
                         "dispatch_edges",
                         "unresolved_framework",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.reachability",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "source_files",
+                        "functions",
+                        "symbols",
+                        "references",
+                        "call_sites",
+                        "call_targets",
+                        "unresolved_calls",
+                        "entrypoints",
+                        "identity_records",
+                        "exports",
+                    ],
+                    outputs: vec!["reachability_roots", "call_reachability"],
                 },
                 ProviderOrderRow {
                     id: "polint.extensions",

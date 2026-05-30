@@ -41,6 +41,9 @@ use crate::analysis::extensions::sinks::{ExtensionFactConfidence, ExtensionFactP
 use crate::analysis::extensions::store::{
     AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput, RejectedExtensionFact,
 };
+use crate::analysis::identity::facts::IdentityRecord;
+use crate::analysis::identity::provider::valid_call_site_ids;
+use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
@@ -49,6 +52,8 @@ use crate::analysis::points_to::facts::{
     PointsToConstraintFact, PointsToPrecision, PointsToSetFact, PointsToStatus,
 };
 use crate::analysis::points_to::store::PointsToStore;
+use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
 use crate::analysis::refined_calls::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
@@ -687,6 +692,8 @@ pub struct AnalysisDb {
     call_targets: Vec<CallTargetFact>,
     unresolved_calls: Vec<UnresolvedCallFact>,
     call_store: Option<CallStore>,
+    identity_records: Vec<IdentityRecord>,
+    identity_store: Option<IdentityStore>,
     refined_call_edges: Vec<RefinedCallEdgeFact>,
     refined_call_store: Option<RefinedCallStore>,
     data_flow_nodes: Vec<DataFlowNodeFact>,
@@ -721,6 +728,8 @@ pub struct AnalysisDb {
     dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
     unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
     entrypoint_store: Option<EntrypointStore>,
+    reachability_roots: Vec<ReachabilityRootFact>,
+    reachability_marks: Vec<CallReachabilityFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
     value_facts: Vec<ValueFact>,
@@ -1056,6 +1065,40 @@ impl AnalysisDb {
         Ok(())
     }
 
+    pub(crate) fn replace_identity_facts(
+        &mut self,
+        output: IdentityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_sites = valid_call_site_ids(self);
+        let valid_targets = self
+            .call_targets
+            .iter()
+            .map(|target| target.id)
+            .collect::<BTreeSet<_>>();
+        let store = IdentityStore::from_output(output, &valid_sites, &valid_targets)?;
+        self.identity_records = store.records().to_vec();
+        self.identity_store = Some(store);
+        Ok(())
+    }
+
+    pub(crate) fn identity_records(&self) -> &[IdentityRecord] {
+        &self.identity_records
+    }
+
+    /// Injects identity records directly, bypassing store-level reference
+    /// validation, so validation diagnostics (the defense-in-depth layer) can be
+    /// exercised even for records that the store would have rejected.
+    #[cfg(test)]
+    pub(crate) fn set_identity_records_for_test(&mut self, records: Vec<IdentityRecord>) {
+        self.identity_records = records;
+        self.identity_store = None;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn identity_store(&self) -> Option<&IdentityStore> {
+        self.identity_store.as_ref()
+    }
+
     pub(crate) fn replace_refined_call_facts(
         &mut self,
         output: RefinedCallOutput,
@@ -1320,6 +1363,39 @@ impl AnalysisDb {
 
     pub(crate) fn entrypoint_facts(&self) -> &[EntrypointFact] {
         &self.entrypoint_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability fact replacement is wired into the kernel provider in the next Phase 43 plan-01 task (provider/kernel splice)."
+    )]
+    pub(crate) fn replace_reachability_facts(
+        &mut self,
+        output: ReachabilityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_function_ids = self.functions.iter().map(|row| row.id).collect();
+        let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
+        let store =
+            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
+        self.reachability_roots = store.roots().to_vec();
+        self.reachability_marks = store.marks().to_vec();
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in Phase 43 plan-01."
+    )]
+    pub(crate) fn reachability_roots(&self) -> &[ReachabilityRootFact] {
+        &self.reachability_roots
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability marks are populated by the marking traversal in Phase 43 plan-02 and read by debug/eval."
+    )]
+    pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
+        &self.reachability_marks
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {

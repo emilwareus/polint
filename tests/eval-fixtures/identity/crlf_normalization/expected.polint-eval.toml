@@ -1,0 +1,31 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "identity-crlf-normalization"
+area = "facts"
+
+# CRLF/LF byte-identical renderer fixture (D-12, D-13, T-42-02-01).
+#
+# This fixture drives the LF checkout (`repo-lf`) end-to-end through the kernel
+# and the Jelly span renderer, asserting the renderer emits only
+# workspace-relative forward-slash paths (no absolute host paths leak —
+# T-42-02-02) and that it ran over the live identity record set.
+#
+# The actual byte-for-byte CRLF == LF equality contract (D-13) is proven by the
+# co-located runner test `identity_crlf_normalization_fixture`, which loads BOTH
+# `repo-lf/` and `repo-crlf/` (identical logical source, `\n` vs `\r\n` line
+# endings preserved through git by `repo-crlf/.gitattributes` containing
+# `* -text`) and asserts each LF identity record's rendered Jelly span is
+# byte-identical to the corresponding CRLF record's span. A single eval fixture
+# loads one repo, so the cross-encoding equality lives in the runner test while
+# this fixture pins the LF case as genuinely observed.
+
+[repo]
+path = "repo-lf"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "identity.render.jelly.no_absolute_path", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "identity.render.jelly.rendered_count.nonzero", value = "true", mode = "exact" }

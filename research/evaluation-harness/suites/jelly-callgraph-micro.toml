@@ -4,6 +4,7 @@ name = "Jelly JS/TS callgraph micro"
 kind = "call_graph_precision"
 languages = ["javascript", "typescript"]
 adapter_id = "jelly_callgraph_micro"
+scoring_mode = "oracle-jelly"
 source_url = "https://github.com/cs-au-dk/jelly"
 source_commit = "b799ed4f0d68c670fe398830aaa51dd5c628cf74"
 license = "BSD-3-Clause"

@@ -383,6 +383,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(provider_output_invariants(&output.run_report));
     observed.extend(layer_cache_invariants(&output.run_report));
     observed.extend(type_value_alias_facts(&output.db));
+    observed.extend(identity_invariants(&output.db));
     observed.extend(extension_facts(&output.db));
     observed.extend(extension_invariants(&output.db));
     if let Some(budget) = &fixture.manifest.budget {
@@ -395,6 +396,28 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.sort_by_key(observed_sort_key);
 
     Ok(observed)
+}
+
+/// Runs the analysis kernel on a repo directory and returns the raw
+/// `KernelOutput`, so renderer-level tests (e.g. the CRLF byte-identical
+/// fixture) can render identity records directly against the live `AnalysisDb`.
+#[cfg(test)]
+pub(crate) fn run_kernel_for_repo_for_test(
+    repo_root: &Path,
+) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
+    let plan = AnalysisPlan::empty();
+    let loaded = load_config(repo_root)?;
+    let config_digest = config_hash(&loaded);
+    let rule_digest = rule_hash(&[], None, &BTreeMap::new());
+    let cache = Cache::default_for_repo(repo_root, true);
+    AnalysisKernel::run(KernelInput {
+        loaded: &loaded,
+        cache: &cache,
+        config_digest: &config_digest,
+        rule_digest: &rule_digest,
+        plan: &plan,
+        parallel: true,
+    })
 }
 
 #[cfg(test)]
@@ -556,6 +579,127 @@ fn layer_key_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
         bool_string(has_ts_output && component_present(&run_report.input_snapshot.config)),
         "kernel.run_report.layer_key_inputs",
     )]
+}
+
+#[cfg(test)]
+fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    // Surfaces the deduplicated identity record set so the dedup snapshot fixture
+    // can assert the maximum collapse multiplicity deterministically (D-10,
+    // D-11). The dedup determinism contract itself is proven by the co-located
+    // tests in analysis::identity::dedup.
+    let records = db.identity_records();
+    let max_multiplicity = records
+        .iter()
+        .map(|record| record.multiplicity)
+        .max()
+        .unwrap_or(0);
+    let mut invariants = vec![observed_invariant(
+        "identity.dedup.multiplicity",
+        max_multiplicity.to_string(),
+        "kernel.run_report.identity_records",
+    )];
+    invariants.extend(identity_render_invariants(db));
+    invariants.extend(identity_categorized_failure_invariants(db));
+    invariants
+}
+
+/// Surfaces the closed `IdentityCategory` counter map computed from the live
+/// analysis facts (Plan 42-03, D-15) as deterministic observed invariants so the
+/// categorized-failures fixture can assert each counter directly.
+///
+/// Native fixtures carry no benchmark oracle, so `wrong_identity` (which requires
+/// oracle span overlap, D-16) never fires here — the empty oracle-span set is
+/// passed through `categorized_failures_from_db` and the wrong-identity pass is
+/// skipped. The fixture exercises the four naturally-emitted categories; the
+/// fifth-category wiring is proven by the `drive_record_category_model_missing`
+/// unit test (BLOCKER #4).
+#[cfg(test)]
+fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    let section =
+        crate::eval::metrics::categorized_failures_from_db(db, &std::collections::BTreeSet::new());
+    // Exact per-category counts (rehydrated into the report's
+    // `categorized_failures` section by `categorized_failures_from_observed`) plus
+    // byte-stable `.nonzero` booleans the fixture asserts (exact counts are
+    // brittle for the Phase 43 determinism gate; the boolean is order-stable).
+    let counters = [
+        ("wrong_identity", section.wrong_identity),
+        ("unsupported_edge", section.unsupported_edge),
+        ("unresolved_edge", section.unresolved_edge),
+        ("package_load_limitation", section.package_load_limitation),
+        ("model_missing", section.model_missing),
+    ];
+    let mut invariants = Vec::with_capacity(counters.len() * 2);
+    for (name, value) in counters {
+        invariants.push(observed_invariant(
+            format!("identity.categorized_failures.{name}"),
+            value.to_string(),
+            "kernel.run_report.identity_records",
+        ));
+        invariants.push(observed_invariant(
+            format!("identity.categorized_failures.{name}.nonzero"),
+            bool_string(value > 0),
+            "kernel.run_report.identity_records",
+        ));
+    }
+    invariants
+}
+
+/// Renders every identity record through the single-source-of-truth renderers
+/// (Phase 42 D-05) and surfaces deterministic render invariants:
+///
+/// - `identity.render.jelly.no_absolute_path` proves the Jelly renderer emits
+///   only workspace-relative forward-slash paths (T-42-02-02);
+/// - `identity.render.jelly.rendered_count` proves the renderer ran over the
+///   live identity record set so the CRLF / oracle-coverage fixtures assert an
+///   actually-observed value rather than a phantom.
+#[cfg(test)]
+fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
+    use crate::analysis::identity::render::{go_relstring, jelly_span};
+
+    let files = db
+        .files()
+        .iter()
+        .map(|file| (file.id, file))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut rendered_count = 0u32;
+    let mut all_workspace_relative = true;
+    for record in db.identity_records() {
+        // Both renderers participate so the leak gate (Plan 04) and downstream
+        // consumers see them exercised end-to-end on real records. The Go
+        // RelString output is asserted (not discarded) so a renderer regression
+        // that produced an empty name would fail here rather than pass silently.
+        let go_rel = go_relstring::render(record);
+        assert!(
+            !go_rel.is_empty(),
+            "go_relstring render must be non-empty for {}",
+            record.stable_key
+        );
+        let Some(source) = files.get(&record.file_id) else {
+            continue;
+        };
+        let rendered = jelly_span::render(record, source);
+        rendered_count += 1;
+        if rendered.starts_with("/Users/")
+            || rendered.starts_with("/home/")
+            || rendered.contains(":\\")
+        {
+            all_workspace_relative = false;
+        }
+    }
+
+    vec![
+        observed_invariant(
+            "identity.render.jelly.no_absolute_path",
+            bool_string(all_workspace_relative),
+            "kernel.run_report.identity_records",
+        ),
+        observed_invariant(
+            "identity.render.jelly.rendered_count.nonzero",
+            bool_string(rendered_count > 0),
+            "kernel.run_report.identity_records",
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -3601,15 +3745,17 @@ path = "repo"
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
                 ("provider_order.8", "polint.calls"),
-                ("provider_order.9", "polint.abstract_domains"),
-                ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.entrypoints"),
-                ("provider_order.12", "polint.extensions"),
-                ("provider_order.13", "polint.type_value_alias"),
-                ("provider_order.14", "polint.refined_calls"),
-                ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.evidence"),
-                ("provider_order.17", "polint.metrics"),
+                ("provider_order.9", "polint.identity"),
+                ("provider_order.10", "polint.abstract_domains"),
+                ("provider_order.11", "polint.direct_summaries"),
+                ("provider_order.12", "polint.entrypoints"),
+                ("provider_order.13", "polint.reachability"),
+                ("provider_order.14", "polint.extensions"),
+                ("provider_order.15", "polint.type_value_alias"),
+                ("provider_order.16", "polint.refined_calls"),
+                ("provider_order.17", "polint.data_flow"),
+                ("provider_order.18", "polint.evidence"),
+                ("provider_order.19", "polint.metrics"),
             ]
         );
     }

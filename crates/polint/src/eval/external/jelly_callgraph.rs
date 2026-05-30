@@ -7,7 +7,7 @@ use serde::Deserialize;
 #[cfg(test)]
 use crate::analysis_kernel::KernelOutput;
 #[cfg(test)]
-use crate::core::{FileId, SourceFile, Span};
+use crate::core::Span;
 use crate::eval::adapter::{BenchmarkAdapter, PreparedCase, RawObservedOutput};
 #[cfg(test)]
 use crate::eval::model::ObservedGraphEdge;
@@ -112,31 +112,43 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
     fn normalize_kernel_output(
         &self,
         _manifest: &SuiteManifest,
-        case: &EvaluationCase,
+        _case: &EvaluationCase,
         _prepared: &PreparedCase,
         output: &KernelOutput,
     ) -> anyhow::Result<Vec<ObservedItem>> {
-        let case_dir = Path::new(&case.repo_path)
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
+        // Per D-05 the Jelly span string is produced ONLY by
+        // `analysis::identity::render::jelly_span::render` — this adapter no
+        // longer formats spans inline. We look up the IdentityRecord whose span
+        // matches each edge span and render it; an edge whose span has no
+        // identity record (or whose source file is missing) is dropped via the
+        // existing `else { continue; }` short-circuit. The `db` borrow keeps the
+        // lookup pure and explicit (WARNING #3 — no inline `format!()`).
         let files = output
             .db
             .files()
             .iter()
             .map(|file| (file.id, file))
             .collect::<BTreeMap<_, _>>();
+        let records = output.db.identity_records();
+        let render_span = |span: &Span| -> Option<String> {
+            let record = records.iter().find(|record| record.span == *span)?;
+            let source = files.get(&span.file)?;
+            Some(crate::analysis::identity::render::jelly_span::render(
+                record, source,
+            ))
+        };
         let mut items = Vec::new();
         for edge in crate::eval::observed::graph_edges_from_kernel_output(output) {
-            let Some(call_site) = jelly_span_identity(&files, case_dir, &edge.site_span) else {
+            let Some(call_site) = render_span(&edge.site_span) else {
                 continue;
             };
-            let Some(caller) = jelly_span_identity(&files, case_dir, &edge.caller_span) else {
+            let Some(caller) = render_span(&edge.caller_span) else {
                 continue;
             };
             let Some(target_span) = &edge.target_span else {
                 continue;
             };
-            let Some(target) = jelly_span_identity(&files, case_dir, target_span) else {
+            let Some(target) = render_span(target_span) else {
                 continue;
             };
             items.push(ObservedItem::GraphEdge(ObservedGraphEdge {
@@ -318,24 +330,6 @@ fn next_location_part<'a>(
         .next()
         .filter(|part| !part.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Jelly location `{raw}` missing {field}"))
-}
-
-#[cfg(test)]
-fn jelly_span_identity(
-    files: &BTreeMap<FileId, &SourceFile>,
-    case_dir: &Path,
-    span: &Span,
-) -> Option<String> {
-    let file = files.get(&span.file)?;
-    let relative_path = Path::new(&file.relative_path)
-        .strip_prefix(case_dir)
-        .unwrap_or_else(|_| Path::new(&file.relative_path))
-        .to_string_lossy()
-        .replace('\\', "/");
-    Some(format!(
-        "{}:{}:{}:{}:{}",
-        relative_path, span.start_line, span.start_col, span.end_line, span.end_col
-    ))
 }
 
 #[cfg(test)]
@@ -532,6 +526,7 @@ mod tests {
             kind: SuiteKind::CallGraphPrecision,
             languages: vec!["javascript".to_string(), "typescript".to_string()],
             adapter_id: "jelly_callgraph_micro".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::OracleJelly,
             source_url: Some("https://github.com/cs-au-dk/jelly".to_string()),
             source_commit: Some("b799ed4f0d68c670fe398830aaa51dd5c628cf74".to_string()),
             license: "Apache-2.0".to_string(),

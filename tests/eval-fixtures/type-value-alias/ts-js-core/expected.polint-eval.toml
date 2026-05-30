@@ -33,7 +33,7 @@ fact = { family = "PointsToSet", stable_key = "PointsToSet", mode = "partial", p
 fact = { family = "AliasAnswer", stable_key = "AliasAnswer", mode = "partial", producer_id = "polint.type_value_alias" }
 
 [[expected]]
-invariant = { name = "provider_order.13", value = "polint.type_value_alias", mode = "exact" }
+invariant = { name = "provider_order.15", value = "polint.type_value_alias", mode = "exact" }
 
 [[expected]]
 runtime_budget = { name = "type_value_alias_ts_js_core", max_runtime_ms = 10000, mode = "exact" }

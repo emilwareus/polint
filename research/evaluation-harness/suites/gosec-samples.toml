@@ -4,6 +4,7 @@ name = "gosec samples"
 kind = "scanner_vulnerability"
 languages = ["go"]
 adapter_id = "gosec_samples"
+scoring_mode = "whole-repo"
 source_url = "https://github.com/securego/gosec"
 source_commit = "de65614d10a6"
 license = "license-review-needed"

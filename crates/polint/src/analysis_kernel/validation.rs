@@ -10,6 +10,7 @@ use crate::analysis::cfg::validate::validate_cfg;
 use crate::analysis::data_flow::validate::validate_output as validate_data_flow_output;
 use crate::analysis::domains::validate::validate_abstract_domains;
 use crate::analysis::entrypoints::validate::validate_entrypoints;
+use crate::analysis::identity::validate::validate_identity;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, ValueFactId};
 use crate::analysis::points_to::facts::{
     PointsToBudgetStatus, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
@@ -56,6 +57,7 @@ pub(crate) fn validate_fact_metadata(
     validate_semantic_mir(db, &ids, &mut diagnostics);
     validate_cfg(db, &mut diagnostics);
     validate_calls(db, &mut diagnostics);
+    validate_identity(db, &mut diagnostics);
     validate_abstract_domains(db, &mut diagnostics);
     validate_summaries(db, &mut diagnostics);
     validate_entrypoints(db, &mut diagnostics);

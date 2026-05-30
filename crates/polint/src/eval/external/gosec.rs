@@ -209,6 +209,7 @@ mod tests {
             kind: SuiteKind::ScannerVulnerability,
             languages: vec!["go".to_string()],
             adapter_id: "gosec_samples".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::WholeRepo,
             source_url: Some("https://github.com/securego/gosec".to_string()),
             source_commit: Some("de65614d10a6".to_string()),
             license: "license-review-needed".to_string(),

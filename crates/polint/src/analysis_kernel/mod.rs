@@ -273,6 +273,26 @@ impl AnalysisKernel {
         let calls_dependency_output_digest = calls_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
         });
+
+        let identity = crate::analysis::identity::provider::derive_identity_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.identity"),
+            calls_dependency_output_digest.clone(),
+        );
+        let polint_identity_cache_stats = identity.cache_stats.clone();
+        let identity_output_digest = identity.output_digest;
+        diagnostics.extend(identity.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.identity",
+            &db,
+            polint_identity_cache_stats,
+            identity_output_digest.clone(),
+        ));
+        let identity_dependency_output_digest = identity_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.identity")
+        });
+
         let abstract_domains =
             crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
                 &mut db,
@@ -401,6 +421,30 @@ impl AnalysisKernel {
                 "polint.entrypoints",
             )
         });
+
+        // polint.reachability runs immediately after polint.entrypoints (D-19),
+        // consuming the calls/entrypoints/identity/symbol/topology output digests.
+        let reachability =
+            crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.reachability"),
+                &input.loaded.config.reachability.roots,
+                entrypoints_calls_digest.clone(),
+                entrypoints_dependency_output_digest.clone(),
+                identity_dependency_output_digest,
+                entrypoints_symbol_digest.clone(),
+                entrypoints_topology_digest.clone(),
+            );
+        let polint_reachability_cache_stats = reachability.cache_stats.clone();
+        let reachability_output_digest = reachability.output_digest;
+        diagnostics.extend(reachability.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.reachability",
+            &db,
+            polint_reachability_cache_stats,
+            reachability_output_digest,
+        ));
 
         let extensions =
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
@@ -977,9 +1021,11 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",
@@ -1891,9 +1937,11 @@ function setup() {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
                 "polint.entrypoints",
+                "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.refined_calls",

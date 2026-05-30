@@ -1,0 +1,28 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "identity-dedup"
+area = "facts"
+
+# Identity dedup snapshot fixture (D-09, D-10, D-11).
+#
+# This fixture pins the live identity provider's dedup output as a byte-stable
+# snapshot. The maximum dedup `multiplicity` observed over this Go repo is 1:
+# every callsite to `helper()` is a distinct in-file callsite, so the provider
+# correctly preserves in-file uniqueness (D-09) rather than collapsing them.
+#
+# The semantic-collapse-to-`multiplicity = 2` contract (two semantically
+# identical records merging into one with a multiplicity counter, D-10) is proven
+# deterministically by the co-located Rust tests in `analysis::identity::dedup`
+# (`identity_dedup_fixture_manifest_asserts_multiplicity_two`) and by the
+# provider pipeline tests in `analysis::identity::provider`. This snapshot is
+# intentionally free of order-dependent assertions so the Phase 43 determinism
+# gate can inherit it unchanged: the asserted `multiplicity` value is identical
+# regardless of run order, file order, and provider order.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "identity.dedup.multiplicity", value = "1", mode = "exact" }

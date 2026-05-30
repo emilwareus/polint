@@ -4,6 +4,7 @@ name = "Go x/tools RTA callgraph"
 kind = "call_graph_precision"
 languages = ["go"]
 adapter_id = "go_x_tools_rta_callgraph"
+scoring_mode = "oracle-rta"
 source_url = "https://github.com/golang/tools"
 source_commit = "7743a285e3d261ca235408e013ec5c14cb5170e4"
 license = "BSD-3-Clause"

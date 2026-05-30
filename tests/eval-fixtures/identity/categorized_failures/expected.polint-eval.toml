@@ -1,0 +1,51 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "identity-categorized-failures"
+area = "facts"
+
+# Identity-vs-unsupported taxonomy fixture (Plan 42-03, D-15, D-16).
+#
+# This fixture exercises the closed `IdentityCategory` counter map from REAL
+# source through the live `analysis::identity::categorize` projection:
+#
+#   - `unsupported_edge` fires from `src/main.go`'s `reflect.Call(...)`
+#     (UnresolvedCallReason::Reflection) and `src/dynamic.ts`'s `eval(...)`
+#     (UnresolvedCallReason::Eval), each mapping to IdentityCategory::UnsupportedEdge.
+#   - `unresolved_edge` fires from `src/dynamic.ts`'s `obj[key]()`
+#     (UnresolvedCallReason::DynamicProperty) and the unresolved `missingHelper()`
+#     call in `src/main.go` (MissingSemanticReference), mapping to
+#     IdentityCategory::UnresolvedEdge.
+#
+# BLOCKER #4 / D-15 — all FIVE counters proven non-zero across the test corpus:
+#
+# The syntactic Go/TS frontend collapses every native failure into either
+# `unsupported_edge` or `unresolved_edge`. The remaining three categories require
+# inputs the native frontend does not produce:
+#   - `wrong_identity` needs a benchmark oracle span overlap (D-16) — native
+#     fixtures carry no oracle, so it is proven by the
+#     `categorized_failures_wrong_identity_fires_on_oracle_span_overlap` unit test
+#     in eval::metrics (drives `categorized_failures_from_db` with an oracle set).
+#   - `package_load_limitation` needs CallTargetStatus::SetupMissing — proven by
+#     the `categorized_failures_package_load_limitation_fires_on_setup_missing`
+#     unit test in eval::metrics.
+#   - `model_missing` needs CallTargetStatus::Rejected / interface-dispatch model
+#     gaps — proven by the
+#     `categorized_failures_model_missing_fires_on_rejected_target` unit test in
+#     eval::metrics AND the `drive_record_category_model_missing` unit test in
+#     eval::report.
+# Each of those unit tests asserts the corresponding `categorized_failures.*`
+# counter reaches non-zero, so D-15 is honored with no silent scope reduction.
+#
+# Non-zero booleans (not exact counts) are asserted here so the snapshot stays
+# byte-stable across run / file / provider order for the Phase 43 determinism gate.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "identity.categorized_failures.unsupported_edge.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "identity.categorized_failures.unresolved_edge.nonzero", value = "true", mode = "exact" }

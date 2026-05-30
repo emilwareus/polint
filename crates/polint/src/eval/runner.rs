@@ -111,6 +111,9 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
         .collect::<Vec<_>>();
     let mut metrics = crate::eval::report::MetricSummary::from(compute_metrics(&all_matches));
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
+    metrics.sections.categorized_failures = categorized_failures_for_cases(&case_results);
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
         suite_id: manifest.id.0.clone(),
@@ -127,6 +130,65 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
     };
     run.output_hash = deterministic_output_hash(&run);
     Ok(normalize_run(&run))
+}
+
+/// Applies the per-suite [`ScoringMode`](crate::eval::suite::ScoringMode) filter to
+/// the live call-graph edges in a kernel-run db, returning the call-site stable
+/// keys whose edges are SCORED under that mode (D-17).
+///
+/// The join mirrors the composition-by-stable-key discipline: each
+/// `db.call_targets()` edge is mapped to its call-site stable key (via
+/// `db.call_sites()` by `CallSiteId`), then [`filter_scored_edges_by_scoring_mode`]
+/// consults the reachable-graph marking by that key. For `oracle-rta` the result
+/// is the reachable-from-roots edges only; for `oracle-jelly` / `whole-repo` it is
+/// every edge. The db is never mutated — edges excluded from scoring remain present
+/// as facts marked unreachable (T-43-02-03).
+///
+/// WARNING (D-17): swapping `oracle-rta` and `oracle-jelly` silently tanks one
+/// suite's recall — see the doc on `filter_scored_edges_by_scoring_mode`.
+#[cfg(test)]
+fn scored_call_graph_edges_for_db(
+    db: &crate::core::AnalysisDb,
+    scoring_mode: crate::eval::suite::ScoringMode,
+) -> Vec<String> {
+    use std::collections::BTreeMap;
+
+    let site_key_by_id: BTreeMap<_, &str> = db
+        .call_sites()
+        .iter()
+        .map(|site| (site.id, site.stable_key.as_str()))
+        .collect();
+    // One entry per scorable call-graph edge, tagged with its source call-site key.
+    let edge_site_keys: Vec<&str> = db
+        .call_targets()
+        .iter()
+        .filter_map(|target| site_key_by_id.get(&target.site).copied())
+        .collect();
+
+    let reachable = crate::eval::metrics::reachable_graph_lookup(db);
+    crate::eval::metrics::filter_scored_edges_by_scoring_mode(
+        &edge_site_keys,
+        |key| key,
+        scoring_mode,
+        &reachable,
+    )
+    .into_iter()
+    .map(|index| edge_site_keys[index].to_string())
+    .collect()
+}
+
+/// Aggregates the categorized-failure counters across every case's observed
+/// items (Plan 42-03). Each case's observation layer emits per-category invariants
+/// from the live `AnalysisDb`; this sums them into the suite-wide section so the
+/// report JSON carries the `categorized_failures` counter map (D-15).
+fn categorized_failures_for_cases(
+    cases: &[CaseResult],
+) -> crate::eval::report::CategorizedFailureSection {
+    let observed = cases
+        .iter()
+        .flat_map(|case| case.observed.iter().cloned())
+        .collect::<Vec<_>>();
+    crate::eval::metrics::categorized_failures_from_observed(&observed)
 }
 
 #[cfg(test)]
@@ -215,6 +277,9 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
         .collect::<Vec<_>>();
     let mut metrics = crate::eval::report::MetricSummary::from(compute_metrics(&all_matches));
     metrics.sections.suite_native = adapter.suite_native_metrics(manifest, &case_results)?;
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
+    metrics.sections.categorized_failures = categorized_failures_for_cases(&case_results);
 
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
@@ -263,7 +328,36 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
             plan: &plan,
             parallel: true,
         })?;
-    adapter.normalize_kernel_output(manifest, case, prepared, &output)
+    let mut observed = adapter.normalize_kernel_output(manifest, case, prepared, &output)?;
+    // D-17: thread the suite's scoring_mode into the scoring path. The mode-aware
+    // filter consults the reachable-graph marking by call-site stable key. Under
+    // oracle-rta only reachable-from-roots edges count; oracle-jelly/whole-repo
+    // score the full set. Edges excluded from scoring stay present as facts (the
+    // db is not mutated) — we record the mode-aware scored edge count as an
+    // invariant so the scoring decision is captured in the report.
+    let scored = scored_call_graph_edges_for_db(&output.db, manifest.scoring_mode);
+    observed.push(scoring_mode_scored_edges_invariant(
+        manifest.scoring_mode,
+        scored.len(),
+    ));
+    Ok(observed)
+}
+
+#[cfg(test)]
+fn scoring_mode_scored_edges_invariant(
+    scoring_mode: crate::eval::suite::ScoringMode,
+    scored_edge_count: usize,
+) -> ObservedItem {
+    use crate::eval::model::ObservedInvariant;
+    ObservedItem::Invariant(ObservedInvariant {
+        name: "reachability.scoring_mode.scored_edge_count".to_string(),
+        value: scored_edge_count.to_string(),
+        mode: AssertionMode::Partial,
+        producer_id: Some("polint.reachability".to_string()),
+        provenance: Some(format!("scoring_mode={}", scoring_mode.as_wire_str())),
+        precision: None,
+        status: None,
+    })
 }
 
 #[cfg(test)]
@@ -585,6 +679,235 @@ mod tests {
     }
 
     #[test]
+    fn identity_dedup_fixture() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/dedup");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-dedup");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "dedup fixture expected rows must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
+    fn identity_categorized_failures_fixture() {
+        // Plan 42-03 (D-15, D-16): the categorized-failures fixture exercises the
+        // closed IdentityCategory counter map from real source. `unsupported_edge`
+        // and `unresolved_edge` fire naturally from the Go + TS fixture sources;
+        // the report's `categorized_failures` section carries the counts, and the
+        // `.nonzero` invariants prove the two real-source categories are non-zero.
+        // The remaining three categories are proven by the eval::metrics unit tests
+        // (wrong_identity / package_load_limitation / model_missing) and the
+        // eval::report `drive_record_category_model_missing` test (BLOCKER #4).
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/categorized_failures");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-categorized-failures");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "categorized-failures fixture expected rows must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+
+        let section = &run.metrics.sections.categorized_failures;
+        assert!(
+            section.unsupported_edge > 0,
+            "unsupported_edge must fire from real source: {section:?}"
+        );
+        assert!(
+            section.unresolved_edge > 0,
+            "unresolved_edge must fire from real source: {section:?}"
+        );
+    }
+
+    #[test]
+    fn identity_categorized_failures_fixture_determinism() {
+        // The taxonomy snapshot must be byte-stable across repeated runs (D-11) so
+        // the Phase 43 determinism gate inherits it unchanged.
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/categorized_failures");
+        let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(first.output_hash, second.output_hash);
+    }
+
+    #[test]
+    fn identity_dedup_fixture_determinism() {
+        // The dedup snapshot must be byte-stable across repeated runs (D-11): the
+        // determinism gate Phase 43 inherits relies on this invariant.
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/dedup");
+        let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(first.output_hash, second.output_hash);
+    }
+
+    #[test]
+    fn identity_jelly_oracle_coverage_fixture() {
+        // D-20, D-21, D-22: the Jelly oracle-span coverage over the Jelly micro
+        // fixture set must be >= 0.99 on the current host platform. The Jelly
+        // adapter renders every observed edge span through the single-source-of-
+        // truth jelly_span renderer (D-05); this test asserts the deterministic
+        // matched/total ratio meets the threshold and that each unmatched span
+        // (if any) carries debuggable file/span/reason fields.
+        use crate::eval::external::jelly_callgraph::JellyCallgraphAdapter;
+        use crate::eval::model::EvaluationMode;
+        use crate::eval::suite::{
+            CaseSelector, ExpectedSource, ExpectedSourceFormat, LocalClonePolicy, SuiteCheckout,
+            SuiteCheckoutStrategy, SuiteId, SuiteKind, SuiteScoring, SuiteTier,
+        };
+
+        let repo = repo_root().join("tests/eval-fixtures/identity/jelly_oracle_coverage/repo");
+        let manifest = SuiteManifest {
+            schema_version: "polint-eval-suite-1".to_string(),
+            id: SuiteId("identity-jelly-oracle-coverage".to_string()),
+            name: "Identity Jelly oracle coverage".to_string(),
+            kind: SuiteKind::CallGraphPrecision,
+            languages: vec!["javascript".to_string(), "typescript".to_string()],
+            adapter_id: "jelly_callgraph_micro".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::OracleJelly,
+            source_url: None,
+            source_commit: None,
+            license: "Apache-2.0".to_string(),
+            language_support: SuiteLanguageSupport::Supported,
+            checkout: SuiteCheckout {
+                strategy: SuiteCheckoutStrategy::LocalClone,
+                path: repo.to_string_lossy().to_string(),
+                ignored_by_git: false,
+                local_clone_policy: LocalClonePolicy::AllowAbsolute,
+            },
+            expected: ExpectedSource {
+                format: ExpectedSourceFormat::SuiteNative,
+                path: "suite-native-jelly-oracle-coverage".to_string(),
+            },
+            scoring: SuiteScoring {
+                native: Vec::new(),
+                unified: vec!["precision".to_string(), "recall".to_string()],
+            },
+            tiers: std::collections::BTreeMap::from([(
+                SuiteTier::Fast,
+                CaseSelector {
+                    enabled: true,
+                    selector: "all".to_string(),
+                    max_cases: None,
+                    deterministic_seed: Some("jelly-oracle-coverage".to_string()),
+                },
+            )]),
+        };
+
+        let output_dir = tempdir().unwrap();
+        let artifacts = run_external_suite_for_test(
+            &JellyCallgraphAdapter,
+            &manifest,
+            SuiteTier::Fast,
+            EvaluationMode::PolintBaseline,
+            output_dir.path(),
+        )
+        .unwrap();
+
+        let run: crate::eval::report::EvaluationRun =
+            serde_json::from_str(&std::fs::read_to_string(&artifacts.json_path).unwrap()).unwrap();
+        let coverage = &run.metrics.sections.jelly_oracle_coverage;
+        assert!(
+            coverage.total > 0,
+            "oracle coverage fixture must enumerate at least one oracle span"
+        );
+        assert!(
+            coverage.ratio >= 0.99,
+            "jelly oracle coverage ratio {} (matched {}/{}) below 0.99; unmatched: {:?}",
+            coverage.ratio,
+            coverage.matched,
+            coverage.total,
+            coverage.unmatched
+        );
+        for unmatched in &coverage.unmatched {
+            assert!(!unmatched.file.is_empty());
+            assert!(!unmatched.span.is_empty());
+            assert!(!unmatched.reason.is_empty());
+        }
+    }
+
+    #[test]
+    fn identity_crlf_normalization_fixture() {
+        // D-12, D-13: the Jelly renderer normalizes CRLF -> LF at render time so
+        // a `\n` checkout and a `\r\n` checkout of the same logical source
+        // produce byte-identical rendered spans. The eval fixture pins the LF
+        // case as observed; this test proves the byte-for-byte equality by
+        // loading BOTH repos and comparing rendered identity spans.
+        use crate::analysis::identity::render::jelly_span;
+
+        let fixture_root = repo_root().join("tests/eval-fixtures/identity/crlf_normalization");
+        let lf_output =
+            crate::eval::observed::run_kernel_for_repo_for_test(&fixture_root.join("repo-lf"))
+                .unwrap();
+        let crlf_output =
+            crate::eval::observed::run_kernel_for_repo_for_test(&fixture_root.join("repo-crlf"))
+                .unwrap();
+
+        let render_by_relative_path = |output: &crate::analysis_kernel::KernelOutput| {
+            let files = output
+                .db
+                .files()
+                .iter()
+                .map(|file| (file.id, file.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let mut rendered = std::collections::BTreeMap::new();
+            for record in output.db.identity_records() {
+                let Some(source) = files.get(&record.file_id) else {
+                    continue;
+                };
+                // Key by (relative path, stable container/display) so the two
+                // encodings line up despite differing byte offsets on disk.
+                let key = format!(
+                    "{}|{}|{}|{:?}",
+                    source.relative_path.replace('\\', "/"),
+                    record.container_path,
+                    record.display_name,
+                    record.kind,
+                );
+                rendered.insert(key, jelly_span::render(record, source));
+            }
+            rendered
+        };
+
+        let lf_rendered = render_by_relative_path(&lf_output);
+        let crlf_rendered = render_by_relative_path(&crlf_output);
+
+        assert!(
+            !lf_rendered.is_empty(),
+            "LF repo must produce at least one identity record"
+        );
+        assert_eq!(
+            lf_rendered.keys().collect::<Vec<_>>(),
+            crlf_rendered.keys().collect::<Vec<_>>(),
+            "LF and CRLF repos must expose the same identity record set"
+        );
+        for (key, lf_span) in &lf_rendered {
+            let crlf_span = crlf_rendered.get(key).expect("matching CRLF record");
+            assert_eq!(
+                lf_span, crlf_span,
+                "CRLF and LF rendered Jelly spans must be byte-identical for {key}"
+            );
+            assert!(!lf_span.starts_with("/Users/"));
+            assert!(!lf_span.starts_with("/home/"));
+            assert!(!lf_span.contains(":\\"));
+        }
+    }
+
+    #[test]
+    fn identity_crlf_normalization_fixture_observed_through_eval_harness() {
+        let fixture_dir = repo_root().join("tests/eval-fixtures/identity/crlf_normalization");
+        let run = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
+        assert_eq!(run.cases.len(), 1);
+        assert_eq!(run.cases[0].case_id, "identity-crlf-normalization");
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "CRLF fixture render invariants must all be observed"
+        );
+        assert_eq!(run.metrics.forbidden_hits, 0);
+    }
+
+    #[test]
     fn phase40_promotion_fixture_gates_pass_deterministically() {
         let fixture_dir = repo_root().join("tests/eval-fixtures/promotion/cfg-call-flow-evidence");
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
@@ -705,6 +1028,7 @@ mod tests {
             kind: SuiteKind::ScannerVulnerability,
             languages: vec!["go".to_string()],
             adapter_id: "null".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::WholeRepo,
             source_url: Some("https://example.test/runner".to_string()),
             source_commit: Some("abc123".to_string()),
             license: "test".to_string(),

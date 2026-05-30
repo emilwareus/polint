@@ -166,6 +166,20 @@ pub(crate) fn run_native_fixture_for_test(
     Ok(evaluation_run_for_fixture(&fixture, observed))
 }
 
+/// Builds the normalized [`EvaluationRun`] for `fixture` from a CALLER-SUPPLIED
+/// observed-item vector. The determinism gate (`eval::determinism_gate`) uses
+/// this to feed seeded-permuted observed rows through the exact same
+/// `normalize_run` + `deterministic_output_hash` path the live fixture runner
+/// uses, proving the normalized observed JSON is byte-identical regardless of
+/// row-insertion order (D-20/D-21).
+#[cfg(test)]
+pub(crate) fn evaluation_run_for_fixture_with_observed_for_test(
+    fixture: &NativeFixture,
+    observed: Vec<crate::eval::model::ObservedItem>,
+) -> crate::eval::report::EvaluationRun {
+    evaluation_run_for_fixture(fixture, observed)
+}
+
 #[cfg(test)]
 pub(crate) fn run_cache_current_determinism_fixture_for_test(
     fixture_dir: &Path,
@@ -912,8 +926,12 @@ fn evaluation_run_for_fixture(
         &observed,
         crate::eval::matcher::MatcherConfig::default(),
     );
-    let metrics: crate::eval::report::MetricSummary =
+    let mut metrics: crate::eval::report::MetricSummary =
         crate::eval::metrics::compute_metrics(&matches).into();
+    metrics.sections.jelly_oracle_coverage =
+        crate::eval::metrics::jelly_oracle_coverage(&fixture.manifest.expected, &observed);
+    metrics.sections.categorized_failures =
+        crate::eval::metrics::categorized_failures_from_observed(&observed);
     let runtime = runtime_observation(&fixture.manifest, &observed);
     let run = crate::eval::report::EvaluationRun {
         schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
@@ -1800,15 +1818,17 @@ mod eval_native_fixture_runner_tests {
                 ("provider_order.6", "polint.semantic_mir"),
                 ("provider_order.7", "polint.cfg"),
                 ("provider_order.8", "polint.calls"),
-                ("provider_order.9", "polint.abstract_domains"),
-                ("provider_order.10", "polint.direct_summaries"),
-                ("provider_order.11", "polint.entrypoints"),
-                ("provider_order.12", "polint.extensions"),
-                ("provider_order.13", "polint.type_value_alias"),
-                ("provider_order.14", "polint.refined_calls"),
-                ("provider_order.15", "polint.data_flow"),
-                ("provider_order.16", "polint.evidence"),
-                ("provider_order.17", "polint.metrics"),
+                ("provider_order.9", "polint.identity"),
+                ("provider_order.10", "polint.abstract_domains"),
+                ("provider_order.11", "polint.direct_summaries"),
+                ("provider_order.12", "polint.entrypoints"),
+                ("provider_order.13", "polint.reachability"),
+                ("provider_order.14", "polint.extensions"),
+                ("provider_order.15", "polint.type_value_alias"),
+                ("provider_order.16", "polint.refined_calls"),
+                ("provider_order.17", "polint.data_flow"),
+                ("provider_order.18", "polint.evidence"),
+                ("provider_order.19", "polint.metrics"),
                 (
                     "provider_output.polint.abstract_domains.schema_version",
                     "abstract-domain-facts-1:1",

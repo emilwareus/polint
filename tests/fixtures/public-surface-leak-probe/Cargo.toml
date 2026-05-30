@@ -1,0 +1,24 @@
+# V1.3 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19.
+#
+# Do NOT add dependencies. Do NOT add features. This crate exists ONLY to
+# compile against `polint::sdk::prelude::*` and prove the supported public
+# surface stays frozen for the v1.3 milestone. It is excluded from the
+# workspace (`[workspace] exclude` in the root Cargo.toml) so it never
+# participates in normal `cargo build --workspace` / lint / test runs; it is
+# compiled in isolation only by the leak-gate test at
+# `crates/polint/tests/public_surface_leak.rs`.
+
+[package]
+name = "public-surface-leak-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+name = "public_surface_leak_probe"
+crate-type = ["lib"]
+
+[dependencies]
+polint = { path = "../../../crates/polint", default-features = false }

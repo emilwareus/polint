@@ -1,0 +1,21 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "determinism-go-reachable"
+area = "facts"
+
+# Phase 43 Plan 03 determinism-gate Go fixture (REACH-03, D-20/D-21/D-24).
+#
+# `main` is the Go root (RootKind::Main). main -> reachable is a root-seeded call
+# site (in_reachable_graph = true); orphan -> orphanHelper is outside the
+# reachable graph (in_reachable_graph = false), so the gate's reachable-graph
+# marking invariant (>= 1 root, >= 1 call site, >= 1 unreachable mark) holds.
+#
+# This manifest is intentionally free of order-dependent assertions: the
+# `eval::determinism_gate` harness asserts the full normalized observed JSON is
+# byte-identical across 10 seeded provider-order / row-order permutations, so no
+# brittle per-row expectation is captured here.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

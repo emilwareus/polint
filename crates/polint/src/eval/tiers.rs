@@ -195,6 +195,7 @@ mod tests {
             kind: SuiteKind::ScannerVulnerability,
             languages: vec!["javascript".to_string()],
             adapter_id: "tier".to_string(),
+            scoring_mode: crate::eval::suite::ScoringMode::WholeRepo,
             source_url: Some("https://example.test/tier".to_string()),
             source_commit: Some("abc123".to_string()),
             license: "test".to_string(),

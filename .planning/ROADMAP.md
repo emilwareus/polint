@@ -18,7 +18,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 
 ## Phases (v1.3)
 
-- [ ] **Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy** - Stable identity records, Go `RelString` and Jelly span renderers, identity-vs-unsupported categorization, public-surface-leak CI gate.
+- [x] **Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy** - Stable identity records, Go `RelString` and Jelly span renderers, identity-vs-unsupported categorization, public-surface-leak CI gate. ✅ Verified 5/5 (full Go module import-path RelString deferred to Phase 46; broad Jelly coverage to Phase 45).
 - [ ] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
 - [ ] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
 - [ ] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. May run in parallel with Phase 46.
@@ -43,8 +43,8 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Per-benchmark renderers produce Go `RelString`-style names and Jelly `file:start_line:start_col:end_line:end_col` spans with ≥99% Jelly oracle-span coverage on micro fixtures across Linux + macOS CI.
   3. CRLF/LF normalization fixture passes and produces byte-identical renderer output.
   4. Evaluation output reports distinct categories `wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`.
-  5. Public-surface-leak CI gate is installed: external rule crate compiles against `polint::sdk::prelude::*` and reaches zero v1.3 solver types.
-**Plans**: TBD
+  5. Public-surface-leak CI gate is installed: external rule crate compiles against `polint::sdk::prelude::*` and reaches zero v1.3 solver types. ✅ Addressed by Plan 04 (leak-gate job on Linux + macOS; locked ALLOWED_PRELUDE = 97 entries).
+**Plans**: 5 total — 01 (identity substrate) ✅, 02 (renderers) ✅, 03 (identity taxonomy) ✅, 04 (public-surface-leak CI gate) ✅, 05 (gap closure: Go package-name qualification + dedup total-order determinism) ✅
 
 ### Phase 43: Reachability, Roots & Per-Suite Scoring Mode
 **Goal**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate, scores each benchmark suite in the mode its oracle expects, and inherits a determinism gate every subsequent solver phase must pass.
@@ -55,7 +55,10 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Each suite manifest declares a `scoring_mode` (`oracle-rta`, `oracle-jelly`, `whole-repo`) and the gate fails if it is missing; unreachable direct calls remain facts but are marked outside the reachable graph.
   3. Determinism gate fixture passes: 10 shuffled provider-order runs produce byte-identical observed JSON, identical solver step counts, and identical budget-exceeded reasons.
   4. The determinism gate is wired so every subsequent solver-introducing phase inherits it as an acceptance gate.
-**Plans**: TBD
+**Plans**: 3 total
+- [x] 43-01-PLAN.md — analysis::reachability module + ReachabilityRootFact/RootKind + root discovery (Go main/init/exported, entrypoint bridge, configured roots) + polint.reachability provider/cache + kernel splice (REACH-01)
+- [x] 43-02-PLAN.md — required scoring_mode field + 4 suite manifest updates + reachable-set BFS/DFS + CallReachabilityFact marking + mode-aware scoring filter (REACH-02)
+- [x] 43-03-PLAN.md — reserved solver_step_count/budget_exceeded_reasons section + N=10 determinism-gate harness + Go/TS fixtures + fast-CI Linux+macOS job + inheritance contract (REACH-03)
 
 ### Phase 44: Semantic Graph Skeleton & Constraint Vocabulary
 **Goal**: polint has a private shared semantic graph with stable identities, typed edges, and a closed constraint vocabulary that language frontends emit into — the architectural keystone for the unified solver.
@@ -193,8 +196,8 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
-| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 0/0 | Not started | - |
-| 43 | Reachability, Roots & Per-Suite Scoring Mode | 0/0 | Not started | - |
+| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
+| 43 | Reachability, Roots & Per-Suite Scoring Mode | 3/3 | Complete    | 2026-05-29 |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
 | 46 | Go Semantic Frontend & Sidecar | 0/0 | Not started | - |

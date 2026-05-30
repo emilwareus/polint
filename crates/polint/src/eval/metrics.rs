@@ -3,10 +3,14 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
+use crate::eval::model::{ExpectedItem, ObservedItem};
 use crate::eval::report::{
-    GraphMetricSection, MatchSummary, MetricSections, MetricSummary, PathMetricSection,
-    PerformanceMetricSection, ScannerMetricSection, UnknownMetricSection,
+    CategorizedFailureSection, GraphMetricSection, JellyOracleCoverageSection, JellyUnmatchedSpan,
+    MatchSummary, MetricSections, MetricSummary, PathMetricSection, PerformanceMetricSection,
+    ScannerMetricSection, SolverMetricSection, UnknownMetricSection,
 };
+#[cfg(test)]
+use crate::eval::suite::ScoringMode;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +80,13 @@ impl From<ComputedMetrics> for MetricSummary {
             },
             suite_native: std::collections::BTreeMap::new(),
             adaptation: None,
+            jelly_oracle_coverage: JellyOracleCoverageSection::default(),
+            categorized_failures: CategorizedFailureSection::default(),
+            // RESERVED (D-23): defaulted to step_count = 0 / empty reasons in
+            // Phase 43 so the observed/report JSON surfaces the `solver` section
+            // now and the N=10 determinism gate stays byte-stable across the
+            // milestone. Phase 47+ populates real values without changing shape.
+            solver: SolverMetricSection::default(),
         };
         Self {
             true_positives: metrics.true_positives,
@@ -246,6 +257,293 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     );
 
     metrics
+}
+
+/// Computes deterministic Jelly oracle-span coverage (D-20, D-21).
+///
+/// Every distinct Jelly graph-edge endpoint span in the `expected` (oracle) set
+/// is checked against the `observed` (renderer-produced) endpoint span set. A
+/// span counts as `matched` when at least one observed Jelly graph edge renders
+/// that exact span string; unmatched oracle spans are surfaced individually for
+/// debuggability. `ratio = matched / total`, or `1.0` when there are no oracle
+/// spans (an empty oracle is vacuously fully covered, so it never drags a
+/// suite-wide ratio below the 0.99 threshold).
+///
+/// The renderer-produced observed spans are the single source of truth (D-05):
+/// the eval adapter populates `observed` via
+/// `analysis::identity::render::jelly_span::render`, so this function never
+/// re-renders — it counts agreement between the oracle and the rendered spans.
+pub(crate) fn jelly_oracle_coverage(
+    expected: &[ExpectedItem],
+    observed: &[ObservedItem],
+) -> JellyOracleCoverageSection {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let observed_spans: BTreeSet<&str> = observed
+        .iter()
+        .filter_map(jelly_graph_edge_observed)
+        .flat_map(|edge| [edge.0, edge.1])
+        .collect();
+
+    // Deterministic distinct oracle spans, keyed by span string -> source file
+    // (the file portion before the first `:` of the Jelly span shape).
+    let mut oracle_spans: BTreeMap<&str, &str> = BTreeMap::new();
+    for edge in expected.iter().filter_map(jelly_graph_edge_expected) {
+        for span in [edge.0, edge.1] {
+            oracle_spans
+                .entry(span)
+                .or_insert_with(|| jelly_span_file(span));
+        }
+    }
+
+    let total = oracle_spans.len() as u32;
+    let mut matched = 0u32;
+    let mut unmatched = Vec::new();
+    for (span, file) in &oracle_spans {
+        if observed_spans.contains(span) {
+            matched += 1;
+        } else {
+            unmatched.push(JellyUnmatchedSpan {
+                file: (*file).to_string(),
+                span: (*span).to_string(),
+                reason: "no identity record renders this span".to_string(),
+            });
+        }
+    }
+
+    let ratio = if total == 0 {
+        1.0
+    } else {
+        f64::from(matched) / f64::from(total)
+    };
+
+    JellyOracleCoverageSection {
+        matched,
+        total,
+        ratio,
+        unmatched,
+    }
+}
+
+/// Aggregates Jelly oracle-span coverage across an entire suite run (D-20,
+/// D-22). The per-platform aggregate is the deterministic union of every case's
+/// oracle spans matched against every case's observed rendered spans; there is
+/// no cross-platform averaging — each platform's CI run computes this
+/// independently and asserts the threshold on its own host.
+pub(crate) fn jelly_oracle_coverage_for_cases(
+    cases: &[crate::eval::report::CaseResult],
+) -> JellyOracleCoverageSection {
+    let expected = cases
+        .iter()
+        .flat_map(|case| case.expected.iter().cloned())
+        .collect::<Vec<_>>();
+    let observed = cases
+        .iter()
+        .flat_map(|case| case.observed.iter().cloned())
+        .collect::<Vec<_>>();
+    jelly_oracle_coverage(&expected, &observed)
+}
+
+/// Projects the live analysis facts into the closed [`CategorizedFailureSection`]
+/// counter map (D-15, D-16; Plan 42-03).
+///
+/// Each failing fact is categorized at most once via direct dispatch — the pass
+/// is O(n) over the fact tables, no nested loops (threat T-42-03-06):
+///
+/// - every `unresolved_calls` fact carries an `UnresolvedCallReason` ->
+///   [`category_for_unresolved`];
+/// - every `call_targets` fact with a non-`Resolved`/non-`Ambiguous`
+///   `CallTargetStatus` -> [`category_for_unsupported`] (`None` skips success
+///   and ambiguity, which are not failures);
+/// - every callsite identity record whose `(file_id, span)` overlaps an oracle
+///   entry's span without matching its container/digest is a wrong-identity
+///   event -> [`category_for_wrong_identity`].
+///
+/// `oracle_overlap` is computed here by comparing observed callsite spans to the
+/// `oracle_callsite_spans` set the caller derives from the expected (oracle)
+/// items. When that set is empty (no oracle, e.g. native fixtures) no
+/// wrong-identity events fire — a callsite with no overlapping oracle entry is a
+/// miss, not a wrong-identity (D-16).
+pub(crate) fn categorized_failures_from_db(
+    db: &crate::core::AnalysisDb,
+    oracle_callsite_spans: &std::collections::BTreeSet<(u32, u32, u32)>,
+) -> CategorizedFailureSection {
+    use crate::analysis::calls::facts::CallTargetStatus;
+    use crate::analysis::identity::categorize::{
+        category_for_unresolved, category_for_unsupported, category_for_wrong_identity,
+    };
+    use crate::analysis::identity::facts::IdentityKind;
+
+    let mut section = CategorizedFailureSection::default();
+
+    for unresolved in db.unresolved_calls() {
+        section.record_category(category_for_unresolved(unresolved.reason));
+    }
+
+    for target in db.call_targets() {
+        if !matches!(
+            target.status,
+            CallTargetStatus::Resolved | CallTargetStatus::Ambiguous
+        ) && let Some(category) = category_for_unsupported(target.status)
+        {
+            section.record_category(category);
+        }
+    }
+
+    if !oracle_callsite_spans.is_empty() {
+        for record in db.identity_records() {
+            if record.kind != IdentityKind::Callsite {
+                continue;
+            }
+            let key = (
+                record.file_id.0,
+                record.span.start_byte,
+                record.span.end_byte,
+            );
+            let oracle_overlap = oracle_callsite_spans.contains(&key);
+            if let Some(category) = category_for_wrong_identity(record, oracle_overlap) {
+                section.record_category(category);
+            }
+        }
+    }
+
+    section
+}
+
+/// Builds the call-site-stable-key -> `in_reachable_graph` lookup from the live
+/// reachability marking (`db.reachability_marks()`), the composition-by-stable-key
+/// join the mode-aware scoring filter uses (mirrors the `categorized_failures_from_db`
+/// join discipline). A missing marking is recorded as absent (`None` from the
+/// returned map), never silently coerced to reachable/unreachable (threat
+/// T-43-02-02).
+///
+/// Consumed by the (test-facing) eval external-suite scoring path; the eval harness
+/// is internal and test-gated (no public CLI/SDK surface), so this scoring helper
+/// is `#[cfg(test)]` alongside it.
+#[cfg(test)]
+pub(crate) fn reachable_graph_lookup(
+    db: &crate::core::AnalysisDb,
+) -> std::collections::BTreeMap<String, bool> {
+    db.reachability_marks()
+        .iter()
+        .map(|mark| (mark.call_site_stable_key.clone(), mark.in_reachable_graph))
+        .collect()
+}
+
+/// Applies the D-17 mode-aware scoring filter to a set of scored call-graph edges,
+/// each tagged with its source call-site stable key.
+///
+/// WARNING (D-17 / Specific Ideas): getting `OracleRta` vs `OracleJelly` BACKWARDS
+/// silently tanks one suite's recall. The Go x/tools RTA oracle reports
+/// reachable-from-`main` edges ONLY, so `OracleRta` MUST filter the scored set to
+/// the reachable-from-roots edges; Jelly enumerates module-wide independent of
+/// main-reachability, so `OracleJelly` MUST NOT filter. Swapping the two would make
+/// polint score the wrong edge set against each oracle. The
+/// `oracle_rta_scored_set_is_subset_of_oracle_jelly` regression test guards this.
+///
+/// Semantics:
+/// - `OracleRta`: retain only edges whose source call site is in the reachable
+///   graph (look up `CallReachabilityFact.in_reachable_graph` by call-site stable
+///   key). Edges outside the reachable graph are EXCLUDED from scoring but remain
+///   present as facts (this function does not delete anything from the db). An edge
+///   with no marking is conservatively excluded (it cannot be proven reachable).
+/// - `OracleJelly` / `WholeRepo`: no filtering — every edge is scored.
+///
+/// `#[cfg(test)]` alongside the test-facing eval scoring path that consumes it.
+#[cfg(test)]
+pub(crate) fn filter_scored_edges_by_scoring_mode<T>(
+    edges: &[T],
+    call_site_key_of: impl Fn(&T) -> &str,
+    scoring_mode: ScoringMode,
+    reachable_by_call_site: &std::collections::BTreeMap<String, bool>,
+) -> Vec<usize> {
+    match scoring_mode {
+        // oracle-rta: filter to the reachable-from-roots edges (NOT the other way
+        // around — see the backwards-mode warning above).
+        ScoringMode::OracleRta => edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| {
+                reachable_by_call_site
+                    .get(call_site_key_of(edge))
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        // oracle-jelly / whole-repo: score the full enumerated set, no filtering.
+        ScoringMode::OracleJelly | ScoringMode::WholeRepo => (0..edges.len()).collect(),
+    }
+}
+
+/// Reconstructs the [`CategorizedFailureSection`] from the per-category observed
+/// invariants emitted by `eval::observed::identity_categorized_failure_invariants`.
+///
+/// The observation layer computes the section from the live `AnalysisDb`; this
+/// rehydrates it into the report shape so the section appears in the report JSON
+/// for a native fixture. Missing or unparsable invariants default to `0`.
+pub(crate) fn categorized_failures_from_observed(
+    observed: &[ObservedItem],
+) -> CategorizedFailureSection {
+    let mut section = CategorizedFailureSection::default();
+    for item in observed {
+        let ObservedItem::Invariant(invariant) = item else {
+            continue;
+        };
+        let Ok(value) = invariant.value.parse::<u32>() else {
+            continue;
+        };
+        match invariant.name.as_str() {
+            "identity.categorized_failures.wrong_identity" => section.wrong_identity = value,
+            "identity.categorized_failures.unsupported_edge" => section.unsupported_edge = value,
+            "identity.categorized_failures.unresolved_edge" => section.unresolved_edge = value,
+            "identity.categorized_failures.package_load_limitation" => {
+                section.package_load_limitation = value;
+            }
+            "identity.categorized_failures.model_missing" => section.model_missing = value,
+            _ => {}
+        }
+    }
+    section
+}
+
+fn jelly_graph_edge_expected(item: &ExpectedItem) -> Option<(&str, &str)> {
+    match item {
+        ExpectedItem::GraphEdge(edge) if edge.graph.starts_with("jelly.call_graph.") => {
+            Some((edge.from.as_str(), edge.to.as_str()))
+        }
+        _ => None,
+    }
+}
+
+fn jelly_graph_edge_observed(item: &ObservedItem) -> Option<(&str, &str)> {
+    match item {
+        ObservedItem::GraphEdge(edge) if edge.graph.starts_with("jelly.call_graph.") => {
+            Some((edge.from.as_str(), edge.to.as_str()))
+        }
+        _ => None,
+    }
+}
+
+/// Extracts the source-file portion of a Jelly span string
+/// (`file:start_line:start_col:end_line:end_col`).
+///
+/// WR-05 path invariant: this `rsplitn(5, ':')` split from the right is only correct
+/// because Jelly spans are normalized to forward-slash, repo-relative paths with NO
+/// colon in the file portion. The renderer enforces exactly this — see
+/// `eval::observed::identity_render_invariants`, which asserts the rendered Jelly
+/// path is not absolute and never contains `:\` (no Windows drive letters or
+/// backslash separators). If that invariant ever regresses, a path containing a `:`
+/// would push the line/col tail past five pieces and mis-attribute the `file`
+/// segment, so the cheap debug assertion below pins the contract at the use site.
+fn jelly_span_file(span: &str) -> &str {
+    let file = span.rsplitn(5, ':').last().unwrap_or(span);
+    debug_assert!(
+        !file.contains(":\\"),
+        "Jelly span file segment must be a colon-free forward-slash path \
+         (identity_render_invariants), got: {file:?} from span {span:?}"
+    );
+    file
 }
 
 fn status_label(status: crate::eval::model::ObservedStatus) -> &'static str {
@@ -567,6 +865,441 @@ mod tests {
                 .get("secbench_js.test_file_count"),
             Some(&704.0)
         );
+    }
+
+    // -- Plan 42-03 categorized-failures pass over synthetic live facts --------
+    //
+    // These exercise `categorized_failures_from_db` end-to-end (the real
+    // projection logic, not just `record_category`) for the three categories the
+    // syntactic frontend does not naturally emit on native fixtures:
+    // `wrong_identity` (needs oracle span overlap, D-16), `package_load_limitation`
+    // (needs CallTargetStatus::SetupMissing), and `model_missing` (needs
+    // CallTargetStatus::Rejected). Together with the categorized-failures fixture
+    // (which proves `unsupported_edge` + `unresolved_edge` from real source) all
+    // FIVE counters are proven non-zero across the test corpus (BLOCKER #4, D-15).
+
+    use crate::analysis::calls::facts::{
+        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+        CallSyntaxKind, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+    };
+    use crate::analysis::identity::facts::{
+        IdentityKind, IdentityRecord, IdentityRecordId, LanguageTag, compute_signature_digest,
+    };
+    use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId};
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+
+    fn db_with_one_site() -> (AnalysisDb, FileId, CallSiteFact) {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() {}\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "main".to_string(),
+            span: Span::point(file, 2, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let site = CallSiteFact {
+            id: CallSiteId(0),
+            language: Language::Go,
+            file,
+            caller: FunctionId(0),
+            owner_symbol: None,
+            body: MirBodyId(0),
+            operation: MirOpId(0),
+            span: Span::point(file, 2, 5),
+            kind: CallSyntaxKind::Function,
+            callee: CallCallee::Identifier {
+                reference: None,
+                name: "callee".to_string(),
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status: CallTargetStatus::Unresolved,
+            precision: CallPrecision::Unknown,
+            stable_key: "call-site:synthetic".to_string(),
+        };
+        (db, file, site)
+    }
+
+    fn target_with_status(site: CallSiteId, status: CallTargetStatus) -> CallTargetFact {
+        CallTargetFact {
+            id: CallTargetId(0),
+            site,
+            caller: FunctionId(0),
+            target_function: None,
+            target_symbol: None,
+            edge_kind: CallEdgeKind::Unknown,
+            algorithm: CallAlgorithm::Unsupported,
+            status,
+            reason: None,
+            provenance: CallProvenance::Native,
+            precision: CallPrecision::Unsupported,
+            stable_key: format!("call-target:synthetic:{status:?}"),
+        }
+    }
+
+    fn callsite_identity_at(file: FileId, span: Span) -> IdentityRecord {
+        let language = LanguageTag::Go;
+        IdentityRecord {
+            id: IdentityRecordId(0),
+            kind: IdentityKind::Callsite,
+            file_id: file,
+            span,
+            language,
+            package_or_module: std::sync::Arc::from("src/main.go"),
+            container_path: std::sync::Arc::from("main"),
+            display_name: std::sync::Arc::from("callee"),
+            signature_digest: compute_signature_digest(
+                language,
+                "src/main.go",
+                "main",
+                "callee",
+                None,
+                None,
+            ),
+            multiplicity: 1,
+            stable_key: "identity|callsite|synthetic".to_string(),
+            originating_call_site_id: None,
+            originating_call_target_id: None,
+        }
+    }
+
+    #[test]
+    fn categorized_failures_unresolved_and_unsupported_from_unresolved_calls() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let unresolved = vec![
+            UnresolvedCallFact {
+                site: site.id,
+                caller: FunctionId(0),
+                status: CallTargetStatus::Unresolved,
+                reason: UnresolvedCallReason::DynamicProperty,
+                algorithm: CallAlgorithm::Unsupported,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Unknown,
+                stable_key: "unresolved:dynamic".to_string(),
+            },
+            UnresolvedCallFact {
+                site: site.id,
+                caller: FunctionId(0),
+                status: CallTargetStatus::Unsupported,
+                reason: UnresolvedCallReason::Reflection,
+                algorithm: CallAlgorithm::Unsupported,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Unsupported,
+                stable_key: "unresolved:reflection".to_string(),
+            },
+        ];
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved,
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.unresolved_edge, 1);
+        assert_eq!(section.unsupported_edge, 1);
+        assert_eq!(section.package_load_limitation, 0);
+        assert_eq!(section.model_missing, 0);
+        assert_eq!(section.wrong_identity, 0);
+    }
+
+    #[test]
+    fn categorized_failures_package_load_limitation_fires_on_setup_missing() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let target = target_with_status(site.id, CallTargetStatus::SetupMissing);
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.package_load_limitation, 1);
+        assert_eq!(section.model_missing, 0);
+        assert_eq!(section.unresolved_edge, 0);
+        assert_eq!(section.unsupported_edge, 0);
+    }
+
+    #[test]
+    fn categorized_failures_model_missing_fires_on_rejected_target() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let target = target_with_status(site.id, CallTargetStatus::Rejected);
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![target],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section.model_missing, 1);
+        assert_eq!(section.package_load_limitation, 0);
+        assert_eq!(section.unresolved_edge, 0);
+        assert_eq!(section.unsupported_edge, 0);
+    }
+
+    #[test]
+    fn categorized_failures_resolved_and_ambiguous_targets_are_not_failures() {
+        use crate::analysis::calls::store::CallOutput;
+        let (mut db, _file, site) = db_with_one_site();
+        let resolved = CallTargetFact {
+            id: CallTargetId(0),
+            stable_key: "call-target:resolved".to_string(),
+            ..target_with_status(site.id, CallTargetStatus::Resolved)
+        };
+        let ambiguous = CallTargetFact {
+            id: CallTargetId(1),
+            stable_key: "call-target:ambiguous".to_string(),
+            ..target_with_status(site.id, CallTargetStatus::Ambiguous)
+        };
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: vec![resolved, ambiguous],
+            unresolved: Vec::new(),
+        })
+        .unwrap();
+
+        let section = categorized_failures_from_db(&db, &std::collections::BTreeSet::new());
+        assert_eq!(section, CategorizedFailureSection::default());
+    }
+
+    #[test]
+    fn categorized_failures_wrong_identity_fires_on_oracle_span_overlap() {
+        let (mut db, file, _site) = db_with_one_site();
+        let span = Span {
+            file,
+            start_byte: 20,
+            end_byte: 30,
+            start_line: 2,
+            start_col: 5,
+            end_line: 2,
+            end_col: 15,
+        };
+        db.set_identity_records_for_test(vec![callsite_identity_at(file, span.clone())]);
+
+        // An oracle entry overlapping the observed callsite's (file, span) makes it
+        // a wrong-identity event (D-16). The key matches the (file_id, start_byte,
+        // end_byte) tuple `categorized_failures_from_db` derives.
+        let oracle = std::collections::BTreeSet::from([(file.0, span.start_byte, span.end_byte)]);
+        let section = categorized_failures_from_db(&db, &oracle);
+        assert_eq!(section.wrong_identity, 1);
+
+        // With no overlapping oracle the same record is a miss, not a wrong-identity.
+        let empty = std::collections::BTreeSet::new();
+        assert_eq!(categorized_failures_from_db(&db, &empty).wrong_identity, 0);
+    }
+
+    // -- Plan 43-02 Task 3: mode-aware scoring filter (D-17) ------------------
+
+    /// Scored call-graph edges over a fixture where some source functions are
+    /// outside the reachable graph: `e-A` and `e-B` are reachable, `e-C` and `e-D`
+    /// are out-of-graph.
+    fn scored_edges() -> Vec<&'static str> {
+        vec!["e-A", "e-B", "e-C", "e-D"]
+    }
+
+    fn reachable_lookup() -> std::collections::BTreeMap<String, bool> {
+        [
+            ("e-A".to_string(), true),
+            ("e-B".to_string(), true),
+            ("e-C".to_string(), false),
+            ("e-D".to_string(), false),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn oracle_rta_scores_only_reachable_source_edges() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        );
+        // Only the two reachable edges (e-A, e-B) are scored; e-C/e-D excluded.
+        assert_eq!(scored, vec![0, 1]);
+    }
+
+    #[test]
+    fn oracle_jelly_scores_the_full_enumerated_edge_set() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        );
+        // Reachability marking is recorded but does NOT filter — all four scored.
+        assert_eq!(scored, vec![0, 1, 2, 3]);
+        assert!(
+            scored.len() > {
+                // Strictly larger than the oracle-rta scored count on this fixture.
+                filter_scored_edges_by_scoring_mode(
+                    &edges,
+                    |edge| edge,
+                    ScoringMode::OracleRta,
+                    &lookup,
+                )
+                .len()
+            }
+        );
+    }
+
+    #[test]
+    fn whole_repo_scores_every_edge_without_filtering() {
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let scored = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::WholeRepo,
+            &lookup,
+        );
+        assert_eq!(scored, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn oracle_rta_scored_set_is_subset_of_oracle_jelly() {
+        // Regression guard for the backwards-mode footgun (T-43-02-02): on a fixture
+        // with unreachable edges, the oracle-rta scored set must be a (strict or
+        // equal) subset of the oracle-jelly scored set. If the OracleRta/OracleJelly
+        // mapping were swapped, oracle-rta would score MORE than oracle-jelly and
+        // this assertion would fail.
+        let edges = scored_edges();
+        let lookup = reachable_lookup();
+        let rta: std::collections::BTreeSet<usize> = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        )
+        .into_iter()
+        .collect();
+        let jelly: std::collections::BTreeSet<usize> = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        )
+        .into_iter()
+        .collect();
+        assert!(rta.is_subset(&jelly));
+        // Strict subset on this fixture (there are unreachable edges).
+        assert!(rta.len() < jelly.len());
+    }
+
+    #[test]
+    fn unmarked_edges_are_excluded_under_oracle_rta_never_silently_included() {
+        // An edge with no marking cannot be proven reachable, so oracle-rta excludes
+        // it (fail-closed; threat T-43-02-02). oracle-jelly still scores it.
+        let edges = vec!["e-A", "e-unmarked"];
+        let mut lookup = std::collections::BTreeMap::new();
+        lookup.insert("e-A".to_string(), true);
+        let rta = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleRta,
+            &lookup,
+        );
+        assert_eq!(rta, vec![0]); // only e-A, the unmarked edge is excluded
+        let jelly = filter_scored_edges_by_scoring_mode(
+            &edges,
+            |edge| edge,
+            ScoringMode::OracleJelly,
+            &lookup,
+        );
+        assert_eq!(jelly, vec![0, 1]);
+    }
+
+    #[test]
+    fn reachable_graph_lookup_joins_marks_by_call_site_stable_key() {
+        use crate::analysis::ids::ReachabilityRootId;
+        use crate::analysis::reachability::facts::{
+            CallReachabilityFact, CallReachabilityReason, ReachabilityRootFact, RootKind,
+            RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
+        };
+        use crate::analysis::reachability::store::ReachabilityProviderOutput;
+        use crate::core::AnalysisDb;
+
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("pkg/app.go"),
+            "pkg/app.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(1),
+            file,
+            name: "Root".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let root = ReachabilityRootFact {
+            id: ReachabilityRootId(0),
+            kind: RootKind::Exported,
+            language: Language::Go,
+            target_function: function,
+            target_symbol: None,
+            originating_entrypoint: None,
+            file,
+            span: Span::point(file, 1, 1),
+            precision: RootPrecision::ResolvedStatic,
+            provenance: RootProvenance::NativeDiscovery,
+            status: RootStatus::Resolved,
+            provider_id: "polint.reachability".to_string(),
+            stable_key: compute_reachability_root_stable_key(
+                RootKind::Exported,
+                Language::Go,
+                "pkg.Root",
+                file,
+                &Span::point(file, 1, 1),
+            ),
+        };
+        db.replace_reachability_facts(ReachabilityProviderOutput {
+            roots: vec![root],
+            marks: vec![
+                CallReachabilityFact::new(
+                    "site-in",
+                    true,
+                    CallReachabilityReason::RootSeed,
+                    "polint.reachability",
+                ),
+                CallReachabilityFact::new(
+                    "site-out",
+                    false,
+                    CallReachabilityReason::OutsideReachableGraph,
+                    "polint.reachability",
+                ),
+            ],
+        })
+        .expect("store reachability");
+
+        let lookup = reachable_graph_lookup(&db);
+        assert_eq!(lookup.get("site-in"), Some(&true));
+        assert_eq!(lookup.get("site-out"), Some(&false));
+        assert_eq!(lookup.get("site-missing"), None);
     }
 
     fn summary(
