@@ -152,6 +152,16 @@ pub(crate) struct SemanticNodeId(pub(crate) u64);
 )]
 pub(crate) struct SemanticEdgeId(pub(crate) u64);
 
+// `Default` is required because the dense `id` field on `ConstraintFact` carries
+// `#[serde(skip)]` (dense IDs must never enter a serialized stable-payload / digest
+// part, D-06); serde reconstructs the skipped field via `Default`, yielding
+// `SemanticConstraintId(0)`. The dense IDs are assigned only after the stable-key
+// sort (D-05), mirroring `SemanticNodeId`/`SemanticEdgeId`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub(crate) struct SemanticConstraintId(pub(crate) u64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +234,7 @@ mod tests {
         assert_small_id_contract::<ReachabilityRootId>();
         assert_small_id_contract::<SemanticNodeId>();
         assert_small_id_contract::<SemanticEdgeId>();
+        assert_small_id_contract::<SemanticConstraintId>();
     }
 
     #[test]
