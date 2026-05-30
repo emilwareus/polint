@@ -22,7 +22,7 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 
 ### Shared Semantic Graph & Unified Solver
 
-- [ ] **GRAPH-01**: polint has a private `analysis::semantic_graph` with typed `NodeKind` (function, callsite, scope, place, abstract object, module, package) and `EdgeKind` (call, member-of, alloc, flow), indexes, validation, provider manifest, and cache key.
+- [x] **GRAPH-01**: polint has a private `analysis::semantic_graph` with typed `NodeKind` (function, callsite, scope, place, abstract object, module, package) and `EdgeKind` (call, member-of, alloc, flow), indexes, validation, provider manifest, and cache key.
 - [ ] **GRAPH-02**: polint defines a constraint vocabulary (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`) that language frontends emit into the semantic graph; constraint emission is verified by snapshot fixtures.
 - [ ] **GRAPH-03**: polint has a private unified `analysis::solver` with deterministic `VecDeque` worklist, explicit `SolverBudget` / `BudgetStatus`, per-language `SolverPolicy` trait scaffolding, and folds v1.2's `points_to::solver` in as a sub-domain.
 - [ ] **GRAPH-04**: every solver-derived edge carries `DerivedEdgeProvenance` (contributing fact IDs, constraint kind, solver step) consumable by `polint explain`.
@@ -112,7 +112,7 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | REACH-01 | Phase 43 | Complete |
 | REACH-02 | Phase 43 | Complete |
 | REACH-03 | Phase 43 | Complete |
-| GRAPH-01 | Phase 44 | Pending |
+| GRAPH-01 | Phase 44 | Complete |
 | GRAPH-02 | Phase 44 | Pending |
 | GRAPH-03 | Phase 47 | Pending |
 | GRAPH-04 | Phase 47 | Pending |

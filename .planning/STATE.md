@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-30T10:02:04.001Z"
-last_activity: 2026-05-30 -- Phase 44 planning complete
+last_updated: "2026-05-30T10:15:38.961Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 13
   completed_phases: 2
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
   percent: 15
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 44 — semantic graph skeleton & constraint vocabulary
+**Current focus:** Phase 44 — Semantic Graph Skeleton & Constraint Vocabulary
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 44
-Plan: Not started
+Phase: 44 (Semantic Graph Skeleton & Constraint Vocabulary) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 44 planning complete
+Last activity: 2026-05-30 -- Completed 44-01 (semantic graph skeleton: NodeKind/EdgeKind, fact families, dense IDs, store indexes); GRAPH-01 done
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -425,6 +425,11 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 43-03]: SolverMetricSection (solver_step_count/budget_exceeded_reasons) reserved on a #[serde(default)] MetricSections section, NOT the frozen MetricSummary, defaulted 0/empty for Phase 47+ so the byte-identity determinism gate stays stable across the milestone (D-23).
 - [Phase 43-03]: The determinism gate runs N=10 seeded permutations of provider-enumeration order + observed row-insertion order through the live normalize_run path, driven by provider_manifests() so phases 44-54 auto-enroll (D-22), with per-fixture >=1 root / >=1 call site / >=1 in_reachable_graph=false invariants (D-24).
 - [Phase 43-03]: determinism-gate CI job mirrors leak-gate (ubuntu+macos, fail-fast false, independent passes); the Go fixture's unreachable mark needs only tree-sitter call sites so the gate passes without a Go toolchain, matching the no-Go leak-gate analog (D-24/D-25).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: Module node composes core::ModuleNodeId (PATTERNS V3); there is no ModuleId type.
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: Closed NodeKind/EdgeKind enums use pinned-order + serde-rename + as_str() + lock tests, never #[repr(u8)] (PATTERNS V2).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: normalized() assigns dense SemanticNodeId/SemanticEdgeId only after the stable-key sort and remaps edge endpoints to the post-sort node numbering (D-05).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphStore builds both outgoing (source) and incoming (target) adjacency in one post-normalization pass; the incoming index feeds the Phase 47 solver fixpoint (D-14).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphOutput carries nodes+edges only; the constraints field is deferred to Plan 02.
 
 ## Execution Metrics
 
