@@ -300,6 +300,10 @@ impl GraphBuilder {
     // -- TS direct binding constraints -------------------------------------
 
     fn project_ts_direct_bindings(&mut self, db: &AnalysisDb, bindings: &[TsDirectBindingFact]) {
+        // Phase 45 semantic-graph-only projection: TS direct binding rows emit
+        // CopyEdge/CallConstraint rows here and do not create CallTargetFact rows.
+        // The calls/refined-calls contract remains owned by analysis::calls until a
+        // later plan deliberately promotes direct TS bindings into that fact family.
         let context = TsDirectBindingNodeContext::new(db);
         for binding in bindings {
             if binding.status != TsDirectBindingStatus::Resolved {
@@ -998,6 +1002,43 @@ function run() {
                 resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
             let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
             assert_ts_direct_projection(output);
+        }
+
+        #[test]
+        fn semantic_graph_only_projection_does_not_add_call_target_facts() {
+            let (mut db, file) = ts_db_with_file(
+                "src/app.ts",
+                r#"
+function f() {}
+const alias = f;
+function run() {
+  alias();
+}
+"#,
+            );
+            let inventory = extract_ts_inventory(db.file(file).expect("file"));
+            let scope = extract_ts_scope(db.file(file).expect("file"));
+            let target = ts_function(&inventory, "f").clone();
+            let caller = ts_function(&inventory, "run").clone();
+            let callsite = ts_callsite(&inventory, "alias").clone();
+            push_ts_function(&mut db, &target);
+            let caller = push_ts_function(&mut db, &caller);
+            replace_single_ts_callsite(&mut db, caller, &callsite);
+
+            let bindings = resolve_direct_bindings(&inventory, &scope);
+            let before_targets = db.call_targets().len();
+            let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
+
+            assert_ts_direct_projection(output);
+            assert_eq!(db.call_targets().len(), before_targets);
+        }
+
+        #[test]
+        fn source_documents_semantic_graph_only_projection_for_phase_45() {
+            let source = include_str!("build.rs");
+
+            assert!(source.contains("Phase 45 semantic-graph-only projection"));
+            assert!(source.contains("do not create CallTargetFact rows"));
         }
 
         fn assert_ts_direct_projection(output: SemanticGraphOutput) {
