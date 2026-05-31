@@ -87,7 +87,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [x] 45-01-PLAN.md — private JS/TS inventory fact model, Oxc function/callsite extraction, normalized inventory output (JS-01)
 - [x] 45-02-PLAN.md — private JS/TS scope/binding facts, Oxc semantic extraction, scope store indexes, unresolved dynamic boundary rows (JS-02)
 - [x] 45-03-PLAN.md — private TS direct binding facts, local/import/module-mediated direct bindings, normalized binding store/cache contract (JS-02, JS-03 foundation)
-- [ ] 45-04-PLAN.md — project TS direct bindings into semantic graph `CopyEdge` and `CallConstraint` rows (JS-03)
+- [x] 45-04-PLAN.md — project TS direct bindings into semantic graph `CopyEdge` and `CallConstraint` rows (JS-03)
 - [ ] 45-05-PLAN.md — close Phase 45 with Jelly, module/binding, cache/determinism, and public-surface fixtures (JS-01, JS-02, JS-03)
 **UI hint**: no
 
