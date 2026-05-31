@@ -3,7 +3,7 @@
     reason = "Phase 45 wires private TS scope extraction into direct binding across sequential plans"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use oxc_allocator::Allocator;
@@ -76,6 +76,13 @@ fn extract_ts_scope_from_program(
     // Oxc semantic symbols point destructured names at the declaration owner in
     // some cases; this AST fallback preserves an explicit destructuring row.
     bindings.extend(extract_destructuring_rows(
+        file,
+        source,
+        nodes,
+        &scope_keys,
+        scoping,
+    ));
+    bindings.extend(extract_boundary_rows(
         file,
         source,
         nodes,
@@ -468,6 +475,93 @@ fn extract_destructuring_rows(
     }
 
     rows
+}
+
+fn extract_boundary_rows(
+    file: &SourceFile,
+    source: &str,
+    nodes: &AstNodes<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+) -> Vec<TsBindingFact> {
+    let module_scope = scope_keys
+        .get(&scoping.root_scope_id())
+        .cloned()
+        .unwrap_or_else(|| module_scope_key(file));
+    let parameter_names = parameter_names(scoping, nodes);
+    let mut rows = Vec::new();
+
+    for (_, node) in nodes.iter_enumerated() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        let Some((name, reason)) = boundary_reason(&call.callee, &parameter_names) else {
+            continue;
+        };
+        rows.push(binding_row(BindingRowDraft {
+            file,
+            source,
+            span: span_from_oxc(file.id, source, call.span),
+            scope_key: module_scope.clone(),
+            name,
+            declaration_kind: TsDeclarationKind::UnsupportedDynamic,
+            binding_kind: TsBindingKind::UnsupportedDynamic,
+            import_export_kind: TsImportExportKind::None,
+            module_source: None,
+            imported_name: None,
+            exported_name: None,
+            status: TsBindingStatus::unsupported_dynamic(reason),
+        }));
+    }
+
+    rows
+}
+
+fn parameter_names(scoping: &Scoping, nodes: &AstNodes<'_>) -> BTreeSet<String> {
+    scoping
+        .symbol_ids()
+        .filter(|symbol| is_parameter_declaration(nodes, scoping.symbol_declaration(*symbol)))
+        .map(|symbol| scoping.symbol_name(symbol).to_string())
+        .collect()
+}
+
+fn boundary_reason(
+    callee: &Expression<'_>,
+    parameter_names: &BTreeSet<String>,
+) -> Option<(String, &'static str)> {
+    match callee {
+        Expression::Identifier(identifier)
+            if parameter_names.contains(identifier.name.as_str()) =>
+        {
+            Some((
+                identifier.name.to_string(),
+                "parameter callback requires function-token phase",
+            ))
+        }
+        Expression::ComputedMemberExpression(_) => Some((
+            "<computed-member>".to_string(),
+            "computed property requires property-flow phase",
+        )),
+        Expression::StaticMemberExpression(_)
+            if expression_text(callee)
+                .as_deref()
+                .is_some_and(|text| text.contains(".prototype.")) =>
+        {
+            Some((
+                expression_text(callee).unwrap_or_else(|| "<prototype>".to_string()),
+                "prototype dispatch requires later prototype phase",
+            ))
+        }
+        Expression::StaticMemberExpression(member)
+            if matches!(&member.object, Expression::ThisExpression(_)) =>
+        {
+            Some((
+                expression_text(callee).unwrap_or_else(|| "this.<member>".to_string()),
+                "this-dependent call requires receiver modeling",
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn collect_pattern_names(pattern: &BindingPattern<'_>, names: &mut Vec<String>) {
