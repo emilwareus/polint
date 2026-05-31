@@ -532,6 +532,9 @@ impl AnalysisKernel {
                 type_value_alias_dependency_output_digest.clone(),
                 entrypoints_symbol_digest,
                 entrypoints_topology_digest,
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+                entrypoints_semantic_mir_digest.clone(),
             );
         let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
         let semantic_graph_output_digest = semantic_graph.output_digest.clone();

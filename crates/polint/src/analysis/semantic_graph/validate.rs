@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::semantic_graph::facts::SemanticPrecision;
 use crate::analysis::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
 use crate::analysis_kernel::FactPrecision;
@@ -103,7 +102,7 @@ pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Dia
     // references the type substrate (a different family) and is intentionally not
     // checked against the node set here.
     for constraint in constraints {
-        for node in constraint_referenced_nodes(&constraint.kind) {
+        for node in constraint.kind.referenced_nodes() {
             if !node_ids.contains(&node) {
                 push_diagnostic(
                     diagnostics,
@@ -148,21 +147,6 @@ pub(crate) fn reject_exact_precision(
         Some(precision_ceiling_diagnostic("SemanticNode", stable_key))
     } else {
         None
-    }
-}
-
-/// Collects every `SemanticNodeId` referenced by a constraint payload, mirroring the
-/// store's referential validation. `TypeConstraint.type_fact` (a `TypeFactId`) is
-/// intentionally excluded — it is not a graph node.
-fn constraint_referenced_nodes(kind: &ConstraintKind) -> Vec<SemanticNodeId> {
-    match kind {
-        ConstraintKind::CopyEdge { dst, src } => vec![*dst, *src],
-        ConstraintKind::Alloc { dst, object } => vec![*dst, *object],
-        ConstraintKind::FieldLoad { dst, base, .. } => vec![*dst, *base],
-        ConstraintKind::FieldStore { base, src, .. } => vec![*base, *src],
-        ConstraintKind::CallConstraint { callsite } => vec![*callsite],
-        ConstraintKind::TypeConstraint { node, .. } => vec![*node],
-        ConstraintKind::ModelEdge => Vec::new(),
     }
 }
 

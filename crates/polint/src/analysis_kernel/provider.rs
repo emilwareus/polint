@@ -626,27 +626,25 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
     ProviderManifest {
         id: "polint.semantic_graph",
         kind: ProviderKind::WholeRepoDerived,
-        // SC3 dependency-index inputs — PRESENT-NOW vs DEFERRED-AND-WHY (D-17),
-        // mirroring the note in semantic_graph::cache_key. The families listed below
-        // are the SC3 inputs that have producers today (semantic index via
-        // symbols/scopes/references, module/topology, direct calls, types, value,
-        // entrypoints, extensions). DEFERRED inputs have NO producer yet and are
-        // therefore intentionally absent from this slice (not silently dropped):
-        // MIR / CFG / summaries (Phase 47), accepted adaptation models (Phase 49),
-        // and solver budgets (Phase 51/53). Each enters this slice only when its
-        // producer lands. Comment-only; the slice contains ONLY today's families.
+        // Fact families `build_semantic_graph` ACTUALLY reads today (kept in lockstep
+        // with the projection so the declared read-set never overstates consumption):
+        // functions/packages (syntax), scopes (symbol graph), call sites (calls),
+        // value facts (type/value/alias), and MIR places (semantic MIR). The producer
+        // output digest of each is folded into the provider output digest in
+        // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
+        //
+        // SC3 inputs with NO producer yet are intentionally ABSENT until their
+        // producer lands (not silently dropped): CFG / summaries (Phase 47), accepted
+        // adaptation models / `ModelEdge` (Phase 49), and solver budgets (Phase
+        // 51/53). When the projection begins reading a new family, add it here AND
+        // fold its producer digest in the same change.
         inputs: &[
             "functions",
             "packages",
             "scopes",
             "call_sites",
             "value_facts",
-            "access_paths",
-            "type_facts",
-            "symbols",
-            "references",
-            "entrypoints",
-            "extension_facts",
+            "places",
         ],
         outputs: &["semantic_nodes", "semantic_edges", "semantic_constraints"],
         language_scope: LanguageScope::MultiLanguage,
@@ -1299,12 +1297,7 @@ mod tests {
                         "scopes",
                         "call_sites",
                         "value_facts",
-                        "access_paths",
-                        "type_facts",
-                        "symbols",
-                        "references",
-                        "entrypoints",
-                        "extension_facts",
+                        "places",
                     ],
                     outputs: vec!["semantic_nodes", "semantic_edges", "semantic_constraints"],
                 },

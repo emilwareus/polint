@@ -66,7 +66,9 @@ impl SemanticGraphOutput {
         // constraint's node references would point at stale pre-sort node IDs after
         // re-densification.
         for constraint in &mut self.constraints {
-            remap_constraint_nodes(&mut constraint.kind, &remap);
+            constraint
+                .kind
+                .remap_nodes(|node| remap.get(&node).copied().unwrap_or(node));
         }
         self.constraints.sort_by(|left, right| {
             (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
@@ -75,62 +77,6 @@ impl SemanticGraphOutput {
             constraint.id = SemanticConstraintId(index as u64);
         }
         self
-    }
-}
-
-/// Rewrites every `SemanticNodeId` carried by a constraint payload through the
-/// node-densification remap, mirroring the edge-endpoint remap so constraint node
-/// references stay consistent with the post-sort node numbering.
-fn remap_constraint_nodes(
-    kind: &mut ConstraintKind,
-    remap: &BTreeMap<SemanticNodeId, SemanticNodeId>,
-) {
-    let remap_one = |node: &mut SemanticNodeId| {
-        if let Some(&new_id) = remap.get(node) {
-            *node = new_id;
-        }
-    };
-    match kind {
-        ConstraintKind::CopyEdge { dst, src } => {
-            remap_one(dst);
-            remap_one(src);
-        }
-        ConstraintKind::Alloc { dst, object } => {
-            remap_one(dst);
-            remap_one(object);
-        }
-        ConstraintKind::FieldLoad { dst, base, .. } => {
-            remap_one(dst);
-            remap_one(base);
-        }
-        ConstraintKind::FieldStore { base, src, .. } => {
-            remap_one(base);
-            remap_one(src);
-        }
-        ConstraintKind::CallConstraint { callsite } => {
-            remap_one(callsite);
-        }
-        ConstraintKind::TypeConstraint { node, .. } => {
-            remap_one(node);
-        }
-        // `ModelEdge` carries no node payload and emits zero rows (D-11); nothing to
-        // remap.
-        ConstraintKind::ModelEdge => {}
-    }
-}
-
-/// Collects every `SemanticNodeId` referenced by a constraint payload for the
-/// referential validation pass. `TypeConstraint.type_fact` (a `TypeFactId` from the
-/// type substrate, not a graph node) is intentionally excluded.
-fn constraint_referenced_nodes(kind: &ConstraintKind) -> Vec<SemanticNodeId> {
-    match kind {
-        ConstraintKind::CopyEdge { dst, src } => vec![*dst, *src],
-        ConstraintKind::Alloc { dst, object } => vec![*dst, *object],
-        ConstraintKind::FieldLoad { dst, base, .. } => vec![*dst, *base],
-        ConstraintKind::FieldStore { base, src, .. } => vec![*base, *src],
-        ConstraintKind::CallConstraint { callsite } => vec![*callsite],
-        ConstraintKind::TypeConstraint { node, .. } => vec![*node],
-        ConstraintKind::ModelEdge => Vec::new(),
     }
 }
 
@@ -190,7 +136,7 @@ impl SemanticGraphStore {
         // edge-endpoint check. `TypeConstraint.type_fact` references the type
         // substrate (a different family) and is intentionally NOT checked here.
         for constraint in &output.constraints {
-            for node in constraint_referenced_nodes(&constraint.kind) {
+            for node in constraint.kind.referenced_nodes() {
                 if !node_ids.contains(&node) {
                     return Err(AnalysisError::InvalidFact {
                         provider: SEMANTIC_GRAPH_PROVIDER_ID,

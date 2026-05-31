@@ -1,6 +1,3 @@
-use serde::Serialize;
-use std::fmt::Debug;
-
 use crate::analysis::semantic_graph::build::build_semantic_graph;
 use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_parameter_digest;
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
@@ -24,9 +21,9 @@ pub(crate) struct SemanticGraphProviderRunOutput {
 /// 1. project a real-but-minimal graph from existing facts via `build_semantic_graph`
 ///    (read-only, mutates no upstream family),
 /// 2. `normalized()` — stable-key sort,
-/// 3. compute the output digest over EXACTLY the stored stable serde payloads
-///    (`#[serde(skip)]` strips dense IDs; an empty-output sentinel distinguishes the
-///    empty graph), never dense IDs,
+/// 3. compute the output digest over the stored stable KEYS (an edge key encodes its
+///    endpoints; a constraint contributes its referenced nodes' stable keys), never
+///    the run-local dense IDs; an empty-output sentinel distinguishes the empty graph,
 /// 4. dense IDs are a post-digest read concern assigned inside `from_output`,
 /// 5. `db.replace_semantic_graph_facts(...)` stores + referentially validates,
 /// 6. on store error return `output_digest: None` so a cache layer never records a
@@ -49,6 +46,9 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     type_value_alias_output_digest: Digest,
     symbol_output_digest: Digest,
     module_topology_output_digest: Digest,
+    go_syntax_output_digest: Digest,
+    ts_syntax_output_digest: Digest,
+    semantic_mir_output_digest: Digest,
 ) -> SemanticGraphProviderRunOutput {
     debug_assert_eq!(manifest.id, SEMANTIC_GRAPH_PROVIDER_ID);
 
@@ -56,8 +56,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // stable-key order the digest is computed over.
     let output = build_semantic_graph(db).normalized();
 
-    // Phase 3: digest over the stored stable payloads (never dense IDs; the dense
-    // `id` fields carry `#[serde(skip)]`), with the empty-output sentinel.
+    // Phase 3: digest over the stored stable KEYS (never dense IDs — see
+    // `semantic_graph_output_digest`), with the empty-output sentinel.
     let output_digest = semantic_graph_output_digest(
         manifest,
         input_snapshot,
@@ -69,6 +69,9 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &type_value_alias_output_digest,
         &symbol_output_digest,
         &module_topology_output_digest,
+        &go_syntax_output_digest,
+        &ts_syntax_output_digest,
+        &semantic_mir_output_digest,
         &output,
     );
 
@@ -92,7 +95,23 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     }
 }
 
-/// Output digest over stable payloads, never dense IDs (D-17).
+/// Output digest over stable KEYS, never dense IDs (D-17).
+///
+/// Every node/edge/constraint contribution is composed from content-derived stable
+/// keys, NOT the run-local dense `SemanticNodeId`/`SemanticEdgeId` handles: a node's
+/// stable key encodes its kind + referenced identity; an edge's stable key already
+/// encodes both endpoints by their stable keys; a constraint contributes its stable
+/// key plus the stable keys of the nodes it references (resolved through the
+/// post-normalize node table). This honors the D-17 "never dense IDs" contract — the
+/// digest is invariant under any future change to dense-ID numbering that preserves
+/// stable keys.
+///
+/// The folded upstream digests cover the producers of every fact family
+/// `build_semantic_graph` reads: `go`/`ts` syntax (functions, packages), symbol
+/// graph (scopes), calls (call sites), type/value/alias (value facts) and semantic
+/// MIR (places). `identity`/`abstract_domains`/`entrypoints`/`reachability`/
+/// `module_topology` are folded as well so the keystone over-invalidates rather than
+/// risks a stale graph as later phases begin consuming them.
 #[allow(clippy::too_many_arguments)]
 fn semantic_graph_output_digest(
     manifest: &ProviderManifest,
@@ -105,6 +124,9 @@ fn semantic_graph_output_digest(
     type_value_alias_output_digest: &Digest,
     symbol_output_digest: &Digest,
     module_topology_output_digest: &Digest,
+    go_syntax_output_digest: &Digest,
+    ts_syntax_output_digest: &Digest,
+    semantic_mir_output_digest: &Digest,
     output: &SemanticGraphOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -121,6 +143,9 @@ fn semantic_graph_output_digest(
         format!("type_value_alias_output={type_value_alias_output_digest}"),
         format!("symbol_graph={symbol_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
+        format!("go_syntax={go_syntax_output_digest}"),
+        format!("ts_syntax={ts_syntax_output_digest}"),
+        format!("semantic_mir={semantic_mir_output_digest}"),
     ];
     extend_component_parts(
         &mut parts,
@@ -133,24 +158,47 @@ fn semantic_graph_output_digest(
         &input_snapshot.ts_js_lifecycle.components,
     );
 
+    // Post-normalize node dense id (== position) -> stable key, so a constraint can
+    // contribute its endpoints by their stable keys rather than dense handles.
+    let node_key_by_id: Vec<&str> = output
+        .nodes
+        .iter()
+        .map(|node| node.stable_key.as_str())
+        .collect();
+
     parts.extend(
         output
             .nodes
             .iter()
-            .map(|node| format!("node={}", stable_fact_payload(node))),
+            .map(|node| format!("node={}|prec={:?}", node.stable_key, node.precision)),
     );
     parts.extend(
         output
             .edges
             .iter()
-            .map(|edge| format!("edge={}", stable_fact_payload(edge))),
+            .map(|edge| format!("edge={}|prec={:?}", edge.stable_key, edge.precision)),
     );
-    parts.extend(
-        output
-            .constraints
-            .iter()
-            .map(|constraint| format!("constraint={}", stable_fact_payload(constraint))),
-    );
+    parts.extend(output.constraints.iter().map(|constraint| {
+        let mut refs: Vec<&str> = constraint
+            .kind
+            .referenced_nodes()
+            .into_iter()
+            .map(|node| {
+                node_key_by_id
+                    .get(node.0 as usize)
+                    .copied()
+                    .unwrap_or("<unresolved>")
+            })
+            .collect();
+        refs.sort_unstable();
+        format!(
+            "constraint={}|status={:?}|prec={:?}|refs=[{}]",
+            constraint.stable_key,
+            constraint.status,
+            constraint.precision,
+            refs.join(","),
+        )
+    }));
     if output.nodes.is_empty() && output.edges.is_empty() && output.constraints.is_empty() {
         parts.push("semantic_graph_output=empty".to_string());
     }
@@ -167,13 +215,6 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
             component.name, component.status, component.digest
         )
     }));
-}
-
-fn stable_fact_payload<T>(fact: &T) -> String
-where
-    T: Serialize + Debug,
-{
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -280,6 +321,9 @@ mod tests {
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
+            absent("polint.go.syntax"),
+            absent("polint.ts.syntax"),
+            absent("polint.semantic_mir"),
         )
     }
 
@@ -359,6 +403,9 @@ mod tests {
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
+            absent("polint.go.syntax"),
+            absent("polint.ts.syntax"),
+            absent("polint.semantic_mir"),
         )
         .output_digest;
         let mut db_b = db_with_go_main();
@@ -374,6 +421,9 @@ mod tests {
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
+            absent("polint.go.syntax"),
+            absent("polint.ts.syntax"),
+            absent("polint.semantic_mir"),
         )
         .output_digest;
         assert_ne!(with_absent, with_present);

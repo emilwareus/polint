@@ -92,6 +92,73 @@ impl ConstraintKind {
             Self::TypeConstraint { .. } => "type_constraint",
         }
     }
+
+    /// Every `SemanticNodeId` this payload references — the single source of truth
+    /// for both referential validation (`store`/`validate`) and dense-ID remapping.
+    ///
+    /// Matched WITHOUT a `..` rest pattern and binding every field (non-node fields
+    /// via `_`), so adding any field to a variant is a **compile error here** rather
+    /// than a silent escape from remap/validation. Non-node fields (`field`,
+    /// `type_fact`) are intentionally excluded — a `TypeFactId` is a type-substrate
+    /// identity, not a graph node.
+    pub(crate) fn referenced_nodes(&self) -> Vec<SemanticNodeId> {
+        match self {
+            Self::CopyEdge { dst, src } => vec![*dst, *src],
+            Self::Alloc { dst, object } => vec![*dst, *object],
+            Self::FieldLoad {
+                dst,
+                base,
+                field: _,
+            } => vec![*dst, *base],
+            Self::FieldStore {
+                base,
+                field: _,
+                src,
+            } => vec![*base, *src],
+            Self::CallConstraint { callsite } => vec![*callsite],
+            Self::ModelEdge => Vec::new(),
+            Self::TypeConstraint { node, type_fact: _ } => vec![*node],
+        }
+    }
+
+    /// Applies `map` in place to every `SemanticNodeId` this payload references,
+    /// used to rewrite endpoints through the node-densification remap. Matched
+    /// WITHOUT `..` for the same drift-proofing as [`referenced_nodes`].
+    pub(crate) fn remap_nodes(&mut self, map: impl Fn(SemanticNodeId) -> SemanticNodeId) {
+        match self {
+            Self::CopyEdge { dst, src } => {
+                *dst = map(*dst);
+                *src = map(*src);
+            }
+            Self::Alloc { dst, object } => {
+                *dst = map(*dst);
+                *object = map(*object);
+            }
+            Self::FieldLoad {
+                dst,
+                base,
+                field: _,
+            } => {
+                *dst = map(*dst);
+                *base = map(*base);
+            }
+            Self::FieldStore {
+                base,
+                field: _,
+                src,
+            } => {
+                *base = map(*base);
+                *src = map(*src);
+            }
+            Self::CallConstraint { callsite } => {
+                *callsite = map(*callsite);
+            }
+            Self::ModelEdge => {}
+            Self::TypeConstraint { node, type_fact: _ } => {
+                *node = map(*node);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

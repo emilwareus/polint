@@ -19,22 +19,24 @@ pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 /// deferred input enters this digest (and the manifest `inputs` slice) only when its
 /// producer lands — invalidating the cache at that point by construction.
 ///
-/// PRESENT-NOW (these have producers today; their output digests are folded into the
-/// provider output digest in `provider.rs`, and the families they expose appear in
-/// the manifest `inputs` slice):
-/// - semantic index (`polint.symbol_graph`: scopes, symbols, references)
-/// - module graph / topology (`polint.module_graph` / `polint.module_topology`)
-/// - direct calls (`polint.calls`: call sites)
-/// - types / value / alias (`polint.type_value_alias`)
-/// - entrypoints (`polint.entrypoints`)
-/// - extensions (`polint.extensions`)
-/// - identity (`polint.identity`) and reachability (`polint.reachability`)
+/// READ-AND-FOLDED (the projection reads these families today; the producer output
+/// digest of each is folded into the provider output digest in
+/// `provider::semantic_graph_output_digest`, and the families appear in the manifest
+/// `inputs` slice):
+/// - functions / packages (`polint.go.syntax` / `polint.ts.syntax`)
+/// - scopes (`polint.symbol_graph`)
+/// - call sites (`polint.calls`)
+/// - value facts (`polint.type_value_alias`)
+/// - MIR places (`polint.semantic_mir`)
+///
+/// ALSO-FOLDED, NOT-YET-READ (digests folded so the keystone over-invalidates rather
+/// than risks a stale graph as later phases begin consuming them, but the projection
+/// does NOT read these families yet, so they are NOT in the manifest `inputs` slice):
+/// `polint.identity`, `polint.abstract_domains`, `polint.entrypoints`,
+/// `polint.reachability`, `polint.module_topology`.
 ///
 /// DEFERRED-AND-WHY (no producer exists yet; emitted/digested as ZERO until the named
 /// phase lands a producer — NOT a silent omission):
-/// - MIR — full unified MIR consumption is reserved for Phase 47 (unified call-graph
-///   solver). (Local semantic MIR exists, but the SC3 dependency-index MIR input the
-///   solver folds over is a Phase 47 concern.)
 /// - CFG — reserved for Phase 47's budgeted solver consumption.
 /// - summaries — reserved for Phase 47/50 (interprocedural summary folding).
 /// - accepted adaptation models — reserved for Phase 49 (ADAPT-01); no model producer

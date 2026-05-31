@@ -24,7 +24,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::analysis::ids::SemanticNodeId;
+use crate::analysis::ids::{PlaceId, SemanticNodeId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
 use crate::analysis::semantic_graph::facts::{
@@ -70,6 +70,9 @@ struct GraphBuilder {
     /// node stable key -> pre-sort SemanticNodeId, so a node identity is projected
     /// at most once and edges/constraints can resolve their endpoints.
     node_by_key: BTreeMap<String, SemanticNodeId>,
+    /// pre-sort SemanticNodeId (as index) -> node stable key, the O(1) reverse of
+    /// `node_by_key` so `node_key_for` (called twice per edge) never linear-scans.
+    key_by_node: Vec<String>,
 }
 
 impl GraphBuilder {
@@ -82,6 +85,10 @@ impl GraphBuilder {
         let id = SemanticNodeId(self.next_node);
         self.next_node += 1;
         self.node_by_key.insert(stable_key.clone(), id);
+        // key_by_node is index-aligned with the sequential pre-sort id, so id.0 ==
+        // key_by_node.len() at the moment of the push.
+        debug_assert_eq!(id.0 as usize, self.key_by_node.len());
+        self.key_by_node.push(stable_key.clone());
         self.nodes.push(SemanticNodeFact {
             id,
             kind,
@@ -138,11 +145,15 @@ impl GraphBuilder {
         });
     }
 
+    /// Resolves a pre-sort node id back to its stable key in O(1) via the
+    /// index-aligned `key_by_node` sidecar. `push_edge` only ever receives ids
+    /// returned by `intern_node`, so the index is always in range; an out-of-range
+    /// id is a builder invariant violation, not an expected empty-key fallback.
     fn node_key_for(&self, id: SemanticNodeId) -> String {
-        self.node_by_key
-            .iter()
-            .find_map(|(key, &node_id)| (node_id == id).then(|| key.clone()))
-            .unwrap_or_default()
+        self.key_by_node
+            .get(id.0 as usize)
+            .cloned()
+            .expect("edge endpoint must reference an interned node")
     }
 
     // -- node projection ----------------------------------------------------
@@ -170,22 +181,23 @@ impl GraphBuilder {
         &self,
         db: &AnalysisDb,
         function: &crate::core::FunctionFact,
-    ) -> SemanticNodeId {
+    ) -> Option<SemanticNodeId> {
         let key = function_node_key(db, function);
-        self.node_by_key
-            .get(&key)
-            .copied()
-            .unwrap_or(SemanticNodeId(u64::MAX))
+        self.node_by_key.get(&key).copied()
     }
 
     // -- call edges + call constraints --------------------------------------
 
     fn project_call_edges_and_constraints(&mut self, db: &AnalysisDb) {
-        // Map FunctionId -> its node id by walking functions once.
+        // Map FunctionId -> its node id by walking functions once. Functions that
+        // were not interned as nodes are simply absent (no sentinel).
         let func_node: BTreeMap<_, _> = db
             .functions()
             .iter()
-            .map(|function| (function.id, self.function_node(db, function)))
+            .filter_map(|function| {
+                self.function_node(db, function)
+                    .map(|node| (function.id, node))
+            })
             .collect();
 
         for site in db.call_sites() {
@@ -195,9 +207,7 @@ impl GraphBuilder {
             };
             // Call edge: caller function node -> callsite node, only where the caller
             // resolves to a projected function node (honest: no fabricated endpoints).
-            if let Some(&caller_node) = func_node.get(&site.caller)
-                && caller_node != SemanticNodeId(u64::MAX)
-            {
+            if let Some(&caller_node) = func_node.get(&site.caller) {
                 self.push_edge(EdgeKind::Call, caller_node, callsite_node);
             }
             // CallConstraint anchored at the callsite node — one per call site.
@@ -248,6 +258,18 @@ impl GraphBuilder {
     // that wires the object-token bridge (D-07 honesty), rather than inflating recall.
 
     fn project_value_constraints(&mut self, db: &AnalysisDb) {
+        // `PlaceId` -> the place's own content-stable key. Keying a Place node by the
+        // *place* identity (not the owning value fact) means the SAME place referenced
+        // by different value facts maps to ONE node, so the Phase 47 solver can unify
+        // copy chains through a shared place. A place absent from the MIR place table
+        // has no honest stable identity at this layer, so its copy is skipped rather
+        // than fabricated (D-07), mirroring the Alloc/Field deferrals.
+        let place_key_by_id: BTreeMap<PlaceId, &str> = db
+            .mir_places()
+            .iter()
+            .map(|place| (place.id, place.stable_key.as_str()))
+            .collect();
+
         for value in db.value_facts() {
             // Only project where the value's subject is a concrete place — that is the
             // `dst` of the copy relationship.
@@ -255,16 +277,23 @@ impl GraphBuilder {
                 continue;
             };
 
-            // `dst <- src`: a value copy from another concrete place. Both endpoints
-            // are real `Place` nodes; nothing is fabricated.
+            // `dst <- src`: a value copy from another concrete place.
             let src_place = match &value.kind {
                 ValueKind::PlaceRef(src) | ValueKind::CallReturn(src) => *src,
                 _ => continue,
             };
-            let dst_key = place_node_key(&value.stable_key, "subject");
-            let dst_node = self.intern_node(NodeKind::Place(dst_place), dst_key);
-            let src_key = place_node_key(&value.stable_key, "source");
-            let src_node = self.intern_node(NodeKind::Place(src_place), src_key);
+
+            // Both endpoints must resolve to a place with an honest, shared stable
+            // identity; otherwise skip rather than fabricate a per-fact place node.
+            let (Some(&dst_stable), Some(&src_stable)) = (
+                place_key_by_id.get(&dst_place),
+                place_key_by_id.get(&src_place),
+            ) else {
+                continue;
+            };
+
+            let dst_node = self.intern_node(NodeKind::Place(dst_place), place_node_key(dst_stable));
+            let src_node = self.intern_node(NodeKind::Place(src_place), place_node_key(src_stable));
             self.push_constraint(
                 ConstraintKind::CopyEdge {
                     dst: dst_node,
@@ -331,16 +360,16 @@ fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
     .into_string()
 }
 
-/// Place node key derived from the owning fact's stable key plus a role label, so the
-/// `subject`/`source` place of the same value fact map to distinct nodes without
-/// fabricating dense place IDs as identity.
-fn place_node_key(owner_stable_key: &str, role: &str) -> String {
+/// Place node key derived from the place's OWN content-stable identity (the
+/// `PlaceFact.stable_key`, which the MIR layer composes from stable context, never
+/// run-local dense IDs). Keying on the place identity — not the owning value fact —
+/// is what makes the same place a single shared node across copies.
+fn place_node_key(place_stable_key: &str) -> String {
     semantic_stable_key(
         FactFamily::Place,
         &[
             ("node_kind", "place".to_string()),
-            ("owner", owner_stable_key.to_string()),
-            ("role", role.to_string()),
+            ("identity", place_stable_key.to_string()),
         ],
     )
     .into_string()
