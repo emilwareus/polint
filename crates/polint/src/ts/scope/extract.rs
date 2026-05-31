@@ -1,0 +1,899 @@
+#![allow(
+    dead_code,
+    reason = "Phase 45 wires private TS scope extraction into direct binding across sequential plans"
+)]
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use oxc_allocator::Allocator;
+use oxc_ast::AstKind;
+use oxc_ast::ast::{
+    Argument, BindingPattern, Expression, FunctionType, ImportDeclarationSpecifier,
+    ImportOrExportKind, ModuleExportName, Program, Statement, VariableDeclarationKind,
+};
+use oxc_parser::Parser;
+use oxc_semantic::{
+    AstNodes, ScopeId as OxcScopeId, Scoping, SemanticBuilder, SymbolFlags, SymbolId as OxcSymbolId,
+};
+use oxc_span::{GetSpan, SourceType};
+
+use crate::analysis::ids::{TsBindingId, TsScopeId};
+use crate::core::{FileId, SourceFile, Span, span_from_byte_range};
+use crate::ts::scope::facts::{
+    TsBindingFact, TsBindingKind, TsBindingStatus, TsDeclarationKind, TsImportExportKind,
+    TsScopeFact, TsScopeKind,
+};
+use crate::ts::scope::store::TsScopeOutput;
+
+pub(crate) fn extract_ts_scope(file: &SourceFile) -> TsScopeOutput {
+    let source = file.source.as_ref();
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+
+    if parsed.panicked && parsed.program.body.is_empty() {
+        return TsScopeOutput::default();
+    }
+
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    extract_ts_scope_from_program(
+        file,
+        source,
+        &parsed.program,
+        semantic.scoping(),
+        semantic.nodes(),
+    )
+    .normalized()
+}
+
+fn extract_ts_scope_from_program(
+    file: &SourceFile,
+    source: &str,
+    program: &Program<'_>,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) -> TsScopeOutput {
+    let (scopes, scope_keys) = extract_scope_rows(file, source, scoping, nodes);
+    let mut bindings = extract_semantic_binding_rows(file, source, scoping, nodes, &scope_keys);
+    // Oxc semantic symbols record import bindings, but not each import/export
+    // specifier's module/source alias shape as a standalone row.
+    bindings.extend(extract_import_export_rows(
+        file,
+        source,
+        program,
+        &scope_keys,
+        scoping,
+    ));
+    // Oxc semantic symbols do not model local alias assignments as alias rows;
+    // this AST fallback records only direct identifier/require aliases.
+    bindings.extend(extract_alias_rows(
+        file,
+        source,
+        nodes,
+        &scope_keys,
+        scoping,
+    ));
+    // Oxc semantic symbols point destructured names at the declaration owner in
+    // some cases; this AST fallback preserves an explicit destructuring row.
+    bindings.extend(extract_destructuring_rows(
+        file,
+        source,
+        nodes,
+        &scope_keys,
+        scoping,
+    ));
+
+    TsScopeOutput { scopes, bindings }
+}
+
+fn extract_scope_rows(
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) -> (Vec<TsScopeFact>, BTreeMap<OxcScopeId, String>) {
+    let mut scope_keys = BTreeMap::new();
+    let mut rows = Vec::new();
+
+    for scope_id in scoping.scope_descendants_from_root() {
+        let node_id = scoping.get_node_id(scope_id);
+        let kind = ts_scope_kind(nodes.kind(node_id));
+        let span = span_from_oxc(file.id, source, nodes.kind(node_id).span());
+        let stable_key = scope_stable_key(file, &span, kind);
+        scope_keys.insert(scope_id, stable_key.clone());
+        let parent_scope_key = scoping
+            .scope_parent_id(scope_id)
+            .and_then(|parent| scope_keys.get(&parent).cloned());
+        rows.push(TsScopeFact {
+            id: TsScopeId(0),
+            file: file.id,
+            span,
+            stable_key,
+            parent_scope_key,
+            kind,
+        });
+    }
+
+    (rows, scope_keys)
+}
+
+fn extract_semantic_binding_rows(
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+) -> Vec<TsBindingFact> {
+    let mut symbols = scoping.symbol_ids().collect::<Vec<_>>();
+    symbols.sort_by(|left, right| {
+        let left_span = scoping.symbol_span(*left);
+        let right_span = scoping.symbol_span(*right);
+        (
+            left_span.start,
+            left_span.end,
+            scoping.symbol_name(*left),
+            left.index(),
+        )
+            .cmp(&(
+                right_span.start,
+                right_span.end,
+                scoping.symbol_name(*right),
+                right.index(),
+            ))
+    });
+
+    symbols
+        .into_iter()
+        .map(|symbol| semantic_binding_row(file, source, scoping, nodes, scope_keys, symbol))
+        .collect()
+}
+
+fn semantic_binding_row(
+    file: &SourceFile,
+    source: &str,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    symbol: OxcSymbolId,
+) -> TsBindingFact {
+    let flags = scoping.symbol_flags(symbol);
+    let scope_id = scoping.symbol_scope_id(symbol);
+    let scope_key = scope_keys
+        .get(&scope_id)
+        .cloned()
+        .unwrap_or_else(|| module_scope_key(file));
+    let parent_scope_key = scoping
+        .scope_parent_id(scope_id)
+        .and_then(|parent| scope_keys.get(&parent).cloned());
+    let declaration_node = scoping.symbol_declaration(symbol);
+    let declaration_kind = declaration_kind_for_symbol(flags, nodes, declaration_node);
+    let binding_kind = binding_kind_for_symbol(flags, declaration_kind);
+    let span = span_from_oxc(file.id, source, scoping.symbol_span(symbol));
+    let name = scoping.symbol_name(symbol).to_string();
+    let status = if flags.is_import() {
+        TsBindingStatus::external("<semantic-import>")
+    } else {
+        TsBindingStatus::present()
+    };
+    let import_export_kind = if flags.is_import() {
+        TsImportExportKind::ImportNamed
+    } else {
+        TsImportExportKind::None
+    };
+    let stable_key = binding_stable_key(
+        file,
+        &span,
+        &scope_key,
+        &name,
+        binding_kind,
+        import_export_kind,
+        &status,
+    );
+
+    TsBindingFact {
+        id: TsBindingId(0),
+        file: file.id,
+        span,
+        stable_key,
+        scope_key,
+        parent_scope_key,
+        name,
+        declaration_kind,
+        binding_kind,
+        import_export_kind,
+        module_source: None,
+        imported_name: None,
+        exported_name: None,
+        inventory_function_key: None,
+        inventory_callsite_key: None,
+        status,
+    }
+}
+
+fn extract_import_export_rows(
+    file: &SourceFile,
+    source: &str,
+    program: &Program<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+) -> Vec<TsBindingFact> {
+    let module_scope = scope_keys
+        .get(&scoping.root_scope_id())
+        .cloned()
+        .unwrap_or_else(|| module_scope_key(file));
+    let mut rows = Vec::new();
+
+    for statement in &program.body {
+        match statement {
+            Statement::ImportDeclaration(import) => {
+                let import_path = import.source.value.to_string();
+                let Some(specifiers) = &import.specifiers else {
+                    rows.push(binding_row(BindingRowDraft {
+                        file,
+                        source,
+                        span: span_from_oxc(file.id, source, import.span),
+                        scope_key: module_scope.clone(),
+                        name: import_path.clone(),
+                        declaration_kind: TsDeclarationKind::Import,
+                        binding_kind: TsBindingKind::Import,
+                        import_export_kind: TsImportExportKind::SideEffectImport,
+                        module_source: Some(import_path.clone()),
+                        imported_name: None,
+                        exported_name: None,
+                        status: TsBindingStatus::external(import_path),
+                    }));
+                    continue;
+                };
+
+                for specifier in specifiers {
+                    match specifier {
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                            let local = default.local.name.to_string();
+                            rows.push(import_binding_row(
+                                file,
+                                source,
+                                default.span,
+                                module_scope.clone(),
+                                local,
+                                "default".to_string(),
+                                import_path.clone(),
+                                TsBindingKind::DefaultImport,
+                                TsImportExportKind::ImportDefault,
+                            ));
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                            let local = namespace.local.name.to_string();
+                            rows.push(import_binding_row(
+                                file,
+                                source,
+                                namespace.span,
+                                module_scope.clone(),
+                                local,
+                                "*".to_string(),
+                                import_path.clone(),
+                                TsBindingKind::NamespaceImport,
+                                TsImportExportKind::ImportNamespace,
+                            ));
+                        }
+                        ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                            let local = named.local.name.to_string();
+                            let imported = module_export_name_text(&named.imported);
+                            let is_type_import =
+                                matches!(import.import_kind, ImportOrExportKind::Type)
+                                    || matches!(named.import_kind, ImportOrExportKind::Type);
+                            rows.push(import_binding_row(
+                                file,
+                                source,
+                                named.span,
+                                module_scope.clone(),
+                                local.clone(),
+                                imported.clone(),
+                                import_path.clone(),
+                                TsBindingKind::NamedImport,
+                                TsImportExportKind::ImportNamed,
+                            ));
+                            if local != imported || is_type_import {
+                                rows.push(binding_row(BindingRowDraft {
+                                    file,
+                                    source,
+                                    span: span_from_oxc(file.id, source, named.span),
+                                    scope_key: module_scope.clone(),
+                                    name: local,
+                                    declaration_kind: TsDeclarationKind::Alias,
+                                    binding_kind: TsBindingKind::Alias,
+                                    import_export_kind: TsImportExportKind::Alias,
+                                    module_source: Some(import_path.clone()),
+                                    imported_name: Some(imported),
+                                    exported_name: None,
+                                    status: TsBindingStatus::external(import_path.clone()),
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(source_module) = &export.source {
+                    for specifier in &export.specifiers {
+                        let exported = module_export_name_text(&specifier.exported);
+                        rows.push(binding_row(BindingRowDraft {
+                            file,
+                            source,
+                            span: span_from_oxc(file.id, source, specifier.span),
+                            scope_key: module_scope.clone(),
+                            name: exported.clone(),
+                            declaration_kind: TsDeclarationKind::ReExport,
+                            binding_kind: TsBindingKind::ReExport,
+                            import_export_kind: TsImportExportKind::ReExportNamed,
+                            module_source: Some(source_module.value.to_string()),
+                            imported_name: Some(module_export_name_text(&specifier.local)),
+                            exported_name: Some(exported),
+                            status: TsBindingStatus::external(source_module.value.to_string()),
+                        }));
+                    }
+                }
+            }
+            Statement::ExportAllDeclaration(export) => {
+                rows.push(binding_row(BindingRowDraft {
+                    file,
+                    source,
+                    span: span_from_oxc(file.id, source, export.span),
+                    scope_key: module_scope.clone(),
+                    name: "*".to_string(),
+                    declaration_kind: TsDeclarationKind::ReExport,
+                    binding_kind: TsBindingKind::ReExport,
+                    import_export_kind: TsImportExportKind::ReExportAll,
+                    module_source: Some(export.source.value.to_string()),
+                    imported_name: Some("*".to_string()),
+                    exported_name: Some("*".to_string()),
+                    status: TsBindingStatus::external(export.source.value.to_string()),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    rows
+}
+
+fn extract_alias_rows(
+    file: &SourceFile,
+    source: &str,
+    nodes: &AstNodes<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+) -> Vec<TsBindingFact> {
+    let module_scope = scope_keys
+        .get(&scoping.root_scope_id())
+        .cloned()
+        .unwrap_or_else(|| module_scope_key(file));
+    let mut rows = Vec::new();
+
+    for (_, node) in nodes.iter_enumerated() {
+        let AstKind::VariableDeclarator(declarator) = node.kind() else {
+            continue;
+        };
+        let Some(name) = binding_identifier_name(&declarator.id) else {
+            continue;
+        };
+        let Some(init) = &declarator.init else {
+            continue;
+        };
+        match init {
+            Expression::Identifier(target) => rows.push(binding_row(BindingRowDraft {
+                file,
+                source,
+                span: span_from_oxc(file.id, source, declarator.span),
+                scope_key: module_scope.clone(),
+                name,
+                declaration_kind: TsDeclarationKind::Alias,
+                binding_kind: TsBindingKind::Alias,
+                import_export_kind: TsImportExportKind::Alias,
+                module_source: None,
+                imported_name: Some(target.name.to_string()),
+                exported_name: None,
+                status: TsBindingStatus::present(),
+            })),
+            Expression::CallExpression(call)
+                if expression_text(&call.callee).as_deref() == Some("require") =>
+            {
+                let module = match call.arguments.first() {
+                    Some(Argument::StringLiteral(path)) => path.value.to_string(),
+                    _ => "<dynamic-require>".to_string(),
+                };
+                rows.push(binding_row(BindingRowDraft {
+                    file,
+                    source,
+                    span: span_from_oxc(file.id, source, declarator.span),
+                    scope_key: module_scope.clone(),
+                    name,
+                    declaration_kind: TsDeclarationKind::Import,
+                    binding_kind: TsBindingKind::Import,
+                    import_export_kind: TsImportExportKind::CommonJsRequire,
+                    module_source: Some(module.clone()),
+                    imported_name: Some("module.exports".to_string()),
+                    exported_name: None,
+                    status: if module == "<dynamic-require>" {
+                        TsBindingStatus::unsupported_dynamic("dynamic require")
+                    } else {
+                        TsBindingStatus::external(module)
+                    },
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    rows
+}
+
+fn extract_destructuring_rows(
+    file: &SourceFile,
+    source: &str,
+    nodes: &AstNodes<'_>,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+) -> Vec<TsBindingFact> {
+    let module_scope = scope_keys
+        .get(&scoping.root_scope_id())
+        .cloned()
+        .unwrap_or_else(|| module_scope_key(file));
+    let mut rows = Vec::new();
+
+    for (_, node) in nodes.iter_enumerated() {
+        let AstKind::VariableDeclarator(declarator) = node.kind() else {
+            continue;
+        };
+        if matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
+            continue;
+        }
+        let mut names = Vec::new();
+        collect_pattern_names(&declarator.id, &mut names);
+        for name in names {
+            rows.push(binding_row(BindingRowDraft {
+                file,
+                source,
+                span: span_from_oxc(file.id, source, declarator.span),
+                scope_key: module_scope.clone(),
+                name,
+                declaration_kind: TsDeclarationKind::Destructuring,
+                binding_kind: TsBindingKind::Destructuring,
+                import_export_kind: TsImportExportKind::None,
+                module_source: None,
+                imported_name: None,
+                exported_name: None,
+                status: TsBindingStatus::present(),
+            }));
+        }
+    }
+
+    rows
+}
+
+fn collect_pattern_names(pattern: &BindingPattern<'_>, names: &mut Vec<String>) {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => names.push(identifier.name.to_string()),
+        BindingPattern::ObjectPattern(pattern) => {
+            for property in &pattern.properties {
+                collect_pattern_names(&property.value, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                collect_pattern_names(&rest.argument, names);
+            }
+        }
+        BindingPattern::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                collect_pattern_names(element, names);
+            }
+            if let Some(rest) = &pattern.rest {
+                collect_pattern_names(&rest.argument, names);
+            }
+        }
+        BindingPattern::AssignmentPattern(pattern) => collect_pattern_names(&pattern.left, names),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "import rows mirror the normalized binding fact dimensions"
+)]
+fn import_binding_row(
+    file: &SourceFile,
+    source: &str,
+    span: oxc_span::Span,
+    scope_key: String,
+    local: String,
+    imported: String,
+    import_path: String,
+    binding_kind: TsBindingKind,
+    import_export_kind: TsImportExportKind,
+) -> TsBindingFact {
+    binding_row(BindingRowDraft {
+        file,
+        source,
+        span: span_from_oxc(file.id, source, span),
+        scope_key,
+        name: local,
+        declaration_kind: TsDeclarationKind::Import,
+        binding_kind,
+        import_export_kind,
+        module_source: Some(import_path.clone()),
+        imported_name: Some(imported),
+        exported_name: None,
+        status: TsBindingStatus::external(import_path),
+    })
+}
+
+struct BindingRowDraft<'a> {
+    file: &'a SourceFile,
+    source: &'a str,
+    span: Span,
+    scope_key: String,
+    name: String,
+    declaration_kind: TsDeclarationKind,
+    binding_kind: TsBindingKind,
+    import_export_kind: TsImportExportKind,
+    module_source: Option<String>,
+    imported_name: Option<String>,
+    exported_name: Option<String>,
+    status: TsBindingStatus,
+}
+
+fn binding_row(draft: BindingRowDraft<'_>) -> TsBindingFact {
+    let stable_key = binding_stable_key(
+        draft.file,
+        &draft.span,
+        &draft.scope_key,
+        &draft.name,
+        draft.binding_kind,
+        draft.import_export_kind,
+        &draft.status,
+    );
+    TsBindingFact {
+        id: TsBindingId(0),
+        file: draft.file.id,
+        span: draft.span,
+        stable_key,
+        scope_key: draft.scope_key,
+        parent_scope_key: None,
+        name: draft.name,
+        declaration_kind: draft.declaration_kind,
+        binding_kind: draft.binding_kind,
+        import_export_kind: draft.import_export_kind,
+        module_source: draft.module_source,
+        imported_name: draft.imported_name,
+        exported_name: draft.exported_name,
+        inventory_function_key: None,
+        inventory_callsite_key: None,
+        status: draft.status,
+    }
+}
+
+fn declaration_kind_for_symbol(
+    flags: SymbolFlags,
+    nodes: &AstNodes<'_>,
+    declaration_node: oxc_semantic::NodeId,
+) -> TsDeclarationKind {
+    if flags.is_import() {
+        return TsDeclarationKind::Import;
+    }
+    if flags.is_catch_variable() {
+        return TsDeclarationKind::Catch;
+    }
+    if is_parameter_declaration(nodes, declaration_node) {
+        return TsDeclarationKind::Parameter;
+    }
+    if is_destructuring_declaration(nodes, declaration_node) {
+        return TsDeclarationKind::Destructuring;
+    }
+    match nodes.kind(declaration_node) {
+        AstKind::VariableDeclaration(declaration) => match declaration.kind {
+            VariableDeclarationKind::Var => TsDeclarationKind::Var,
+            VariableDeclarationKind::Let => TsDeclarationKind::Let,
+            VariableDeclarationKind::Const => TsDeclarationKind::Const,
+            VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
+                TsDeclarationKind::UnsupportedDynamic
+            }
+        },
+        AstKind::VariableDeclarator(declarator) => match declarator.kind {
+            VariableDeclarationKind::Var => TsDeclarationKind::Var,
+            VariableDeclarationKind::Let => TsDeclarationKind::Let,
+            VariableDeclarationKind::Const => match declarator.init.as_ref() {
+                Some(Expression::FunctionExpression(_)) => TsDeclarationKind::FunctionExpression,
+                Some(Expression::ClassExpression(_)) => TsDeclarationKind::ClassExpression,
+                _ => TsDeclarationKind::Const,
+            },
+            VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
+                TsDeclarationKind::UnsupportedDynamic
+            }
+        },
+        AstKind::Function(function) => match function.r#type {
+            FunctionType::FunctionDeclaration | FunctionType::TSDeclareFunction => {
+                TsDeclarationKind::FunctionDeclaration
+            }
+            FunctionType::FunctionExpression | FunctionType::TSEmptyBodyFunctionExpression => {
+                TsDeclarationKind::FunctionExpression
+            }
+        },
+        AstKind::Class(_) => TsDeclarationKind::ClassDeclaration,
+        AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_) => {
+            TsDeclarationKind::Parameter
+        }
+        AstKind::CatchParameter(_) => TsDeclarationKind::Catch,
+        _ if flags.is_function() => TsDeclarationKind::FunctionDeclaration,
+        _ if flags.is_class() => TsDeclarationKind::ClassDeclaration,
+        _ if flags.is_const_variable() => TsDeclarationKind::Const,
+        _ if flags.is_function_scoped_declaration() => TsDeclarationKind::Var,
+        _ => TsDeclarationKind::Unknown,
+    }
+}
+
+fn binding_kind_for_symbol(
+    flags: SymbolFlags,
+    declaration_kind: TsDeclarationKind,
+) -> TsBindingKind {
+    if flags.is_import() {
+        return TsBindingKind::Import;
+    }
+    match declaration_kind {
+        TsDeclarationKind::Var => TsBindingKind::Var,
+        TsDeclarationKind::Let => TsBindingKind::Let,
+        TsDeclarationKind::Const => TsBindingKind::Const,
+        TsDeclarationKind::FunctionDeclaration => TsBindingKind::FunctionDeclaration,
+        TsDeclarationKind::FunctionExpression => TsBindingKind::FunctionExpression,
+        TsDeclarationKind::ClassDeclaration => TsBindingKind::ClassDeclaration,
+        TsDeclarationKind::ClassExpression => TsBindingKind::ClassExpression,
+        TsDeclarationKind::Parameter => TsBindingKind::Parameter,
+        TsDeclarationKind::Destructuring => TsBindingKind::Destructuring,
+        TsDeclarationKind::Catch => TsBindingKind::Catch,
+        TsDeclarationKind::Import => TsBindingKind::Import,
+        TsDeclarationKind::ReExport => TsBindingKind::ReExport,
+        TsDeclarationKind::Alias => TsBindingKind::Alias,
+        TsDeclarationKind::UnsupportedDynamic => TsBindingKind::UnsupportedDynamic,
+        TsDeclarationKind::Unknown => TsBindingKind::Unknown,
+    }
+}
+
+fn is_parameter_declaration(nodes: &AstNodes<'_>, node_id: oxc_semantic::NodeId) -> bool {
+    matches!(
+        nodes.kind(node_id),
+        AstKind::FormalParameter(_) | AstKind::FormalParameterRest(_)
+    ) || nodes.ancestor_kinds(node_id).any(|kind| {
+        matches!(
+            kind,
+            AstKind::FormalParameter(_)
+                | AstKind::FormalParameterRest(_)
+                | AstKind::TSThisParameter(_)
+        )
+    })
+}
+
+fn is_destructuring_declaration(nodes: &AstNodes<'_>, node_id: oxc_semantic::NodeId) -> bool {
+    nodes.ancestor_kinds(node_id).any(|kind| {
+        matches!(
+            kind,
+            AstKind::ObjectPattern(_) | AstKind::ArrayPattern(_) | AstKind::AssignmentPattern(_)
+        )
+    }) || matches!(
+        nodes.kind(node_id),
+        AstKind::ObjectPattern(_) | AstKind::ArrayPattern(_) | AstKind::AssignmentPattern(_)
+    )
+}
+
+fn binding_identifier_name(pattern: &BindingPattern<'_>) -> Option<String> {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.to_string()),
+        _ => None,
+    }
+}
+
+fn ts_scope_kind(kind: AstKind<'_>) -> TsScopeKind {
+    match kind {
+        AstKind::Program(_) => TsScopeKind::Module,
+        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => TsScopeKind::Function,
+        AstKind::Class(_) => TsScopeKind::Class,
+        AstKind::BlockStatement(_) => TsScopeKind::Block,
+        AstKind::CatchClause(_) => TsScopeKind::Catch,
+        AstKind::ForStatement(_) | AstKind::ForInStatement(_) | AstKind::ForOfStatement(_) => {
+            TsScopeKind::Loop
+        }
+        AstKind::SwitchStatement(_) => TsScopeKind::Switch,
+        AstKind::TSInterfaceDeclaration(_)
+        | AstKind::TSTypeAliasDeclaration(_)
+        | AstKind::TSEnumDeclaration(_) => TsScopeKind::Type,
+        AstKind::TSModuleDeclaration(_) => TsScopeKind::Namespace,
+        _ => TsScopeKind::Unknown,
+    }
+}
+
+fn expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StaticMemberExpression(member) => expression_text(&member.object)
+            .map(|object| format!("{object}.{}", member.property.name)),
+        Expression::ParenthesizedExpression(expression) => expression_text(&expression.expression),
+        Expression::TSAsExpression(expression) => expression_text(&expression.expression),
+        Expression::TSSatisfiesExpression(expression) => expression_text(&expression.expression),
+        Expression::TSNonNullExpression(expression) => expression_text(&expression.expression),
+        Expression::TSTypeAssertion(expression) => expression_text(&expression.expression),
+        _ => None,
+    }
+}
+
+fn module_export_name_text(name: &ModuleExportName<'_>) -> String {
+    match name {
+        ModuleExportName::IdentifierName(identifier) => identifier.name.to_string(),
+        ModuleExportName::IdentifierReference(identifier) => identifier.name.to_string(),
+        ModuleExportName::StringLiteral(literal) => literal.value.to_string(),
+    }
+}
+
+fn scope_stable_key(file: &SourceFile, span: &Span, kind: TsScopeKind) -> String {
+    stable_key(
+        "ts_scope",
+        &[
+            ("file", file.relative_path.clone()),
+            ("kind", kind.as_str().to_string()),
+            ("start", span.start_byte.to_string()),
+            ("end", span.end_byte.to_string()),
+        ],
+    )
+}
+
+fn module_scope_key(file: &SourceFile) -> String {
+    stable_key(
+        "ts_scope",
+        &[
+            ("file", file.relative_path.clone()),
+            ("kind", "module".to_string()),
+            ("start", "0".to_string()),
+            ("end", "0".to_string()),
+        ],
+    )
+}
+
+fn binding_stable_key(
+    file: &SourceFile,
+    span: &Span,
+    scope_key: &str,
+    name: &str,
+    binding_kind: TsBindingKind,
+    import_export_kind: TsImportExportKind,
+    status: &TsBindingStatus,
+) -> String {
+    stable_key(
+        "ts_binding",
+        &[
+            ("file", file.relative_path.clone()),
+            ("scope", scope_key.to_string()),
+            ("name", name.to_string()),
+            ("kind", binding_kind.as_str().to_string()),
+            ("io", format!("{import_export_kind:?}")),
+            ("status", status.as_str().to_string()),
+            ("start", span.start_byte.to_string()),
+            ("end", span.end_byte.to_string()),
+        ],
+    )
+}
+
+fn stable_key(prefix: &str, parts: &[(&str, String)]) -> String {
+    let mut normalized = parts
+        .iter()
+        .map(|(label, value)| (*label, value.replace('\\', "/")))
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.0.cmp(right.0));
+
+    let mut key = length_prefixed(prefix);
+    for (label, value) in normalized {
+        key.push('|');
+        key.push_str(&length_prefixed(label));
+        key.push('=');
+        key.push_str(&length_prefixed(&value));
+    }
+    key
+}
+
+fn length_prefixed(value: &str) -> String {
+    format!("{}:{}", value.len(), value)
+}
+
+fn parse_source_type(path: &Path) -> SourceType {
+    SourceType::from_path(path).unwrap_or_default()
+}
+
+fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
+    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    use crate::core::AnalysisDb;
+
+    use super::*;
+
+    #[test]
+    fn extracts_required_scope_binding_forms_from_oxc_semantics() {
+        let file = fixture_file(
+            r#"
+import defaultThing, { named as alias, other } from "./dep";
+import * as ns from "./ns";
+export { named as renamed } from "./dep";
+export * from "./star";
+
+var legacy = 1;
+let local = 2;
+const fixed = 3;
+const { item: destructured } = source;
+function declared(param, { nested }) {
+  try {
+    return param;
+  } catch (err) {
+    const inside = err;
+  }
+}
+class Klass {}
+const expr = function namedExpr() {};
+const KlassExpr = class {};
+const aliasLocal = local;
+"#,
+        );
+
+        let output = extract_ts_scope(file);
+        let kinds = output
+            .bindings
+            .iter()
+            .map(|binding| binding.binding_kind)
+            .collect::<BTreeSet<_>>();
+
+        for expected in [
+            TsBindingKind::Var,
+            TsBindingKind::Let,
+            TsBindingKind::Const,
+            TsBindingKind::FunctionDeclaration,
+            TsBindingKind::FunctionExpression,
+            TsBindingKind::ClassDeclaration,
+            TsBindingKind::ClassExpression,
+            TsBindingKind::Parameter,
+            TsBindingKind::Destructuring,
+            TsBindingKind::Catch,
+            TsBindingKind::Import,
+            TsBindingKind::ReExport,
+            TsBindingKind::NamespaceImport,
+            TsBindingKind::DefaultImport,
+            TsBindingKind::NamedImport,
+            TsBindingKind::Alias,
+        ] {
+            assert!(kinds.contains(&expected), "missing {expected:?}");
+        }
+        assert!(!output.scopes.is_empty());
+    }
+
+    #[test]
+    fn import_rows_carry_external_status_and_module_source() {
+        let file = fixture_file(r#"import { named as alias } from "./dep";"#);
+        let output = extract_ts_scope(file);
+        let import = output
+            .bindings
+            .iter()
+            .find(|binding| binding.binding_kind == TsBindingKind::NamedImport)
+            .expect("named import row");
+
+        assert_eq!(import.module_source.as_deref(), Some("./dep"));
+        assert_eq!(import.imported_name.as_deref(), Some("named"));
+        assert!(matches!(import.status, TsBindingStatus::External { .. }));
+    }
+
+    fn fixture_file(source: &str) -> &'static SourceFile {
+        let mut db = Box::new(AnalysisDb::new());
+        let file_id = db.add_file(
+            PathBuf::from("src/scope.ts"),
+            "src/scope.ts".to_string(),
+            source.to_string(),
+        );
+        let leaked = Box::leak(db);
+        leaked.file(file_id).expect("fixture file")
+    }
+}
