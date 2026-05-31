@@ -6,18 +6,19 @@
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    BindingPattern, FunctionType, MethodDefinition, MethodDefinitionKind, Program, PropertyKey,
-    VariableDeclarator,
+    Argument, BindingPattern, Expression, FunctionType, MethodDefinition, MethodDefinitionKind,
+    Program, PropertyKey, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType};
 use std::path::Path;
 
-use crate::analysis::ids::TsInventoryFunctionId;
+use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
 use crate::core::{SourceFile, Span, span_from_byte_range};
 use crate::ts::inventory::facts::{
-    TsFunctionInventoryKind, TsInventoryFunctionFact, TsInventoryStatus,
+    TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
+    TsInventoryFunctionFact, TsInventoryStatus,
 };
 use crate::ts::inventory::store::TsInventoryOutput;
 
@@ -40,7 +41,6 @@ fn extract_ts_inventory_from_program(
     _program: &Program<'_>,
     nodes: &AstNodes<'_>,
 ) -> TsInventoryOutput {
-    let mut function_rows = Vec::new();
     let mut node_entries = nodes
         .iter_enumerated()
         .filter_map(|(node_id, node)| {
@@ -51,6 +51,7 @@ fn extract_ts_inventory_from_program(
         .collect::<Vec<_>>();
     node_entries.sort_by_key(|(start, end, kind, _, _)| (*start, *end, kind.as_str()));
 
+    let mut function_rows = Vec::new();
     for (_, _, kind, node_id, ast_kind) in node_entries {
         let span = span_from_oxc(file.id, source, ast_kind.span());
         let display_name = function_display_name(nodes, node_id, ast_kind);
@@ -74,9 +75,45 @@ fn extract_ts_inventory_from_program(
         });
     }
 
+    let mut callsite_entries = nodes
+        .iter_enumerated()
+        .filter_map(|(node_id, node)| {
+            let kind = callsite_inventory_kind(node.kind())?;
+            let span = node.kind().span();
+            Some((span.start, span.end, kind, node_id, node.kind()))
+        })
+        .collect::<Vec<_>>();
+    callsite_entries.sort_by_key(|(start, end, kind, _, _)| (*start, *end, kind.as_str()));
+
+    let mut callsite_rows = Vec::new();
+    for (_, _, kind, node_id, ast_kind) in callsite_entries {
+        let span = span_from_oxc(file.id, source, ast_kind.span());
+        let display_name = callsite_display_name(ast_kind);
+        let lexical_parent_key = lexical_parent_key(file, nodes, node_id);
+        let status = callsite_status(ast_kind, display_name.as_deref());
+        let stable_key = callsite_stable_key(
+            file,
+            &span,
+            kind,
+            lexical_parent_key.as_deref(),
+            &display_name,
+            &status,
+        );
+        callsite_rows.push(TsInventoryCallsiteFact {
+            id: TsInventoryCallsiteId(0),
+            file: file.id,
+            span,
+            stable_key,
+            lexical_parent_key,
+            display_name,
+            kind,
+            status,
+        });
+    }
+
     TsInventoryOutput {
         functions: function_rows,
-        callsites: Vec::new(),
+        callsites: callsite_rows,
     }
 }
 
@@ -111,6 +148,24 @@ fn method_inventory_kind(method: &MethodDefinition<'_>) -> TsFunctionInventoryKi
         MethodDefinitionKind::Constructor => TsFunctionInventoryKind::Constructor,
         MethodDefinitionKind::Get | MethodDefinitionKind::Set => TsFunctionInventoryKind::Accessor,
         MethodDefinitionKind::Method => TsFunctionInventoryKind::Method,
+    }
+}
+
+fn callsite_inventory_kind(kind: AstKind<'_>) -> Option<TsCallsiteInventoryKind> {
+    match kind {
+        AstKind::CallExpression(call) if call.optional => {
+            Some(TsCallsiteInventoryKind::OptionalCall)
+        }
+        AstKind::CallExpression(call)
+            if expression_text(&call.callee).as_deref() == Some("require") =>
+        {
+            Some(TsCallsiteInventoryKind::Require)
+        }
+        AstKind::CallExpression(_) => Some(TsCallsiteInventoryKind::Call),
+        AstKind::NewExpression(_) => Some(TsCallsiteInventoryKind::New),
+        AstKind::TaggedTemplateExpression(_) => Some(TsCallsiteInventoryKind::TaggedTemplate),
+        AstKind::ImportExpression(_) => Some(TsCallsiteInventoryKind::DynamicImport),
+        _ => None,
     }
 }
 
@@ -151,6 +206,61 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        _ => None,
+    }
+}
+
+fn callsite_display_name(kind: AstKind<'_>) -> Option<String> {
+    match kind {
+        AstKind::CallExpression(call) => expression_text(&call.callee),
+        AstKind::NewExpression(expression) => expression_text(&expression.callee),
+        AstKind::TaggedTemplateExpression(expression) => expression_text(&expression.tag),
+        AstKind::ImportExpression(expression) => match &expression.source {
+            Expression::StringLiteral(literal) => Some(format!("import:{}", literal.value)),
+            _ => Some("import:<dynamic>".to_string()),
+        },
+        _ => None,
+    }
+}
+
+fn callsite_status(kind: AstKind<'_>, display_name: Option<&str>) -> TsInventoryStatus {
+    match kind {
+        AstKind::ImportExpression(expression) => match &expression.source {
+            Expression::StringLiteral(_) => TsInventoryStatus::resolved(),
+            _ => TsInventoryStatus::unresolved("non-string dynamic import"),
+        },
+        AstKind::CallExpression(call)
+            if expression_text(&call.callee).as_deref() == Some("require") =>
+        {
+            if matches!(call.arguments.first(), Some(Argument::StringLiteral(_))) {
+                TsInventoryStatus::resolved()
+            } else {
+                TsInventoryStatus::unresolved("non-string require")
+            }
+        }
+        AstKind::CallExpression(_)
+        | AstKind::NewExpression(_)
+        | AstKind::TaggedTemplateExpression(_) => {
+            if display_name.is_some() {
+                TsInventoryStatus::resolved()
+            } else {
+                TsInventoryStatus::unresolved("dynamic callee")
+            }
+        }
+        _ => TsInventoryStatus::unsupported("unsupported callsite syntax"),
+    }
+}
+
+fn expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::StaticMemberExpression(member) => expression_text(&member.object)
+            .map(|object| format!("{object}.{}", member.property.name)),
+        Expression::ParenthesizedExpression(expression) => expression_text(&expression.expression),
+        Expression::TSAsExpression(expression) => expression_text(&expression.expression),
+        Expression::TSSatisfiesExpression(expression) => expression_text(&expression.expression),
+        Expression::TSNonNullExpression(expression) => expression_text(&expression.expression),
+        Expression::TSTypeAssertion(expression) => expression_text(&expression.expression),
         _ => None,
     }
 }
@@ -226,6 +336,42 @@ fn function_stable_key(
             ),
         ],
     )
+}
+
+fn callsite_stable_key(
+    file: &SourceFile,
+    span: &Span,
+    kind: TsCallsiteInventoryKind,
+    lexical_parent_key: Option<&str>,
+    display_name: &Option<String>,
+    status: &TsInventoryStatus,
+) -> String {
+    stable_inventory_key(
+        "ts_inventory_callsite",
+        &[
+            ("file", file.relative_path.clone()),
+            ("kind", kind.as_str().to_string()),
+            ("start", span.start_byte.to_string()),
+            ("end", span.end_byte.to_string()),
+            (
+                "parent",
+                lexical_parent_key.unwrap_or("<module>").to_string(),
+            ),
+            (
+                "display",
+                display_name.as_deref().unwrap_or("<dynamic>").to_string(),
+            ),
+            ("status", inventory_status_label(status).to_string()),
+        ],
+    )
+}
+
+fn inventory_status_label(status: &TsInventoryStatus) -> &'static str {
+    match status {
+        TsInventoryStatus::Resolved => "resolved",
+        TsInventoryStatus::Unresolved { .. } => "unresolved",
+        TsInventoryStatus::Unsupported { .. } => "unsupported",
+    }
 }
 
 fn stable_inventory_key(prefix: &str, parts: &[(&str, String)]) -> String {
