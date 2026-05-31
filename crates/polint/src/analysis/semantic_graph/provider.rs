@@ -445,6 +445,78 @@ mod tests {
     }
 
     #[test]
+    fn output_digest_folds_ts_direct_binding_and_module_topology_digests() {
+        let snapshot = snapshot(&AnalysisDb::new());
+        let output = SemanticGraphOutput::empty();
+        let base_ts_direct =
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_direct_binding", &["base"]);
+        let changed_ts_direct = Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "ts_direct_binding",
+            &["changed"],
+        );
+        let base_module_topology =
+            Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]);
+        let changed_module_topology =
+            Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]);
+
+        let base = semantic_graph_output_digest(
+            manifest(),
+            &snapshot,
+            &absent("polint.calls"),
+            &absent("polint.identity"),
+            &absent("polint.abstract_domains"),
+            &absent("polint.entrypoints"),
+            &absent("polint.reachability"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.symbol_graph"),
+            &base_module_topology,
+            &absent("polint.go.syntax"),
+            &absent("polint.ts.syntax"),
+            &absent("polint.semantic_mir"),
+            &base_ts_direct,
+            &output,
+        );
+        let changed_direct = semantic_graph_output_digest(
+            manifest(),
+            &snapshot,
+            &absent("polint.calls"),
+            &absent("polint.identity"),
+            &absent("polint.abstract_domains"),
+            &absent("polint.entrypoints"),
+            &absent("polint.reachability"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.symbol_graph"),
+            &base_module_topology,
+            &absent("polint.go.syntax"),
+            &absent("polint.ts.syntax"),
+            &absent("polint.semantic_mir"),
+            &changed_ts_direct,
+            &output,
+        );
+        let changed_topology = semantic_graph_output_digest(
+            manifest(),
+            &snapshot,
+            &absent("polint.calls"),
+            &absent("polint.identity"),
+            &absent("polint.abstract_domains"),
+            &absent("polint.entrypoints"),
+            &absent("polint.reachability"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.symbol_graph"),
+            &changed_module_topology,
+            &absent("polint.go.syntax"),
+            &absent("polint.ts.syntax"),
+            &absent("polint.semantic_mir"),
+            &base_ts_direct,
+            &output,
+        );
+
+        assert_ne!(base, changed_direct);
+        assert_ne!(base, changed_topology);
+    }
+
+    #[test]
     fn provider_manifests_list_semantic_graph_between_type_value_alias_and_refined_calls() {
         let manifests = AnalysisKernel::provider_manifests();
         let tva = manifests

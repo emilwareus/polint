@@ -112,6 +112,28 @@ mod tests {
     }
 
     #[test]
+    fn ts_direct_binding_projection_invalidates_the_pre_phase_45_digest() {
+        let pre_phase_45 = Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "semantic_graph_provider_parameters",
+            &[
+                "semantic-graph-facts-1",
+                "semantic_nodes",
+                "semantic_edges",
+                "semantic_constraints",
+                "node_projection_v1",
+                "edge_projection_v1",
+                "constraint_projection_v1",
+            ],
+        );
+
+        assert_ne!(
+            super::semantic_graph_provider_parameter_digest(),
+            pre_phase_45
+        );
+    }
+
+    #[test]
     fn semantic_graph_schema_label_is_semantic_graph_facts_1() {
         assert_eq!(super::SEMANTIC_GRAPH_SCHEMA_LABEL, "semantic-graph-facts-1");
     }

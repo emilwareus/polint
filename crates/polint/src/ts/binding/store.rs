@@ -335,6 +335,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn output_digest_changes_for_source_scope_module_and_status_inputs() {
+        let base = TsDirectBindingOutput {
+            bindings: vec![binding(
+                "binding:resolved",
+                TsDirectBindingId(10),
+                TsInventoryCallsiteId(3),
+            )],
+        };
+        let base_digest = ts_direct_binding_output_digest(&base);
+
+        let mut changed_source = base.clone();
+        changed_source.bindings[0].callsite_stable_key = "callsite:changed-source".to_string();
+        assert_ne!(
+            base_digest,
+            ts_direct_binding_output_digest(&changed_source)
+        );
+
+        let mut changed_scope = base.clone();
+        changed_scope.bindings[0].scope_binding_stable_key =
+            Some("scope:changed-binding".to_string());
+        assert_ne!(base_digest, ts_direct_binding_output_digest(&changed_scope));
+
+        let mut changed_module = base.clone();
+        changed_module.bindings[0].resolved_import = Some(ResolvedImportId(44));
+        changed_module.bindings[0].module_node = Some(ModuleNodeId(45));
+        assert_ne!(
+            base_digest,
+            ts_direct_binding_output_digest(&changed_module)
+        );
+
+        let mut changed_status = base;
+        changed_status.bindings[0].status = TsDirectBindingStatus::Unresolved;
+        changed_status.bindings[0].reason = Some(TsDirectBindingReason::ImportedBindingUnresolved);
+        assert_ne!(
+            base_digest,
+            ts_direct_binding_output_digest(&changed_status)
+        );
+    }
+
+    #[test]
+    fn output_digest_preserves_hit_for_noop_row_order_change() {
+        let first = TsDirectBindingOutput {
+            bindings: vec![
+                binding("binding:a", TsDirectBindingId(10), TsInventoryCallsiteId(3)),
+                binding("binding:b", TsDirectBindingId(11), TsInventoryCallsiteId(4)),
+            ],
+        };
+        let second = TsDirectBindingOutput {
+            bindings: vec![
+                binding("binding:b", TsDirectBindingId(11), TsInventoryCallsiteId(4)),
+                binding("binding:a", TsDirectBindingId(10), TsInventoryCallsiteId(3)),
+            ],
+        };
+
+        assert_eq!(
+            ts_direct_binding_output_digest(&first),
+            ts_direct_binding_output_digest(&second)
+        );
+    }
+
     fn binding(
         stable_key: &str,
         id: TsDirectBindingId,
