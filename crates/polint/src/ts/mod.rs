@@ -3,6 +3,7 @@
 //! optional disk cache.
 
 mod adapter;
+pub(crate) mod inventory;
 #[cfg(test)]
 mod tests;
 
