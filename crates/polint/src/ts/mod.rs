@@ -4,6 +4,7 @@
 
 mod adapter;
 pub(crate) mod inventory;
+pub(crate) mod scope;
 #[cfg(test)]
 mod tests;
 

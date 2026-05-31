@@ -37,6 +37,12 @@ pub(crate) struct TsInventoryFunctionId(pub(crate) u64);
 pub(crate) struct TsInventoryCallsiteId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct TsScopeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct TsBindingId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct AbstractStateId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -206,6 +212,8 @@ mod tests {
         assert_small_id_contract::<CallTargetId>();
         assert_small_id_contract::<TsInventoryFunctionId>();
         assert_small_id_contract::<TsInventoryCallsiteId>();
+        assert_small_id_contract::<TsScopeId>();
+        assert_small_id_contract::<TsBindingId>();
         assert_small_id_contract::<AbstractStateId>();
         assert_small_id_contract::<DomainObservationId>();
         assert_small_id_contract::<DomainEventId>();
