@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-05-31T18:48:28.731Z"
-last_activity: 2026-05-31 -- Completed 45-02 scope binding plan
+last_updated: "2026-05-31T19:11:49.000Z"
+last_activity: 2026-05-31 -- Completed 45-03 direct binding fact plan
 progress:
   total_phases: 13
   completed_phases: 3
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 14
   percent: 23
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 45 (JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Executing Phase 45
-Last activity: 2026-05-31 -- Completed 45-02 scope binding plan
+Last activity: 2026-05-31 -- Completed 45-03 direct binding fact plan
 
 ### Open repo-admin action (T-42-04-10)
 
