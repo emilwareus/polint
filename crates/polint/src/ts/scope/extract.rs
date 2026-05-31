@@ -9,8 +9,9 @@ use std::path::Path;
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, FunctionType, ImportDeclarationSpecifier,
-    ImportOrExportKind, ModuleExportName, Program, Statement, VariableDeclarationKind,
+    Argument, BindingPattern, ExportDefaultDeclarationKind, Expression, FunctionType,
+    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
+    VariableDeclarationKind,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{
@@ -340,6 +341,22 @@ fn extract_import_export_rows(
                     }
                 }
             }
+            Statement::ExportDefaultDeclaration(export) => {
+                rows.push(binding_row(BindingRowDraft {
+                    file,
+                    source,
+                    span: span_from_oxc(file.id, source, export.span),
+                    scope_key: module_scope.clone(),
+                    name: "default".to_string(),
+                    declaration_kind: TsDeclarationKind::Alias,
+                    binding_kind: TsBindingKind::Alias,
+                    import_export_kind: TsImportExportKind::ExportDefault,
+                    module_source: None,
+                    imported_name: default_export_target_name(&export.declaration),
+                    exported_name: Some("default".to_string()),
+                    status: TsBindingStatus::present(),
+                }));
+            }
             Statement::ExportAllDeclaration(export) => {
                 rows.push(binding_row(BindingRowDraft {
                     file,
@@ -361,6 +378,19 @@ fn extract_import_export_rows(
     }
 
     rows
+}
+
+fn default_export_target_name(declaration: &ExportDefaultDeclarationKind<'_>) -> Option<String> {
+    match declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+            function.id.as_ref().map(|id| id.name.to_string())
+        }
+        ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+            class.id.as_ref().map(|id| id.name.to_string())
+        }
+        ExportDefaultDeclarationKind::Identifier(identifier) => Some(identifier.name.to_string()),
+        _ => None,
+    }
 }
 
 fn extract_alias_rows(
@@ -401,6 +431,24 @@ fn extract_alias_rows(
                 exported_name: None,
                 status: TsBindingStatus::present(),
             })),
+            Expression::StaticMemberExpression(member)
+                if let Some(module) = require_module_path(&member.object) =>
+            {
+                rows.push(binding_row(BindingRowDraft {
+                    file,
+                    source,
+                    span: span_from_oxc(file.id, source, declarator.span),
+                    scope_key: module_scope.clone(),
+                    name,
+                    declaration_kind: TsDeclarationKind::Import,
+                    binding_kind: TsBindingKind::Import,
+                    import_export_kind: TsImportExportKind::CommonJsRequire,
+                    module_source: Some(module.clone()),
+                    imported_name: Some(member.property.name.to_string()),
+                    exported_name: None,
+                    status: TsBindingStatus::external(module),
+                }));
+            }
             Expression::CallExpression(call)
                 if expression_text(&call.callee).as_deref() == Some("require") =>
             {
@@ -432,6 +480,19 @@ fn extract_alias_rows(
     }
 
     rows
+}
+
+fn require_module_path(expression: &Expression<'_>) -> Option<String> {
+    let Expression::CallExpression(call) = expression else {
+        return None;
+    };
+    if expression_text(&call.callee).as_deref() != Some("require") {
+        return None;
+    }
+    match call.arguments.first() {
+        Some(Argument::StringLiteral(path)) => Some(path.value.to_string()),
+        _ => None,
+    }
 }
 
 fn extract_destructuring_rows(
