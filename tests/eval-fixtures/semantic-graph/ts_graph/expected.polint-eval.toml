@@ -1,0 +1,21 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "semantic-graph-ts-graph"
+area = "facts"
+
+# Phase 44 Plan 03 semantic-graph TS/JS snapshot fixture (GRAPH-02, D-12).
+#
+# `entry` calls `greet` (a direct call site -> Call edge + CallConstraint) and
+# copies the result into locals (value copies -> CopyEdge constraints). The
+# package/function/scope/callsite nodes plus scope-in-package containment (MemberOf
+# edge) give the graph >= 1 of each node/edge/constraint kind the minimal projection
+# emits today.
+#
+# This manifest is intentionally free of order-dependent assertions: the
+# `semantic_graph` snapshot test asserts the full normalized debug JSON is
+# byte-stable and total-ordered by stable key.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

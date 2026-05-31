@@ -3752,10 +3752,11 @@ path = "repo"
                 ("provider_order.13", "polint.reachability"),
                 ("provider_order.14", "polint.extensions"),
                 ("provider_order.15", "polint.type_value_alias"),
-                ("provider_order.16", "polint.refined_calls"),
-                ("provider_order.17", "polint.data_flow"),
-                ("provider_order.18", "polint.evidence"),
-                ("provider_order.19", "polint.metrics"),
+                ("provider_order.16", "polint.semantic_graph"),
+                ("provider_order.17", "polint.refined_calls"),
+                ("provider_order.18", "polint.data_flow"),
+                ("provider_order.19", "polint.evidence"),
+                ("provider_order.20", "polint.metrics"),
             ]
         );
     }

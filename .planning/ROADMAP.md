@@ -69,7 +69,10 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Constraint vocabulary is defined as a closed enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`) with snapshot fixtures asserting language frontends emit the expected shapes.
   3. Dependency index for the shared-graph cache layer is designed and lists every contributing input (semantic index, module graph, MIR, CFG, direct calls, types, summaries, entrypoints, extensions, accepted adaptation models, solver budgets).
   4. Public-boundary proof: `analysis::semantic_graph` and the constraint enum stay `pub(crate)`, never reachable from `polint::sdk::prelude::*`.
-**Plans**: TBD
+**Plans**: 3 total
+- [x] 44-01-PLAN.md — analysis::semantic_graph module + NodeKind/EdgeKind closed enums (composing existing v1.2 IDs) + node/edge facts + SemanticNodeId/SemanticEdgeId + stable keys + SemanticGraphStore indexes (GRAPH-01)
+- [x] 44-02-PLAN.md — ConstraintKind closed vocabulary + ConstraintFact family + SemanticConstraintId + build_semantic_graph emission from existing facts + ModelEdge reserved-empty + points-to naming-collision guard (GRAPH-02)
+- [x] 44-03-PLAN.md — polint.semantic_graph provider + cache key + validation + kernel order/run/validation splice + Go/TS snapshot fixtures + determinism-gate inheritance + public-surface-leak proof (GRAPH-01, GRAPH-02)
 
 ### Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls
 **Goal**: polint enumerates every JS/TS function and callsite with Jelly-shaped spans, builds proper lexical scopes and a module graph, and emits direct bindings as constraints — the JS/TS foundation for the token solver.
@@ -198,7 +201,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 |-------|------|----------------|--------|-----------|
 | 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
 | 43 | Reachability, Roots & Per-Suite Scoring Mode | 3/3 | Complete    | 2026-05-29 |
-| 44 | Semantic Graph Skeleton & Constraint Vocabulary | 0/0 | Not started | - |
+| 44 | Semantic Graph Skeleton & Constraint Vocabulary | 3/3 | Complete    | 2026-05-30 |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
 | 46 | Go Semantic Frontend & Sidecar | 0/0 | Not started | - |
 | 47 | Unified Solver Core & Derived-Edge Provenance | 0/0 | Not started | - |

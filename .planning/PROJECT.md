@@ -40,6 +40,8 @@ Phase 31 of v1.2 completed on 2026-05-21. polint now has a private P0 abstract-d
 
 v1.2 Static Analysis Engine Implementation shipped on 2026-05-27. It delivered the full private static-analysis engine substrate from the research roadmap: kernel scheduling, provenance, internal evaluation, cache identity and persistence, semantic backbone, MIR, CFG, calls, abstract domains, summaries, demand queries, extension sinks, framework/trust facts, type/value/alias precision layers, refined calls, data flow, slicing/evidence, benchmark promotion gates, and bounded public SDK/query ergonomics.
 
+v1.3 Graph Engine Precision is in progress. Phase 44 completed on 2026-05-30: a private `analysis::semantic_graph` (all `pub(crate)`) now provides the unified-solver keystone — closed `NodeKind`/`EdgeKind` taxonomies composing existing v1.2 identities, the closed GRAPH-02 constraint vocabulary (`CopyEdge`/`Alloc`/`FieldLoad`/`FieldStore`/`CallConstraint`/`ModelEdge`/`TypeConstraint`), deterministic by-kind/outgoing/incoming indexes, a kernel provider slotted between `type_value_alias` and `refined_calls` with a digest-complete cache key and validation, Go/TS snapshot fixtures, inheritance of the Phase 43 determinism gate, and a green public-surface-leak boundary. (Prior v1.3 phases: 42 benchmark identity/renderers, 43 reachability/roots/scoring-mode.)
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -237,4 +239,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-27 after v1.3 milestone start*
+*Last updated: 2026-05-30 after Phase 44 completion*

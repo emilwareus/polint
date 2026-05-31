@@ -432,13 +432,22 @@ impl AnalysisKernel {
                 &input.loaded.config.reachability.roots,
                 entrypoints_calls_digest.clone(),
                 entrypoints_dependency_output_digest.clone(),
-                identity_dependency_output_digest,
+                identity_dependency_output_digest.clone(),
                 entrypoints_symbol_digest.clone(),
                 entrypoints_topology_digest.clone(),
             );
         let polint_reachability_cache_stats = reachability.cache_stats.clone();
         let reachability_output_digest = reachability.output_digest;
         diagnostics.extend(reachability.diagnostics);
+        // In-scope dependency digest for the polint.semantic_graph run splice below
+        // (the Option is moved into the provider-output push next).
+        let reachability_dependency_output_digest =
+            reachability_output_digest.clone().unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.reachability",
+                )
+            });
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.reachability",
             &db,
@@ -477,12 +486,12 @@ impl AnalysisKernel {
                 entrypoints_semantic_mir_digest.clone(),
                 entrypoints_cfg_digest.clone(),
                 entrypoints_calls_digest.clone(),
-                abstract_domains_dependency_output_digest,
+                abstract_domains_dependency_output_digest.clone(),
                 direct_summaries_dependency_output_digest.clone(),
                 entrypoints_dependency_output_digest.clone(),
                 extensions_dependency_output_digest.clone(),
-                entrypoints_symbol_digest,
-                entrypoints_topology_digest,
+                entrypoints_symbol_digest.clone(),
+                entrypoints_topology_digest.clone(),
                 vec![
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
@@ -505,6 +514,38 @@ impl AnalysisKernel {
                     "polint.type_value_alias",
                 )
             });
+
+        // polint.semantic_graph runs between polint.type_value_alias and
+        // polint.refined_calls (D-16). It projects the unified node/edge/constraint
+        // graph from already-stored facts and folds every consumed upstream provider
+        // output digest into its own output digest (D-17).
+        let semantic_graph =
+            crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.semantic_graph"),
+                entrypoints_calls_digest.clone(),
+                identity_dependency_output_digest,
+                abstract_domains_dependency_output_digest,
+                entrypoints_dependency_output_digest.clone(),
+                reachability_dependency_output_digest,
+                type_value_alias_dependency_output_digest.clone(),
+                entrypoints_symbol_digest,
+                entrypoints_topology_digest,
+                go_dependency_output_digest.clone(),
+                ts_dependency_output_digest.clone(),
+                entrypoints_semantic_mir_digest.clone(),
+            );
+        let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
+        let semantic_graph_output_digest = semantic_graph.output_digest.clone();
+        diagnostics.extend(semantic_graph.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.semantic_graph",
+            &db,
+            polint_semantic_graph_cache_stats,
+            semantic_graph_output_digest,
+        ));
+
         let refined_calls =
             crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
                 &mut db,
@@ -1028,6 +1069,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -1944,6 +1986,7 @@ function setup() {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",

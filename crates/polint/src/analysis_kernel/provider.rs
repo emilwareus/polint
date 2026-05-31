@@ -212,6 +212,11 @@ const TYPE_VALUE_ALIAS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const SEMANTIC_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::semantic_graph::cache_key::SEMANTIC_GRAPH_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const REFINED_CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::refined_calls::cache_key::REFINED_CALLS_SCHEMA_LABEL,
     version: 1,
@@ -619,6 +624,35 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        id: "polint.semantic_graph",
+        kind: ProviderKind::WholeRepoDerived,
+        // Fact families `build_semantic_graph` ACTUALLY reads today (kept in lockstep
+        // with the projection so the declared read-set never overstates consumption):
+        // functions/packages (syntax), scopes (symbol graph), call sites (calls),
+        // value facts (type/value/alias), and MIR places (semantic MIR). The producer
+        // output digest of each is folded into the provider output digest in
+        // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
+        //
+        // SC3 inputs with NO producer yet are intentionally ABSENT until their
+        // producer lands (not silently dropped): CFG / summaries (Phase 47), accepted
+        // adaptation models / `ModelEdge` (Phase 49), and solver budgets (Phase
+        // 51/53). When the projection begins reading a new family, add it here AND
+        // fold its producer digest in the same change.
+        inputs: &[
+            "functions",
+            "packages",
+            "scopes",
+            "call_sites",
+            "value_facts",
+            "places",
+        ],
+        outputs: &["semantic_nodes", "semantic_edges", "semantic_constraints"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: SEMANTIC_GRAPH_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.refined_calls",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -777,6 +811,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -806,6 +841,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -862,6 +898,7 @@ mod tests {
                 "polint.reachability",
                 "polint.extensions",
                 "polint.type_value_alias",
+                "polint.semantic_graph",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -1249,6 +1286,20 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                     ],
+                },
+                ProviderOrderRow {
+                    id: "polint.semantic_graph",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "functions",
+                        "packages",
+                        "scopes",
+                        "call_sites",
+                        "value_facts",
+                        "places",
+                    ],
+                    outputs: vec!["semantic_nodes", "semantic_edges", "semantic_constraints"],
                 },
                 ProviderOrderRow {
                     id: "polint.refined_calls",

@@ -59,6 +59,9 @@ use crate::analysis::refined_calls::facts::{
 };
 use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
+use crate::analysis::semantic_graph::constraints::ConstraintFact;
+use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
 use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{
     SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
@@ -730,6 +733,9 @@ pub struct AnalysisDb {
     entrypoint_store: Option<EntrypointStore>,
     reachability_roots: Vec<ReachabilityRootFact>,
     reachability_marks: Vec<CallReachabilityFact>,
+    semantic_nodes: Vec<SemanticNodeFact>,
+    semantic_edges: Vec<SemanticEdgeFact>,
+    semantic_constraints: Vec<ConstraintFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
     value_facts: Vec<ValueFact>,
@@ -1396,6 +1402,35 @@ impl AnalysisDb {
     )]
     pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
         &self.reachability_marks
+    }
+
+    /// Stores the normalized semantic-graph nodes/edges/constraints (GRAPH-01),
+    /// mirroring [`Self::replace_reachability_facts`]. Construction runs through
+    /// [`SemanticGraphStore::from_output`], which normalizes (stable-key sort + dense
+    /// ID assignment) and referentially validates every edge endpoint and constraint
+    /// node reference — a dangling reference returns [`AnalysisError::InvalidFact`] so
+    /// the db is never left holding a malformed graph.
+    pub(crate) fn replace_semantic_graph_facts(
+        &mut self,
+        output: SemanticGraphOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = SemanticGraphStore::from_output(output)?;
+        self.semantic_nodes = store.nodes().to_vec();
+        self.semantic_edges = store.edges().to_vec();
+        self.semantic_constraints = store.constraints().to_vec();
+        Ok(())
+    }
+
+    pub(crate) fn semantic_nodes(&self) -> &[SemanticNodeFact] {
+        &self.semantic_nodes
+    }
+
+    pub(crate) fn semantic_edges(&self) -> &[SemanticEdgeFact] {
+        &self.semantic_edges
+    }
+
+    pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
+        &self.semantic_constraints
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {

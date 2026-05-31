@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: ready_to_plan
-last_updated: 2026-05-29T17:07:06.182Z
-last_activity: 2026-05-29
+last_updated: 2026-05-30T11:45:28.555Z
+last_activity: 2026-05-30
 progress:
   total_phases: 13
-  completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 15
-stopped_at: Phase 43 complete (3/3) — ready to discuss Phase 44
+  completed_phases: 3
+  total_plans: 11
+  completed_plans: 11
+  percent: 23
+stopped_at: Phase 44 complete (3/3) — ready to discuss Phase 45
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 44 — semantic graph skeleton & constraint vocabulary
+**Current focus:** Phase 45 — js/ts inventory, scope, bindings, module graph & direct calls
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 44
+Phase: 45
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-05-29
+Last activity: 2026-05-30
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -426,11 +426,25 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 43-03]: SolverMetricSection (solver_step_count/budget_exceeded_reasons) reserved on a #[serde(default)] MetricSections section, NOT the frozen MetricSummary, defaulted 0/empty for Phase 47+ so the byte-identity determinism gate stays stable across the milestone (D-23).
 - [Phase 43-03]: The determinism gate runs N=10 seeded permutations of provider-enumeration order + observed row-insertion order through the live normalize_run path, driven by provider_manifests() so phases 44-54 auto-enroll (D-22), with per-fixture >=1 root / >=1 call site / >=1 in_reachable_graph=false invariants (D-24).
 - [Phase 43-03]: determinism-gate CI job mirrors leak-gate (ubuntu+macos, fail-fast false, independent passes); the Go fixture's unreachable mark needs only tree-sitter call sites so the gate passes without a Go toolchain, matching the no-Go leak-gate analog (D-24/D-25).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: Module node composes core::ModuleNodeId (PATTERNS V3); there is no ModuleId type.
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: Closed NodeKind/EdgeKind enums use pinned-order + serde-rename + as_str() + lock tests, never #[repr(u8)] (PATTERNS V2).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: normalized() assigns dense SemanticNodeId/SemanticEdgeId only after the stable-key sort and remaps edge endpoints to the post-sort node numbering (D-05).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphStore builds both outgoing (source) and incoming (target) adjacency in one post-normalization pass; the incoming index feeds the Phase 47 solver fixpoint (D-14).
+- [Phase ?]: [Phase 44-semantic-graph-skeleton]: SemanticGraphOutput carries nodes+edges only; the constraints field is deferred to Plan 02.
+- [Phase 44-02]: ConstraintFact mirrors PointsToConstraintFact and reuses points_to PointsToStatus/PointsToPrecision field types (D-10); ConstraintKind stays separate from PointsToConstraintKind with no import/merge (D-09; folding deferred to Phase 47).
+- [Phase 44-02]: ModelEdge is a fieldless reserved variant emitting zero constraints (no producer until Phase 49); build_semantic_graph also emits zero Alloc/Field/Type constraints honestly (no endpoint bridge) rather than fabricating nodes to inflate recall (D-07).
+- [Phase 44-02]: normalized() remaps constraint payload node references to the post-sort dense node numbering (mirroring the edge-endpoint remap); the store builds a constraints-by-ConstraintKind index and rejects dangling constraint node refs.
+- [Phase 44-02]: build_semantic_graph is a read-only projection over functions/packages/scopes/call_sites/values, composing stable keys from referenced identity (D-06) and mutating no upstream family (D-13).
+- [Phase 44-03]: polint.semantic_graph provider folds every consumed upstream provider output digest + schema/parameter into its output digest with an empty-output sentinel (D-17); deferred SC3 inputs (MIR/CFG/summaries/adaptation-models/solver-budgets) are self-documented and digested as zero until Phases 47/49/51/53 land producers.
+- [Phase 44-03]: semantic-graph precision ceiling rejects the exact-equivalent tier (SemanticPrecision::ResolvedStatic) since the graph precision enums carry no literal Exact variant; replace_semantic_graph_facts routes through SemanticGraphStore::from_output for normalize + referential validation.
+- [Phase 44-03]: the provider auto-enrolls into the Phase 43 determinism gate via provider_manifests() (no gate edit); a dedicated eval::semantic_graph_snapshot gate proves byte-stable Go + TS/JS constraint emission, and the Phase 42 public-surface-leak gate stays green unmodified.
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 44-semantic-graph-skeleton-constraint-vocabulary | 03 | 15 min | 3 | 13 |
+| 44-semantic-graph-skeleton-constraint-vocabulary | 02 | 13 min | 3 | 5 |
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
 | 20-private-analysis-kernel-facade | 02 | 9 min | 2 | 2 |
 | 21-provenance-precision-and-validation-metadata | 01 | 9h 8m | 2 | 3 |
@@ -506,9 +520,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-05-29
-- Last activity: 2026-05-29 - Completed Phase 43 Plan 03 (N=10 determinism gate driven by provider_manifests() + reserved SolverMetricSection + Linux/macOS determinism-gate CI job + phases 44-54 inheritance doc); Phase 43 complete (3/3 plans); REACH-03.
-- Stopped at: Completed 43-03-PLAN.md; Phase 43 done (REACH-01/02/03); ready for Phase 43 verification / Phase 44.
+- Last session: 2026-05-30
+- Last activity: 2026-05-30 - Completed Phase 44 Plan 02 (ConstraintKind vocabulary + ConstraintFact + SemanticConstraintId; SemanticGraphOutput/Store carries/indexes/validates constraints; build_semantic_graph projects a real-but-minimal graph from existing facts); GRAPH-02 done.
+- Stopped at: Completed 44-02-PLAN.md; Phase 44 at 2/3 plans; ready for Phase 44 Plan 03 (provider/cache/validation wiring + Go/TS snapshot fixtures).
 - Resume file: None
 
 ### Quick Tasks Completed

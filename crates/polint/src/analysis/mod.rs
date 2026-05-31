@@ -26,6 +26,7 @@ pub(crate) mod points_to;
 pub(crate) mod provider;
 pub(crate) mod reachability;
 pub(crate) mod refined_calls;
+pub(crate) mod semantic_graph;
 pub(crate) mod slicing;
 pub(crate) mod stable_key;
 pub(crate) mod store;
