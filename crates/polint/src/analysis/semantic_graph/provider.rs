@@ -1,4 +1,6 @@
-use crate::analysis::semantic_graph::build::build_semantic_graph;
+use crate::analysis::semantic_graph::build::{
+    build_semantic_graph_with_ts_direct_bindings, collect_ts_direct_bindings,
+};
 use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_parameter_digest;
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
 use crate::analysis_kernel::ProviderManifest;
@@ -7,6 +9,9 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::ts::binding::store::{
+    ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticGraphProviderRunOutput {
@@ -54,7 +59,10 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
 
     // Phase 1-2: project + normalize. The build is read-only; normalized() fixes the
     // stable-key order the digest is computed over.
-    let output = build_semantic_graph(db).normalized();
+    let ts_direct_bindings = collect_ts_direct_bindings(db);
+    let ts_direct_binding_output_digest = ts_direct_binding_output_digest(&ts_direct_bindings);
+    let output =
+        build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings).normalized();
 
     // Phase 3: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
@@ -72,6 +80,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &go_syntax_output_digest,
         &ts_syntax_output_digest,
         &semantic_mir_output_digest,
+        &ts_direct_binding_output_digest,
         &output,
     );
 
@@ -127,6 +136,7 @@ fn semantic_graph_output_digest(
     go_syntax_output_digest: &Digest,
     ts_syntax_output_digest: &Digest,
     semantic_mir_output_digest: &Digest,
+    ts_direct_binding_output_digest: &Digest,
     output: &SemanticGraphOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -146,6 +156,11 @@ fn semantic_graph_output_digest(
         format!("go_syntax={go_syntax_output_digest}"),
         format!("ts_syntax={ts_syntax_output_digest}"),
         format!("semantic_mir={semantic_mir_output_digest}"),
+        format!("ts_direct_binding_output={ts_direct_binding_output_digest}"),
+        format!(
+            "ts_direct_binding_parameters={}",
+            ts_direct_binding_provider_parameter_digest()
+        ),
     ];
     extend_component_parts(
         &mut parts,

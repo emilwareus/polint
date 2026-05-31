@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::semantic_graph::facts::SemanticPrecision;
+use crate::analysis::semantic_graph::constraints::ConstraintFact;
+use crate::analysis::semantic_graph::facts::{
+    SemanticEdgeFact, SemanticNodeFact, SemanticPrecision,
+};
 use crate::analysis::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
 use crate::analysis_kernel::FactPrecision;
 use crate::core::AnalysisDb;
@@ -20,10 +23,20 @@ use crate::diagnostics::{Diagnostic, TextRange};
 /// Failures surface as structured [`Diagnostic`]s carrying `family`/`stable_key`/
 /// `field`/`reason` evidence, mirroring `reachability::validate`.
 pub(crate) fn validate_semantic_graph(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
-    let nodes = db.semantic_nodes();
-    let edges = db.semantic_edges();
-    let constraints = db.semantic_constraints();
+    validate_semantic_graph_rows(
+        db.semantic_nodes(),
+        db.semantic_edges(),
+        db.semantic_constraints(),
+        diagnostics,
+    );
+}
 
+fn validate_semantic_graph_rows(
+    nodes: &[SemanticNodeFact],
+    edges: &[SemanticEdgeFact],
+    constraints: &[ConstraintFact],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     // Duplicate stable keys per family.
     check_duplicate_stable_keys(
         diagnostics,
@@ -336,6 +349,35 @@ mod tests {
         assert!(reject_exact_precision(FactPrecision::Exact, "k").is_some());
         assert!(reject_exact_precision(FactPrecision::SetupAware, "k").is_none());
         assert!(reject_exact_precision(FactPrecision::Heuristic, "k").is_none());
+    }
+
+    #[test]
+    fn validation_rejects_dangling_ts_direct_binding_constraint_endpoint() {
+        let nodes = vec![node(
+            NodeKind::Function(FunctionId(1)),
+            SemanticPrecision::Conservative,
+            "node|function|target",
+        )];
+        let constraints = vec![ConstraintFact {
+            id: Default::default(),
+            kind: ConstraintKind::CopyEdge {
+                dst: SemanticNodeId(0),
+                src: SemanticNodeId(99),
+            },
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::FlowInsensitive,
+            stable_key: "constraint|ts_direct_binding|dangling".to_string(),
+        }];
+        let mut diagnostics = Vec::new();
+
+        validate_semantic_graph_rows(&nodes, &[], &constraints, &mut diagnostics);
+
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                format!("{diagnostic:?}").contains("dangling semantic constraint node reference")
+            }),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]

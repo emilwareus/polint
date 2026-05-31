@@ -81,7 +81,7 @@ struct TsFileAnalysis {
     scope: TsScopeOutput,
 }
 
-fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
+pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
     let analyses = db
         .files()
         .iter()

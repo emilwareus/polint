@@ -58,6 +58,8 @@ pub(crate) fn semantic_graph_provider_parameter_digest() -> Digest {
             "node_projection_v1",
             "edge_projection_v1",
             "constraint_projection_v1",
+            "ts_direct_binding_output",
+            "ts_direct_binding_projection_v1",
         ],
     )
 }
@@ -81,6 +83,8 @@ mod tests {
                     "node_projection_v1",
                     "edge_projection_v1",
                     "constraint_projection_v1",
+                    "ts_direct_binding_output",
+                    "ts_direct_binding_projection_v1",
                 ],
             )
         );

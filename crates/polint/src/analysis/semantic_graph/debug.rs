@@ -61,6 +61,8 @@ struct EdgeRow {
 struct ConstraintRow {
     kind: String,
     status: String,
+    source: String,
+    referenced_nodes: Vec<u64>,
     stable_key: String,
 }
 
@@ -118,6 +120,17 @@ fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
         .map(|constraint: &ConstraintFact| ConstraintRow {
             kind: constraint.kind.as_str().to_string(),
             status: format!("{:?}", constraint.status),
+            source: if constraint.stable_key.contains("ts_direct_binding") {
+                "ts_direct_binding".to_string()
+            } else {
+                "semantic_graph".to_string()
+            },
+            referenced_nodes: constraint
+                .kind
+                .referenced_nodes()
+                .into_iter()
+                .map(|node| node.0)
+                .collect(),
             stable_key: constraint.stable_key.clone(),
         })
         .collect();
@@ -127,4 +140,56 @@ fn constraint_rows(db: &AnalysisDb) -> Vec<ConstraintRow> {
 
 fn increment(counts: &mut BTreeMap<String, usize>, key: &str) {
     *counts.entry(key.to_string()).or_default() += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::ids::SemanticNodeId;
+    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+    use crate::analysis::semantic_graph::facts::{NodeKind, SemanticNodeFact, SemanticPrecision};
+    use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    use crate::core::{AnalysisDb, FunctionId};
+
+    use super::*;
+
+    #[test]
+    fn debug_json_marks_ts_direct_binding_constraints_with_node_refs() {
+        let mut db = AnalysisDb::new();
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                node(0, FunctionId(1), "node:function:target"),
+                node(1, FunctionId(2), "node:function:callsite"),
+            ],
+            edges: Vec::new(),
+            constraints: vec![ConstraintFact {
+                id: Default::default(),
+                kind: ConstraintKind::CopyEdge {
+                    dst: SemanticNodeId(1),
+                    src: SemanticNodeId(0),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "constraint:ts_direct_binding:copy".to_string(),
+            }],
+        })
+        .expect("store graph");
+
+        let json = metadata_debug_json_for_test(&db);
+        let constraints = json["constraints"].as_array().expect("constraints array");
+        assert_eq!(constraints[0]["source"], "ts_direct_binding");
+        assert_eq!(
+            constraints[0]["referenced_nodes"].as_array().unwrap().len(),
+            2
+        );
+    }
+
+    fn node(id: u64, function: FunctionId, stable_key: &str) -> SemanticNodeFact {
+        SemanticNodeFact {
+            id: SemanticNodeId(id),
+            kind: NodeKind::Function(function),
+            precision: SemanticPrecision::Conservative,
+            stable_key: stable_key.to_string(),
+        }
+    }
 }

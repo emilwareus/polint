@@ -38,6 +38,52 @@ pub(crate) fn ts_direct_binding_provider_parameter_digest() -> Digest {
     )
 }
 
+pub(crate) fn ts_direct_binding_output_digest(output: &TsDirectBindingOutput) -> Digest {
+    let mut parts = vec![format!(
+        "parameters={}",
+        ts_direct_binding_provider_parameter_digest()
+    )];
+    parts.extend(output.bindings.iter().map(|binding| {
+        format!(
+            "binding={} callsite={} target={} scope={} import={} module={} kind={:?} status={} reason={}",
+            binding.stable_key,
+            binding.callsite_stable_key,
+            binding
+                .target_function_stable_key
+                .as_deref()
+                .unwrap_or("none"),
+            binding
+                .scope_binding_stable_key
+                .as_deref()
+                .unwrap_or("none"),
+            binding
+                .resolved_import
+                .map(|id| id.0.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            binding
+                .module_node
+                .map(|id| id.0.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            binding.kind,
+            binding.status.as_str(),
+            binding
+                .reason
+                .map(TsDirectBindingReason::as_str)
+                .unwrap_or("none"),
+        )
+    }));
+    if output.bindings.is_empty() {
+        parts.push("ts_direct_binding_output=empty".to_string());
+    }
+    parts.sort();
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(
+        DigestKind::ProviderOutput,
+        "ts_direct_binding_output",
+        &refs,
+    )
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TsDirectBindingOutput {
     pub(crate) bindings: Vec<TsDirectBindingFact>,
@@ -268,6 +314,24 @@ mod tests {
                     "schema=ts_direct_binding_schema_v1",
                 ],
             )
+        );
+    }
+
+    #[test]
+    fn output_digest_changes_for_binding_rows() {
+        let empty = TsDirectBindingOutput::default();
+        let populated = TsDirectBindingOutput {
+            bindings: vec![binding(
+                "binding:resolved",
+                TsDirectBindingId(10),
+                TsInventoryCallsiteId(3),
+            )],
+        }
+        .normalized();
+
+        assert_ne!(
+            ts_direct_binding_output_digest(&empty),
+            ts_direct_binding_output_digest(&populated)
         );
     }
 
