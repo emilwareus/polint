@@ -19,22 +19,30 @@
 
 use std::path::Path;
 
+use crate::analysis::semantic_graph::build::collect_ts_direct_bindings;
 use crate::analysis::semantic_graph::debug::metadata_debug_json_for_test as semantic_graph_debug_json;
-use crate::eval::observed::run_kernel_for_repo_for_test;
+use crate::analysis_kernel::KernelOutput;
+use crate::eval::fixtures::load_native_fixture;
+use crate::eval::observed::{copy_fixture_repo_for_test, run_kernel_for_repo_for_test};
+use crate::ts::binding::facts::TsDirectBindingReason;
 
-fn fixture_repo(name: &str) -> std::path::PathBuf {
+fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/eval-fixtures/semantic-graph")
         .join(name)
-        .join("repo")
 }
 
 /// Runs the kernel over a fixture repo and returns the byte-stable semantic-graph
 /// debug JSON (pretty, deterministic key order).
 fn observe_semantic_graph(name: &str) -> serde_json::Value {
-    let repo = fixture_repo(name);
-    let output = run_kernel_for_repo_for_test(&repo).expect("kernel runs over fixture repo");
+    let output = run_fixture_kernel(name);
     semantic_graph_debug_json(&output.db)
+}
+
+fn run_fixture_kernel(name: &str) -> KernelOutput {
+    let fixture = load_native_fixture(&fixture_dir(name)).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    run_kernel_for_repo_for_test(temp.path()).expect("kernel runs over fixture repo")
 }
 
 /// Asserts the fixture emits >= 1 of each kind and that the observed debug JSON is
@@ -108,6 +116,11 @@ fn ts_graph_fixture_emits_each_kind_and_is_byte_stable() {
 }
 
 #[test]
+fn ts_direct_bindings_fixture_emits_each_kind_and_is_byte_stable() {
+    assert_fixture_emits_each_kind_and_is_byte_stable("ts_direct_bindings");
+}
+
+#[test]
 fn go_graph_emits_call_edge_and_call_constraint() {
     let observed = observe_semantic_graph("go_graph");
     let call_edges = observed["counts"]["edges_by_kind"]["call"]
@@ -142,5 +155,76 @@ fn ts_graph_emits_call_edge_and_call_constraint() {
     assert!(
         call_constraints >= 1,
         "ts_graph: expected >= 1 CallConstraint, got {call_constraints}: {observed:#}"
+    );
+}
+
+#[test]
+fn ts_direct_bindings_fixture_emits_resolved_copy_and_call_constraints() {
+    let observed = observe_semantic_graph("ts_direct_bindings");
+    let copy_edges = observed["counts"]["constraints_by_kind"]["copy_edge"]
+        .as_u64()
+        .unwrap_or(0);
+    let call_constraints = observed["counts"]["constraints_by_kind"]["call_constraint"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(
+        copy_edges >= 1,
+        "ts_direct_bindings: expected >= 1 CopyEdge, got {copy_edges}: {observed:#}"
+    );
+    assert!(
+        call_constraints >= 1,
+        "ts_direct_bindings: expected >= 1 CallConstraint, got {call_constraints}: {observed:#}"
+    );
+
+    let total_nodes = observed["counts"]["total_nodes"].as_u64().unwrap_or(0);
+    let constraints = observed["constraints"]
+        .as_array()
+        .expect("constraints array");
+    let ts_direct_rows = constraints
+        .iter()
+        .filter(|row| row["source"] == "ts_direct_binding")
+        .collect::<Vec<_>>();
+    assert!(
+        ts_direct_rows
+            .iter()
+            .any(|row| row["kind"].as_str() == Some("copy_edge")),
+        "ts_direct_bindings: expected a TS direct-binding CopyEdge row: {observed:#}"
+    );
+    assert!(
+        ts_direct_rows
+            .iter()
+            .any(|row| row["kind"].as_str() == Some("call_constraint")),
+        "ts_direct_bindings: expected a TS direct-binding CallConstraint row: {observed:#}"
+    );
+    for row in ts_direct_rows {
+        let refs = row["referenced_nodes"]
+            .as_array()
+            .expect("referenced_nodes array");
+        assert!(
+            !refs.is_empty(),
+            "ts_direct_bindings: TS direct row must reference graph nodes: {row:#}"
+        );
+        for node in refs {
+            let node = node.as_u64().expect("node ref is u64");
+            assert!(
+                node < total_nodes,
+                "ts_direct_bindings: referenced node {node} must resolve within {total_nodes} nodes: {row:#}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ts_direct_bindings_fixture_records_non_string_dynamic_import_reason() {
+    let output = run_fixture_kernel("ts_direct_bindings");
+    let bindings = collect_ts_direct_bindings(&output.db);
+
+    assert!(
+        bindings
+            .bindings
+            .iter()
+            .any(|binding| binding.reason == Some(TsDirectBindingReason::NonStringDynamicImport)),
+        "ts_direct_bindings: expected unresolved non-string dynamic import reason, got {:#?}",
+        bindings.bindings
     );
 }

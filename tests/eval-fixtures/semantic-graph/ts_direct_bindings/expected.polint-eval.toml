@@ -1,0 +1,17 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "semantic-graph-ts-direct-bindings"
+area = "facts"
+
+# Phase 45 Plan 05 semantic-graph fixture for TS direct bindings (JS-02/JS-03).
+#
+# The repo covers ESM named/default/namespace imports, ESM re-exports,
+# CommonJS require-member calls, a TypeScript path alias, destructuring, a local
+# function alias, and one unresolved non-string dynamic import. The snapshot
+# tests assert that TS direct-binding rows project stable CopyEdge and
+# CallConstraint constraints whose referenced nodes resolve in the stored graph.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
