@@ -648,6 +648,7 @@ mod tests {
         TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings,
         resolve_direct_bindings_with_modules,
     };
+    use crate::ts::binding::facts::TsDirectBindingReason;
     use crate::ts::inventory::facts::{TsInventoryCallsiteFact, TsInventoryFunctionFact};
 
     fn span(file: FileId) -> Span {
@@ -1041,6 +1042,37 @@ function run() {
             assert!(source.contains("do not create CallTargetFact rows"));
         }
 
+        #[test]
+        fn unresolved_no_solver_boundary_rows_emit_zero_target_constraints() {
+            let db = AnalysisDb::new();
+            let rows = [
+                TsDirectBindingReason::TokenFlowRequired,
+                TsDirectBindingReason::PropertyFlowRequired,
+                TsDirectBindingReason::PrototypeModelRequired,
+                TsDirectBindingReason::ThisModelRequired,
+            ]
+            .into_iter()
+            .map(unresolved_binding)
+            .collect::<Vec<_>>();
+
+            let output = build_semantic_graph_with_ts_direct_bindings(&db, &rows);
+
+            assert!(output.constraints.iter().all(|constraint| {
+                !matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
+                    && !matches!(constraint.kind, ConstraintKind::CallConstraint { .. })
+            }));
+        }
+
+        #[test]
+        fn source_has_no_phase_45_solver_reference_or_token_worklist() {
+            let source = include_str!("build.rs");
+
+            assert!(!source.contains(concat!("analysis", "::solver")));
+            assert!(!source.contains(concat!("fixed", "-point")));
+            assert!(!source.contains(concat!("token", "-set")));
+            assert!(!source.contains(concat!("token", " propagation")));
+        }
+
         fn assert_ts_direct_projection(output: SemanticGraphOutput) {
             let copy_edges = output
                 .constraints
@@ -1058,6 +1090,24 @@ function run() {
             assert!(copy_edges >= 1, "expected TS direct CopyEdge");
             assert!(call_constraints >= 1, "expected TS direct CallConstraint");
             SemanticGraphStore::from_output(output).expect("TS direct graph validates");
+        }
+
+        fn unresolved_binding(reason: TsDirectBindingReason) -> TsDirectBindingFact {
+            TsDirectBindingFact {
+                id: crate::analysis::ids::TsDirectBindingId(0),
+                callsite: crate::analysis::ids::TsInventoryCallsiteId(1),
+                callsite_stable_key: format!("callsite:{}", reason.as_str()),
+                target_function: None,
+                target_function_stable_key: None,
+                scope_binding: None,
+                scope_binding_stable_key: None,
+                resolved_import: None,
+                module_node: None,
+                kind: TsDirectBindingKind::LocalFunction,
+                status: TsDirectBindingStatus::Unresolved,
+                reason: Some(reason),
+                stable_key: format!("ts_direct_binding:{}", reason.as_str()),
+            }
         }
     }
 }
