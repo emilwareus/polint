@@ -19,9 +19,9 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 ## Phases (v1.3)
 
 - [x] **Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy** - Stable identity records, Go `RelString` and Jelly span renderers, identity-vs-unsupported categorization, public-surface-leak CI gate. ✅ Verified 5/5 (full Go module import-path RelString deferred to Phase 46; broad Jelly coverage to Phase 45).
-- [ ] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
-- [ ] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
-- [ ] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. May run in parallel with Phase 46.
+- [x] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
+- [x] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
+- [x] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. ✅ Verified 5/5. May run in parallel with Phase 46.
 - [ ] **Phase 46: Go Semantic Frontend & Sidecar** - `polint-go-frontend` Go binary (`go/packages` + `go/ssa`), NDJSON protocol, sidecar client, lowering to semantic graph; typed process boundary, version pinning, failure taxonomy. May run in parallel with Phase 45.
 - [ ] **Phase 47: Unified Solver Core & Derived-Edge Provenance** - Private `analysis::solver` (deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`, per-language `SolverPolicy` scaffolding); folds in `points_to` as a sub-domain; `DerivedEdgeProvenance` contract.
 - [ ] **Phase 48: Go RTA Driver** - Private `analysis::solver::go_rta` (reachable functions from roots, address-taken tracking, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration). May run in parallel with Phase 49.
@@ -88,7 +88,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [x] 45-02-PLAN.md — private JS/TS scope/binding facts, Oxc semantic extraction, scope store indexes, unresolved dynamic boundary rows (JS-02)
 - [x] 45-03-PLAN.md — private TS direct binding facts, local/import/module-mediated direct bindings, normalized binding store/cache contract (JS-02, JS-03 foundation)
 - [x] 45-04-PLAN.md — project TS direct bindings into semantic graph `CopyEdge` and `CallConstraint` rows (JS-03)
-- [ ] 45-05-PLAN.md — close Phase 45 with Jelly, module/binding, cache/determinism, and public-surface fixtures (JS-01, JS-02, JS-03)
+- [x] 45-05-PLAN.md — close Phase 45 with Jelly, module/binding, cache/determinism, and public-surface fixtures (JS-01, JS-02, JS-03)
 **UI hint**: no
 
 May run in parallel with Phase 46 (shares no Rust modules).
