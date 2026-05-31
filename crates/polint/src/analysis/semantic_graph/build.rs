@@ -34,7 +34,16 @@ use crate::analysis::semantic_graph::store::SemanticGraphOutput;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::values::facts::{ValueKind, ValueSubject};
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, Span};
+use crate::core::{AnalysisDb, FileId, Span};
+use crate::ts::binding::direct::{
+    TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings_with_modules,
+};
+use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingStatus};
+use crate::ts::binding::store::TsDirectBindingOutput;
+use crate::ts::inventory::extract::extract_ts_inventory;
+use crate::ts::inventory::store::TsInventoryOutput;
+use crate::ts::scope::extract::extract_ts_scope;
+use crate::ts::scope::store::TsScopeOutput;
 
 /// Projects a real-but-minimal semantic graph from already-stored v1.2 facts.
 ///
@@ -44,10 +53,19 @@ use crate::core::{AnalysisDb, Span};
 /// `normalized()` (and `SemanticGraphStore::from_output`) to sort by stable key and
 /// assign dense IDs (D-05).
 pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
+    let ts_direct_bindings = collect_ts_direct_bindings(db);
+    build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings)
+}
+
+pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
+    db: &AnalysisDb,
+    ts_direct_bindings: &[TsDirectBindingFact],
+) -> SemanticGraphOutput {
     let mut builder = GraphBuilder::default();
 
     builder.project_nodes(db);
     builder.project_call_edges_and_constraints(db);
+    builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
     // FieldLoad/FieldStore, TypeConstraint, and ModelEdge intentionally emit zero
@@ -55,6 +73,65 @@ pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
     // access-path projections are already projected as nodes above.
 
     builder.into_output()
+}
+
+struct TsFileAnalysis {
+    file: FileId,
+    inventory: TsInventoryOutput,
+    scope: TsScopeOutput,
+}
+
+fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
+    let analyses = db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+        .map(|file| TsFileAnalysis {
+            file: file.id,
+            inventory: extract_ts_inventory(file),
+            scope: extract_ts_scope(file),
+        })
+        .collect::<Vec<_>>();
+    if analyses.is_empty() {
+        return TsDirectBindingOutput::default();
+    }
+
+    let analysis_by_file = analyses
+        .iter()
+        .enumerate()
+        .map(|(index, analysis)| (analysis.file, index))
+        .collect::<BTreeMap<_, _>>();
+    let module_files = db
+        .module_nodes()
+        .iter()
+        .filter_map(|node| {
+            let file = node.file?;
+            let analysis = analyses.get(*analysis_by_file.get(&file)?)?;
+            Some(TsDirectBindingModuleFile {
+                module_node: node.id,
+                inventory: &analysis.inventory,
+                scope: &analysis.scope,
+            })
+        })
+        .collect::<Vec<_>>();
+    let module_input = TsDirectBindingModuleInput {
+        imports: db.imports(),
+        resolved_imports: db.resolved_imports(),
+        module_nodes: db.module_nodes(),
+        module_files: &module_files,
+    };
+
+    let mut bindings = Vec::new();
+    for analysis in &analyses {
+        let output = resolve_direct_bindings_with_modules(
+            &analysis.inventory,
+            &analysis.scope,
+            &module_input,
+        );
+        bindings.extend(output.bindings);
+    }
+
+    TsDirectBindingOutput { bindings }.normalized()
 }
 
 /// Accumulates pre-normalization nodes/edges/constraints plus the lookup maps that
@@ -220,6 +297,44 @@ impl GraphBuilder {
         }
     }
 
+    // -- TS direct binding constraints -------------------------------------
+
+    fn project_ts_direct_bindings(&mut self, db: &AnalysisDb, bindings: &[TsDirectBindingFact]) {
+        let context = TsDirectBindingNodeContext::new(db);
+        for binding in bindings {
+            if binding.status != TsDirectBindingStatus::Resolved {
+                continue;
+            }
+            let Some(callsite_node) =
+                context.callsite_node_for_binding(self, &binding.callsite_stable_key)
+            else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::CallConstraint {
+                    callsite: callsite_node,
+                },
+                &binding.stable_key,
+            );
+
+            let Some(target_key) = binding.target_function_stable_key.as_deref() else {
+                continue;
+            };
+            let Some(target_node) = context.function_node_for_binding(self, target_key) else {
+                continue;
+            };
+            if direct_binding_emits_copy_edge(binding.kind) {
+                self.push_constraint(
+                    ConstraintKind::CopyEdge {
+                        dst: callsite_node,
+                        src: target_node,
+                    },
+                    &binding.stable_key,
+                );
+            }
+        }
+    }
+
     // -- member-of edges ----------------------------------------------------
 
     fn project_member_of_edges(&mut self, db: &AnalysisDb) {
@@ -313,6 +428,136 @@ impl GraphBuilder {
     }
 }
 
+fn direct_binding_emits_copy_edge(kind: TsDirectBindingKind) -> bool {
+    matches!(
+        kind,
+        TsDirectBindingKind::LocalAlias
+            | TsDirectBindingKind::ImportedNamed
+            | TsDirectBindingKind::ImportedDefault
+            | TsDirectBindingKind::ImportedNamespaceMember
+            | TsDirectBindingKind::ReExportedAlias
+            | TsDirectBindingKind::CommonJsRequireMember
+    )
+}
+
+struct TsDirectBindingNodeContext<'a> {
+    db: &'a AnalysisDb,
+    file_by_relative_path: BTreeMap<&'a str, FileId>,
+}
+
+impl<'a> TsDirectBindingNodeContext<'a> {
+    fn new(db: &'a AnalysisDb) -> Self {
+        Self {
+            db,
+            file_by_relative_path: db
+                .files()
+                .iter()
+                .map(|file| (file.relative_path.as_str(), file.id))
+                .collect(),
+        }
+    }
+
+    fn callsite_node_for_binding(
+        &self,
+        builder: &GraphBuilder,
+        callsite_stable_key: &str,
+    ) -> Option<SemanticNodeId> {
+        let identity = TsInventoryStableIdentity::parse(callsite_stable_key)?;
+        let file = self.file_by_relative_path.get(identity.file.as_str())?;
+        self.db
+            .call_sites()
+            .iter()
+            .find(|site| {
+                site.file == *file
+                    && site.span.start_byte == identity.start
+                    && site.span.end_byte == identity.end
+            })
+            .and_then(|site| {
+                let key = node_key_from_identity("callsite", &site.stable_key);
+                builder.node_by_key.get(&key).copied()
+            })
+    }
+
+    fn function_node_for_binding(
+        &self,
+        builder: &GraphBuilder,
+        function_stable_key: &str,
+    ) -> Option<SemanticNodeId> {
+        let identity = TsInventoryStableIdentity::parse(function_stable_key)?;
+        let file = self.file_by_relative_path.get(identity.file.as_str())?;
+        self.db
+            .functions()
+            .iter()
+            .find(|function| {
+                function.file == *file
+                    && function.span.start_byte == identity.start
+                    && function.span.end_byte == identity.end
+                    && identity
+                        .display
+                        .as_deref()
+                        .is_none_or(|display| display == function.name)
+            })
+            .and_then(|function| {
+                let key = function_node_key(self.db, function);
+                builder.node_by_key.get(&key).copied()
+            })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TsInventoryStableIdentity {
+    file: String,
+    start: u32,
+    end: u32,
+    display: Option<String>,
+}
+
+impl TsInventoryStableIdentity {
+    fn parse(stable_key: &str) -> Option<Self> {
+        let parts = parse_length_prefixed_parts(stable_key)?;
+        Some(Self {
+            file: parts.get("file")?.clone(),
+            start: parts.get("start")?.parse().ok()?,
+            end: parts.get("end")?.parse().ok()?,
+            display: parts.get("display").cloned(),
+        })
+    }
+}
+
+fn parse_length_prefixed_parts(stable_key: &str) -> Option<BTreeMap<String, String>> {
+    let mut cursor = 0;
+    let (_prefix, next) = parse_length_prefixed_token(stable_key, cursor)?;
+    cursor = next;
+    let mut parts = BTreeMap::new();
+
+    while cursor < stable_key.len() {
+        if stable_key.as_bytes().get(cursor) != Some(&b'|') {
+            return None;
+        }
+        cursor += 1;
+        let (label, next) = parse_length_prefixed_token(stable_key, cursor)?;
+        cursor = next;
+        if stable_key.as_bytes().get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+        let (value, next) = parse_length_prefixed_token(stable_key, cursor)?;
+        cursor = next;
+        parts.insert(label, value);
+    }
+
+    Some(parts)
+}
+
+fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(String, usize)> {
+    let colon = input[start..].find(':')? + start;
+    let len = input[start..colon].parse::<usize>().ok()?;
+    let value_start = colon + 1;
+    let value_end = value_start.checked_add(len)?;
+    let value = input.get(value_start..value_end)?.to_string();
+    Some((value, value_end))
+}
+
 // ---------------------------------------------------------------------------
 // Stable-key composition helpers (D-06: composed from referenced identity)
 // ---------------------------------------------------------------------------
@@ -391,8 +636,15 @@ mod tests {
     use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
     use crate::analysis::semantic_graph::store::SemanticGraphStore;
     use crate::core::{
-        AnalysisDb, FileId, FunctionFact, FunctionId, Language, PackageFact, PackageId, Span,
+        AnalysisDb, FileId, FunctionFact, FunctionId, ImportFact, ImportId, Language, ModuleNode,
+        ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact, Span,
     };
+    use crate::ts::binding::direct::{
+        TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings,
+        resolve_direct_bindings_with_modules,
+    };
+    use crate::ts::inventory::facts::{TsInventoryCallsiteFact, TsInventoryFunctionFact};
 
     fn span(file: FileId) -> Span {
         Span {
@@ -464,6 +716,87 @@ mod tests {
         .expect("call replace");
 
         db
+    }
+
+    fn ts_db_with_file(path: &str, source: &str) -> (AnalysisDb, FileId) {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
+        (db, file)
+    }
+
+    fn push_ts_function(db: &mut AnalysisDb, function: &TsInventoryFunctionFact) -> FunctionId {
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file: function.file,
+            name: function
+                .display_name
+                .clone()
+                .unwrap_or_else(|| "<anonymous>".to_string()),
+            span: function.span.clone(),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        })
+    }
+
+    fn ts_function<'a>(
+        inventory: &'a TsInventoryOutput,
+        display_name: &str,
+    ) -> &'a TsInventoryFunctionFact {
+        inventory
+            .functions
+            .iter()
+            .find(|function| function.display_name.as_deref() == Some(display_name))
+            .unwrap_or_else(|| panic!("missing TS function {display_name}"))
+    }
+
+    fn ts_callsite<'a>(
+        inventory: &'a TsInventoryOutput,
+        display_name: &str,
+    ) -> &'a TsInventoryCallsiteFact {
+        inventory
+            .callsites
+            .iter()
+            .find(|callsite| callsite.display_name.as_deref() == Some(display_name))
+            .unwrap_or_else(|| panic!("missing TS callsite {display_name}"))
+    }
+
+    fn replace_single_ts_callsite(
+        db: &mut AnalysisDb,
+        caller: FunctionId,
+        callsite: &TsInventoryCallsiteFact,
+    ) {
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file: callsite.file,
+                caller,
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: callsite.span.clone(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: callsite
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| "<dynamic>".to_string()),
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Resolved,
+                precision: CallPrecision::SetupAware,
+                stable_key: format!("ts-callsite:{}", callsite.stable_key),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call replace");
     }
 
     #[test]
@@ -550,5 +883,140 @@ mod tests {
         let _ = build_semantic_graph(&db);
         assert_eq!(db.call_sites().len(), before_sites);
         assert_eq!(db.functions().len(), before_funcs);
+    }
+
+    mod ts_direct_bindings {
+        use super::*;
+
+        #[test]
+        fn projects_copy_edge_and_call_constraint_for_local_alias() {
+            let (mut db, file) = ts_db_with_file(
+                "src/app.ts",
+                r#"
+function f() {}
+const alias = f;
+function run() {
+  alias();
+}
+"#,
+            );
+            let inventory = extract_ts_inventory(db.file(file).expect("file"));
+            let scope = extract_ts_scope(db.file(file).expect("file"));
+            let target = ts_function(&inventory, "f").clone();
+            let caller = ts_function(&inventory, "run").clone();
+            let callsite = ts_callsite(&inventory, "alias").clone();
+            push_ts_function(&mut db, &target);
+            let caller = push_ts_function(&mut db, &caller);
+            replace_single_ts_callsite(&mut db, caller, &callsite);
+
+            let bindings = resolve_direct_bindings(&inventory, &scope);
+            let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
+            assert_ts_direct_projection(output);
+        }
+
+        #[test]
+        fn projects_copy_edge_and_call_constraint_for_imported_alias() {
+            let mut db = AnalysisDb::new();
+            let app_file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                r#"
+import { f as g } from "./m";
+function run() {
+  g();
+}
+"#
+                .to_string(),
+            );
+            let module_file = db.add_file(
+                PathBuf::from("src/m.ts"),
+                "src/m.ts".to_string(),
+                "export function f() {}".to_string(),
+            );
+            let app_inventory = extract_ts_inventory(db.file(app_file).expect("app"));
+            let app_scope = extract_ts_scope(db.file(app_file).expect("app"));
+            let module_inventory = extract_ts_inventory(db.file(module_file).expect("module"));
+            let module_scope = extract_ts_scope(db.file(module_file).expect("module"));
+
+            let target = ts_function(&module_inventory, "f").clone();
+            let caller = ts_function(&app_inventory, "run").clone();
+            let callsite = ts_callsite(&app_inventory, "g").clone();
+            push_ts_function(&mut db, &target);
+            let caller = push_ts_function(&mut db, &caller);
+            replace_single_ts_callsite(&mut db, caller, &callsite);
+            let import = db.push_import(ImportFact {
+                id: ImportId(0),
+                file: app_file,
+                package: None,
+                path: "./m".to_string(),
+                span: Span::point(app_file, 1, 0),
+                language: Language::TypeScript,
+            });
+            db.replace_module_graph_facts(
+                vec![ResolvedImportFact {
+                    id: crate::core::ResolvedImportId(0),
+                    import,
+                    from_file: app_file,
+                    target_node: Some(ModuleNodeId(1)),
+                    status: ResolutionStatus::Resolved,
+                    precision: ResolutionPrecision::ExactFile,
+                    reason: None,
+                }],
+                vec![
+                    ModuleNode {
+                        id: ModuleNodeId(0),
+                        kind: ModuleNodeKind::File,
+                        label: "src/app.ts".to_string(),
+                        file: Some(app_file),
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                    ModuleNode {
+                        id: ModuleNodeId(1),
+                        kind: ModuleNodeKind::File,
+                        label: "src/m.ts".to_string(),
+                        file: Some(module_file),
+                        package: None,
+                        language: Some(Language::TypeScript),
+                    },
+                ],
+                Vec::new(),
+            );
+            let module_files = vec![TsDirectBindingModuleFile {
+                module_node: ModuleNodeId(1),
+                inventory: &module_inventory,
+                scope: &module_scope,
+            }];
+            let module_input = TsDirectBindingModuleInput {
+                imports: db.imports(),
+                resolved_imports: db.resolved_imports(),
+                module_nodes: db.module_nodes(),
+                module_files: &module_files,
+            };
+
+            let bindings =
+                resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+            let output = build_semantic_graph_with_ts_direct_bindings(&db, &bindings.bindings);
+            assert_ts_direct_projection(output);
+        }
+
+        fn assert_ts_direct_projection(output: SemanticGraphOutput) {
+            let copy_edges = output
+                .constraints
+                .iter()
+                .filter(|constraint| matches!(constraint.kind, ConstraintKind::CopyEdge { .. }))
+                .count();
+            let call_constraints = output
+                .constraints
+                .iter()
+                .filter(|constraint| {
+                    matches!(constraint.kind, ConstraintKind::CallConstraint { .. })
+                })
+                .count();
+
+            assert!(copy_edges >= 1, "expected TS direct CopyEdge");
+            assert!(call_constraints >= 1, "expected TS direct CallConstraint");
+            SemanticGraphStore::from_output(output).expect("TS direct graph validates");
+        }
     }
 }
