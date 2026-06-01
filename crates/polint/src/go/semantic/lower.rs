@@ -241,9 +241,15 @@ mod tests {
     #[test]
     fn lower_rejects_absolute_repo_escaping_path() {
         let db = db_with_go_file("main.go");
+        let outside = if cfg!(windows) {
+            r"C:\tmp\outside.go"
+        } else {
+            "/tmp/outside.go"
+        };
+        let outside_json = serde_json::to_string(outside).expect("path serializes as JSON");
         let output = decode_ndjson_str(&format!(
             r#"{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_begin"}}
-{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"function","package_id":"example.com/p","package_path":"example.com/p","name":"F","qualified":"example.com/p.F","stable_key":"fn","file":"/tmp/outside.go"}}
+{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"function","package_id":"example.com/p","package_path":"example.com/p","name":"F","qualified":"example.com/p.F","stable_key":"fn","file":{outside_json}}}
 {{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_end"}}
 "#,
         ))

@@ -332,8 +332,14 @@ mod tests {
 
     fn fake_stdout_command(stdout: &str) -> std::process::Command {
         if cfg!(windows) {
-            let mut command = std::process::Command::new("cmd");
-            command.arg("/C").arg(format!("echo {stdout}"));
+            let mut command = std::process::Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Output.Write($args[0])",
+                stdout,
+            ]);
             command
         } else {
             let mut command = std::process::Command::new("sh");
