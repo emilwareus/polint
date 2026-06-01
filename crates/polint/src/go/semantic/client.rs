@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use crate::go::lifecycle::GoAnalysisConfig;
+use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
 use crate::go::semantic::process::{
     GoSemanticProcessError, command_for_frontend, resolve_go_semantic_frontend,
 };
@@ -139,9 +140,9 @@ fn run_with_timeout(
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(GoSemanticProcessError::Timeout(
-                "GoSidecarTimeout: go semantic frontend exceeded request timeout".to_string(),
-            ));
+            return Err(GoSemanticProcessError::Timeout(format!(
+                "{GO_SIDECAR_TIMEOUT}: go semantic frontend exceeded request timeout"
+            )));
         }
         std::thread::sleep(Duration::from_millis(10));
     }

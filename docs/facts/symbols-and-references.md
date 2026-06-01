@@ -330,6 +330,10 @@ Current limits:
 - no public exposure of Go object values, object addresses, package loader JSON,
   sidecar DTOs, or sidecar internals
 
+The private `polint-go-frontend` semantic sidecar used by graph analysis is
+separate from the public symbol/reference fact surface documented here. Its
+private rows are not SDK facts and should not be imported by repo-local rules.
+
 ## Cache And Determinism
 
 Symbol and reference facts participate in deterministic planning and cache

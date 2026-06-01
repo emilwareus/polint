@@ -7,6 +7,7 @@
 
 pub(crate) mod cache_key;
 pub(crate) mod client;
+pub(crate) mod diagnostics;
 pub(crate) mod facts;
 pub(crate) mod lower;
 pub(crate) mod process;
