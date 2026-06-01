@@ -208,7 +208,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 43 | Reachability, Roots & Per-Suite Scoring Mode | 3/3 | Complete    | 2026-05-29 |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 3/3 | Complete    | 2026-05-30 |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 5/5 | Complete    | 2026-05-31 |
-| 46 | Go Semantic Frontend & Sidecar | 1/4 | In Progress|  |
+| 46 | Go Semantic Frontend & Sidecar | 2/4 | In Progress|  |
 | 47 | Unified Solver Core & Derived-Edge Provenance | 0/0 | Not started | - |
 | 48 | Go RTA Driver | 0/0 | Not started | - |
 | 49 | JS/TS Function-Token Propagation Driver | 0/0 | Not started | - |
