@@ -10,8 +10,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
     Argument, BindingPattern, ExportDefaultDeclarationKind, Expression, FunctionType,
-    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
-    VariableDeclarationKind,
+    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, ObjectPropertyKind, Program,
+    PropertyKey, Statement, VariableDeclarationKind,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{
@@ -515,9 +515,17 @@ fn extract_destructuring_rows(
         if matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
             continue;
         }
+        let destructuring_aliases =
+            object_literal_destructuring_aliases(&declarator.id, declarator.init.as_ref());
         let mut names = Vec::new();
         collect_pattern_names(&declarator.id, &mut names);
         for name in names {
+            let imported_name = destructuring_aliases.get(&name).cloned();
+            let import_export_kind = if imported_name.is_some() {
+                TsImportExportKind::Alias
+            } else {
+                TsImportExportKind::None
+            };
             rows.push(binding_row(BindingRowDraft {
                 file,
                 source,
@@ -526,9 +534,9 @@ fn extract_destructuring_rows(
                 name,
                 declaration_kind: TsDeclarationKind::Destructuring,
                 binding_kind: TsBindingKind::Destructuring,
-                import_export_kind: TsImportExportKind::None,
+                import_export_kind,
                 module_source: None,
-                imported_name: None,
+                imported_name,
                 exported_name: None,
                 status: TsBindingStatus::present(),
             }));
@@ -536,6 +544,50 @@ fn extract_destructuring_rows(
     }
 
     rows
+}
+
+fn object_literal_destructuring_aliases(
+    pattern: &BindingPattern<'_>,
+    init: Option<&Expression<'_>>,
+) -> BTreeMap<String, String> {
+    let BindingPattern::ObjectPattern(pattern) = pattern else {
+        return BTreeMap::new();
+    };
+    let Some(Expression::ObjectExpression(object)) = init else {
+        return BTreeMap::new();
+    };
+
+    let targets_by_key = object
+        .properties
+        .iter()
+        .filter_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            if property.computed {
+                return None;
+            }
+            Some((
+                property_key_name(&property.key)?,
+                expression_identifier_name(&property.value)?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    pattern
+        .properties
+        .iter()
+        .filter_map(|property| {
+            if property.computed {
+                return None;
+            }
+            let target = targets_by_key.get(&property_key_name(&property.key)?)?;
+            Some((
+                destructured_local_name(&property.value)?,
+                target.to_string(),
+            ))
+        })
+        .collect()
 }
 
 fn extract_boundary_rows(
@@ -645,6 +697,40 @@ fn collect_pattern_names(pattern: &BindingPattern<'_>, names: &mut Vec<String>) 
             }
         }
         BindingPattern::AssignmentPattern(pattern) => collect_pattern_names(&pattern.left, names),
+    }
+}
+
+fn destructured_local_name(pattern: &BindingPattern<'_>) -> Option<String> {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.to_string()),
+        BindingPattern::AssignmentPattern(pattern) => destructured_local_name(&pattern.left),
+        _ => None,
+    }
+}
+
+fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
+    key.name().map(|name| name.into_owned())
+}
+
+fn expression_identifier_name(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::ParenthesizedExpression(expression) => {
+            expression_identifier_name(&expression.expression)
+        }
+        Expression::TSAsExpression(expression) => {
+            expression_identifier_name(&expression.expression)
+        }
+        Expression::TSSatisfiesExpression(expression) => {
+            expression_identifier_name(&expression.expression)
+        }
+        Expression::TSNonNullExpression(expression) => {
+            expression_identifier_name(&expression.expression)
+        }
+        Expression::TSTypeAssertion(expression) => {
+            expression_identifier_name(&expression.expression)
+        }
+        _ => None,
     }
 }
 
@@ -1039,6 +1125,23 @@ const aliasLocal = local;
         assert_eq!(import.module_source.as_deref(), Some("./dep"));
         assert_eq!(import.imported_name.as_deref(), Some("named"));
         assert!(matches!(import.status, TsBindingStatus::External { .. }));
+    }
+
+    #[test]
+    fn object_literal_destructuring_rows_carry_alias_target() {
+        let file = fixture_file(r#"const { destructured } = { destructured: localTarget };"#);
+        let output = extract_ts_scope(file);
+        let binding = output
+            .bindings
+            .iter()
+            .find(|binding| {
+                binding.name == "destructured"
+                    && binding.binding_kind == TsBindingKind::Destructuring
+                    && binding.import_export_kind == TsImportExportKind::Alias
+            })
+            .expect("destructuring alias binding");
+
+        assert_eq!(binding.imported_name.as_deref(), Some("localTarget"));
     }
 
     fn fixture_file(source: &str) -> &'static SourceFile {

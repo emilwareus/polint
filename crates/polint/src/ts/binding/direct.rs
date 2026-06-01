@@ -136,7 +136,13 @@ impl<'a> DirectBindingIndex<'a> {
             alias_by_name: scope
                 .bindings
                 .iter()
-                .filter(|binding| binding.binding_kind == TsBindingKind::Alias)
+                .filter(|binding| binding.imported_name.is_some())
+                .filter(|binding| {
+                    matches!(
+                        binding.binding_kind,
+                        TsBindingKind::Alias | TsBindingKind::Destructuring
+                    )
+                })
                 .map(|binding| (binding.name.as_str(), binding))
                 .collect(),
             import_by_name: scope

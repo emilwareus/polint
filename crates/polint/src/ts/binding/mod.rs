@@ -52,6 +52,28 @@ function run() {
     }
 
     #[test]
+    fn resolves_object_literal_destructuring_alias_call() {
+        let file = fixture_file(
+            r#"
+function localTarget() {}
+const { destructured } = { destructured: localTarget };
+function run() {
+  destructured();
+}
+"#,
+        );
+
+        let output = resolve_direct_bindings(&extract_ts_inventory(file), &extract_ts_scope(file));
+        let binding = output
+            .bindings
+            .iter()
+            .find(|binding| binding.callsite_stable_key.contains("destructured"))
+            .expect("destructured call binding");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Resolved);
+    }
+
+    #[test]
     fn computed_property_and_parameter_callback_remain_unresolved() {
         let file = fixture_file(
             r#"

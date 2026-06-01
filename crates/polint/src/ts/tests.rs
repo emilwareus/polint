@@ -483,6 +483,52 @@ return formatLabel("dialog");
 }
 
 #[test]
+fn extracts_commonjs_exported_function_expression_assignments() {
+    let source = r#"
+exports.cjsTarget = function cjsTarget(value: string): string {
+  return normalize(value);
+};
+
+module.exports.otherTarget = function (value: string): string {
+  return cjsTarget(value);
+};
+
+exports.aliasTarget = function implementationName(value: string): string {
+  return otherTarget(value);
+};
+
+obj.notExported = function notExported(): void {};
+"#;
+    let (db, diagnostics) = analyze_source("cjs.ts", source);
+    assert_no_parser_diagnostics(&diagnostics);
+
+    let functions = db
+        .functions()
+        .iter()
+        .map(|function| {
+            (
+                function.name.as_str(),
+                function.is_exported,
+                function
+                    .calls
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        functions,
+        [
+            ("cjsTarget", true, vec!["normalize"]),
+            ("otherTarget", true, vec!["cjsTarget"]),
+            ("aliasTarget", true, vec!["otherTarget"])
+        ]
+    );
+}
+
+#[test]
 fn detects_component_like_ts_facts_with_honest_heuristics() {
     let source = r#"
 function helper() {

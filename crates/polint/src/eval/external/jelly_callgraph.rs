@@ -337,6 +337,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
+    use serde::Deserialize;
     use tempfile::tempdir;
 
     use super::*;
@@ -539,13 +540,22 @@ mod tests {
         let file = db.file(file_id).expect("fixture file");
         let inventory = extract_ts_inventory(file);
         let expectations = ts_inventory_span_expectations();
+        let expected_spans = ts_inventory_span_oracle();
+        assert_eq!(
+            expected_spans.keys().cloned().collect::<BTreeSet<_>>(),
+            expectations
+                .iter()
+                .map(|expected| expected.label.to_string())
+                .collect::<BTreeSet<_>>(),
+            "ts_inventory_spans: Jelly oracle labels must match named JS-01 expectations"
+        );
 
         let mut matched_spans = BTreeMap::new();
         let mut unmatched = Vec::new();
         for expected in &expectations {
             if let Some(span) = expected.find_span(file, &inventory) {
                 matched_spans.insert(
-                    expected.label,
+                    expected.label.to_string(),
                     render_inventory_span(file, expected.identity_kind(), span, expected.display),
                 );
             } else {
@@ -557,26 +567,47 @@ mod tests {
             }
         }
 
-        let ratio = matched_spans.len() as f64 / expectations.len() as f64;
+        let mismatches = expected_spans
+            .iter()
+            .filter_map(|(label, expected_span)| match matched_spans.get(label) {
+                Some(observed_span) if observed_span == expected_span => None,
+                Some(observed_span) => Some(format!(
+                    "file=src/forms.ts span={observed_span} reason=span mismatch for `{label}` expected={expected_span}"
+                )),
+                None => Some(format!(
+                    "file=src/forms.ts span={expected_span} reason=missing oracle label `{label}`"
+                )),
+            })
+            .collect::<Vec<_>>();
+        let exact_matches = expected_spans.len() - mismatches.len();
+        let ratio = exact_matches as f64 / expected_spans.len() as f64;
         assert!(
             ratio >= 0.99,
-            "ts_inventory_spans Jelly oracle-span coverage ratio {ratio:.4} (matched {}/{}) below 0.99; unmatched: {unmatched:?}",
-            matched_spans.len(),
-            expectations.len()
+            "ts_inventory_spans Jelly oracle-span coverage ratio {ratio:.4} (exact {}/{}) below 0.99; unmatched: {unmatched:?}; mismatches: {mismatches:?}",
+            exact_matches,
+            expected_spans.len()
         );
+        assert_eq!(matched_spans, expected_spans);
         assert!(
             matched_spans
                 .values()
                 .any(|span| spans_multiple_lines(span.as_str())),
             "ts_inventory_spans: expected at least one multi-line Jelly span, got {matched_spans:?}"
         );
-        assert_eq!(
-            matched_spans.keys().copied().collect::<BTreeSet<_>>(),
-            expectations
-                .iter()
-                .map(|expected| expected.label)
-                .collect::<BTreeSet<_>>()
-        );
+    }
+
+    #[derive(Deserialize)]
+    struct JellySpanOracle {
+        spans: BTreeMap<String, String>,
+    }
+
+    fn ts_inventory_span_oracle() -> BTreeMap<String, String> {
+        let oracle_path =
+            repo_root().join("tests/eval-fixtures/jelly/ts-inventory-spans/jelly-spans.toml");
+        let oracle = std::fs::read_to_string(&oracle_path).expect("read Jelly span oracle fixture");
+        toml::from_str::<JellySpanOracle>(&oracle)
+            .expect("parse Jelly span oracle fixture")
+            .spans
     }
 
     #[derive(Clone, Copy)]
