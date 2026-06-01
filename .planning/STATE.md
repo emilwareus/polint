@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: ready_to_plan
-last_updated: 2026-05-30T11:45:28.555Z
-last_activity: 2026-05-30
+status: executing
+last_updated: "2026-05-31T20:34:23.000Z"
+last_activity: 2026-05-31 -- Completed Phase 45 fixture and gate closure
 progress:
   total_phases: 13
-  completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
-  percent: 23
-stopped_at: Phase 44 complete (3/3) — ready to discuss Phase 45
+  completed_phases: 4
+  total_plans: 16
+  completed_plans: 16
+  percent: 31
 ---
 
 # State: polint
@@ -22,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 45 — js/ts inventory, scope, bindings, module graph & direct calls
+**Current focus:** Phase 46 — Go Semantic Frontend & Sidecar
 
 ## Current Status
 
@@ -41,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 45
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-05-30
+Phase: 46 (Go Semantic Frontend & Sidecar) — READY
+Plan: TBD
+Status: Phase 45 complete; ready to discuss/plan Phase 46
+Last activity: 2026-05-31 -- Completed Phase 45 fixture and gate closure
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -529,6 +528,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260601-e11 | Fix deep PR review findings | 2026-06-01 | implemented | [260601-e11-fix-deep-pr-review-findings](./quick/260601-e11-fix-deep-pr-review-findings/) |
+| 260601-baq | Fix final PR review findings | 2026-06-01 | implemented | [260601-baq-fix-final-pr-review-findings](./quick/260601-baq-fix-final-pr-review-findings/) |
 | 260527-d9f | Reconcile v1.2 milestone closeout artifacts before archival | 2026-05-27 | artifact-only | [260527-d9f-reconcile-v1-2-milestone-closeout-artifa](./quick/260527-d9f-reconcile-v1-2-milestone-closeout-artifa/) |
 | 260527-auc | Document public ResolvedImports and ModuleGraphFacts examples | 2026-05-27 | implemented | [260527-auc-document-public-resolvedimports-and-modu](./quick/260527-auc-document-public-resolvedimports-and-modu/) |
 | 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |

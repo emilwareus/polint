@@ -19,22 +19,54 @@
 
 use std::path::Path;
 
+use crate::analysis::semantic_graph::build::collect_ts_direct_bindings;
 use crate::analysis::semantic_graph::debug::metadata_debug_json_for_test as semantic_graph_debug_json;
-use crate::eval::observed::run_kernel_for_repo_for_test;
+use crate::analysis_kernel::KernelOutput;
+use crate::analysis_kernel::incremental::Digest;
+use crate::analysis_plan::AnalysisPlan;
+use crate::eval::fixtures::load_native_fixture;
+use crate::eval::observed::{
+    copy_fixture_repo_for_test, run_kernel_for_repo_for_test,
+    run_kernel_for_repo_with_plan_for_test,
+};
+use crate::ts::binding::facts::{
+    TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingReason, TsDirectBindingStatus,
+};
 
-fn fixture_repo(name: &str) -> std::path::PathBuf {
+fn fixture_dir(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/eval-fixtures/semantic-graph")
         .join(name)
-        .join("repo")
 }
 
 /// Runs the kernel over a fixture repo and returns the byte-stable semantic-graph
 /// debug JSON (pretty, deterministic key order).
 fn observe_semantic_graph(name: &str) -> serde_json::Value {
-    let repo = fixture_repo(name);
-    let output = run_kernel_for_repo_for_test(&repo).expect("kernel runs over fixture repo");
+    let output = run_fixture_kernel(name);
     semantic_graph_debug_json(&output.db)
+}
+
+fn run_fixture_kernel(name: &str) -> KernelOutput {
+    let fixture = load_native_fixture(&fixture_dir(name)).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    if name == "ts_direct_bindings" {
+        let plan =
+            AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+        return run_kernel_for_repo_with_plan_for_test(temp.path(), &plan)
+            .expect("kernel runs over TS direct-binding fixture repo");
+    }
+    run_kernel_for_repo_for_test(temp.path()).expect("kernel runs over fixture repo")
+}
+
+fn provider_output_digest(output: &KernelOutput, provider_id: &str) -> Digest {
+    output
+        .run_report
+        .provider_outputs
+        .iter()
+        .find(|row| row.provider_id == provider_id)
+        .unwrap_or_else(|| panic!("provider output row {provider_id} exists"))
+        .output_digest
+        .clone()
 }
 
 /// Asserts the fixture emits >= 1 of each kind and that the observed debug JSON is
@@ -108,6 +140,11 @@ fn ts_graph_fixture_emits_each_kind_and_is_byte_stable() {
 }
 
 #[test]
+fn ts_direct_bindings_fixture_emits_each_kind_and_is_byte_stable() {
+    assert_fixture_emits_each_kind_and_is_byte_stable("ts_direct_bindings");
+}
+
+#[test]
 fn go_graph_emits_call_edge_and_call_constraint() {
     let observed = observe_semantic_graph("go_graph");
     let call_edges = observed["counts"]["edges_by_kind"]["call"]
@@ -142,5 +179,290 @@ fn ts_graph_emits_call_edge_and_call_constraint() {
     assert!(
         call_constraints >= 1,
         "ts_graph: expected >= 1 CallConstraint, got {call_constraints}: {observed:#}"
+    );
+}
+
+#[test]
+fn ts_direct_bindings_fixture_emits_resolved_copy_and_call_constraints() {
+    let observed = observe_semantic_graph("ts_direct_bindings");
+    let copy_edges = observed["counts"]["constraints_by_kind"]["copy_edge"]
+        .as_u64()
+        .unwrap_or(0);
+    let call_constraints = observed["counts"]["constraints_by_kind"]["call_constraint"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(
+        copy_edges >= 1,
+        "ts_direct_bindings: expected >= 1 CopyEdge, got {copy_edges}: {observed:#}"
+    );
+    assert!(
+        call_constraints >= 1,
+        "ts_direct_bindings: expected >= 1 CallConstraint, got {call_constraints}: {observed:#}"
+    );
+
+    let total_nodes = observed["counts"]["total_nodes"].as_u64().unwrap_or(0);
+    let constraints = observed["constraints"]
+        .as_array()
+        .expect("constraints array");
+    let ts_direct_rows = constraints
+        .iter()
+        .filter(|row| row["source"] == "ts_direct_binding")
+        .collect::<Vec<_>>();
+    assert!(
+        ts_direct_rows
+            .iter()
+            .any(|row| row["kind"].as_str() == Some("copy_edge")),
+        "ts_direct_bindings: expected a TS direct-binding CopyEdge row: {observed:#}"
+    );
+    assert!(
+        ts_direct_rows
+            .iter()
+            .any(|row| row["kind"].as_str() == Some("call_constraint")),
+        "ts_direct_bindings: expected a TS direct-binding CallConstraint row: {observed:#}"
+    );
+    for row in ts_direct_rows {
+        let refs = row["referenced_nodes"]
+            .as_array()
+            .expect("referenced_nodes array");
+        assert!(
+            !refs.is_empty(),
+            "ts_direct_bindings: TS direct row must reference graph nodes: {row:#}"
+        );
+        for node in refs {
+            let node = node.as_u64().expect("node ref is u64");
+            assert!(
+                node < total_nodes,
+                "ts_direct_bindings: referenced node {node} must resolve within {total_nodes} nodes: {row:#}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ts_direct_bindings_fixture_asserts_each_claimed_binding_form_projects_to_constraints() {
+    let output = run_fixture_kernel("ts_direct_bindings");
+    let observed = semantic_graph_debug_json(&output.db);
+    let bindings = collect_ts_direct_bindings(&output.db);
+
+    for expected in ts_direct_binding_expectations() {
+        let binding = binding_for_callsite(&bindings.bindings, expected.callsite);
+        assert_eq!(
+            binding.status, expected.status,
+            "ts_direct_bindings: {} status mismatch: {binding:#?}",
+            expected.callsite
+        );
+        assert_eq!(
+            binding.kind, expected.kind,
+            "ts_direct_bindings: {} binding kind mismatch: {binding:#?}",
+            expected.callsite
+        );
+        assert_eq!(
+            binding.reason, expected.reason,
+            "ts_direct_bindings: {} unresolved reason mismatch: {binding:#?}",
+            expected.callsite
+        );
+        if let Some(target) = expected.target {
+            assert!(
+                binding
+                    .target_function_stable_key
+                    .as_deref()
+                    .is_some_and(|key| key.contains(target)),
+                "ts_direct_bindings: {} target must contain {target}: {binding:#?}",
+                expected.callsite
+            );
+        }
+        if expected.status == TsDirectBindingStatus::Resolved {
+            assert_ts_direct_constraint(&observed, "call_constraint", binding);
+            if expected.emits_copy_edge {
+                assert_ts_direct_constraint(&observed, "copy_edge", binding);
+            }
+        }
+    }
+}
+
+#[test]
+fn ts_direct_bindings_fixture_records_non_string_dynamic_import_reason() {
+    let output = run_fixture_kernel("ts_direct_bindings");
+    let bindings = collect_ts_direct_bindings(&output.db);
+
+    assert!(
+        bindings
+            .bindings
+            .iter()
+            .any(|binding| binding.reason == Some(TsDirectBindingReason::NonStringDynamicImport)),
+        "ts_direct_bindings: expected unresolved non-string dynamic import reason, got {:#?}",
+        bindings.bindings
+    );
+}
+
+#[test]
+fn semantic_graph_digest_changes_when_ts_path_alias_fixture_changes() {
+    let fixture = load_native_fixture(&fixture_dir("ts_direct_bindings")).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+    let first =
+        run_kernel_for_repo_with_plan_for_test(temp.path(), &plan).expect("first kernel run");
+    let first_digest = provider_output_digest(&first, "polint.semantic_graph");
+    let first_bindings = collect_ts_direct_bindings(&first.db);
+    let first_alias = binding_for_callsite(&first_bindings.bindings, "aliasTarget");
+    assert_eq!(first_alias.status, TsDirectBindingStatus::Resolved);
+
+    std::fs::write(
+        temp.path().join("tsconfig.json"),
+        r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": ["src/missing/*"]
+    },
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/**/*"]
+}
+"#,
+    )
+    .expect("break path alias in fixture copy");
+
+    let second =
+        run_kernel_for_repo_with_plan_for_test(temp.path(), &plan).expect("second kernel run");
+    let second_digest = provider_output_digest(&second, "polint.semantic_graph");
+    let second_bindings = collect_ts_direct_bindings(&second.db);
+    let second_alias = binding_for_callsite(&second_bindings.bindings, "aliasTarget");
+
+    assert_ne!(
+        first_digest, second_digest,
+        "semantic graph output digest must change when tsconfig path alias resolution changes"
+    );
+    assert_ne!(
+        second_alias.status,
+        TsDirectBindingStatus::Resolved,
+        "aliasTarget must stop resolving after the fixture path alias is broken: {second_alias:#?}"
+    );
+}
+
+#[derive(Clone, Copy)]
+struct TsDirectBindingExpectation {
+    callsite: &'static str,
+    kind: TsDirectBindingKind,
+    status: TsDirectBindingStatus,
+    reason: Option<TsDirectBindingReason>,
+    target: Option<&'static str>,
+    emits_copy_edge: bool,
+}
+
+fn ts_direct_binding_expectations() -> [TsDirectBindingExpectation; 9] {
+    use TsDirectBindingKind::{
+        CommonJsRequireMember, ImportedDefault, ImportedNamed, ImportedNamespaceMember, LocalAlias,
+        LocalFunction, ReExportedAlias,
+    };
+    use TsDirectBindingReason::NonStringDynamicImport;
+    use TsDirectBindingStatus::{Resolved, Unresolved};
+
+    [
+        TsDirectBindingExpectation {
+            callsite: "localAlias",
+            kind: LocalAlias,
+            status: Resolved,
+            reason: None,
+            target: Some("localTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "namedAlias",
+            kind: ImportedNamed,
+            status: Resolved,
+            reason: None,
+            target: Some("namedTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "defaultTarget",
+            kind: ImportedDefault,
+            status: Resolved,
+            reason: None,
+            target: Some("defaultTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "ns.namespaceTarget",
+            kind: ImportedNamespaceMember,
+            status: Resolved,
+            reason: None,
+            target: Some("namespaceTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "viaBarrel",
+            kind: ReExportedAlias,
+            status: Resolved,
+            reason: None,
+            target: Some("namedTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "aliasTarget",
+            kind: ImportedNamed,
+            status: Resolved,
+            reason: None,
+            target: Some("aliasTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "cjsMember",
+            kind: CommonJsRequireMember,
+            status: Resolved,
+            reason: None,
+            target: Some("cjsTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "destructured",
+            kind: LocalAlias,
+            status: Resolved,
+            reason: None,
+            target: Some("localTarget"),
+            emits_copy_edge: true,
+        },
+        TsDirectBindingExpectation {
+            callsite: "import:<dynamic>",
+            kind: LocalFunction,
+            status: Unresolved,
+            reason: Some(NonStringDynamicImport),
+            target: None,
+            emits_copy_edge: false,
+        },
+    ]
+}
+
+fn binding_for_callsite<'a>(
+    bindings: &'a [TsDirectBindingFact],
+    callsite: &str,
+) -> &'a TsDirectBindingFact {
+    bindings
+        .iter()
+        .find(|binding| binding.callsite_stable_key.contains(callsite))
+        .unwrap_or_else(|| panic!("missing direct binding for callsite {callsite}: {bindings:#?}"))
+}
+
+fn assert_ts_direct_constraint(
+    observed: &serde_json::Value,
+    kind: &str,
+    binding: &TsDirectBindingFact,
+) {
+    let constraints = observed["constraints"]
+        .as_array()
+        .expect("constraints array");
+    assert!(
+        constraints.iter().any(|row| {
+            row["source"] == "ts_direct_binding"
+                && row["kind"].as_str() == Some(kind)
+                && row["stable_key"]
+                    .as_str()
+                    .is_some_and(|stable_key| stable_key.contains(&binding.stable_key))
+        }),
+        "missing TS direct-binding {kind} constraint for {}: {observed:#}",
+        binding.stable_key
     );
 }

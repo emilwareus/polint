@@ -334,14 +334,26 @@ fn next_location_part<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
+    use serde::Deserialize;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::analysis::identity::facts::{
+        IdentityKind, IdentityRecord, IdentityRecordId, LanguageTag, compute_identity_stable_key,
+        compute_signature_digest,
+    };
+    use crate::analysis::identity::render::jelly_span;
+    use crate::core::{AnalysisDb, SourceFile, Span};
     use crate::eval::suite::{
         CaseSelector, ExpectedSource, ExpectedSourceFormat, LocalClonePolicy, SuiteCheckout,
         SuiteCheckoutStrategy, SuiteId, SuiteKind, SuiteScoring, SuiteTier,
+    };
+    use crate::ts::inventory::extract::extract_ts_inventory;
+    use crate::ts::inventory::facts::{
+        TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryStatus,
     };
 
     #[test]
@@ -516,6 +528,340 @@ mod tests {
 
         assert_eq!(metrics["jelly.callgraph_micro.case_count"], 1.0);
         assert_eq!(metrics["jelly.callgraph_micro.expected_edge_count"], 1.0);
+    }
+
+    #[test]
+    fn ts_inventory_spans_fixture_covers_js01_forms_with_jelly_spans() {
+        let fixture = repo_root().join("tests/eval-fixtures/jelly/ts-inventory-spans/repo");
+        let forms = fixture.join("src/forms.ts");
+        let source = std::fs::read_to_string(&forms).expect("read TS inventory span fixture");
+        let mut db = AnalysisDb::new();
+        let file_id = db.add_file(forms, "src/forms.ts".to_string(), source);
+        let file = db.file(file_id).expect("fixture file");
+        let inventory = extract_ts_inventory(file);
+        let expectations = ts_inventory_span_expectations();
+        let expected_spans = ts_inventory_span_oracle();
+        assert_eq!(
+            expected_spans.keys().cloned().collect::<BTreeSet<_>>(),
+            expectations
+                .iter()
+                .map(|expected| expected.label.to_string())
+                .collect::<BTreeSet<_>>(),
+            "ts_inventory_spans: Jelly oracle labels must match named JS-01 expectations"
+        );
+
+        let mut matched_spans = BTreeMap::new();
+        let mut unmatched = Vec::new();
+        for expected in &expectations {
+            if let Some(span) = expected.find_span(file, &inventory) {
+                matched_spans.insert(
+                    expected.label.to_string(),
+                    render_inventory_span(file, expected.identity_kind(), span, expected.display),
+                );
+            } else {
+                unmatched.push(format!(
+                    "file=src/forms.ts span={} reason=missing named JS-01 inventory form `{}`",
+                    expected.source_contains.unwrap_or(expected.display),
+                    expected.label
+                ));
+            }
+        }
+
+        let mismatches = expected_spans
+            .iter()
+            .filter_map(|(label, expected_span)| match matched_spans.get(label) {
+                Some(observed_span) if observed_span == expected_span => None,
+                Some(observed_span) => Some(format!(
+                    "file=src/forms.ts span={observed_span} reason=span mismatch for `{label}` expected={expected_span}"
+                )),
+                None => Some(format!(
+                    "file=src/forms.ts span={expected_span} reason=missing oracle label `{label}`"
+                )),
+            })
+            .collect::<Vec<_>>();
+        let exact_matches = expected_spans.len() - mismatches.len();
+        let ratio = exact_matches as f64 / expected_spans.len() as f64;
+        assert!(
+            ratio >= 0.99,
+            "ts_inventory_spans Jelly oracle-span coverage ratio {ratio:.4} (exact {}/{}) below 0.99; unmatched: {unmatched:?}; mismatches: {mismatches:?}",
+            exact_matches,
+            expected_spans.len()
+        );
+        assert_eq!(matched_spans, expected_spans);
+        assert!(
+            matched_spans
+                .values()
+                .any(|span| spans_multiple_lines(span.as_str())),
+            "ts_inventory_spans: expected at least one multi-line Jelly span, got {matched_spans:?}"
+        );
+    }
+
+    #[derive(Deserialize)]
+    struct JellySpanOracle {
+        spans: BTreeMap<String, String>,
+    }
+
+    fn ts_inventory_span_oracle() -> BTreeMap<String, String> {
+        let oracle_path =
+            repo_root().join("tests/eval-fixtures/jelly/ts-inventory-spans/jelly-spans.toml");
+        let oracle = std::fs::read_to_string(&oracle_path).expect("read Jelly span oracle fixture");
+        toml::from_str::<JellySpanOracle>(&oracle)
+            .expect("parse Jelly span oracle fixture")
+            .spans
+    }
+
+    #[derive(Clone, Copy)]
+    enum InventoryExpectationKind {
+        Function(TsFunctionInventoryKind),
+        Callsite(TsCallsiteInventoryKind),
+    }
+
+    struct InventoryExpectation {
+        label: &'static str,
+        kind: InventoryExpectationKind,
+        display: &'static str,
+        source_contains: Option<&'static str>,
+        status_reason: Option<&'static str>,
+    }
+
+    impl InventoryExpectation {
+        fn function(
+            label: &'static str,
+            kind: TsFunctionInventoryKind,
+            display: &'static str,
+            source_contains: Option<&'static str>,
+        ) -> Self {
+            Self {
+                label,
+                kind: InventoryExpectationKind::Function(kind),
+                display,
+                source_contains,
+                status_reason: None,
+            }
+        }
+
+        fn callsite(
+            label: &'static str,
+            kind: TsCallsiteInventoryKind,
+            display: &'static str,
+            source_contains: Option<&'static str>,
+            status_reason: Option<&'static str>,
+        ) -> Self {
+            Self {
+                label,
+                kind: InventoryExpectationKind::Callsite(kind),
+                display,
+                source_contains,
+                status_reason,
+            }
+        }
+
+        fn identity_kind(&self) -> IdentityKind {
+            match self.kind {
+                InventoryExpectationKind::Function(_) => IdentityKind::Function,
+                InventoryExpectationKind::Callsite(_) => IdentityKind::Callsite,
+            }
+        }
+
+        fn find_span(
+            &self,
+            file: &SourceFile,
+            inventory: &crate::ts::inventory::store::TsInventoryOutput,
+        ) -> Option<Span> {
+            match self.kind {
+                InventoryExpectationKind::Function(kind) => inventory
+                    .functions
+                    .iter()
+                    .find(|function| {
+                        function.kind == kind
+                            && function.display_name.as_deref() == Some(self.display)
+                            && self.source_contains_matches(file, &function.span)
+                    })
+                    .map(|function| function.span.clone()),
+                InventoryExpectationKind::Callsite(kind) => inventory
+                    .callsites
+                    .iter()
+                    .find(|callsite| {
+                        callsite.kind == kind
+                            && callsite.display_name.as_deref() == Some(self.display)
+                            && self.source_contains_matches(file, &callsite.span)
+                            && self.status_reason_matches(&callsite.status)
+                    })
+                    .map(|callsite| callsite.span.clone()),
+            }
+        }
+
+        fn source_contains_matches(&self, file: &SourceFile, span: &Span) -> bool {
+            let Some(needle) = self.source_contains else {
+                return true;
+            };
+            source_slice(file, span).contains(needle)
+        }
+
+        fn status_reason_matches(&self, status: &TsInventoryStatus) -> bool {
+            match self.status_reason {
+                Some(expected) => {
+                    matches!(status, TsInventoryStatus::Unresolved { reason } if reason == expected)
+                }
+                None => matches!(status, TsInventoryStatus::Resolved),
+            }
+        }
+    }
+
+    fn ts_inventory_span_expectations() -> Vec<InventoryExpectation> {
+        vec![
+            InventoryExpectation::function(
+                "function-declaration",
+                TsFunctionInventoryKind::Declaration,
+                "declaredMulti",
+                Some("function declaredMulti"),
+            ),
+            InventoryExpectation::function(
+                "function-expression",
+                TsFunctionInventoryKind::FunctionExpression,
+                "namedExpr",
+                Some("function namedExpr"),
+            ),
+            InventoryExpectation::function(
+                "arrow",
+                TsFunctionInventoryKind::Arrow,
+                "arrow",
+                Some("=> declaredMulti(value)"),
+            ),
+            InventoryExpectation::function(
+                "nested-arrow",
+                TsFunctionInventoryKind::Arrow,
+                "nestedArrow",
+                Some("=> declaredMulti(\"nested\")"),
+            ),
+            InventoryExpectation::function(
+                "method",
+                TsFunctionInventoryKind::Method,
+                "method",
+                Some("method(next"),
+            ),
+            InventoryExpectation::function(
+                "constructor",
+                TsFunctionInventoryKind::Constructor,
+                "constructor",
+                Some("constructor(value"),
+            ),
+            InventoryExpectation::function(
+                "accessor-get",
+                TsFunctionInventoryKind::Accessor,
+                "current",
+                Some("get current"),
+            ),
+            InventoryExpectation::function(
+                "accessor-set",
+                TsFunctionInventoryKind::Accessor,
+                "current",
+                Some("set current"),
+            ),
+            InventoryExpectation::function(
+                "class-static-block",
+                TsFunctionInventoryKind::ClassStaticBlock,
+                "static",
+                Some("static {"),
+            ),
+            InventoryExpectation::callsite(
+                "call",
+                TsCallsiteInventoryKind::Call,
+                "declaredMulti",
+                None,
+                None,
+            ),
+            InventoryExpectation::callsite(
+                "new",
+                TsCallsiteInventoryKind::New,
+                "Box",
+                Some("new Box"),
+                None,
+            ),
+            InventoryExpectation::callsite(
+                "tagged-template",
+                TsCallsiteInventoryKind::TaggedTemplate,
+                "tag",
+                Some("tag`hello"),
+                None,
+            ),
+            InventoryExpectation::callsite(
+                "optional-call",
+                TsCallsiteInventoryKind::OptionalCall,
+                "maybe",
+                Some("maybe?."),
+                None,
+            ),
+            InventoryExpectation::callsite(
+                "dynamic-import-static",
+                TsCallsiteInventoryKind::DynamicImport,
+                "import:./static",
+                Some("import(\"./static\")"),
+                None,
+            ),
+            InventoryExpectation::callsite(
+                "dynamic-import-unresolved",
+                TsCallsiteInventoryKind::DynamicImport,
+                "import:<dynamic>",
+                Some("import(dynamicSpecifier)"),
+                Some("non-string dynamic import"),
+            ),
+            InventoryExpectation::callsite(
+                "require",
+                TsCallsiteInventoryKind::Require,
+                "require",
+                Some("require(\"pkg\")"),
+                None,
+            ),
+        ]
+    }
+
+    fn render_inventory_span(
+        file: &SourceFile,
+        kind: IdentityKind,
+        span: Span,
+        display_name: &str,
+    ) -> String {
+        let language = LanguageTag::TypeScript;
+        let record = IdentityRecord {
+            id: IdentityRecordId(0),
+            kind,
+            file_id: file.id,
+            span: span.clone(),
+            language,
+            package_or_module: Arc::from(file.relative_path.as_str()),
+            container_path: Arc::from(file.relative_path.as_str()),
+            display_name: Arc::from(display_name),
+            signature_digest: compute_signature_digest(
+                language,
+                &file.relative_path,
+                &file.relative_path,
+                display_name,
+                None,
+                None,
+            ),
+            multiplicity: 1,
+            stable_key: compute_identity_stable_key(
+                kind,
+                language,
+                &file.relative_path,
+                &file.relative_path,
+                file.id,
+                &span,
+            ),
+            originating_call_site_id: None,
+            originating_call_target_id: None,
+        };
+        jelly_span::render(&record, file)
+    }
+
+    fn source_slice<'a>(file: &'a SourceFile, span: &Span) -> &'a str {
+        &file.source[span.start_byte as usize..span.end_byte as usize]
+    }
+
+    fn spans_multiple_lines(span: &str) -> bool {
+        let parts = span.rsplit(':').take(4).collect::<Vec<_>>();
+        parts.len() == 4 && parts[3] != parts[1]
     }
 
     fn manifest(path: &str) -> SuiteManifest {

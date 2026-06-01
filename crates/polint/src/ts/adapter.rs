@@ -13,12 +13,12 @@ use crate::diagnostics::{Diagnostic, TextRange};
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, ArrowFunctionExpression, BindingPattern, Class, ClassElement,
-    Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
-    Function, FunctionBody, ImportOrExportKind, JSXAttributeItem, JSXAttributeName,
-    JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment, MethodDefinition,
-    ModuleExportName, ObjectPropertyKind, Program, PropertyKey, RegExpLiteral, Statement,
-    TemplateLiteral, VariableDeclarator,
+    Argument, ArrayExpressionElement, ArrowFunctionExpression, AssignmentTarget, BindingPattern,
+    Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
+    ForStatementLeft, Function, FunctionBody, ImportOrExportKind, JSXAttributeItem,
+    JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment,
+    MethodDefinition, ModuleExportName, ObjectPropertyKind, Program, PropertyKey, RegExpLiteral,
+    Statement, TemplateLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -1137,6 +1137,9 @@ fn extract_declarations(
                     push_ts_class(db, file, source, language, name, class, is_exported);
                 }
             }
+            Statement::ExpressionStatement(statement) => {
+                extract_commonjs_exported_function_assignment(db, ctx, &statement.expression);
+            }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(declaration) = &export.declaration {
                     extract_declaration(
@@ -1178,6 +1181,54 @@ fn extract_declarations(
             },
             _ => {}
         }
+    }
+}
+
+fn extract_commonjs_exported_function_assignment(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    expression: &Expression<'_>,
+) {
+    let Expression::AssignmentExpression(assignment) = expression else {
+        return;
+    };
+    let Expression::FunctionExpression(function) = &assignment.right else {
+        return;
+    };
+    let Some(export_name) = commonjs_export_assignment_name(&assignment.left) else {
+        return;
+    };
+    let is_component_like = is_component_like_name(&export_name) || function_returns_jsx(function);
+
+    push_ts_function(
+        db,
+        ctx,
+        TsFunctionSpec {
+            name: export_name,
+            span: function.span,
+            is_exported: true,
+            cyclomatic_complexity: ts_cyclomatic_complexity(function),
+            calls: function_body_calls(function.body.as_deref()),
+            is_component_like,
+        },
+    );
+}
+
+fn commonjs_export_assignment_name(target: &AssignmentTarget<'_>) -> Option<String> {
+    commonjs_export_property_name(target)
+}
+
+fn commonjs_export_property_name(target: &AssignmentTarget<'_>) -> Option<String> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member)
+            if matches!(
+                callee_text(&member.object).as_deref(),
+                Some("exports" | "module.exports")
+            ) =>
+        {
+            Some(member.property.name.to_string())
+        }
+        _ => None,
     }
 }
 

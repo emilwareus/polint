@@ -1,0 +1,18 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "jelly-ts-inventory-spans"
+area = "graphs"
+
+# Phase 45 Plan 05 Jelly span fixture for JS-01 inventory coverage.
+#
+# `crates/polint/src/eval/external/jelly_callgraph.rs` loads `repo/src/forms.ts`,
+# extracts TS/JS inventory rows, renders each row span through the Jelly span
+# renderer, and asserts a named coverage ratio >= 0.99. The fixture covers
+# declarations, expressions, arrows, methods, constructors, accessors, class
+# static blocks, calls, `new`, tagged templates, optional calls, dynamic import,
+# non-string dynamic import, and `require`.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

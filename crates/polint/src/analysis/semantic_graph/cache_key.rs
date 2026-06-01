@@ -58,6 +58,8 @@ pub(crate) fn semantic_graph_provider_parameter_digest() -> Digest {
             "node_projection_v1",
             "edge_projection_v1",
             "constraint_projection_v1",
+            "ts_direct_binding_output",
+            "ts_direct_binding_projection_v1",
         ],
     )
 }
@@ -81,6 +83,8 @@ mod tests {
                     "node_projection_v1",
                     "edge_projection_v1",
                     "constraint_projection_v1",
+                    "ts_direct_binding_output",
+                    "ts_direct_binding_projection_v1",
                 ],
             )
         );
@@ -105,6 +109,28 @@ mod tests {
             ],
         );
         assert_ne!(super::semantic_graph_provider_parameter_digest(), pre_bump);
+    }
+
+    #[test]
+    fn ts_direct_binding_projection_invalidates_the_pre_phase_45_digest() {
+        let pre_phase_45 = Digest::from_parts(
+            DigestKind::ProviderParameters,
+            "semantic_graph_provider_parameters",
+            &[
+                "semantic-graph-facts-1",
+                "semantic_nodes",
+                "semantic_edges",
+                "semantic_constraints",
+                "node_projection_v1",
+                "edge_projection_v1",
+                "constraint_projection_v1",
+            ],
+        );
+
+        assert_ne!(
+            super::semantic_graph_provider_parameter_digest(),
+            pre_phase_45
+        );
     }
 
     #[test]

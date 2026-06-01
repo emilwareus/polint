@@ -19,9 +19,9 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 ## Phases (v1.3)
 
 - [x] **Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy** - Stable identity records, Go `RelString` and Jelly span renderers, identity-vs-unsupported categorization, public-surface-leak CI gate. ✅ Verified 5/5 (full Go module import-path RelString deferred to Phase 46; broad Jelly coverage to Phase 45).
-- [ ] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
-- [ ] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
-- [ ] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. May run in parallel with Phase 46.
+- [x] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
+- [x] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
+- [x] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. ✅ Verified 5/5. May run in parallel with Phase 46.
 - [ ] **Phase 46: Go Semantic Frontend & Sidecar** - `polint-go-frontend` Go binary (`go/packages` + `go/ssa`), NDJSON protocol, sidecar client, lowering to semantic graph; typed process boundary, version pinning, failure taxonomy. May run in parallel with Phase 45.
 - [ ] **Phase 47: Unified Solver Core & Derived-Edge Provenance** - Private `analysis::solver` (deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`, per-language `SolverPolicy` scaffolding); folds in `points_to` as a sub-domain; `DerivedEdgeProvenance` contract.
 - [ ] **Phase 48: Go RTA Driver** - Private `analysis::solver::go_rta` (reachable functions from roots, address-taken tracking, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration). May run in parallel with Phase 49.
@@ -83,7 +83,12 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
   2. Lexical scopes (`var`, `let`, `const`, functions, classes, imports, destructuring, parameters, catch, re-exports) and a module graph covering ESM, CommonJS, and TypeScript path aliases are built and stored as private facts.
   3. JS/TS direct call bindings (`f()`, `ns.f()`, imported aliases, local aliases) emit `CopyEdge` + `CallConstraint` constraints into the semantic graph (verified by snapshot fixtures).
   4. All new JS/TS modules (`src/ts/inventory/`, `src/ts/scope/`) stay `pub(crate)` and pass the public-surface-leak gate.
-**Plans**: TBD
+**Plans**: 5 total
+- [x] 45-01-PLAN.md — private JS/TS inventory fact model, Oxc function/callsite extraction, normalized inventory output (JS-01)
+- [x] 45-02-PLAN.md — private JS/TS scope/binding facts, Oxc semantic extraction, scope store indexes, unresolved dynamic boundary rows (JS-02)
+- [x] 45-03-PLAN.md — private TS direct binding facts, local/import/module-mediated direct bindings, normalized binding store/cache contract (JS-02, JS-03 foundation)
+- [x] 45-04-PLAN.md — project TS direct bindings into semantic graph `CopyEdge` and `CallConstraint` rows (JS-03)
+- [x] 45-05-PLAN.md — close Phase 45 with Jelly, module/binding, cache/determinism, and public-surface fixtures (JS-01, JS-02, JS-03)
 **UI hint**: no
 
 May run in parallel with Phase 46 (shares no Rust modules).
@@ -202,7 +207,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
 | 43 | Reachability, Roots & Per-Suite Scoring Mode | 3/3 | Complete    | 2026-05-29 |
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 3/3 | Complete    | 2026-05-30 |
-| 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 0/0 | Not started | - |
+| 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 5/5 | Complete    | 2026-05-31 |
 | 46 | Go Semantic Frontend & Sidecar | 0/0 | Not started | - |
 | 47 | Unified Solver Core & Derived-Edge Provenance | 0/0 | Not started | - |
 | 48 | Go RTA Driver | 0/0 | Not started | - |

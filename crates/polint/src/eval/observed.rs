@@ -406,6 +406,17 @@ pub(crate) fn run_kernel_for_repo_for_test(
     repo_root: &Path,
 ) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
     let plan = AnalysisPlan::empty();
+    run_kernel_for_repo_with_plan_for_test(repo_root, &plan)
+}
+
+/// Runs the analysis kernel on a repo directory with a caller-supplied plan and
+/// returns the raw [`crate::analysis_kernel::KernelOutput`] for focused fixture
+/// assertions that need private fact access.
+#[cfg(test)]
+pub(crate) fn run_kernel_for_repo_with_plan_for_test(
+    repo_root: &Path,
+    plan: &AnalysisPlan,
+) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
     let loaded = load_config(repo_root)?;
     let config_digest = config_hash(&loaded);
     let rule_digest = rule_hash(&[], None, &BTreeMap::new());
@@ -415,7 +426,7 @@ pub(crate) fn run_kernel_for_repo_for_test(
         cache: &cache,
         config_digest: &config_digest,
         rule_digest: &rule_digest,
-        plan: &plan,
+        plan,
         parallel: true,
     })
 }
