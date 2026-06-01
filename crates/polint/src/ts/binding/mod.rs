@@ -136,6 +136,54 @@ function run(f) {
     }
 
     #[test]
+    fn parameter_callback_boundary_is_scope_aware() {
+        let file = fixture_file(
+            r#"
+function cb() {}
+function run() {
+  cb();
+}
+function invoke(cb) {
+  cb();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let cb_bindings = bindings_for_display(&output, &inventory, "cb");
+
+        assert!(
+            cb_bindings
+                .iter()
+                .any(|binding| binding.status == TsDirectBindingStatus::Resolved)
+        );
+        assert!(cb_bindings.iter().any(|binding| {
+            binding.status == TsDirectBindingStatus::Unresolved
+                && binding.reason == Some(TsDirectBindingReason::TokenFlowRequired)
+        }));
+    }
+
+    #[test]
+    fn local_function_expression_binding_resolves_by_lexical_binding() {
+        let file = fixture_file(
+            r#"
+const f = function() {};
+function run() {
+  f();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let binding = binding_for_display(&output, &inventory, "f");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Resolved);
+        assert!(binding.target_function.is_some());
+    }
+
+    #[test]
     fn resolves_object_literal_destructuring_alias_call() {
         let file = fixture_file(
             r#"
@@ -205,6 +253,24 @@ function run(cb, obj, key) {
             .iter()
             .find(|binding| binding.callsite == callsite.id)
             .unwrap_or_else(|| panic!("missing binding for callsite {display_name}"))
+    }
+
+    fn bindings_for_display<'a>(
+        output: &'a crate::ts::binding::store::TsDirectBindingOutput,
+        inventory: &TsInventoryOutput,
+        display_name: &str,
+    ) -> Vec<&'a TsDirectBindingFact> {
+        let callsite_ids = inventory
+            .callsites
+            .iter()
+            .filter(|callsite| callsite.display_name.as_deref() == Some(display_name))
+            .map(|callsite| callsite.id)
+            .collect::<Vec<_>>();
+        output
+            .bindings
+            .iter()
+            .filter(|binding| callsite_ids.contains(&binding.callsite))
+            .collect()
     }
 }
 
@@ -427,6 +493,206 @@ function run() {
             TsDirectBindingStatus::External,
             TsDirectBindingKind::ImportedNamed,
             Some(TsDirectBindingReason::ExternalPackageUnresolved),
+        );
+    }
+
+    #[test]
+    fn local_parameter_shadowing_import_requires_token_flow() {
+        let mut db = Box::new(AnalysisDb::new());
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            r#"
+import { f } from "./m";
+function run(f) {
+  f();
+}
+"#
+            .to_string(),
+        );
+        let m_file = db.add_file(
+            PathBuf::from("src/m.ts"),
+            "src/m.ts".to_string(),
+            "export function f() {}".to_string(),
+        );
+        let db = Box::leak(db);
+
+        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+
+        let m_node = ModuleNodeId(1);
+        let imports = vec![import(0, app_file, "./m")];
+        let resolved = vec![resolved(
+            0,
+            0,
+            app_file,
+            Some(m_node),
+            ResolutionStatus::Resolved,
+        )];
+        let nodes = vec![
+            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(m_node, "src/m.ts", m_file),
+        ];
+        let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
+        let module_input = TsDirectBindingModuleInput {
+            imports: &imports,
+            resolved_imports: &resolved,
+            module_nodes: &nodes,
+            module_files: &module_files,
+        };
+
+        let output =
+            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+
+        assert_call(
+            &output,
+            &app_inventory,
+            "f",
+            TsDirectBindingStatus::Unresolved,
+            TsDirectBindingKind::LocalFunction,
+            Some(TsDirectBindingReason::TokenFlowRequired),
+        );
+    }
+
+    #[test]
+    fn module_imports_resolve_only_explicit_exports_and_local_export_aliases() {
+        let mut db = Box::new(AnalysisDb::new());
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            r#"
+import { f, g } from "./m";
+function run() {
+  f();
+  g();
+}
+"#
+            .to_string(),
+        );
+        let m_file = db.add_file(
+            PathBuf::from("src/m.ts"),
+            "src/m.ts".to_string(),
+            r#"
+function f() {}
+function real() {}
+export { real as g };
+"#
+            .to_string(),
+        );
+        let db = Box::leak(db);
+
+        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+
+        let m_node = ModuleNodeId(1);
+        let imports = vec![import(0, app_file, "./m")];
+        let resolved = vec![resolved(
+            0,
+            0,
+            app_file,
+            Some(m_node),
+            ResolutionStatus::Resolved,
+        )];
+        let nodes = vec![
+            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(m_node, "src/m.ts", m_file),
+        ];
+        let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
+        let module_input = TsDirectBindingModuleInput {
+            imports: &imports,
+            resolved_imports: &resolved,
+            module_nodes: &nodes,
+            module_files: &module_files,
+        };
+
+        let output =
+            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+
+        assert_call(
+            &output,
+            &app_inventory,
+            "f",
+            TsDirectBindingStatus::Unresolved,
+            TsDirectBindingKind::ImportedNamed,
+            Some(TsDirectBindingReason::ImportedBindingUnresolved),
+        );
+        assert_call(
+            &output,
+            &app_inventory,
+            "g",
+            TsDirectBindingStatus::Resolved,
+            TsDirectBindingKind::ImportedNamed,
+            None,
+        );
+    }
+
+    #[test]
+    fn local_export_alias_does_not_resolve_non_visible_nested_function() {
+        let mut db = Box::new(AnalysisDb::new());
+        let app_file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            r#"
+import { g } from "./m";
+function run() {
+  g();
+}
+"#
+            .to_string(),
+        );
+        let m_file = db.add_file(
+            PathBuf::from("src/m.ts"),
+            "src/m.ts".to_string(),
+            r#"
+function wrapper() {
+  function hidden() {}
+}
+export { hidden as g };
+"#
+            .to_string(),
+        );
+        let db = Box::leak(db);
+
+        let app_inventory = extract_ts_inventory(db.file(app_file).expect("app file"));
+        let app_scope = extract_ts_scope(db.file(app_file).expect("app file"));
+        let m_inventory = extract_ts_inventory(db.file(m_file).expect("m file"));
+        let m_scope = extract_ts_scope(db.file(m_file).expect("m file"));
+
+        let m_node = ModuleNodeId(1);
+        let imports = vec![import(0, app_file, "./m")];
+        let resolved = vec![resolved(
+            0,
+            0,
+            app_file,
+            Some(m_node),
+            ResolutionStatus::Resolved,
+        )];
+        let nodes = vec![
+            file_node(ModuleNodeId(0), "src/app.ts", app_file),
+            file_node(m_node, "src/m.ts", m_file),
+        ];
+        let module_files = vec![module_file(m_node, &m_inventory, &m_scope)];
+        let module_input = TsDirectBindingModuleInput {
+            imports: &imports,
+            resolved_imports: &resolved,
+            module_nodes: &nodes,
+            module_files: &module_files,
+        };
+
+        let output =
+            resolve_direct_bindings_with_modules(&app_inventory, &app_scope, &module_input);
+
+        assert_call(
+            &output,
+            &app_inventory,
+            "g",
+            TsDirectBindingStatus::Unresolved,
+            TsDirectBindingKind::ImportedNamed,
+            Some(TsDirectBindingReason::ImportedBindingUnresolved),
         );
     }
 

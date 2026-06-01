@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::analysis::ids::{TsDirectBindingId, TsInventoryCallsiteId, TsInventoryFunctionId};
+use crate::analysis::ids::TsDirectBindingId;
 use crate::analysis_kernel::incremental::{Digest, DigestKind};
 use crate::core::ModuleNodeId;
 use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingReason};
@@ -107,8 +107,8 @@ impl TsDirectBindingOutput {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TsDirectBindingStore {
     output: TsDirectBindingOutput,
-    bindings_by_callsite: BTreeMap<TsInventoryCallsiteId, Vec<usize>>,
-    bindings_by_target_function: BTreeMap<TsInventoryFunctionId, Vec<usize>>,
+    bindings_by_callsite_stable_key: BTreeMap<String, Vec<usize>>,
+    bindings_by_target_function_stable_key: BTreeMap<String, Vec<usize>>,
     bindings_by_unresolved_reason: BTreeMap<TsDirectBindingReason, Vec<usize>>,
     bindings_by_module_node: BTreeMap<ModuleNodeId, Vec<usize>>,
     bindings_by_stable_key: BTreeMap<String, usize>,
@@ -124,13 +124,13 @@ impl TsDirectBindingStore {
 
         for (index, binding) in store.output.bindings.iter().enumerate() {
             store
-                .bindings_by_callsite
-                .entry(binding.callsite)
+                .bindings_by_callsite_stable_key
+                .entry(binding.callsite_stable_key.clone())
                 .or_default()
                 .push(index);
-            if let Some(target_function) = binding.target_function {
+            if let Some(target_function) = binding.target_function_stable_key.clone() {
                 store
-                    .bindings_by_target_function
+                    .bindings_by_target_function_stable_key
                     .entry(target_function)
                     .or_default()
                     .push(index);
@@ -161,18 +161,24 @@ impl TsDirectBindingStore {
         &self.output.bindings
     }
 
-    pub(crate) fn bindings_by_callsite(
+    pub(crate) fn bindings_by_callsite_stable_key(
         &self,
-        callsite: TsInventoryCallsiteId,
+        callsite_stable_key: &str,
     ) -> Vec<&TsDirectBindingFact> {
-        self.binding_refs(self.bindings_by_callsite.get(&callsite))
+        self.binding_refs(
+            self.bindings_by_callsite_stable_key
+                .get(callsite_stable_key),
+        )
     }
 
-    pub(crate) fn bindings_by_target_function(
+    pub(crate) fn bindings_by_target_function_stable_key(
         &self,
-        target_function: TsInventoryFunctionId,
+        target_function_stable_key: &str,
     ) -> Vec<&TsDirectBindingFact> {
-        self.binding_refs(self.bindings_by_target_function.get(&target_function))
+        self.binding_refs(
+            self.bindings_by_target_function_stable_key
+                .get(target_function_stable_key),
+        )
     }
 
     pub(crate) fn bindings_by_unresolved_reason(
@@ -246,6 +252,7 @@ mod tests {
             TsInventoryCallsiteId(3),
         );
         resolved.target_function = Some(TsInventoryFunctionId(7));
+        resolved.target_function_stable_key = Some("function:7".to_string());
         resolved.module_node = Some(ModuleNodeId(9));
 
         let mut unresolved = binding(
@@ -262,11 +269,11 @@ mod tests {
 
         assert_eq!(store.bindings().len(), 2);
         assert_eq!(
-            store.bindings_by_callsite(TsInventoryCallsiteId(3))[0].stable_key,
+            store.bindings_by_callsite_stable_key("callsite:3")[0].stable_key,
             "binding:resolved"
         );
         assert_eq!(
-            store.bindings_by_target_function(TsInventoryFunctionId(7))[0].stable_key,
+            store.bindings_by_target_function_stable_key("function:7")[0].stable_key,
             "binding:resolved"
         );
         assert_eq!(
@@ -284,6 +291,48 @@ mod tests {
                 .binding_by_stable_key("binding:resolved")
                 .map(|binding| binding.callsite),
             Some(TsInventoryCallsiteId(3))
+        );
+    }
+
+    #[test]
+    fn store_indexes_global_output_by_stable_keys_not_dense_ids() {
+        let mut first = binding(
+            "binding:first",
+            TsDirectBindingId(10),
+            TsInventoryCallsiteId(0),
+        );
+        first.callsite_stable_key = "file:a:callsite:0".to_string();
+        first.target_function = Some(TsInventoryFunctionId(0));
+        first.target_function_stable_key = Some("file:a:function:0".to_string());
+
+        let mut second = binding(
+            "binding:second",
+            TsDirectBindingId(11),
+            TsInventoryCallsiteId(0),
+        );
+        second.callsite_stable_key = "file:b:callsite:0".to_string();
+        second.target_function = Some(TsInventoryFunctionId(0));
+        second.target_function_stable_key = Some("file:b:function:0".to_string());
+
+        let store = TsDirectBindingStore::from_output(TsDirectBindingOutput {
+            bindings: vec![first, second],
+        });
+
+        assert_eq!(
+            store.bindings_by_callsite_stable_key("file:a:callsite:0")[0].stable_key,
+            "binding:first"
+        );
+        assert_eq!(
+            store.bindings_by_callsite_stable_key("file:b:callsite:0")[0].stable_key,
+            "binding:second"
+        );
+        assert_eq!(
+            store.bindings_by_target_function_stable_key("file:a:function:0")[0].stable_key,
+            "binding:first"
+        );
+        assert_eq!(
+            store.bindings_by_target_function_stable_key("file:b:function:0")[0].stable_key,
+            "binding:second"
         );
     }
 

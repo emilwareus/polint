@@ -3,15 +3,15 @@
     reason = "Phase 45 wires private TS scope extraction into direct binding across sequential plans"
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, BindingPattern, ExportDefaultDeclarationKind, Expression, FunctionType,
-    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, ObjectPropertyKind, Program,
-    PropertyKey, Statement, VariableDeclarationKind,
+    Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
+    Expression, FunctionType, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName,
+    ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclarationKind,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{
@@ -89,6 +89,7 @@ fn extract_ts_scope_from_program(
         nodes,
         &scope_keys,
         scoping,
+        &bindings,
     ));
 
     TsScopeOutput { scopes, bindings }
@@ -339,6 +340,24 @@ fn extract_import_export_rows(
                             status: TsBindingStatus::external(source_module.value.to_string()),
                         }));
                     }
+                } else if let Some(declaration) = &export.declaration {
+                    rows.extend(local_export_declaration_rows(
+                        file,
+                        source,
+                        module_scope.clone(),
+                        declaration,
+                    ));
+                } else {
+                    for specifier in &export.specifiers {
+                        rows.push(local_export_row(
+                            file,
+                            source,
+                            span_from_oxc(file.id, source, specifier.span),
+                            module_scope.clone(),
+                            module_export_name_text(&specifier.local),
+                            module_export_name_text(&specifier.exported),
+                        ));
+                    }
                 }
             }
             Statement::ExportDefaultDeclaration(export) => {
@@ -348,14 +367,28 @@ fn extract_import_export_rows(
                     span: span_from_oxc(file.id, source, export.span),
                     scope_key: module_scope.clone(),
                     name: "default".to_string(),
-                    declaration_kind: TsDeclarationKind::Alias,
-                    binding_kind: TsBindingKind::Alias,
+                    declaration_kind: TsDeclarationKind::ReExport,
+                    binding_kind: TsBindingKind::ReExport,
                     import_export_kind: TsImportExportKind::ExportDefault,
                     module_source: None,
                     imported_name: default_export_target_name(&export.declaration),
                     exported_name: Some("default".to_string()),
                     status: TsBindingStatus::present(),
                 }));
+            }
+            Statement::ExpressionStatement(statement) => {
+                if let Some((exported, imported, span)) =
+                    commonjs_export_assignment(&statement.expression)
+                {
+                    rows.push(local_export_row(
+                        file,
+                        source,
+                        span_from_oxc(file.id, source, span),
+                        module_scope.clone(),
+                        imported,
+                        exported,
+                    ));
+                }
             }
             Statement::ExportAllDeclaration(export) => {
                 rows.push(binding_row(BindingRowDraft {
@@ -389,6 +422,102 @@ fn default_export_target_name(declaration: &ExportDefaultDeclarationKind<'_>) ->
             class.id.as_ref().map(|id| id.name.to_string())
         }
         ExportDefaultDeclarationKind::Identifier(identifier) => Some(identifier.name.to_string()),
+        _ => None,
+    }
+}
+
+fn local_export_declaration_rows(
+    file: &SourceFile,
+    source: &str,
+    module_scope: String,
+    declaration: &Declaration<'_>,
+) -> Vec<TsBindingFact> {
+    match declaration {
+        Declaration::FunctionDeclaration(function) => function
+            .id
+            .as_ref()
+            .map(|id| {
+                vec![local_export_row(
+                    file,
+                    source,
+                    span_from_oxc(file.id, source, function.span),
+                    module_scope,
+                    id.name.to_string(),
+                    id.name.to_string(),
+                )]
+            })
+            .unwrap_or_default(),
+        Declaration::VariableDeclaration(variable) => variable
+            .declarations
+            .iter()
+            .filter_map(|declarator| {
+                let name = binding_identifier_name(&declarator.id)?;
+                Some(local_export_row(
+                    file,
+                    source,
+                    span_from_oxc(file.id, source, declarator.span),
+                    module_scope.clone(),
+                    name.clone(),
+                    name,
+                ))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn local_export_row(
+    file: &SourceFile,
+    source: &str,
+    span: Span,
+    scope_key: String,
+    imported_name: String,
+    exported_name: String,
+) -> TsBindingFact {
+    binding_row(BindingRowDraft {
+        file,
+        source,
+        span,
+        scope_key,
+        name: imported_name.clone(),
+        declaration_kind: TsDeclarationKind::ReExport,
+        binding_kind: TsBindingKind::ReExport,
+        import_export_kind: TsImportExportKind::ReExportNamed,
+        module_source: None,
+        imported_name: Some(imported_name),
+        exported_name: Some(exported_name),
+        status: TsBindingStatus::present(),
+    })
+}
+
+fn commonjs_export_assignment(
+    expression: &Expression<'_>,
+) -> Option<(String, String, oxc_span::Span)> {
+    let Expression::AssignmentExpression(assignment) = expression else {
+        return None;
+    };
+    let exported = commonjs_export_assignment_name(&assignment.left)?;
+    let imported = match &assignment.right {
+        Expression::FunctionExpression(function) => function
+            .id
+            .as_ref()
+            .map(|id| id.name.to_string())
+            .unwrap_or_else(|| exported.clone()),
+        _ => exported.clone(),
+    };
+    Some((exported, imported, assignment.span))
+}
+
+fn commonjs_export_assignment_name(target: &AssignmentTarget<'_>) -> Option<String> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member)
+            if matches!(
+                expression_text(&member.object).as_deref(),
+                Some("exports" | "module.exports")
+            ) =>
+        {
+            Some(member.property.name.to_string())
+        }
         _ => None,
     }
 }
@@ -638,26 +767,31 @@ fn extract_boundary_rows(
     nodes: &AstNodes<'_>,
     scope_keys: &BTreeMap<OxcScopeId, String>,
     scoping: &Scoping,
+    bindings: &[TsBindingFact],
 ) -> Vec<TsBindingFact> {
     let module_scope = scope_keys
         .get(&scoping.root_scope_id())
         .cloned()
         .unwrap_or_else(|| module_scope_key(file));
-    let parameter_names = parameter_names(scoping, nodes);
+    let scope_parents = scope_parent_keys(scoping, scope_keys);
     let mut rows = Vec::new();
 
     for (_, node) in nodes.iter_enumerated() {
         let AstKind::CallExpression(call) = node.kind() else {
             continue;
         };
-        let Some((name, reason)) = boundary_reason(&call.callee, &parameter_names) else {
+        let call_scope = scope_key_for_span(file, source, scope_keys, scoping, nodes, call.span)
+            .unwrap_or_else(|| module_scope.clone());
+        let Some((name, reason)) =
+            boundary_reason(&call.callee, bindings, &scope_parents, call_scope.as_str())
+        else {
             continue;
         };
         rows.push(binding_row(BindingRowDraft {
             file,
             source,
             span: span_from_oxc(file.id, source, call.span),
-            scope_key: module_scope.clone(),
+            scope_key: call_scope,
             name,
             declaration_kind: TsDeclarationKind::UnsupportedDynamic,
             binding_kind: TsBindingKind::UnsupportedDynamic,
@@ -672,21 +806,21 @@ fn extract_boundary_rows(
     rows
 }
 
-fn parameter_names(scoping: &Scoping, nodes: &AstNodes<'_>) -> BTreeSet<String> {
-    scoping
-        .symbol_ids()
-        .filter(|symbol| is_parameter_declaration(nodes, scoping.symbol_declaration(*symbol)))
-        .map(|symbol| scoping.symbol_name(symbol).to_string())
-        .collect()
-}
-
 fn boundary_reason(
     callee: &Expression<'_>,
-    parameter_names: &BTreeSet<String>,
+    bindings: &[TsBindingFact],
+    scope_parents: &BTreeMap<String, Option<String>>,
+    call_scope: &str,
 ) -> Option<(String, &'static str)> {
     match callee {
         Expression::Identifier(identifier)
-            if parameter_names.contains(identifier.name.as_str()) =>
+            if visible_binding_in_rows(
+                bindings,
+                scope_parents,
+                call_scope,
+                identifier.name.as_str(),
+            )
+            .is_some_and(|binding| binding.binding_kind == TsBindingKind::Parameter) =>
         {
             Some((
                 identifier.name.to_string(),
@@ -717,6 +851,74 @@ fn boundary_reason(
         }
         _ => None,
     }
+}
+
+fn scope_parent_keys(
+    scoping: &Scoping,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+) -> BTreeMap<String, Option<String>> {
+    scoping
+        .scope_descendants_from_root()
+        .filter_map(|scope| {
+            let key = scope_keys.get(&scope)?.clone();
+            let parent = scoping
+                .scope_parent_id(scope)
+                .and_then(|parent| scope_keys.get(&parent).cloned());
+            Some((key, parent))
+        })
+        .collect()
+}
+
+fn visible_binding_in_rows<'a>(
+    bindings: &'a [TsBindingFact],
+    scope_parents: &BTreeMap<String, Option<String>>,
+    scope_key: &str,
+    name: &str,
+) -> Option<&'a TsBindingFact> {
+    let mut current = Some(scope_key);
+    while let Some(scope) = current {
+        if let Some(binding) = bindings
+            .iter()
+            .find(|binding| binding.scope_key == scope && binding.name == name)
+        {
+            return Some(binding);
+        }
+        current = scope_parents
+            .get(scope)
+            .and_then(|parent| parent.as_deref());
+    }
+    None
+}
+
+fn scope_key_for_span(
+    file: &SourceFile,
+    source: &str,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+    span: oxc_span::Span,
+) -> Option<String> {
+    let target = span_from_oxc(file.id, source, span);
+    scoping
+        .scope_descendants_from_root()
+        .filter_map(|scope| {
+            let node_id = scoping.get_node_id(scope);
+            let kind = ts_scope_kind(nodes.kind(node_id));
+            if kind == TsScopeKind::Module {
+                return None;
+            }
+            let scope_span = span_from_oxc(file.id, source, nodes.kind(node_id).span());
+            if !span_contains(&scope_span, &target) {
+                return None;
+            }
+            Some((
+                scope_span.end_byte - scope_span.start_byte,
+                scope_keys.get(&scope)?.clone(),
+            ))
+        })
+        .min_by_key(|(width, _)| *width)
+        .map(|(_, key)| key)
+        .or_else(|| scope_keys.get(&scoping.root_scope_id()).cloned())
 }
 
 #[derive(Clone)]
@@ -1127,6 +1329,12 @@ fn parse_source_type(path: &Path) -> SourceType {
 
 fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
     span_from_byte_range(file, source, span.start as usize, span.end as usize)
+}
+
+fn span_contains(container: &Span, span: &Span) -> bool {
+    container.file == span.file
+        && container.start_byte <= span.start_byte
+        && container.end_byte >= span.end_byte
 }
 
 #[cfg(test)]

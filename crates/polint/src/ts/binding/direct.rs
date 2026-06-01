@@ -66,7 +66,7 @@ pub(crate) fn resolve_direct_bindings_with_modules(
 
     for callsite in &inventory.callsites {
         let callsite_scope = index.scope_key_for_callsite(callsite);
-        if let Some(reason) = unresolved_reason_for_callsite(callsite, &index, callsite_scope) {
+        if let Some(reason) = intrinsic_unresolved_reason_for_callsite(callsite) {
             rows.push(unresolved_row(callsite, reason));
             continue;
         }
@@ -79,34 +79,15 @@ pub(crate) fn resolve_direct_bindings_with_modules(
             continue;
         };
         let lookup = CalleeLookup::new(display_name);
-        if let Some(binding) = index.import_binding_for_lookup(callsite_scope, lookup)
-            && let Some(row) = index.module_row(callsite, binding, lookup)
-        {
-            rows.push(row);
-            continue;
-        }
-        if let Some(alias) = index.alias_binding_for_lookup(callsite_scope, lookup)
-            && let Some(target) = index.local_alias_target(alias)
-        {
-            rows.push(resolved_row(
+        let Some(visible) = index.visible_binding_for_lookup(callsite_scope, lookup) else {
+            rows.push(unresolved_row(
                 callsite,
-                target,
-                Some(alias),
-                TsDirectBindingKind::LocalAlias,
+                TsDirectBindingReason::LocalBindingMissing,
             ));
             continue;
-        }
-        if lookup.member_name.is_none()
-            && let Some(target) = index.local_function_for_lookup(callsite_scope, lookup)
-        {
-            rows.push(resolved_row(callsite, target, None, lookup.local_kind));
-            continue;
-        }
+        };
 
-        rows.push(unresolved_row(
-            callsite,
-            TsDirectBindingReason::LocalBindingMissing,
-        ));
+        rows.push(index.row_for_visible_binding(callsite, visible.binding, lookup));
     }
 
     TsDirectBindingOutput { bindings: rows }.normalized()
@@ -227,40 +208,82 @@ impl<'a> DirectBindingIndex<'a> {
             .or_else(|| self.module_scope_by_file.get(&callsite.file).copied())
     }
 
-    fn import_binding_for_lookup(
+    fn visible_binding_for_lookup(
         &self,
         scope_key: Option<&str>,
         lookup: CalleeLookup<'_>,
-    ) -> Option<&'a TsBindingFact> {
-        self.visible_binding(scope_key, lookup.local_name, &self.import_by_scope_name)
-    }
-
-    fn alias_binding_for_lookup(
-        &self,
-        scope_key: Option<&str>,
-        lookup: CalleeLookup<'_>,
-    ) -> Option<&'a TsBindingFact> {
-        self.visible_binding(scope_key, lookup.alias_name(), &self.alias_by_scope_name)
-    }
-
-    fn local_function_for_lookup(
-        &self,
-        scope_key: Option<&str>,
-        lookup: CalleeLookup<'_>,
-    ) -> Option<&'a TsInventoryFunctionFact> {
-        let binding = self.visible_local_binding(scope_key, lookup.local_name)?;
-        if !matches!(
-            binding.binding_kind,
-            TsBindingKind::FunctionDeclaration | TsBindingKind::FunctionExpression
-        ) {
-            return None;
+    ) -> Option<VisibleBinding<'a>> {
+        let local = self.visible_any_binding(scope_key, lookup.local_name, false);
+        if lookup.member_name.is_none() {
+            return local;
         }
-        self.function_by_name(lookup.local_name, Some(binding))
+
+        let exact_member = self.visible_any_binding(scope_key, lookup.alias_name(), true);
+        choose_visible_binding(local, exact_member)
+    }
+
+    fn row_for_visible_binding(
+        &self,
+        callsite: &TsInventoryCallsiteFact,
+        binding: &'a TsBindingFact,
+        lookup: CalleeLookup<'_>,
+    ) -> TsDirectBindingFact {
+        if let Some(reason) = unsupported_binding_reason(binding) {
+            return unresolved_row(callsite, reason);
+        }
+
+        if is_import_binding(binding) {
+            return self
+                .module_row(callsite, binding, lookup)
+                .unwrap_or_else(|| {
+                    unresolved_import_row(
+                        callsite,
+                        binding,
+                        None,
+                        None,
+                        lookup.local_kind,
+                        TsDirectBindingStatus::Unresolved,
+                        TsDirectBindingReason::ImportedBindingUnresolved,
+                    )
+                });
+        }
+
+        if matches!(
+            binding.binding_kind,
+            TsBindingKind::Alias | TsBindingKind::Destructuring
+        ) {
+            if let Some(target) = self.local_alias_target(binding) {
+                return resolved_row(
+                    callsite,
+                    target,
+                    Some(binding),
+                    TsDirectBindingKind::LocalAlias,
+                );
+            }
+            return unresolved_row(callsite, TsDirectBindingReason::LocalBindingMissing);
+        }
+
+        if matches!(binding.binding_kind, TsBindingKind::Parameter) && lookup.member_name.is_none()
+        {
+            return unresolved_row(callsite, TsDirectBindingReason::TokenFlowRequired);
+        }
+
+        if lookup.member_name.is_none()
+            && matches!(
+                binding.binding_kind,
+                TsBindingKind::FunctionDeclaration | TsBindingKind::FunctionExpression
+            )
+            && let Some(target) = self.function_by_name(lookup.local_name, Some(binding))
+        {
+            return resolved_row(callsite, target, None, lookup.local_kind);
+        }
+
+        unresolved_row(callsite, TsDirectBindingReason::LocalBindingMissing)
     }
 
     fn local_alias_target(&self, alias: &'a TsBindingFact) -> Option<&'a TsInventoryFunctionFact> {
         let target_name = alias.imported_name.as_deref()?;
-        let target_binding = self.visible_binding(
+        let target_binding = self.visible_binding_in_map(
             Some(alias.scope_key.as_str()),
             target_name,
             &self.local_by_scope_name,
@@ -287,23 +310,55 @@ impl<'a> DirectBindingIndex<'a> {
         {
             return Some(function);
         }
-        if binding.is_some() {
+        if let Some(binding) = binding {
+            let mut same_file = functions
+                .iter()
+                .copied()
+                .filter(|function| function.file == binding.file);
+            let first = same_file.next()?;
+            if same_file.next().is_none() {
+                return Some(first);
+            }
             return None;
         }
         functions.first().copied()
     }
 
-    fn visible_local_binding(
+    fn visible_any_binding(
         &self,
         scope_key: Option<&str>,
         name: &str,
-    ) -> Option<&'a TsBindingFact> {
-        self.visible_binding(scope_key, name, &self.alias_by_scope_name)
-            .or_else(|| self.visible_binding(scope_key, name, &self.import_by_scope_name))
-            .or_else(|| self.visible_binding(scope_key, name, &self.local_by_scope_name))
+        exact_member: bool,
+    ) -> Option<VisibleBinding<'a>> {
+        let mut current = scope_key;
+        let mut distance = 0;
+        while let Some(scope) = current {
+            if let Some(binding) = self.binding_in_scope(scope, name) {
+                return Some(VisibleBinding {
+                    binding,
+                    distance,
+                    exact_member,
+                });
+            }
+            current = self
+                .scope_parent_by_key
+                .get(scope)
+                .and_then(|parent| *parent);
+            distance += 1;
+        }
+        None
     }
 
-    fn visible_binding(
+    fn binding_in_scope(&self, scope: &str, name: &str) -> Option<&'a TsBindingFact> {
+        self.unsupported_by_scope_name
+            .get(&(scope, name))
+            .copied()
+            .or_else(|| self.alias_by_scope_name.get(&(scope, name)).copied())
+            .or_else(|| self.import_by_scope_name.get(&(scope, name)).copied())
+            .or_else(|| self.local_by_scope_name.get(&(scope, name)).copied())
+    }
+
+    fn visible_binding_in_map(
         &self,
         scope_key: Option<&str>,
         name: &str,
@@ -416,6 +471,32 @@ impl<'a> DirectBindingIndex<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct VisibleBinding<'a> {
+    binding: &'a TsBindingFact,
+    distance: usize,
+    exact_member: bool,
+}
+
+fn choose_visible_binding<'a>(
+    left: Option<VisibleBinding<'a>>,
+    right: Option<VisibleBinding<'a>>,
+) -> Option<VisibleBinding<'a>> {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            if right.distance < left.distance
+                || (right.distance == left.distance && right.exact_member && !left.exact_member)
+            {
+                Some(right)
+            } else {
+                Some(left)
+            }
+        }
+        (Some(binding), None) | (None, Some(binding)) => Some(binding),
+        (None, None) => None,
+    }
+}
+
 struct ModuleBindingIndex<'a> {
     resolved_by_file_source: BTreeMap<(FileId, String), &'a ResolvedImportFact>,
     module_kind_by_id: BTreeMap<ModuleNodeId, ModuleNodeKind>,
@@ -485,14 +566,6 @@ impl<'a> ModuleBindingIndex<'a> {
         }
 
         let module = self.module_file_by_node.get(&module_node)?;
-        if let Some(function) = function_by_export_name(module.inventory, export_name) {
-            return Some(ModuleFunctionTarget {
-                module_node,
-                function,
-                via_reexport: false,
-            });
-        }
-
         for binding in &module.scope.bindings {
             if binding.exported_name.as_deref() == Some(export_name)
                 && let Some(function_key) = binding.inventory_function_key.as_deref()
@@ -509,8 +582,14 @@ impl<'a> ModuleBindingIndex<'a> {
                 });
             }
             if binding.exported_name.as_deref() == Some(export_name)
+                && binding.module_source.is_none()
                 && let Some(imported_name) = binding.imported_name.as_deref()
-                && let Some(function) = function_by_export_name(module.inventory, imported_name)
+                && let Some(function) = function_for_local_export(
+                    module.inventory,
+                    module.scope,
+                    binding,
+                    imported_name,
+                )
             {
                 return Some(ModuleFunctionTarget {
                     module_node,
@@ -589,10 +668,8 @@ impl<'a> CalleeLookup<'a> {
     }
 }
 
-fn unresolved_reason_for_callsite(
+fn intrinsic_unresolved_reason_for_callsite(
     callsite: &TsInventoryCallsiteFact,
-    index: &DirectBindingIndex<'_>,
-    scope_key: Option<&str>,
 ) -> Option<TsDirectBindingReason> {
     if matches!(callsite.kind, TsCallsiteInventoryKind::DynamicImport)
         && matches!(callsite.status, TsInventoryStatus::Unresolved { .. })
@@ -602,29 +679,37 @@ fn unresolved_reason_for_callsite(
     if callsite.display_name.is_none() {
         return Some(TsDirectBindingReason::ComputedProperty);
     }
-    let display = callsite.display_name.as_deref()?;
-    let lookup = CalleeLookup::new(display);
-    index
-        .visible_binding(
-            scope_key,
-            lookup.target_name(),
-            &index.unsupported_by_scope_name,
+    None
+}
+
+fn unsupported_binding_reason(binding: &TsBindingFact) -> Option<TsDirectBindingReason> {
+    match &binding.status {
+        TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("function-token") => {
+            Some(TsDirectBindingReason::TokenFlowRequired)
+        }
+        TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("property-flow") => {
+            Some(TsDirectBindingReason::PropertyFlowRequired)
+        }
+        TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("prototype") => {
+            Some(TsDirectBindingReason::PrototypeModelRequired)
+        }
+        TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("receiver") => {
+            Some(TsDirectBindingReason::ThisModelRequired)
+        }
+        _ => None,
+    }
+}
+
+fn is_import_binding(binding: &TsBindingFact) -> bool {
+    binding.module_source.is_some()
+        && matches!(
+            binding.binding_kind,
+            TsBindingKind::Import
+                | TsBindingKind::NamedImport
+                | TsBindingKind::DefaultImport
+                | TsBindingKind::NamespaceImport
+                | TsBindingKind::ReExport
         )
-        .and_then(|binding| match &binding.status {
-            TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("function-token") => {
-                Some(TsDirectBindingReason::TokenFlowRequired)
-            }
-            TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("property-flow") => {
-                Some(TsDirectBindingReason::PropertyFlowRequired)
-            }
-            TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("prototype") => {
-                Some(TsDirectBindingReason::PrototypeModelRequired)
-            }
-            TsBindingStatus::UnsupportedDynamic { reason } if reason.contains("receiver") => {
-                Some(TsDirectBindingReason::ThisModelRequired)
-            }
-            _ => None,
-        })
 }
 
 fn span_contains(container: &crate::core::Span, span: &crate::core::Span) -> bool {
@@ -680,14 +765,84 @@ fn imported_export_target(
     }
 }
 
-fn function_by_export_name<'a>(
+fn function_for_local_export<'a>(
     inventory: &'a TsInventoryOutput,
-    export_name: &str,
+    scope: &'a TsScopeOutput,
+    export: &TsBindingFact,
+    local_name: &str,
 ) -> Option<&'a TsInventoryFunctionFact> {
-    inventory
+    if let Some(binding) = visible_function_binding(scope, export.scope_key.as_str(), local_name)
+        && let Some(function) = function_by_binding(inventory, local_name, binding)
+    {
+        return Some(function);
+    }
+
+    let mut overlapping = inventory
         .functions
         .iter()
-        .find(|function| function.display_name.as_deref() == Some(export_name))
+        .filter(|function| function.display_name.as_deref() == Some(local_name))
+        .filter(|function| spans_overlap(&function.span, &export.span));
+    let first = overlapping.next()?;
+    if overlapping.next().is_none() {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+fn visible_function_binding<'a>(
+    scope: &'a TsScopeOutput,
+    scope_key: &str,
+    name: &str,
+) -> Option<&'a TsBindingFact> {
+    let parent_by_key = scope
+        .scopes
+        .iter()
+        .map(|scope| (scope.stable_key.as_str(), scope.parent_scope_key.as_deref()))
+        .collect::<BTreeMap<_, _>>();
+    let mut current = Some(scope_key);
+    while let Some(scope_key) = current {
+        if let Some(binding) = scope.bindings.iter().find(|binding| {
+            binding.scope_key == scope_key
+                && binding.name == name
+                && matches!(
+                    binding.binding_kind,
+                    TsBindingKind::FunctionDeclaration | TsBindingKind::FunctionExpression
+                )
+        }) {
+            return Some(binding);
+        }
+        current = parent_by_key.get(scope_key).and_then(|parent| *parent);
+    }
+    None
+}
+
+fn function_by_binding<'a>(
+    inventory: &'a TsInventoryOutput,
+    name: &str,
+    binding: &TsBindingFact,
+) -> Option<&'a TsInventoryFunctionFact> {
+    let functions = inventory
+        .functions
+        .iter()
+        .filter(|function| function.display_name.as_deref() == Some(name))
+        .collect::<Vec<_>>();
+    if let Some(function) = functions.iter().copied().find(|function| {
+        function.file == binding.file && spans_overlap(&function.span, &binding.span)
+    }) {
+        return Some(function);
+    }
+
+    let mut same_file = functions
+        .iter()
+        .copied()
+        .filter(|function| function.file == binding.file);
+    let first = same_file.next()?;
+    if same_file.next().is_none() {
+        Some(first)
+    } else {
+        None
+    }
 }
 
 fn resolved_row(
