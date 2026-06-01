@@ -49,9 +49,37 @@ pub(crate) struct GoSemanticRawFrame {
     #[serde(default)]
     pub(crate) package_path: String,
     #[serde(default)]
+    pub(crate) package_name: String,
+    #[serde(default)]
+    pub(crate) module_path: String,
+    #[serde(default)]
+    pub(crate) files: Vec<String>,
+    #[serde(default)]
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) qualified: String,
+    #[serde(default)]
+    pub(crate) signature: String,
+    #[serde(default)]
+    pub(crate) stable_key: String,
+    #[serde(default)]
+    pub(crate) receiver: String,
+    #[serde(default)]
+    pub(crate) method: String,
+    #[serde(default, rename = "type")]
+    pub(crate) type_name: String,
+    #[serde(default)]
+    pub(crate) methods: Vec<String>,
+    #[serde(default)]
+    pub(crate) file: String,
+    #[serde(default)]
+    pub(crate) span: Option<GoSemanticSpan>,
+    #[serde(default)]
+    pub(crate) caller: String,
+    #[serde(default)]
+    pub(crate) static_callee: String,
+    #[serde(default)]
+    pub(crate) message: String,
     #[serde(default)]
     pub(crate) status: String,
     #[serde(default)]
@@ -60,6 +88,18 @@ pub(crate) struct GoSemanticRawFrame {
     pub(crate) go_version: String,
     #[serde(default)]
     pub(crate) x_tools_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct GoSemanticSpan {
+    pub(crate) start_byte: u32,
+    pub(crate) end_byte: u32,
+    pub(crate) start_line: u32,
+    #[serde(rename = "start_column")]
+    pub(crate) start_col: u32,
+    pub(crate) end_line: u32,
+    #[serde(rename = "end_column")]
+    pub(crate) end_col: u32,
 }
 
 #[derive(Debug, Clone)]

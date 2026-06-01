@@ -201,34 +201,39 @@ fn callsite_display_name(site: &CallSiteFact) -> String {
 
 /// Resolves the `package_or_module` string for a record's language and file.
 ///
-/// For `Language::Go` records this resolves the Go package-clause NAME (`foo`)
-/// from the matching [`PackageFact`] so the Go `RelString` renderer produces
-/// `foo.Bar` instead of the file path `src/main.go.Bar` (CR-01 / IDENT-02). When
-/// no Go `PackageFact` exists for the file it falls back to the workspace-relative
-/// file path so panic-free behavior is preserved. Every other language keeps
-/// `db.path_for(file)` exactly as before (byte-identical non-Go behavior).
-///
-/// This delivers package-NAME qualification only; the full Go module import path
-/// (`github.com/org/...`) requires the Phase 46 Go semantic frontend and is out
-/// of scope here.
+/// For `Language::Go` records this prefers the Phase 46 semantic frontend's full
+/// Go package import path when a validated package row covers the file. It falls
+/// back to the Go package-clause name, then the workspace-relative file path, so
+/// missing semantic setup preserves the earlier panic-free behavior.
 fn package_or_module_for_record(
     db: &AnalysisDb,
     language: Language,
     file: crate::core::FileId,
 ) -> String {
     match language {
-        Language::Go => package_name_for_go_file(db, file)
+        Language::Go => semantic_package_path_for_go_file(db, file)
+            .or_else(|| package_name_for_go_file(db, file))
             .unwrap_or_else(|| package_or_module_for_file(db, file)),
         _ => package_or_module_for_file(db, file),
     }
 }
 
+fn semantic_package_path_for_go_file(db: &AnalysisDb, file: crate::core::FileId) -> Option<String> {
+    let path = db.path_for(file);
+    db.go_semantic_packages()
+        .iter()
+        .find(|package| {
+            package
+                .files
+                .iter()
+                .any(|package_file| package_file == &path)
+        })
+        .map(|package| package.package_path.clone())
+        .filter(|package_path| !package_path.is_empty())
+}
+
 /// Returns the Go package-clause name (e.g. `main` / `foo`) for a file by
 /// scanning `db.packages()` for the first Go [`PackageFact`] on that file.
-///
-/// This is the package NAME, not the import path — the v1.2 substrate's
-/// `PackageFact.name` carries only the package clause; the import path is a
-/// Phase 46 deliverable.
 fn package_name_for_go_file(db: &AnalysisDb, file: crate::core::FileId) -> Option<String> {
     db.packages()
         .iter()
@@ -327,6 +332,8 @@ mod tests {
     use crate::core::{
         AnalysisDb, FileId, FunctionFact, FunctionId, Language, PackageFact, PackageId, Span,
     };
+    use crate::go::semantic::facts::{GoSemanticPackageFact, GoSemanticPackageId};
+    use crate::go::semantic::store::GoSemanticFactsOutput;
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -369,6 +376,55 @@ mod tests {
     fn go_function_with_package_resolves_package_name() {
         let record = go_function_record(Some("foo"));
         assert_eq!(record.package_or_module.as_ref(), "foo");
+    }
+
+    #[test]
+    fn go_function_prefers_semantic_package_import_path() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            std::path::PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package foo\nfunc Bar() {}\n".to_string(),
+        );
+        db.push_package(PackageFact {
+            id: PackageId(0),
+            file,
+            name: "foo".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::Go,
+        });
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            packages: vec![GoSemanticPackageFact {
+                id: GoSemanticPackageId(0),
+                stable_key: "pkg".to_string(),
+                package_id: "github.com/acme/project/pkg".to_string(),
+                package_path: "github.com/acme/project/pkg".to_string(),
+                package_name: "foo".to_string(),
+                module_path: "github.com/acme/project".to_string(),
+                files: vec!["src/main.go".to_string()],
+            }],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("semantic facts replace");
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "Bar".to_string(),
+            span: Span::point(file, 2, 1),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+
+        let function = db.functions().first().expect("pushed function").clone();
+        let record =
+            super::function_identity_record(&db, &function).expect("Go function builds a record");
+        assert_eq!(
+            record.package_or_module.as_ref(),
+            "github.com/acme/project/pkg"
+        );
     }
 
     #[test]

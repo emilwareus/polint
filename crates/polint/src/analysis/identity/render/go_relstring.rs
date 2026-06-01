@@ -178,6 +178,17 @@ mod tests {
     }
 
     #[test]
+    fn semantic_package_import_path_appears_in_output() {
+        let rendered = render(&record(
+            IdentityKind::Function,
+            "github.com/acme/project/pkg",
+            "Foo",
+            "Foo",
+        ));
+        assert_eq!(rendered, "github.com/acme/project/pkg.Foo");
+    }
+
+    #[test]
     fn pointer_receiver_method_format() {
         let rendered = render(&record(
             IdentityKind::Function,

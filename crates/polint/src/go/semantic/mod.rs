@@ -5,9 +5,14 @@
 
 #![allow(dead_code)]
 
+pub(crate) mod cache_key;
 pub(crate) mod client;
+pub(crate) mod facts;
+pub(crate) mod lower;
 pub(crate) mod process;
 pub(crate) mod protocol;
+pub(crate) mod store;
+pub(crate) mod validate;
 
 #[cfg(test)]
 mod tests;
