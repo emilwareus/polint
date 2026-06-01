@@ -9,6 +9,7 @@ pub(crate) enum GoSemanticProtocolError {
     UnsupportedSchema(String),
     UnknownKind(String),
     RowBeforeBegin(String),
+    RowAfterEnd(String),
     DuplicateBegin,
     DuplicateEnd,
     MissingBegin,
@@ -29,6 +30,9 @@ impl std::fmt::Display for GoSemanticProtocolError {
                     f,
                     "Go semantic frame `{kind}` appeared before session_begin"
                 )
+            }
+            Self::RowAfterEnd(kind) => {
+                write!(f, "Go semantic frame `{kind}` appeared after session_end")
             }
             Self::DuplicateBegin => write!(f, "duplicate Go semantic session_begin frame"),
             Self::DuplicateEnd => write!(f, "duplicate Go semantic session_end frame"),
@@ -163,6 +167,9 @@ pub(crate) fn decode_ndjson_str(text: &str) -> Result<GoSemanticOutput, GoSemant
             GoSemanticFrame::Row(frame) if !saw_begin => {
                 return Err(GoSemanticProtocolError::RowBeforeBegin(frame.kind));
             }
+            GoSemanticFrame::Row(frame) if saw_end => {
+                return Err(GoSemanticProtocolError::RowAfterEnd(frame.kind));
+            }
             GoSemanticFrame::Row(frame) => rows.push(frame),
         }
     }
@@ -255,5 +262,19 @@ mod tests {
             decode_ndjson_str("{\"schema\":\"polint-go-semantic-1\",\"kind\":\"session_begin\"}\n")
                 .unwrap_err();
         assert_eq!(err, GoSemanticProtocolError::MissingEnd);
+    }
+
+    #[test]
+    fn decode_ndjson_rejects_rows_after_session_end() {
+        let err = decode_ndjson_str(
+            "{\"schema\":\"polint-go-semantic-1\",\"kind\":\"session_begin\"}\n\
+             {\"schema\":\"polint-go-semantic-1\",\"kind\":\"session_end\"}\n\
+             {\"schema\":\"polint-go-semantic-1\",\"kind\":\"package\",\"package_id\":\"p\"}\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            GoSemanticProtocolError::RowAfterEnd("package".to_string())
+        );
     }
 }

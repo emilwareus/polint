@@ -48,7 +48,7 @@ pub(crate) fn lower_go_semantic(
 
     for row in &output.rows {
         match row.kind.as_str() {
-            "package" => lowered.packages.push(lower_package(row)?),
+            "package" => lowered.packages.push(lower_package(row, &files)?),
             "function" | "method" | "init_function" => {
                 lowered.functions.push(lower_function(row, &files)?);
             }
@@ -63,10 +63,18 @@ pub(crate) fn lower_go_semantic(
     Ok(lowered.normalized())
 }
 
-fn lower_package(row: &GoSemanticRawFrame) -> Result<GoSemanticPackageFact, GoSemanticLowerError> {
+fn lower_package(
+    row: &GoSemanticRawFrame,
+    files: &BTreeMap<&str, FileId>,
+) -> Result<GoSemanticPackageFact, GoSemanticLowerError> {
     for file in &row.files {
         validate_relative_path(file)
             .map_err(|error| GoSemanticLowerError::InvalidPath(error.to_string()))?;
+        if !files.contains_key(file.as_str()) {
+            return Err(GoSemanticLowerError::InvalidPath(format!(
+                "Go semantic sidecar file path `{file}` was not discovered as an in-repository Go file"
+            )));
+        }
     }
     Ok(GoSemanticPackageFact {
         id: GoSemanticPackageId(0),
@@ -162,11 +170,16 @@ fn lower_optional_file_span(
     }
     validate_relative_path(&row.file)
         .map_err(|error| GoSemanticLowerError::InvalidPath(error.to_string()))?;
-    let file = files.get(row.file.as_str()).copied();
-    let span = file.and_then(|file| row.span.as_ref().map(|span| to_span(file, span)));
+    let Some(&file) = files.get(row.file.as_str()) else {
+        return Err(GoSemanticLowerError::InvalidPath(format!(
+            "Go semantic sidecar file path `{}` was not discovered as an in-repository Go file",
+            row.file
+        )));
+    };
+    let span = row.span.as_ref().map(|span| to_span(file, span));
     Ok(LoweredLocation {
         relative_file: Some(row.file.clone()),
-        file,
+        file: Some(file),
         span,
     })
 }
@@ -195,6 +208,7 @@ fn row_stable_key(row: &GoSemanticRawFrame, kind: &str) -> String {
             ("name", row.qualified.clone()),
             ("file", row.file.clone()),
             ("caller", row.caller.clone()),
+            ("message", row.message.clone()),
         ],
     )
     .into_string()
@@ -239,6 +253,34 @@ mod tests {
     }
 
     #[test]
+    fn lower_rejects_undiscovered_in_repository_path() {
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(&format!(
+            r#"{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_begin"}}
+{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"function","package_id":"example.com/p","package_path":"example.com/p","name":"F","qualified":"example.com/p.F","stable_key":"fn","file":"deleted.go"}}
+{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_end"}}
+"#,
+        ))
+        .expect("valid protocol");
+        let err = lower_go_semantic(&db, &output).unwrap_err();
+        assert!(err.to_string().contains("was not discovered"));
+    }
+
+    #[test]
+    fn lower_rejects_package_files_not_discovered_by_polint() {
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(&format!(
+            r#"{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_begin"}}
+{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"package","package_id":"example.com/p","package_path":"example.com/p","files":["main.go","other.go"]}}
+{{"schema":"{GO_SEMANTIC_SCHEMA}","kind":"session_end"}}
+"#,
+        ))
+        .expect("valid protocol");
+        let err = lower_go_semantic(&db, &output).unwrap_err();
+        assert!(err.to_string().contains("other.go"));
+    }
+
+    #[test]
     fn lower_preserves_package_load_errors() {
         let db = db_with_go_file("main.go");
         let output = decode_ndjson_str(
@@ -250,6 +292,24 @@ mod tests {
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowered");
         assert_eq!(lowered.package_errors[0].message, "load failed");
+    }
+
+    #[test]
+    fn lower_package_error_fallback_stable_key_includes_message() {
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(
+            r#"{"schema":"polint-go-semantic-1","kind":"session_begin"}
+{"schema":"polint-go-semantic-1","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"first"}
+{"schema":"polint-go-semantic-1","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"second"}
+{"schema":"polint-go-semantic-1","kind":"session_end"}
+"#,
+        )
+        .expect("valid protocol");
+        let lowered = lower_go_semantic(&db, &output).expect("lowered");
+        assert_ne!(
+            lowered.package_errors[0].stable_key,
+            lowered.package_errors[1].stable_key
+        );
     }
 
     fn db_with_go_file(path: &str) -> AnalysisDb {

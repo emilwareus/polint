@@ -2,8 +2,10 @@ package semantic
 
 import (
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
@@ -147,16 +150,18 @@ func (e *emitter) emitPackage(pkg *packages.Package) {
 		"module_path":  modulePath,
 		"test_variant": testVariant(pkg.ID),
 		"files":        files,
+		"stable_key":   stableKey("package", pkg.ID, pkg.PkgPath),
 	})
 }
 
 func (e *emitter) emitPackageErrors(pkg *packages.Package) {
-	for _, err := range pkg.Errors {
+	for index, err := range pkg.Errors {
 		e.add(Row{
 			"kind":         "package_error",
 			"package_id":   pkg.ID,
 			"package_path": pkg.PkgPath,
 			"message":      err.Msg,
+			"stable_key":   stableKey("package_error", pkg.ID, strconv.Itoa(index), err.Msg),
 		})
 	}
 }
@@ -177,7 +182,7 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 	if fn == nil {
 		return
 	}
-	isInit := strings.HasPrefix(fn.Name(), "init")
+	isInit := isInitFunctionName(fn.Name())
 	isMethod := fn.Signature != nil && fn.Signature.Recv() != nil
 	if fn.Synthetic != "" && !isInit && !isMethod && !fn.Pos().IsValid() {
 		e.add(Row{
@@ -195,16 +200,29 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 	} else if isMethod {
 		kind = "method"
 	}
+	name := fn.Name()
+	if isInit {
+		name = "init"
+	} else if isMethod && fn.Signature != nil && fn.Signature.Recv() != nil {
+		if receiver := receiverTypeName(fn.Signature.Recv().Type().String()); receiver != "" {
+			name = receiver + "." + fn.Name()
+		}
+	}
 	row := Row{
 		"kind":         kind,
 		"package_id":   packageID(pkg),
 		"package_path": packagePath(pkg),
-		"name":         fn.Name(),
+		"name":         name,
 		"qualified":    fn.String(),
 		"signature":    signatureString(fn.Signature),
 		"stable_key":   stableKey(packageID(pkg), fn.String()),
 	}
-	if pos := e.positionSpan(fn.Pos(), fn.Pos()); pos != nil {
+	if syntax := fn.Syntax(); syntax != nil {
+		if pos := e.positionSpan(syntax.Pos(), syntax.End()); pos != nil {
+			row["file"] = posFile(e.fset, syntax.Pos(), e.root)
+			row["span"] = pos
+		}
+	} else if pos := e.positionSpan(fn.Pos(), fn.Pos()); pos != nil {
 		row["file"] = posFile(e.fset, fn.Pos(), e.root)
 		row["span"] = pos
 	}
@@ -238,7 +256,6 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				"package_id":   packageID(pkg),
 				"package_path": packagePath(pkg),
 				"caller":       fn.String(),
-				"stable_key":   stableKey(packageID(pkg), fn.String(), fmt.Sprint(call.Pos())),
 			}
 			if common != nil && common.StaticCallee() != nil {
 				row["static_callee"] = common.StaticCallee().String()
@@ -247,13 +264,56 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				row["status"] = "unresolved_dynamic"
 				row["reason"] = "dynamic or interface dispatch deferred to Phase 48"
 			}
-			if pos := e.positionSpan(call.Pos(), call.Pos()); pos != nil {
+			stableParts := []string{packageID(pkg), fn.String(), fmt.Sprint(call.Pos())}
+			if syntax := callSyntax(fn, call); syntax != nil {
+				if pos := e.positionSpan(syntax.Pos(), syntax.End()); pos != nil {
+					file := posFile(e.fset, syntax.Pos(), e.root)
+					row["file"] = file
+					row["span"] = pos
+					stableParts = []string{
+						packageID(pkg),
+						fn.String(),
+						file,
+						strconv.Itoa(pos.StartByte),
+						strconv.Itoa(pos.EndByte),
+					}
+				}
+			} else if pos := e.positionSpan(call.Pos(), call.Pos()); pos != nil {
 				row["file"] = posFile(e.fset, call.Pos(), e.root)
 				row["span"] = pos
 			}
+			row["stable_key"] = stableKey(stableParts...)
 			e.add(row)
 		}
 	}
+}
+
+func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {
+	if fn == nil || !call.Pos().IsValid() {
+		return nil
+	}
+	syntax := fn.Syntax()
+	if syntax == nil {
+		return nil
+	}
+	pos := call.Pos()
+	var best ast.Node
+	ast.Inspect(syntax, func(node ast.Node) bool {
+		if node == nil {
+			return true
+		}
+		expr, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if expr.Pos() <= pos && pos < expr.End() {
+			if best == nil || expr.End()-expr.Pos() < best.End()-best.Pos() {
+				best = expr
+			}
+		}
+		return true
+	})
+	return best
 }
 
 func (e *emitter) emitMethodSets(pkg *ssa.Package) {
@@ -319,6 +379,23 @@ func signatureString(sig *types.Signature) string {
 		return ""
 	}
 	return sig.String()
+}
+
+func receiverTypeName(receiver string) string {
+	receiver = strings.TrimSpace(receiver)
+	receiver = strings.TrimLeft(receiver, "*&")
+	if receiver == "" {
+		return ""
+	}
+	receiver = receiver[strings.LastIndex(receiver, ".")+1:]
+	if index := strings.Index(receiver, "["); index >= 0 {
+		receiver = receiver[:index]
+	}
+	return receiver
+}
+
+func isInitFunctionName(name string) bool {
+	return name == "init" || strings.HasPrefix(name, "init#") || strings.HasPrefix(name, "init$")
 }
 
 func stableKey(parts ...string) string {
@@ -485,19 +562,201 @@ func rootedPackagePattern(root string, pattern string) string {
 
 func goPackageEnv(root string, moduleRoots []string) ([]string, func(), error) {
 	env := os.Environ()
-	env = append(env, "GOWORK=off")
-	_ = root
-	_ = moduleRoots
-	return env, func() {}, nil
+	workspace, cleanup, err := workspaceEnv(root, moduleRoots)
+	if err != nil {
+		return nil, nil, err
+	}
+	env = setEnv(env, "GOWORK", workspace)
+	return env, cleanup, nil
+}
+
+func setEnv(env []string, key string, value string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return append(filtered, prefix+value)
+}
+
+func workspaceEnv(root string, moduleRoots []string) (string, func(), error) {
+	checkedIn := filepath.Join(root, "go.work")
+	if repoRegularFileExists(root, "go.work") && goWorkCoversModuleRoots(root, checkedIn, moduleRoots) {
+		return checkedIn, func() {}, nil
+	}
+	if !needsSyntheticWorkspace(moduleRoots) {
+		return "off", func() {}, nil
+	}
+	return writeSyntheticGoWork(root, moduleRoots)
+}
+
+func needsSyntheticWorkspace(moduleRoots []string) bool {
+	return len(moduleRoots) != 1 || moduleRoots[0] != "."
+}
+
+func goWorkCoversModuleRoots(root string, workPath string, moduleRoots []string) bool {
+	contents, err := readFileWithLimit(workPath, topologyManifestMaxBytes)
+	if err != nil {
+		return false
+	}
+	work, err := modfile.ParseWork(workPath, contents, nil)
+	if err != nil {
+		return false
+	}
+	rootReal, err := realCleanPath(root)
+	if err != nil {
+		return false
+	}
+	covered := make(map[string]bool)
+	for _, use := range work.Use {
+		usePath := filepath.Clean(filepath.FromSlash(use.Path))
+		if !filepath.IsAbs(usePath) {
+			usePath = filepath.Join(root, usePath)
+		}
+		realUse, err := realCleanPath(usePath)
+		if err != nil || !isUnderRoot(rootReal, realUse) {
+			continue
+		}
+		covered[realUse] = true
+	}
+	for _, moduleRoot := range moduleRoots {
+		modulePath := filepath.Join(root, filepath.FromSlash(moduleRoot))
+		realModule, err := realCleanPath(modulePath)
+		if err != nil || !covered[realModule] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeSyntheticGoWork(root string, moduleRoots []string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "polint-go-work-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temporary go.work directory: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	workPath := filepath.Join(dir, "go.work")
+	var contents strings.Builder
+	contents.WriteString("go ")
+	contents.WriteString(syntheticGoWorkVersion(root, moduleRoots))
+	contents.WriteString("\n\nuse (\n")
+	for _, moduleRoot := range moduleRoots {
+		modulePath := filepath.Join(root, filepath.FromSlash(moduleRoot))
+		contents.WriteString("\t")
+		contents.WriteString(strconv.Quote(filepath.ToSlash(goWorkUsePath(dir, modulePath))))
+		contents.WriteString("\n")
+	}
+	contents.WriteString(")\n")
+	if err := os.WriteFile(workPath, []byte(contents.String()), 0o600); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write temporary go.work: %w", err)
+	}
+	return workPath, cleanup, nil
+}
+
+func syntheticGoWorkVersion(root string, moduleRoots []string) string {
+	version := "1.24"
+	for _, moduleRoot := range moduleRoots {
+		modPath := filepath.Join(root, filepath.FromSlash(moduleRoot), "go.mod")
+		contents, err := readFileWithLimit(modPath, topologyManifestMaxBytes)
+		if err != nil {
+			continue
+		}
+		parsed, err := modfile.Parse(modPath, contents, nil)
+		if err != nil || parsed.Go == nil {
+			continue
+		}
+		if compareGoVersion(parsed.Go.Version, version) > 0 {
+			version = parsed.Go.Version
+		}
+	}
+	return version
+}
+
+func goWorkUsePath(workDir string, modulePath string) string {
+	rel, err := filepath.Rel(workDir, modulePath)
+	if err != nil || rel == "" {
+		return modulePath
+	}
+	return rel
+}
+
+func compareGoVersion(left string, right string) int {
+	leftParts := versionInts(left)
+	rightParts := versionInts(right)
+	for i := 0; i < len(leftParts) || i < len(rightParts); i++ {
+		var l, r int
+		if i < len(leftParts) {
+			l = leftParts[i]
+		}
+		if i < len(rightParts) {
+			r = rightParts[i]
+		}
+		if l < r {
+			return -1
+		}
+		if l > r {
+			return 1
+		}
+	}
+	return 0
+}
+
+func versionInts(version string) []int {
+	var values []int
+	for _, part := range strings.Split(strings.TrimPrefix(version, "go"), ".") {
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			values = append(values, 0)
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func readFileWithLimit(path string, maxBytes int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(contents)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", path, maxBytes)
+	}
+	return contents, nil
+}
+
+func realCleanPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(real), nil
+}
+
+func isUnderRoot(root string, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(filepath.ToSlash(rel), "../"))
 }
 
 func repoRegularFileExists(root string, relative string) bool {
 	path := filepath.Join(root, filepath.FromSlash(relative))
 	rel, err := filepath.Rel(root, path)
 	if err != nil || strings.HasPrefix(filepath.ToSlash(rel), "../") {
-		return false
-	}
-	if strings.HasPrefix(filepath.ToSlash(rel), "../") {
 		return false
 	}
 	info, err := os.Stat(path)

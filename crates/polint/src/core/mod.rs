@@ -1443,10 +1443,6 @@ impl AnalysisDb {
         &self.semantic_constraints
     }
 
-    #[allow(
-        dead_code,
-        reason = "Go semantic replacement is wired by the Phase 46 provider path after lowering is connected to the kernel."
-    )]
     pub(crate) fn replace_go_semantic_facts(
         &mut self,
         output: GoSemanticFactsOutput,

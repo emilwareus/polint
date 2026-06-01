@@ -34,6 +34,7 @@ pub(crate) fn derive_identity_with_cache_stats(
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     calls_provider_output_digest: Digest,
+    go_semantic_output_digest: Digest,
 ) -> IdentityProviderRunOutput {
     // Phase 1: extract.
     let mut records = extract_identity_records(db);
@@ -51,6 +52,7 @@ pub(crate) fn derive_identity_with_cache_stats(
         manifest,
         input_snapshot,
         &calls_provider_output_digest,
+        &go_semantic_output_digest,
         &output,
     );
 
@@ -259,6 +261,7 @@ fn identity_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_provider_output_digest: &Digest,
+    go_semantic_output_digest: &Digest,
     output: &IdentityProviderOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -268,6 +271,7 @@ fn identity_output_digest(
         format!("parameters={}", identity_provider_parameter_digest()),
         format!("config={}", input_snapshot.config.digest),
         format!("calls_output={calls_provider_output_digest}"),
+        format!("go_semantic_output={go_semantic_output_digest}"),
     ];
     parts.extend(output.records.iter().map(|record| {
         format!(
@@ -516,6 +520,11 @@ mod tests {
             manifest,
             &snapshot,
             &Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
+            &Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.go.semantic",
+                &["semantic-a"],
+            ),
             output,
         )
     }
@@ -589,6 +598,11 @@ mod tests {
             &snapshot,
             manifest,
             Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.go.semantic",
+                &["semantic-a"],
+            ),
         );
 
         assert!(first.diagnostics.is_empty());
@@ -619,6 +633,11 @@ mod tests {
             &snapshot,
             manifest,
             Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.go.semantic",
+                &["semantic-a"],
+            ),
         );
         assert_eq!(first.output_digest, second.output_digest);
     }
@@ -676,6 +695,11 @@ mod tests {
             &snapshot,
             manifest,
             Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.go.semantic",
+                &["semantic-a"],
+            ),
         );
         assert!(run.diagnostics.is_empty());
 

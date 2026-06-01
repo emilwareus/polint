@@ -1,11 +1,13 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::go::lifecycle::GoAnalysisConfig;
 use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
 use crate::go::semantic::process::{
-    GoSemanticProcessError, command_for_frontend, resolve_go_semantic_frontend,
+    GoSemanticProcessError, command_for_frontend, frontend_digest, resolve_go_semantic_frontend,
 };
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticProtocolError, decode_ndjson};
 
@@ -44,6 +46,12 @@ pub(crate) struct GoSemanticClient {
     timeout: Duration,
 }
 
+#[derive(Debug)]
+pub(crate) struct GoSemanticClientRun {
+    pub(crate) output: GoSemanticOutput,
+    pub(crate) frontend_digest: String,
+}
+
 impl GoSemanticClient {
     pub(crate) fn new(root: PathBuf) -> Self {
         Self {
@@ -60,12 +68,17 @@ impl GoSemanticClient {
     pub(crate) fn run(
         &self,
         config: &GoAnalysisConfig,
-    ) -> Result<GoSemanticOutput, GoSemanticClientError> {
+    ) -> Result<GoSemanticClientRun, GoSemanticClientError> {
         let frontend = resolve_go_semantic_frontend()?;
+        let digest = frontend_digest(&frontend)?;
         let mut command = command_for_frontend(&frontend, &self.root)?;
         append_request_args(&mut command, &self.root, config);
         let stdout = run_with_timeout(command, self.timeout, &self.root)?;
-        decode_ndjson(&stdout).map_err(GoSemanticClientError::from)
+        let output = decode_ndjson(&stdout).map_err(GoSemanticClientError::from)?;
+        Ok(GoSemanticClientRun {
+            output,
+            frontend_digest: digest,
+        })
     }
 }
 
@@ -102,6 +115,7 @@ fn run_with_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_child_process_group(&mut command);
     let mut child = command.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             GoSemanticProcessError::CommandUnavailable(
@@ -113,6 +127,14 @@ fn run_with_timeout(
             ))
         }
     })?;
+    let mut stdout_reader = child
+        .stdout
+        .take()
+        .map(|stdout| thread::spawn(move || read_all(stdout)));
+    let mut stderr_reader = child
+        .stderr
+        .take()
+        .map(|stderr| thread::spawn(move || read_all(stderr)));
 
     let deadline = Instant::now() + timeout;
     loop {
@@ -121,31 +143,82 @@ fn run_with_timeout(
                 "failed to poll go semantic frontend: {error}"
             ))
         })? {
-            let output = child.wait_with_output().map_err(|error| {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to collect go semantic frontend output: {error}"
-                ))
-            })?;
+            let stdout = join_reader(stdout_reader.take())?;
+            let stderr = join_reader(stderr_reader.take())?;
             if !status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let reason = if stderr.is_empty() {
+                let stderr_text = String::from_utf8_lossy(&stderr).trim().to_string();
+                let reason = if stderr_text.is_empty() {
                     format!("go semantic frontend exited with status {status}.")
                 } else {
-                    format!("go semantic frontend exited with status {status}: {stderr}")
+                    format!("go semantic frontend exited with status {status}: {stderr_text}")
                 };
                 return Err(GoSemanticProcessError::CommandFailed(reason));
             }
-            return Ok(output.stdout);
+            return Ok(stdout);
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            terminate_child_process_tree(&mut child);
             let _ = child.wait();
+            let _ = join_reader(stdout_reader.take());
+            let _ = join_reader(stderr_reader.take());
             return Err(GoSemanticProcessError::Timeout(format!(
                 "{GO_SIDECAR_TIMEOUT}: go semantic frontend exceeded request timeout"
             )));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn read_all(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn join_reader(
+    reader: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+) -> Result<Vec<u8>, GoSemanticProcessError> {
+    let Some(reader) = reader else {
+        return Ok(Vec::new());
+    };
+    reader
+        .join()
+        .map_err(|_| {
+            GoSemanticProcessError::CommandFailed(
+                "failed to join go semantic frontend output reader".to_string(),
+            )
+        })?
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to read go semantic frontend output: {error}"
+            ))
+        })
+}
+
+#[cfg(unix)]
+fn configure_child_process_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_child_process_group(_command: &mut std::process::Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_tree(child: &mut Child) {
+    let process_group = format!("-{}", child.id());
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &process_group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_child_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 #[cfg(test)]
@@ -222,6 +295,41 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_descendant_processes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("sleep.pid");
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(format!(
+            "sleep 10 & echo $! > {}; wait",
+            shell_quote(pid_file.to_string_lossy().as_ref())
+        ));
+
+        let err = run_with_timeout(command, Duration::from_millis(25), Path::new(".")).unwrap_err();
+
+        assert!(err.to_string().contains("GoSidecarTimeout"));
+        if let Ok(pid) = std::fs::read_to_string(pid_file)
+            && let Ok(pid) = pid.trim().parse::<i32>()
+        {
+            assert_process_exits(pid);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_stdout_is_drained_while_child_runs() {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(
+            "i=0; while [ $i -lt 5000 ]; do printf 0123456789abcdef0123456789abcdef; i=$((i + 1)); done",
+        );
+
+        let stdout = run_with_timeout(command, Duration::from_secs(2), Path::new("."))
+            .expect("large stdout exits");
+
+        assert_eq!(stdout.len(), 160_000);
+    }
+
     fn fake_stdout_command(stdout: &str) -> std::process::Command {
         if cfg!(windows) {
             let mut command = std::process::Command::new("cmd");
@@ -234,5 +342,36 @@ mod tests {
                 .arg(format!("printf '%s' '{}'", stdout.replace('\'', "'\\''")));
             command
         }
+    }
+
+    #[cfg(unix)]
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    #[cfg(unix)]
+    fn assert_process_exits(pid: i32) {
+        for _ in 0..20 {
+            if !process_exists(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("descendant process {pid} was still running after Go semantic timeout");
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: i32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }

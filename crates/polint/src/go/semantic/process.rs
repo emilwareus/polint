@@ -28,6 +28,7 @@ const EMBEDDED_GO_FRONTEND_FILES: &[(&str, &str)] = &[
 pub(crate) enum GoSemanticProcessError {
     CommandFailed(String),
     CommandUnavailable(String),
+    VersionUnsupported(String),
     Timeout(String),
 }
 
@@ -36,6 +37,7 @@ impl std::fmt::Display for GoSemanticProcessError {
         match self {
             Self::CommandFailed(reason) => write!(f, "{reason}"),
             Self::CommandUnavailable(reason) => write!(f, "{reason}"),
+            Self::VersionUnsupported(reason) => write!(f, "{reason}"),
             Self::Timeout(reason) => write!(f, "{reason}"),
         }
     }
@@ -211,6 +213,109 @@ pub(crate) fn embedded_frontend_hash() -> String {
     crate::cache::stable_hash(&part_refs)
 }
 
+pub(crate) fn frontend_digest(
+    frontend: &GoSemanticCommand,
+) -> Result<String, GoSemanticProcessError> {
+    match frontend {
+        GoSemanticCommand::Binary(path) => {
+            let bytes = fs::read(path).map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to read Go semantic frontend binary `{}` for digest: {error}",
+                    path.display()
+                ))
+            })?;
+            Ok(stable_bytes_hash(&bytes))
+        }
+        GoSemanticCommand::SourceDir(path) => source_dir_digest(path),
+    }
+}
+
+fn source_dir_digest(path: &Path) -> Result<String, GoSemanticProcessError> {
+    let mut files = Vec::new();
+    collect_frontend_source_files(path, path, &mut files)?;
+    files.sort();
+    let mut parts = vec![GO_SEMANTIC_SCHEMA.to_string()];
+    for relative_path in files {
+        let full_path = path.join(&relative_path);
+        let bytes = fs::read(&full_path).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to read Go semantic frontend source `{}` for digest: {error}",
+                full_path.display()
+            ))
+        })?;
+        parts.push(format!(
+            "{}:{}",
+            relative_path.to_string_lossy().replace('\\', "/"),
+            stable_bytes_hash(&bytes)
+        ));
+    }
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    Ok(crate::cache::stable_hash(&refs))
+}
+
+fn collect_frontend_source_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), GoSemanticProcessError> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to read Go semantic frontend source directory `{}` for digest: {error}",
+            directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to read Go semantic frontend source directory entry `{}` for digest: {error}",
+                directory.display()
+            ))
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to read Go semantic frontend source file type `{}` for digest: {error}",
+                path.display()
+            ))
+        })?;
+        if file_type.is_dir() && !skip_frontend_digest_dir(&path) {
+            collect_frontend_source_files(root, &path, files)?;
+        } else if file_type.is_file() && is_frontend_digest_source(&path) {
+            let relative_path = path.strip_prefix(root).map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to relativize Go semantic frontend source `{}` for digest: {error}",
+                    path.display()
+                ))
+            })?;
+            files.push(relative_path.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+fn skip_frontend_digest_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | ".hg" | "target" | "node_modules")
+    )
+}
+
+fn is_frontend_digest_source(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("go.mod" | "go.sum")
+    ) || path.extension().and_then(|extension| extension.to_str()) == Some("go")
+}
+
+fn stable_bytes_hash(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
 pub(crate) fn command_for_frontend(
     frontend: &GoSemanticCommand,
     root: &Path,
@@ -222,6 +327,7 @@ pub(crate) fn command_for_frontend(
             Ok(command)
         }
         GoSemanticCommand::SourceDir(path) => {
+            ensure_local_go_toolchain_supported()?;
             let mut command = Command::new("go");
             command
                 .arg("run")
@@ -232,6 +338,68 @@ pub(crate) fn command_for_frontend(
             Ok(command)
         }
     }
+}
+
+fn ensure_local_go_toolchain_supported() -> Result<(), GoSemanticProcessError> {
+    let version = local_go_toolchain_version()?;
+    if !go_version_at_least(&version, 1, 25) {
+        return Err(GoSemanticProcessError::VersionUnsupported(format!(
+            "polint-go-frontend source mode requires Go 1.25 or newer on PATH; found {version}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn local_go_toolchain_version() -> Result<String, GoSemanticProcessError> {
+    let output = Command::new("go")
+        .arg("version")
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                GoSemanticProcessError::CommandUnavailable(
+                    "go executable was not found for the Go semantic frontend.".to_string(),
+                )
+            } else {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to run `go version` for Go semantic frontend: {error}"
+                ))
+            }
+        })?;
+    if !output.status.success() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "`go version` exited with status {}",
+            output.status
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_go_version(stdout.as_ref()).ok_or_else(|| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to parse Go toolchain version from `{}`",
+            stdout.trim()
+        ))
+    })
+}
+
+fn parse_go_version(output: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|part| part.starts_with("go") && part.len() > 2)
+        .map(str::to_string)
+}
+
+fn go_version_at_least(version: &str, min_major: u32, min_minor: u32) -> bool {
+    let Some((major, minor)) = parse_go_version_numbers(version) else {
+        return false;
+    };
+    major > min_major || (major == min_major && minor >= min_minor)
+}
+
+fn parse_go_version_numbers(version: &str) -> Option<(u32, u32)> {
+    let version = version.trim().trim_start_matches("go");
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 #[cfg(test)]
@@ -263,5 +431,39 @@ mod tests {
                 "embedded Go semantic frontend drifted at {relative_path}"
             );
         }
+    }
+
+    #[test]
+    fn source_dir_digest_changes_when_go_source_changes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("go.mod"), "module example.test/frontend\n")
+            .expect("write go.mod");
+        fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .expect("write main.go");
+        let first = frontend_digest(&GoSemanticCommand::SourceDir(temp.path().to_path_buf()))
+            .expect("digest source dir");
+
+        fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() { println(\"changed\") }\n",
+        )
+        .expect("rewrite main.go");
+        let second = frontend_digest(&GoSemanticCommand::SourceDir(temp.path().to_path_buf()))
+            .expect("digest source dir again");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn go_toolchain_version_parser_accepts_go_version_output() {
+        assert_eq!(
+            parse_go_version("go version go1.26.2 darwin/arm64"),
+            Some("go1.26.2".to_string())
+        );
+        assert!(go_version_at_least("go1.25.0", 1, 25));
+        assert!(!go_version_at_least("go1.24.9", 1, 25));
     }
 }

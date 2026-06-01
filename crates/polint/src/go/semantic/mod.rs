@@ -12,6 +12,7 @@ pub(crate) mod facts;
 pub(crate) mod lower;
 pub(crate) mod process;
 pub(crate) mod protocol;
+pub(crate) mod provider;
 pub(crate) mod store;
 pub(crate) mod validate;
 
