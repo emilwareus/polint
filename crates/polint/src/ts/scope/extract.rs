@@ -410,19 +410,27 @@ fn extract_alias_rows(
         let AstKind::VariableDeclarator(declarator) = node.kind() else {
             continue;
         };
-        let Some(name) = binding_identifier_name(&declarator.id) else {
+        let Some(identifier) = binding_identifier(&declarator.id) else {
             continue;
         };
         let Some(init) = &declarator.init else {
             continue;
         };
+        let scope_key = scope_key_for_binding(
+            file,
+            scope_keys,
+            scoping,
+            identifier.name.as_str(),
+            identifier.span,
+        )
+        .unwrap_or_else(|| module_scope.clone());
         match init {
             Expression::Identifier(target) => rows.push(binding_row(BindingRowDraft {
                 file,
                 source,
                 span: span_from_oxc(file.id, source, declarator.span),
-                scope_key: module_scope.clone(),
-                name,
+                scope_key: scope_key.clone(),
+                name: identifier.name.clone(),
                 declaration_kind: TsDeclarationKind::Alias,
                 binding_kind: TsBindingKind::Alias,
                 import_export_kind: TsImportExportKind::Alias,
@@ -431,6 +439,32 @@ fn extract_alias_rows(
                 exported_name: None,
                 status: TsBindingStatus::present(),
             })),
+            Expression::ObjectExpression(object) => {
+                rows.extend(object.properties.iter().filter_map(|property| {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return None;
+                    };
+                    if property.computed {
+                        return None;
+                    }
+                    let property_name = property_key_name(&property.key)?;
+                    let target_name = expression_identifier_name(&property.value)?;
+                    Some(binding_row(BindingRowDraft {
+                        file,
+                        source,
+                        span: span_from_oxc(file.id, source, declarator.span),
+                        scope_key: scope_key.clone(),
+                        name: format!("{}.{}", identifier.name, property_name),
+                        declaration_kind: TsDeclarationKind::Alias,
+                        binding_kind: TsBindingKind::Alias,
+                        import_export_kind: TsImportExportKind::Alias,
+                        module_source: None,
+                        imported_name: Some(target_name),
+                        exported_name: None,
+                        status: TsBindingStatus::present(),
+                    }))
+                }));
+            }
             Expression::StaticMemberExpression(member)
                 if let Some(module) = require_module_path(&member.object) =>
             {
@@ -438,8 +472,8 @@ fn extract_alias_rows(
                     file,
                     source,
                     span: span_from_oxc(file.id, source, declarator.span),
-                    scope_key: module_scope.clone(),
-                    name,
+                    scope_key: scope_key.clone(),
+                    name: identifier.name.clone(),
                     declaration_kind: TsDeclarationKind::Import,
                     binding_kind: TsBindingKind::Import,
                     import_export_kind: TsImportExportKind::CommonJsRequire,
@@ -460,8 +494,8 @@ fn extract_alias_rows(
                     file,
                     source,
                     span: span_from_oxc(file.id, source, declarator.span),
-                    scope_key: module_scope.clone(),
-                    name,
+                    scope_key,
+                    name: identifier.name,
                     declaration_kind: TsDeclarationKind::Import,
                     binding_kind: TsBindingKind::Import,
                     import_export_kind: TsImportExportKind::CommonJsRequire,
@@ -518,20 +552,28 @@ fn extract_destructuring_rows(
         let destructuring_aliases =
             object_literal_destructuring_aliases(&declarator.id, declarator.init.as_ref());
         let mut names = Vec::new();
-        collect_pattern_names(&declarator.id, &mut names);
-        for name in names {
-            let imported_name = destructuring_aliases.get(&name).cloned();
+        collect_pattern_bindings(&declarator.id, &mut names);
+        for binding in names {
+            let imported_name = destructuring_aliases.get(&binding.name).cloned();
             let import_export_kind = if imported_name.is_some() {
                 TsImportExportKind::Alias
             } else {
                 TsImportExportKind::None
             };
+            let scope_key = scope_key_for_binding(
+                file,
+                scope_keys,
+                scoping,
+                binding.name.as_str(),
+                binding.span,
+            )
+            .unwrap_or_else(|| module_scope.clone());
             rows.push(binding_row(BindingRowDraft {
                 file,
                 source,
                 span: span_from_oxc(file.id, source, declarator.span),
-                scope_key: module_scope.clone(),
-                name,
+                scope_key,
+                name: binding.name,
                 declaration_kind: TsDeclarationKind::Destructuring,
                 binding_kind: TsBindingKind::Destructuring,
                 import_export_kind,
@@ -677,26 +719,37 @@ fn boundary_reason(
     }
 }
 
-fn collect_pattern_names(pattern: &BindingPattern<'_>, names: &mut Vec<String>) {
+#[derive(Clone)]
+struct PatternBinding {
+    name: String,
+    span: oxc_span::Span,
+}
+
+fn collect_pattern_bindings(pattern: &BindingPattern<'_>, names: &mut Vec<PatternBinding>) {
     match pattern {
-        BindingPattern::BindingIdentifier(identifier) => names.push(identifier.name.to_string()),
+        BindingPattern::BindingIdentifier(identifier) => names.push(PatternBinding {
+            name: identifier.name.to_string(),
+            span: identifier.span,
+        }),
         BindingPattern::ObjectPattern(pattern) => {
             for property in &pattern.properties {
-                collect_pattern_names(&property.value, names);
+                collect_pattern_bindings(&property.value, names);
             }
             if let Some(rest) = &pattern.rest {
-                collect_pattern_names(&rest.argument, names);
+                collect_pattern_bindings(&rest.argument, names);
             }
         }
         BindingPattern::ArrayPattern(pattern) => {
             for element in pattern.elements.iter().flatten() {
-                collect_pattern_names(element, names);
+                collect_pattern_bindings(element, names);
             }
             if let Some(rest) = &pattern.rest {
-                collect_pattern_names(&rest.argument, names);
+                collect_pattern_bindings(&rest.argument, names);
             }
         }
-        BindingPattern::AssignmentPattern(pattern) => collect_pattern_names(&pattern.left, names),
+        BindingPattern::AssignmentPattern(pattern) => {
+            collect_pattern_bindings(&pattern.left, names);
+        }
     }
 }
 
@@ -922,10 +975,40 @@ fn is_destructuring_declaration(nodes: &AstNodes<'_>, node_id: oxc_semantic::Nod
 }
 
 fn binding_identifier_name(pattern: &BindingPattern<'_>) -> Option<String> {
+    binding_identifier(pattern).map(|identifier| identifier.name)
+}
+
+fn binding_identifier(pattern: &BindingPattern<'_>) -> Option<PatternBinding> {
     match pattern {
-        BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.to_string()),
+        BindingPattern::BindingIdentifier(identifier) => Some(PatternBinding {
+            name: identifier.name.to_string(),
+            span: identifier.span,
+        }),
         _ => None,
     }
+}
+
+fn scope_key_for_binding(
+    file: &SourceFile,
+    scope_keys: &BTreeMap<OxcScopeId, String>,
+    scoping: &Scoping,
+    name: &str,
+    span: oxc_span::Span,
+) -> Option<String> {
+    scoping.symbol_ids().find_map(|symbol| {
+        let symbol_span = scoping.symbol_span(symbol);
+        if scoping.symbol_name(symbol) != name
+            || symbol_span.start != span.start
+            || symbol_span.end != span.end
+        {
+            return None;
+        }
+        let scope_id = scoping.symbol_scope_id(symbol);
+        scope_keys
+            .get(&scope_id)
+            .cloned()
+            .or_else(|| Some(module_scope_key(file)))
+    })
 }
 
 fn ts_scope_kind(kind: AstKind<'_>) -> TsScopeKind {

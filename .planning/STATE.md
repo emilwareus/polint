@@ -528,6 +528,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260601-baq | Fix final PR review findings | 2026-06-01 | implemented | [260601-baq-fix-final-pr-review-findings](./quick/260601-baq-fix-final-pr-review-findings/) |
 | 260527-d9f | Reconcile v1.2 milestone closeout artifacts before archival | 2026-05-27 | artifact-only | [260527-d9f-reconcile-v1-2-milestone-closeout-artifa](./quick/260527-d9f-reconcile-v1-2-milestone-closeout-artifa/) |
 | 260527-auc | Document public ResolvedImports and ModuleGraphFacts examples | 2026-05-27 | implemented | [260527-auc-document-public-resolvedimports-and-modu](./quick/260527-auc-document-public-resolvedimports-and-modu/) |
 | 260527-a8t | Fix generated Go rule scaffold heuristic diagnostic disclosure | 2026-05-27 | implemented | [260527-a8t-fix-generated-go-rule-scaffold-heuristic](./quick/260527-a8t-fix-generated-go-rule-scaffold-heuristic/) |

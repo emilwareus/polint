@@ -8,8 +8,11 @@ mod direct_local {
 
     use crate::core::AnalysisDb;
     use crate::ts::binding::direct::resolve_direct_bindings;
-    use crate::ts::binding::facts::{TsDirectBindingReason, TsDirectBindingStatus};
+    use crate::ts::binding::facts::{
+        TsDirectBindingFact, TsDirectBindingReason, TsDirectBindingStatus,
+    };
     use crate::ts::inventory::extract::extract_ts_inventory;
+    use crate::ts::inventory::store::TsInventoryOutput;
     use crate::ts::scope::extract::extract_ts_scope;
 
     #[test]
@@ -49,6 +52,87 @@ function run() {
                 .iter()
                 .any(|binding| binding.callsite_stable_key.contains("ns.f"))
         );
+    }
+
+    #[test]
+    fn arbitrary_static_member_does_not_bind_to_same_named_function() {
+        let file = fixture_file(
+            r#"
+function f() {}
+function run(obj) {
+  obj.f();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let binding = binding_for_display(&output, &inventory, "obj.f");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
+        assert!(binding.target_function.is_none());
+    }
+
+    #[test]
+    fn block_scoped_alias_does_not_escape_into_other_function() {
+        let file = fixture_file(
+            r#"
+function target() {}
+if (ready) {
+  const alias = target;
+}
+function run() {
+  alias();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let binding = binding_for_display(&output, &inventory, "alias");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
+        assert!(binding.target_function.is_none());
+    }
+
+    #[test]
+    fn non_function_local_alias_blocks_outer_function_resolution() {
+        let file = fixture_file(
+            r#"
+function target() {}
+function run() {
+  const target = maybeFunction;
+  target();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let binding = binding_for_display(&output, &inventory, "target");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
+        assert!(binding.target_function.is_none());
+    }
+
+    #[test]
+    fn alias_target_resolution_respects_shadowing_scope() {
+        let file = fixture_file(
+            r#"
+function f() {}
+function run(f) {
+  const alias = f;
+  alias();
+}
+"#,
+        );
+
+        let inventory = extract_ts_inventory(file);
+        let output = resolve_direct_bindings(&inventory, &extract_ts_scope(file));
+        let binding = binding_for_display(&output, &inventory, "alias");
+
+        assert_eq!(binding.status, TsDirectBindingStatus::Unresolved);
+        assert!(binding.target_function.is_none());
     }
 
     #[test]
@@ -104,6 +188,23 @@ function run(cb, obj, key) {
         );
         let leaked = Box::leak(db);
         leaked.file(file_id).expect("fixture file")
+    }
+
+    fn binding_for_display<'a>(
+        output: &'a crate::ts::binding::store::TsDirectBindingOutput,
+        inventory: &TsInventoryOutput,
+        display_name: &str,
+    ) -> &'a TsDirectBindingFact {
+        let callsite = inventory
+            .callsites
+            .iter()
+            .find(|callsite| callsite.display_name.as_deref() == Some(display_name))
+            .unwrap_or_else(|| panic!("missing callsite {display_name}"));
+        output
+            .bindings
+            .iter()
+            .find(|binding| binding.callsite == callsite.id)
+            .unwrap_or_else(|| panic!("missing binding for callsite {display_name}"))
     }
 }
 
