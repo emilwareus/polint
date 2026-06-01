@@ -224,6 +224,9 @@ fn terminate_child_process_tree(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static FAKE_STDOUT_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn timeout_error_uses_go_sidecar_timeout_category() {
@@ -331,21 +334,19 @@ mod tests {
     }
 
     fn fake_stdout_command(stdout: &str) -> std::process::Command {
+        let path = std::env::temp_dir().join(format!(
+            "polint-fake-sidecar-{}-{}.ndjson",
+            std::process::id(),
+            FAKE_STDOUT_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, stdout).expect("write fake sidecar stdout fixture");
         if cfg!(windows) {
-            let mut command = std::process::Command::new("powershell");
-            command.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::Output.Write($args[0])",
-                stdout,
-            ]);
+            let mut command = std::process::Command::new("cmd");
+            command.arg("/C").arg("type").arg(path);
             command
         } else {
-            let mut command = std::process::Command::new("sh");
-            command
-                .arg("-c")
-                .arg(format!("printf '%s' '{}'", stdout.replace('\'', "'\\''")));
+            let mut command = std::process::Command::new("cat");
+            command.arg(path);
             command
         }
     }
