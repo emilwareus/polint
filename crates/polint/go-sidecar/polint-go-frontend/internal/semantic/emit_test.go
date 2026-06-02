@@ -93,6 +93,74 @@ func main() {
 	assertCallsiteStatus(t, rows, "unresolved_dynamic")
 }
 
+func TestEmitHarvestsRTASignals(t *testing.T) {
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+type I interface { M() }
+type T struct{}
+
+func (T) M() {}
+
+func apply(f func()) { f() }
+
+func call(i I) { i.M() }
+
+func main() {
+	var t T
+	call(t)
+	apply(func() { t.M() })
+	apply(t.M)
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+	assertKind(t, rows, "instantiated_type")
+	assertKind(t, rows, "address_taken")
+	assertKind(t, rows, "dynamic_dispatch")
+	assertSchemaVersion(t, rows, "polint-go-semantic-2")
+	assertDynamicDispatchJoinsCallsite(t, rows)
+}
+
+func TestEmitDynamicDispatchCarriesInterfaceDiscriminant(t *testing.T) {
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+type I interface { M() }
+type T struct{}
+
+func (T) M() {}
+func call(i I) { i.M() }
+
+func main() {
+	var t T
+	call(t)
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+	found := false
+	for _, row := range rows {
+		if row["kind"] != "dynamic_dispatch" {
+			continue
+		}
+		if row["method"] == "M" && row["interface_type"] != "" && row["interface_type"] != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an interface-invoke dynamic_dispatch row with interface_type+method in %#v", rows)
+	}
+}
+
 func TestEmitHonorsCheckedInGoWorkForMultipleModuleRoots(t *testing.T) {
 	root := writeGoWorkspaceFixture(t, true)
 	rows, err := Emit(Config{
@@ -216,6 +284,39 @@ func assertRowSpanIsRange(t *testing.T, rows []Row, kind string) {
 		return
 	}
 	t.Fatalf("missing %s row with span in %#v", kind, rows)
+}
+
+func assertSchemaVersion(t *testing.T, rows []Row, schema string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["schema"] != schema {
+			t.Fatalf("row %#v has schema %v, expected %q", row, row["schema"], schema)
+		}
+	}
+}
+
+func assertDynamicDispatchJoinsCallsite(t *testing.T, rows []Row) {
+	t.Helper()
+	callsiteKeys := make(map[string]bool)
+	for _, row := range rows {
+		if row["kind"] == "callsite" {
+			if key, ok := row["stable_key"].(string); ok {
+				callsiteKeys[key] = true
+			}
+		}
+	}
+	for _, row := range rows {
+		if row["kind"] != "dynamic_dispatch" {
+			continue
+		}
+		key, ok := row["callsite_stable_key"].(string)
+		if !ok || key == "" {
+			t.Fatalf("dynamic_dispatch row missing callsite_stable_key: %#v", row)
+		}
+		if !callsiteKeys[key] {
+			t.Fatalf("dynamic_dispatch callsite_stable_key %q has no matching callsite row", key)
+		}
+	}
 }
 
 func assertCallsiteStatus(t *testing.T, rows []Row, status string) {

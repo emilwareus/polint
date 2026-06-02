@@ -19,7 +19,7 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-const SchemaVersion = "polint-go-semantic-1"
+const SchemaVersion = "polint-go-semantic-2"
 const XToolsVersion = "v0.45.0"
 const topologyManifestMaxBytes int64 = 1_048_576
 
@@ -174,6 +174,8 @@ func (e *emitter) emitSSAPackage(pkg *ssa.Package) {
 	for _, fn := range functions {
 		e.emitFunction(pkg, fn)
 		e.emitCallsites(pkg, fn)
+		e.emitInstantiatedTypes(pkg, fn)
+		e.emitAddressTaken(pkg, fn)
 	}
 	e.emitMethodSets(pkg)
 }
@@ -257,12 +259,14 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				"package_path": packagePath(pkg),
 				"caller":       fn.String(),
 			}
+			dynamic := false
 			if common != nil && common.StaticCallee() != nil {
 				row["static_callee"] = common.StaticCallee().String()
 				row["status"] = "resolved_static"
 			} else {
 				row["status"] = "unresolved_dynamic"
-				row["reason"] = "dynamic or interface dispatch deferred to Phase 48"
+				row["reason"] = "interface or func-value dynamic dispatch"
+				dynamic = true
 			}
 			stableParts := []string{packageID(pkg), fn.String(), fmt.Sprint(call.Pos())}
 			if syntax := callSyntax(fn, call); syntax != nil {
@@ -282,8 +286,149 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				row["file"] = posFile(e.fset, call.Pos(), e.root)
 				row["span"] = pos
 			}
-			row["stable_key"] = stableKey(stableParts...)
+			callsiteKey := stableKey(stableParts...)
+			row["stable_key"] = callsiteKey
 			e.add(row)
+			if dynamic {
+				e.emitDynamicDispatch(pkg, fn, common, callsiteKey)
+			}
+		}
+	}
+}
+
+// emitDynamicDispatch emits the dispatch discriminant Plan 2's RTA driver needs to
+// resolve an UnresolvedDynamic callsite by method-set matching (D-05). For an interface
+// invoke it carries the interface type + invoked method name; for a func-value call it
+// carries the called value's signature. The row joins back to its sibling callsite row
+// via callsite_stable_key. Honest representation (Phase 46 D-15): if no discriminant can
+// be derived, no dispatch-detail row is emitted rather than a fabricated identity.
+func (e *emitter) emitDynamicDispatch(pkg *ssa.Package, fn *ssa.Function, common *ssa.CallCommon, callsiteKey string) {
+	if common == nil {
+		return
+	}
+	row := Row{
+		"kind":                "dynamic_dispatch",
+		"package_id":          packageID(pkg),
+		"package_path":        packagePath(pkg),
+		"caller":              fn.String(),
+		"callsite_stable_key": callsiteKey,
+	}
+	var discriminant string
+	if common.IsInvoke() && common.Method != nil {
+		interfaceType := ""
+		if common.Value != nil && common.Value.Type() != nil {
+			interfaceType = common.Value.Type().String()
+		}
+		method := common.Method.Name()
+		row["interface_type"] = interfaceType
+		row["method"] = method
+		discriminant = "invoke:" + interfaceType + ":" + method
+	} else {
+		signature := ""
+		if sig := common.Signature(); sig != nil {
+			signature = sig.String()
+		}
+		if signature == "" {
+			return
+		}
+		row["signature"] = signature
+		discriminant = "func_value:" + signature
+	}
+	row["stable_key"] = stableKey(packageID(pkg), "dynamic_dispatch", callsiteKey, discriminant)
+	e.add(row)
+}
+
+// emitInstantiatedTypes harvests the RTA "rapid type" set: each concrete type converted
+// to an interface via *ssa.MakeInterface in the reachable SSA program (D-05). x/tools RTA
+// adds a type to the rapid-type set precisely when it is converted to an interface, so
+// MakeInterface is the faithful and sufficient source. We deliberately do NOT harvest the
+// *ssa.Alloc / *ssa.MakeMap / *ssa.MakeSlice / *ssa.MakeChan families: allocating a value
+// does not by itself make its type dynamically dispatchable under RTA — only an
+// interface conversion does — so adding them would over-approximate the rapid-type set and
+// flood precision without lifting recall. Types lacking a stable .String() identity emit an
+// "unsupported" row rather than a fabricated identity (Phase 46 D-15). De-duplicated within
+// a function by the concrete type identity.
+func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
+	if fn == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			mi, ok := instr.(*ssa.MakeInterface)
+			if !ok {
+				continue
+			}
+			if mi.X == nil || mi.X.Type() == nil {
+				e.add(Row{
+					"kind":         "unsupported",
+					"package_id":   packageID(pkg),
+					"package_path": packagePath(pkg),
+					"name":         fn.String(),
+					"reason":       "MakeInterface operand without stable type identity",
+				})
+				continue
+			}
+			concrete := mi.X.Type().String()
+			if concrete == "" || seen[concrete] {
+				continue
+			}
+			seen[concrete] = true
+			e.add(Row{
+				"kind":         "instantiated_type",
+				"package_id":   packageID(pkg),
+				"package_path": packagePath(pkg),
+				"type":         concrete,
+				"stable_key":   stableKey(packageID(pkg), "instantiated_type", concrete),
+			})
+		}
+	}
+}
+
+// emitAddressTaken harvests the set of functions whose address is taken in the reachable
+// SSA program (D-05) — an RTA dispatch input for func-value callsites. Sources: *ssa.MakeClosure
+// over an *ssa.Function (closures and bound method values), and any *ssa.Function used as a
+// value operand of an instruction (function references passed as args, stored to globals, or
+// assigned). De-duplicated within a function by the function identity; builtins/synthetic
+// functions without stable identity are skipped rather than fabricated (Phase 46 D-15).
+func (e *emitter) emitAddressTaken(pkg *ssa.Package, fn *ssa.Function) {
+	if fn == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	emit := func(target *ssa.Function) {
+		if target == nil {
+			return
+		}
+		identity := target.String()
+		if identity == "" || seen[identity] {
+			return
+		}
+		seen[identity] = true
+		e.add(Row{
+			"kind":         "address_taken",
+			"package_id":   packageID(pkg),
+			"package_path": packagePath(pkg),
+			"function":     identity,
+			"stable_key":   stableKey(packageID(pkg), "address_taken", identity),
+		})
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			if closure, ok := instr.(*ssa.MakeClosure); ok {
+				if target, ok := closure.Fn.(*ssa.Function); ok {
+					emit(target)
+				}
+			}
+			operands := instr.Operands(nil)
+			for _, operand := range operands {
+				if operand == nil || *operand == nil {
+					continue
+				}
+				if target, ok := (*operand).(*ssa.Function); ok {
+					emit(target)
+				}
+			}
 		}
 	}
 }
