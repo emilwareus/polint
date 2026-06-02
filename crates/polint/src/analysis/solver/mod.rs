@@ -50,8 +50,10 @@
 //!   unbounded loop). Derived edges reject the exact precision tier (D-06).
 
 pub(crate) mod budget;
+pub(crate) mod cache_key;
 pub(crate) mod engine;
 pub(crate) mod facts;
 pub(crate) mod policy;
 pub(crate) mod provenance;
 pub(crate) mod store;
+pub(crate) mod validate;
