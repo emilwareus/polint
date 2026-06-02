@@ -49,6 +49,6 @@
 //!   [`budget::BudgetStatus::BudgetExceeded`] (never a silent drop, never an
 //!   unbounded loop). Derived edges reject the exact precision tier (D-06).
 
-// Sub-modules are declared as each lands in this plan:
-//   `budget` (Task 2: SolverBudget/BudgetStatus),
-//   `policy` + `engine` (Task 3: SolverPolicy scaffold + worklist core).
+pub(crate) mod budget;
+// `policy` + `engine` (Task 3: SolverPolicy scaffold + worklist core) are
+// declared as they land in this plan.
