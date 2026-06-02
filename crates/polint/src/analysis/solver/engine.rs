@@ -139,15 +139,20 @@ impl SolverEngine {
 /// after the stable-key sort in [`SolverOutput::normalized`], so the output is
 /// byte-stable (D-02).
 ///
-/// Honesty (D-06): the derived edge inherits the WEAKEST status/precision across the
-/// contributing hops on its witness path — an untrusted upstream hop
-/// (`BudgetExceeded`/`Unknown`) is never laundered into a confident derived edge
-/// (review finding #4). The per-step worklist cap (`budget.max_steps`) is applied
-/// PER SOURCE; exhausting it on one source latches that source's edges to
-/// `BudgetExceeded`/`Unknown` and sets the run-level
-/// [`crate::analysis::solver::budget::BudgetStatus::BudgetExceeded`] WITHOUT silently
-/// dropping the other, independent sources (review finding #3). Derived edges never
-/// claim exact precision (D-06).
+/// Honesty (D-06): the derived edge inherits the WEAKEST status/precision across
+/// EVERY discovered path to the target — not just its witness path — so an untrusted
+/// upstream hop on any derivation conservatively downgrades the edge and is never
+/// laundered into a confident one (review finding #4; `keys`/`step` stay the
+/// deterministic witness, `status`/`precision` are the conservative join). The
+/// worklist cap (`budget.max_steps`) is applied PER SOURCE; exhausting it on one
+/// source sets the run-level
+/// [`crate::analysis::solver::budget::BudgetStatus::BudgetExceeded`] (surfaced as a
+/// provider diagnostic) WITHOUT silently dropping the other, independent sources
+/// (review finding #3). Edges fully derived before a source's cap was hit keep their
+/// honest status — exhaustion costs the edges never reached, not the ones already
+/// derived, so a complete edge is never spuriously downgraded (review finding #R1).
+/// `solver_step` is a GLOBAL monotonic counter, independent of the per-source budget
+/// counter (review finding #R3). Derived edges never claim exact precision (D-06).
 pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget) -> SolverOutput {
     // Primitive copy adjacency `src -> {dst}`. For each hop `src -> dst` accumulate
     // (a) the UNION of contributing constraint stable keys (#10 — never drop a
@@ -179,24 +184,33 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 
     let mut edges: Vec<DerivedEdgeFact> = Vec::new();
     let mut run_budget_exceeded = false;
+    // GLOBAL monotonic derivation step (R3): increments once per worklist pop across
+    // the WHOLE run and is never reset, so every derived edge's `solver_step` is
+    // globally monotonic and the run's progress is totally ordered. The PER-SOURCE
+    // budget counter below is separate, so the per-source budget (#3) does not
+    // perturb this contract.
+    let mut solver_step: u64 = 0;
 
     let sources: Vec<SemanticNodeRef> = adjacency.keys().copied().collect();
     for start in sources {
-        // PER-SOURCE budget (#3): reset the step counter for each source so one large
-        // source cannot starve the others. Exhaustion is recorded run-level, never as
-        // a silent cross-source drop.
-        let mut steps: u64 = 0;
+        // PER-SOURCE budget (#3): reset the budget counter for each source so one
+        // large source cannot starve the others. Exhaustion is recorded run-level,
+        // never as a silent cross-source drop.
+        let mut budget_steps: u64 = 0;
         let mut source_budget_exceeded = false;
-        // reached: node -> witness-path metadata (contributing keys + weakest
-        // status/precision) for the deterministic witness path start..node.
+        // reached: node -> path metadata. `keys` + `step` are fixed by the first
+        // (BFS-shortest) witness path; `status`/`precision` are CONSERVATIVELY weakened
+        // over EVERY discovered path to the node (R2), so an untrusted alternate path
+        // can never be laundered into a confident edge.
         let mut reached: BTreeMap<SemanticNodeRef, PathMeta> = BTreeMap::new();
         let mut queue: VecDeque<SemanticNodeRef> = VecDeque::new();
         reached.insert(start, PathMeta::seed());
         queue.push_back(start);
 
         while let Some(node) = queue.pop_front() {
-            steps += 1;
-            if steps > budget.max_steps as u64 {
+            budget_steps += 1;
+            solver_step += 1;
+            if budget_steps > budget.max_steps as u64 {
                 source_budget_exceeded = true;
                 break;
             }
@@ -217,12 +231,24 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
                     next_meta.status = weakest_status(next_meta.status, *status);
                     next_meta.precision = weakest_precision(next_meta.precision, *precision);
                 }
-                // Visit a node once per source — the first visit is the deterministic
-                // BFS-shortest witness path, which keeps the witness well-defined and
-                // the closure bounded.
-                if let std::collections::btree_map::Entry::Vacant(slot) = reached.entry(next) {
-                    slot.insert(next_meta);
-                    queue.push_back(next);
+                next_meta.step = solver_step;
+                match reached.entry(next) {
+                    // First visit: the deterministic BFS-shortest witness path fixes
+                    // the contributing keys and the solver step.
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(next_meta);
+                        queue.push_back(next);
+                    }
+                    // Revisit via an alternate path (R2): KEEP the witness keys/step but
+                    // CONSERVATIVELY weaken status/precision over this path too. Do not
+                    // re-enqueue (witness is fixed); `weakest_*` is commutative, so the
+                    // converged value is order-independent (deterministic).
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        let current = slot.get_mut();
+                        current.status = weakest_status(current.status, next_meta.status);
+                        current.precision =
+                            weakest_precision(current.precision, next_meta.precision);
+                    }
                 }
             }
         }
@@ -231,7 +257,13 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
             run_budget_exceeded = true;
         }
 
-        // Emit a derived edge for every node reachable from `start` in >= 1 hop.
+        // Emit a derived edge for every node reachable from `start` in >= 1 hop. Every
+        // node in `reached` was traversed via a COMPLETE witness path, so its edge is
+        // sound and keeps its honest (conservatively weakened) status/precision even
+        // when this source later exhausted the budget — budget exhaustion costs the
+        // edges we never reached, which is conveyed by the run-level signal, NOT a
+        // downgrade of the edges we did derive (R1). Derived edges are at most
+        // flow-insensitive, never exact (D-06).
         for (&node, meta) in &reached {
             if node == start || meta.keys.is_empty() {
                 continue;
@@ -244,17 +276,8 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
                     dst: crate::analysis::ids::SemanticNodeId(node),
                     src: crate::analysis::ids::SemanticNodeId(start),
                 },
-                steps,
+                meta.step,
             );
-            // Honest status/precision: the weakest contributing hop wins (#4); a
-            // budget-exhausted source further downgrades to BudgetExceeded/Unknown
-            // (#3/D-06). Transitive copy edges are at most flow-insensitive, never
-            // exact (D-06).
-            let (status, precision) = if source_budget_exceeded {
-                (PointsToStatus::BudgetExceeded, PointsToPrecision::Unknown)
-            } else {
-                (meta.status, meta.precision)
-            };
             let stable_key = stable_key_from_parts(
                 FactFamily::SolverDerivedEdge,
                 &[
@@ -267,8 +290,8 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
                 id: DerivedEdgeId(0),
                 source: crate::analysis::ids::SemanticNodeId(start),
                 target: crate::analysis::ids::SemanticNodeId(node),
-                status,
-                precision,
+                status: meta.status,
+                precision: meta.precision,
                 stable_key,
                 provenance,
             });
@@ -294,23 +317,28 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 /// `BTreeMap`/`BTreeSet` key during closure derivation.
 type SemanticNodeRef = u64;
 
-/// Witness-path metadata accumulated during the per-source BFS: the union of
-/// contributing constraint stable keys plus the weakest status/precision seen on the
-/// path. `BTreeSet` keeps the contributing keys totally ordered (byte-stable).
+/// Path metadata accumulated during the per-source BFS. `keys` (the union of
+/// contributing constraint stable keys) and `step` (the global monotonic derivation
+/// step) are fixed by the FIRST (BFS-shortest) witness path; `status`/`precision` are
+/// CONSERVATIVELY weakened over EVERY discovered path to the node (R2). `BTreeSet`
+/// keeps the contributing keys totally ordered (byte-stable).
 #[derive(Debug, Clone)]
 struct PathMeta {
     keys: BTreeSet<String>,
     status: PointsToStatus,
     precision: PointsToPrecision,
+    /// The global monotonic `solver_step` at which this node was first reached.
+    step: u64,
 }
 
 impl PathMeta {
-    /// The start node's seed: zero contributing facts, fully trusted.
+    /// The start node's seed: zero contributing facts, fully trusted, step 0.
     fn seed() -> Self {
         Self {
             keys: BTreeSet::new(),
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
+            step: 0,
         }
     }
 }
@@ -696,6 +724,109 @@ mod tests {
                 .iter()
                 .any(|e| e.stable_key == witness_key),
             "deleting a witness fact must invalidate THAT derived edge fact (by stable key)"
+        );
+    }
+
+    #[test]
+    fn budget_exhaustion_keeps_complete_pretruncation_edges_present() {
+        // R1: a source's edges that were FULLY derived before the per-source step cap
+        // was hit are sound and must keep their honest status — budget exhaustion costs
+        // the edges never reached (signalled run-level), not the ones already derived.
+        let constraints = vec![
+            copy_constraint("copy|1-2", 1, 2),
+            copy_constraint("copy|2-3", 2, 3),
+            copy_constraint("copy|3-4", 3, 4),
+        ];
+        let budget = SolverBudget {
+            max_steps: 2,
+            ..SolverBudget::default()
+        };
+
+        let output = derive_edges(&constraints, &budget);
+
+        use crate::analysis::ids::SemanticNodeId;
+        let edge_1_2 = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(2))
+            .expect("complete edge 1 -> 2 derived before truncation");
+        assert_eq!(
+            edge_1_2.status,
+            PointsToStatus::Present,
+            "a complete pre-truncation edge must NOT be downgraded"
+        );
+        assert_eq!(edge_1_2.precision, PointsToPrecision::FlowInsensitive);
+        // The unreached edge is simply absent; the run-level signal conveys the loss.
+        assert!(
+            !output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(4)),
+            "the edge never reached under budget is absent"
+        );
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn untrusted_hop_on_alternate_path_conservatively_downgrades_derived_edge() {
+        // R2: diamond a(1) -> b(2) -> d(4) (clean) AND a(1) -> c(3) -> d(4) where a -> c
+        // is UNTRUSTED. The BFS witness reaches d via b (the shorter, clean path), but
+        // because an untrusted alternate path also derives a -> d, the edge must be
+        // conservatively downgraded — never laundered to a confident edge (#4, fully).
+        let mut untrusted = copy_constraint("copy|a-c", 1, 3);
+        untrusted.status = PointsToStatus::BudgetExceeded;
+        untrusted.precision = PointsToPrecision::Unknown;
+        let constraints = vec![
+            copy_constraint("copy|a-b", 1, 2),
+            copy_constraint("copy|b-d", 2, 4),
+            untrusted,
+            copy_constraint("copy|c-d", 3, 4),
+        ];
+
+        let output = derive_edges(&constraints, &SolverBudget::default());
+
+        use crate::analysis::ids::SemanticNodeId;
+        let edge = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(4))
+            .expect("transitive a -> d derived");
+        assert_eq!(
+            edge.status,
+            PointsToStatus::BudgetExceeded,
+            "an untrusted alternate path must conservatively downgrade the edge"
+        );
+        assert_eq!(edge.precision, PointsToPrecision::Unknown);
+    }
+
+    #[test]
+    fn solver_step_is_globally_monotonic_across_sources() {
+        // R3: the solver step is a GLOBAL monotonic counter, not reset per source, so an
+        // edge from a later source carries a strictly larger solver_step than an edge
+        // from an earlier source (the documented monotonic contract).
+        let constraints = vec![
+            copy_constraint("copy|1-2", 1, 2),
+            copy_constraint("copy|10-11", 10, 11),
+        ];
+
+        let output = derive_edges(&constraints, &SolverBudget::default());
+
+        use crate::analysis::ids::SemanticNodeId;
+        let first = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(2))
+            .expect("edge 1 -> 2");
+        let later = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(10) && e.target == SemanticNodeId(11))
+            .expect("edge 10 -> 11");
+        assert!(
+            later.provenance.solver_step > first.provenance.solver_step,
+            "later source's solver_step ({}) must exceed the earlier source's ({})",
+            later.provenance.solver_step,
+            first.provenance.solver_step
         );
     }
 
