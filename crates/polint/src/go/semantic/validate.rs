@@ -73,9 +73,28 @@ pub(crate) fn validate_go_semantic_output(
     }
     for address_taken in &output.address_taken {
         reject_empty_stable_key("address_taken", &address_taken.stable_key)?;
+        // Identity guard (WR-02): the address-taken function identity is the row's
+        // discriminating field (`inputs.rs` keys the address-taken set on it). An empty
+        // `function` would seed a bogus candidate keyed on the empty string, so reject
+        // it rather than store it — mirroring the dynamic-dispatch discriminant guard.
+        if address_taken.function.is_empty() {
+            return Err(invalid_fact(format!(
+                "Go semantic address_taken `{}` has an empty function identity",
+                address_taken.stable_key
+            )));
+        }
     }
     for instantiated_type in &output.instantiated_types {
         reject_empty_stable_key("instantiated_type", &instantiated_type.stable_key)?;
+        // Identity guard (WR-02): the instantiated `type_name` is the row's
+        // discriminating field. An empty `type_name` normalizes to "" and could
+        // spuriously intersect a method-set keyed on an empty type, so reject it.
+        if instantiated_type.type_name.is_empty() {
+            return Err(invalid_fact(format!(
+                "Go semantic instantiated_type `{}` has an empty type_name",
+                instantiated_type.stable_key
+            )));
+        }
     }
     for dynamic_dispatch in &output.dynamic_dispatch {
         validate_dynamic_dispatch(dynamic_dispatch)?;
@@ -180,8 +199,71 @@ fn invalid_fact(reason: String) -> AnalysisError {
 mod tests {
     use super::*;
     use crate::go::semantic::facts::{
-        GoSemanticCallStatus, GoSemanticCallsiteId, GoSemanticFunctionId, GoSemanticFunctionKind,
+        GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
+        GoSemanticCallsiteId, GoSemanticFunctionId, GoSemanticFunctionKind,
+        GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId,
     };
+
+    #[test]
+    fn validate_rejects_address_taken_with_empty_function() {
+        // WR-02: the address-taken function identity is the row's discriminating
+        // field; an empty one is rejected (mirrors the dynamic-dispatch guard), not
+        // stored as a bogus empty-keyed candidate.
+        let output = GoSemanticFactsOutput {
+            address_taken: vec![GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                function: String::new(),
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        let err = validate_go_semantic_output(&output).unwrap_err();
+        assert!(err.to_string().contains("empty function identity"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_instantiated_type_with_empty_type_name() {
+        // WR-02: the instantiated type_name is the row's discriminating field; an empty
+        // one would normalize to "" and could spuriously intersect an empty-keyed
+        // method-set, so it is rejected.
+        let output = GoSemanticFactsOutput {
+            instantiated_types: vec![GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "it".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                type_name: String::new(),
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        let err = validate_go_semantic_output(&output).unwrap_err();
+        assert!(err.to_string().contains("empty type_name"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_address_taken_and_instantiated_type_with_identity() {
+        // The happy path: non-empty identity fields validate cleanly.
+        let output = GoSemanticFactsOutput {
+            address_taken: vec![GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                function: "example.com/pkg.F".to_string(),
+            }],
+            instantiated_types: vec![GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "it".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                type_name: "example.com/pkg.T".to_string(),
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        assert!(validate_go_semantic_output(&output).is_ok());
+    }
 
     #[test]
     fn validate_rejects_duplicate_stable_keys() {
