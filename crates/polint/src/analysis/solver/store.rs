@@ -18,16 +18,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::DerivedEdgeId;
 
+use super::budget::BudgetStatus;
 use super::facts::DerivedEdgeFact;
 
 /// The provider id for the unified solver (registered in the kernel manifest in
 /// Plan 03), mirroring `SEMANTIC_GRAPH_PROVIDER_ID`.
 pub(crate) const SOLVER_PROVIDER_ID: &str = "polint.solver";
 
-/// Provider output for `polint.solver` — the normalized derived-edge rows.
+/// Provider output for `polint.solver` — the normalized derived-edge rows plus the
+/// run-level [`BudgetStatus`]. `budget_status` is `BudgetExceeded` when the solver
+/// truncated any source's closure under the per-source step budget, so an exhausted
+/// run is never indistinguishable from a complete one (review finding #3 / D-06).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SolverOutput {
     pub(crate) derived_edges: Vec<DerivedEdgeFact>,
+    pub(crate) budget_status: BudgetStatus,
 }
 
 impl SolverOutput {
@@ -169,6 +174,7 @@ mod tests {
                     provenance(&["addr-a", "copy"], 5),
                 ),
             ],
+            ..SolverOutput::default()
         }
     }
 
@@ -222,6 +228,7 @@ mod tests {
                 edge(0, 1, 2, "edge|copy_edge|dup", provenance(&["copy"], 1)),
                 edge(1, 3, 4, "edge|copy_edge|dup", provenance(&["addr"], 2)),
             ],
+            ..SolverOutput::default()
         };
         let error = SolverStore::from_output(output).expect_err("duplicate rejected");
         assert!(

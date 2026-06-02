@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::solver::budget::SolverBudget;
+use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
 use crate::analysis::solver::engine::derive_edges;
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
@@ -82,6 +82,12 @@ pub(crate) fn derive_solver_with_cache_stats(
         db.semantic_nodes().iter().map(|node| node.id).collect();
     validate_derived_edges(&output.derived_edges, &node_ids, &mut diagnostics);
     detect_solver_summary_cycle(&constraints, &mut diagnostics);
+    // Surface budget exhaustion as an honest diagnostic (D-06): when the solver
+    // truncated any source's closure under the per-source step budget, the run is
+    // flagged rather than presenting a silently-truncated edge set as complete.
+    if output.budget_status == BudgetStatus::BudgetExceeded {
+        diagnostics.push(budget_exceeded_diagnostic());
+    }
 
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
@@ -165,6 +171,21 @@ fn solver_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "solver_output", &refs)
+}
+
+/// Honest budget-exhaustion signal (D-06): emitted when the solver truncated a
+/// source's transitive closure under the per-source step budget. Downstream (Phase 52
+/// unknown taxonomy) categorizes it; it is never a silent precision drop.
+fn budget_exceeded_diagnostic() -> Diagnostic {
+    Diagnostic::warning(
+        "polint/internal",
+        "<workspace>",
+        TextRange::point(1, 1),
+        "Solver budget exceeded; some transitive edges were truncated (derived edges \
+         are flagged BudgetExceeded).",
+    )
+    .with_evidence("provider", SOLVER_PROVIDER_ID)
+    .with_evidence("budget_status", BudgetStatus::BudgetExceeded.as_str())
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {

@@ -15,9 +15,15 @@
 //! 3. the **solver step** — the monotonic `u64` worklist step counter the Wave-1
 //!    [`super::engine::SolverEngine`] maintains.
 //!
-//! Provenance must be SOUND and LOAD-BEARING, not decorative: the deletion property
-//! test (D-09, in [`super::store`]/`tests`) proves that removing any single
-//! contributing fact prevents the derived edge from being reproduced.
+//! Provenance is SOUND and LOAD-BEARING per edge FACT, not decorative: it records a
+//! deterministic WITNESSING derivation, and the derived-edge fact's `stable_key`
+//! embeds that witness (the totally-ordered contributing keys + constraint kind). The
+//! deletion property test (D-09, in [`super::engine`]/`tests`) proves that removing
+//! any single witness fact means THAT derived-edge fact (by stable key) is not
+//! reproduced. On a multi-path graph the underlying `source -> target` value-flow may
+//! still hold via an alternate witness under a DIFFERENT edge identity — provenance
+//! describes a witness, not a global dependency of the (source, target) pair (see the
+//! diamond test in [`super::engine`]).
 //!
 //! All types are `pub(crate)` (D-16); nothing here reaches the public SDK surface.
 

@@ -88,9 +88,12 @@ impl SolverBudget {
 /// Pinned declaration order drives the derived `Ord` + serde, making this enum
 /// byte-stable without `#[repr(u8)]`. Budget exhaustion surfaces as an explicit
 /// [`BudgetStatus::BudgetExceeded`] signal rather than a silent precision drop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub(crate) enum BudgetStatus {
     /// The run converged within every budget ceiling.
+    #[default]
     WithinBudget,
     /// A budget ceiling (steps, outer iterations, or a per-sub-domain cap) was
     /// hit; downstream (Phase 52 unknown taxonomy) categorizes this honestly.
