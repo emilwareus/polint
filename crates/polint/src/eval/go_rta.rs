@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::analysis::ids::SemanticNodeId;
+use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
@@ -47,6 +48,12 @@ use crate::eval::observed::{copy_fixture_repo_for_test, run_kernel_for_repo_for_
 fn go_rta_fixture_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/eval-fixtures/go-rta")
+        .join(name)
+}
+
+fn polyglot_fixture_dir(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/eval-fixtures/polyglot-canary")
         .join(name)
 }
 
@@ -240,5 +247,68 @@ fn address_taken_fixture_resolves_func_value_by_signature() {
             "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
         );
     }
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
+fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
+    // D-16 / GO-05 criterion 3: with the Go RTA driver active and the TS token policy
+    // still a stub, the mixed Go+TS fixture shows Go edges resolved AND TS behavior
+    // unchanged (no cross-language interference through the shared solver core).
+    let dir = polyglot_fixture_dir("go-ts");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    // (a) Go driver active: the instantiated (Dog).Speak interface invoke resolves.
+    let dog_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Dog") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Dog).Speak must have a semantic node in the polyglot repo");
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == dog_speak),
+        "the polyglot canary must resolve the Go interface invoke to (Dog).Speak: {:#?}",
+        solver_output.derived_edges
+    );
+
+    // (b) TS behavior unchanged: the TS sources ARE analyzed (TS functions exist), but
+    // the TS token policy is a STUB, so the solver derives NO edge whose endpoints are
+    // TS function nodes — no cross-language interference.
+    let ts_function_ids: std::collections::BTreeSet<crate::core::FunctionId> = output
+        .db
+        .functions()
+        .iter()
+        .filter(|function| function.language == crate::core::Language::TypeScript)
+        .map(|function| function.id)
+        .collect();
+    assert!(
+        !ts_function_ids.is_empty(),
+        "the polyglot canary must actually analyze TS functions (the TS half is live)"
+    );
+    let ts_nodes: std::collections::BTreeSet<SemanticNodeId> = output
+        .db
+        .semantic_nodes()
+        .iter()
+        .filter_map(|node| match node.kind {
+            NodeKind::Function(function_id) if ts_function_ids.contains(&function_id) => {
+                Some(node.id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| ts_nodes.contains(&edge.source) || ts_nodes.contains(&edge.target)),
+        "TsTokensPolicy is a stub: the solver must derive NO TS-endpoint edge \
+         (no cross-language interference, D-16): {:#?}",
+        solver_output.derived_edges
+    );
     assert_solver_output_byte_stable(&output.db, budget);
 }

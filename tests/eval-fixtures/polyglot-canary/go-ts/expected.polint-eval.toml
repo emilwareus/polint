@@ -1,0 +1,28 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "polyglot-canary-go-ts"
+area = "polyglot-canary"
+
+# Phase 48 Plan 03 — the polyglot Go+TS canary (D-16, GO-05 success criterion 3).
+#
+# This fixture is CREATED here for the first time; Phase 54 (BENCH-01) later promotes
+# it to a HARD gate. It exercises cross-language non-regression through the shared
+# solver core: with the Go RTA driver ACTIVE and the TS token policy still a STUB, a
+# mixed Go+TS repo must show
+#   (a) Go edges resolved — the `s.Speak()` interface invoke resolves to the
+#       instantiated (Dog).Speak via the Go RTA driver, AND
+#   (b) TS behavior UNCHANGED — the TS sources are analyzed (TS functions exist) but
+#       the unified solver derives NO TS-endpoint edge (TsTokensPolicy is empty), so
+#       there is no cross-language interference through the shared solver core.
+#
+# The executable proof lives in `eval::go_rta::polyglot_go_ts_canary_*` (it reads the
+# kernel-built db's solver-derived edges + the Go/TS function-node identities); this
+# manifest documents the acceptance contract.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "solver.polyglot_canary.go_resolved_ts_unchanged", value = "true", mode = "exact" }

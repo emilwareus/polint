@@ -285,3 +285,17 @@ fn go_reachable_fixture_exercises_reachable_graph_marking() {
 fn ts_reachable_fixture_exercises_reachable_graph_marking() {
     assert_reachability_marking_exercised(&fixture_dir("ts_reachable"), "ts_reachable");
 }
+
+#[test]
+fn go_rta_fixture_is_byte_identical_under_ten_seeded_permutations() {
+    // D-17: the Go RTA driver's derived solver edges (the main -> (Dog).Greet interface
+    // edge) join the normalized observed JSON; this asserts that observation is
+    // byte-identical across 10 seeded provider-order / row-order permutations — the
+    // RTA derivation does not introduce non-determinism.
+    assert_n10_byte_identical(&fixture_dir("go_rta"));
+}
+
+#[test]
+fn go_rta_fixture_exercises_reachable_graph_marking() {
+    assert_reachability_marking_exercised(&fixture_dir("go_rta"), "go_rta");
+}
