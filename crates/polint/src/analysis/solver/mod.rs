@@ -50,5 +50,5 @@
 //!   unbounded loop). Derived edges reject the exact precision tier (D-06).
 
 pub(crate) mod budget;
-// `policy` + `engine` (Task 3: SolverPolicy scaffold + worklist core) are
-// declared as they land in this plan.
+pub(crate) mod engine;
+pub(crate) mod policy;
