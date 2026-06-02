@@ -51,5 +51,7 @@
 
 pub(crate) mod budget;
 pub(crate) mod engine;
+pub(crate) mod facts;
 pub(crate) mod policy;
 pub(crate) mod provenance;
+pub(crate) mod store;

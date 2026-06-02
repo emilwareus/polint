@@ -71,9 +71,10 @@ pub(crate) struct DerivedEdgeProvenance {
     /// property test (D-09) operates on.
     pub(crate) contributing_facts: Vec<ContributingFact>,
     /// The producing `ConstraintKind`, as its stable snake_case label
-    /// (`ConstraintKind::as_str()`). Reuses the existing vocabulary; no parallel
-    /// enum is minted.
-    pub(crate) constraint_kind: &'static str,
+    /// (`ConstraintKind::as_str()`, owned). Reuses the existing vocabulary; no
+    /// parallel enum is minted. Owned (`String`) rather than `&'static str` so the
+    /// provenance — and the derived-edge fact that carries it — is `Deserialize`.
+    pub(crate) constraint_kind: String,
     /// The monotonic `u64` solver step (the engine's worklist step counter) at
     /// which this edge was derived.
     pub(crate) solver_step: u64,
@@ -101,7 +102,7 @@ impl DerivedEdgeProvenance {
         contributing_facts.dedup();
         Self {
             contributing_facts,
-            constraint_kind: constraint_kind.as_str(),
+            constraint_kind: constraint_kind.as_str().to_string(),
             solver_step,
         }
     }
@@ -117,7 +118,7 @@ impl DerivedEdgeProvenance {
     /// counter and is intentionally excluded from the stable key so two byte-equal
     /// derivations that converge at different steps still dedup).
     pub(crate) fn stable_key_fragment(&self) -> String {
-        let mut fragment = String::from(self.constraint_kind);
+        let mut fragment = self.constraint_kind.clone();
         for fact in &self.contributing_facts {
             fragment.push('|');
             fragment.push_str(&fact.stable_key);

@@ -86,6 +86,12 @@ pub(crate) enum FactFamily {
     PointsToConstraint,
     PointsToSet,
     AliasAnswer,
+    /// Unified-solver derived-edge facts (GRAPH-04, Phase 47). Each row tags a
+    /// solver-derived edge whose `DerivedEdgeProvenance` records its contributing
+    /// fact IDs (total-ordered by stable ID), producing `ConstraintKind`, and the
+    /// monotonic solver step. The provider that emits these into the kernel lands in
+    /// Plan 03; the fact family + stable-key tagging are produced here in Plan 02.
+    SolverDerivedEdge,
     #[expect(
         dead_code,
         reason = "Type/value alias event rows are reserved for later Phase 36 plans."
@@ -189,6 +195,7 @@ impl FactFamily {
             Self::PointsToConstraint => "PointsToConstraint",
             Self::PointsToSet => "PointsToSet",
             Self::AliasAnswer => "AliasAnswer",
+            Self::SolverDerivedEdge => "SolverDerivedEdge",
             Self::TypeValueAliasEvent => "TypeValueAliasEvent",
             Self::MirStatement => "MirStatement",
             Self::MirTerminator => "MirTerminator",

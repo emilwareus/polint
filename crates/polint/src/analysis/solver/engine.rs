@@ -15,10 +15,18 @@
 //! engine produces a result byte-identical to calling `solve_points_to`
 //! directly.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use crate::analysis::ids::DerivedEdgeId;
+use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 use super::budget::{BudgetStatus, SolverBudget};
+use super::facts::DerivedEdgeFact;
 use super::policy::{PolicyOutcome, SolverPolicy};
+use super::provenance::{ContributingFact, DerivedEdgeProvenance};
+use super::store::SolverOutput;
 
 /// Result of a single unified solver run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +113,148 @@ impl SolverEngine {
         }
     }
 }
+
+/// Derive transitive copy edges over the unified `ConstraintKind::CopyEdge`
+/// vocabulary, attaching full [`DerivedEdgeProvenance`] (GRAPH-04, D-08) to each
+/// derived edge.
+///
+/// A `CopyEdge { dst, src }` constraint is a primitive value-flow obligation
+/// `src -> dst`. The unified solver derives the TRANSITIVE closure: if `a -> b` and
+/// `b -> c` are primitive copy edges, the solver derives `a -> c`. Each derived edge
+/// records, as its provenance, the totally-ordered set of contributing primitive
+/// `CopyEdge` constraints (referenced by their EXISTING stable keys) whose
+/// composition produced it, the producing `ConstraintKind` (`copy_edge`), and the
+/// `solver_step` at which it was emitted.
+///
+/// Provenance is LOAD-BEARING (D-09): a derived transitive edge exists only because
+/// of the specific contributing constraints on its derivation path, so deleting any
+/// one of them removes the edge from the recomputed closure (proven by the deletion
+/// property test). The traversal is a deterministic `BTreeMap`/`BTreeSet` worklist —
+/// dense IDs are assigned only after the stable-key sort in
+/// [`SolverOutput::normalized`], so the output is byte-stable (D-02).
+///
+/// Budget: the per-step worklist cap (`budget.max_steps`) bounds the closure; on
+/// exhaustion the emitted edges latch [`PointsToStatus::BudgetExceeded`] honestly
+/// (D-06) rather than dropping silently. Derived edges never claim exact precision
+/// (D-06): they are `FlowInsensitive` at most.
+pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget) -> SolverOutput {
+    // Primitive copy adjacency `src -> {dst}`, plus the contributing constraint
+    // stable key for each primitive `src -> dst` hop. BTree-ordered for determinism.
+    let mut adjacency: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> = BTreeMap::new();
+    let mut hop_keys: BTreeMap<(SemanticNodeRef, SemanticNodeRef), String> = BTreeMap::new();
+    for constraint in constraints {
+        if let ConstraintKind::CopyEdge { dst, src } = &constraint.kind {
+            let (src, dst) = (src.0, dst.0);
+            adjacency.entry(src).or_default().insert(dst);
+            // A constraint's EXISTING stable key is the contributing identity.
+            hop_keys
+                .entry((src, dst))
+                .or_insert_with(|| constraint.stable_key.clone());
+        }
+    }
+
+    // For each source, BFS the closure accumulating the contributing primitive hops
+    // along the path. `reached[node]` is the totally-ordered set of contributing
+    // stable keys for the best (and, in an acyclic chain, only) path to `node`.
+    let mut steps: u64 = 0;
+    let mut budget_exceeded = false;
+    let mut edges: Vec<DerivedEdgeFact> = Vec::new();
+
+    let sources: Vec<SemanticNodeRef> = adjacency.keys().copied().collect();
+    for start in sources {
+        // reached: node -> contributing stable keys on the path start..node.
+        let mut reached: BTreeMap<SemanticNodeRef, BTreeSet<String>> = BTreeMap::new();
+        let mut queue: VecDeque<SemanticNodeRef> = VecDeque::new();
+        reached.insert(start, BTreeSet::new());
+        queue.push_back(start);
+
+        while let Some(node) = queue.pop_front() {
+            steps += 1;
+            if steps > budget.max_steps as u64 {
+                budget_exceeded = true;
+                break;
+            }
+            let path_keys = reached.get(&node).cloned().unwrap_or_default();
+            let Some(targets) = adjacency.get(&node) else {
+                continue;
+            };
+            for &next in targets {
+                if next == start {
+                    // Skip self-loops back to the start (cycle guard).
+                    continue;
+                }
+                let hop_key = hop_keys.get(&(node, next)).cloned().unwrap_or_default();
+                let mut next_keys = path_keys.clone();
+                next_keys.insert(hop_key);
+                // Visit a node once per source (acyclic-chain assumption keeps the
+                // contributing set well-defined and the closure bounded).
+                if let std::collections::btree_map::Entry::Vacant(slot) = reached.entry(next) {
+                    slot.insert(next_keys);
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        // Emit a derived edge for every node reachable from `start` in >= 1 hop.
+        for (&node, contributing) in &reached {
+            if node == start || contributing.is_empty() {
+                continue;
+            }
+            let provenance = DerivedEdgeProvenance::new(
+                contributing.iter().map(|key| ContributingFact {
+                    stable_key: key.clone(),
+                }),
+                &ConstraintKind::CopyEdge {
+                    dst: crate::analysis::ids::SemanticNodeId(node),
+                    src: crate::analysis::ids::SemanticNodeId(start),
+                },
+                steps,
+            );
+            let status = if budget_exceeded {
+                PointsToStatus::BudgetExceeded
+            } else {
+                PointsToStatus::Present
+            };
+            // Honest precision ceiling (D-06): transitive copy edges are at most
+            // flow-insensitive, never exact.
+            let precision = if budget_exceeded {
+                PointsToPrecision::Unknown
+            } else {
+                PointsToPrecision::FlowInsensitive
+            };
+            let stable_key = stable_key_from_parts(
+                FactFamily::SolverDerivedEdge,
+                &[
+                    ("source", start.to_string()),
+                    ("target", node.to_string()),
+                    ("provenance", provenance.stable_key_fragment()),
+                ],
+            );
+            edges.push(DerivedEdgeFact {
+                id: DerivedEdgeId(0),
+                source: crate::analysis::ids::SemanticNodeId(start),
+                target: crate::analysis::ids::SemanticNodeId(node),
+                status,
+                precision,
+                stable_key,
+                provenance,
+            });
+        }
+
+        if budget_exceeded {
+            break;
+        }
+    }
+
+    SolverOutput {
+        derived_edges: edges,
+    }
+    .normalized()
+}
+
+/// Run-local node handle (the `SemanticNodeId.0` value) used as a deterministic
+/// `BTreeMap`/`BTreeSet` key during closure derivation.
+type SemanticNodeRef = u64;
 
 #[cfg(test)]
 mod tests {
@@ -257,5 +407,59 @@ mod tests {
         let run = engine.run();
         assert_eq!(run.budget_status, BudgetStatus::NotRun);
         assert!(run.policy_outcomes.is_empty());
+    }
+
+    fn copy_constraint(stable_key: &str, src: u64, dst: u64) -> ConstraintFact {
+        use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId};
+        ConstraintFact {
+            id: SemanticConstraintId(0),
+            kind: ConstraintKind::CopyEdge {
+                dst: SemanticNodeId(dst),
+                src: SemanticNodeId(src),
+            },
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::FlowInsensitive,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn derive_edges_emits_transitive_copy_edge_with_provenance() {
+        // Chain a -> b -> c: the solver derives the transitive edge a -> c whose
+        // provenance carries BOTH contributing copy constraints.
+        let constraints = vec![
+            copy_constraint("copy|a-b", 1, 2),
+            copy_constraint("copy|b-c", 2, 3),
+        ];
+        let output = derive_edges(&constraints, &SolverBudget::default());
+
+        use crate::analysis::ids::SemanticNodeId;
+        let transitive = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3))
+            .expect("transitive a -> c derived");
+
+        assert_eq!(transitive.provenance.constraint_kind, "copy_edge");
+        assert_eq!(transitive.provenance.contributing_len(), 2);
+        assert!(transitive.provenance.solver_step > 0);
+    }
+
+    #[test]
+    fn derive_edges_is_shuffle_stable() {
+        let constraints = vec![
+            copy_constraint("copy|a-b", 1, 2),
+            copy_constraint("copy|b-c", 2, 3),
+            copy_constraint("copy|c-d", 3, 4),
+        ];
+        let mut shuffled = constraints.clone();
+        shuffled.reverse();
+
+        let a = derive_edges(&constraints, &SolverBudget::default());
+        let b = derive_edges(&shuffled, &SolverBudget::default());
+
+        let a_json = serde_json::to_string(&a.derived_edges).expect("serialize a");
+        let b_json = serde_json::to_string(&b.derived_edges).expect("serialize b");
+        assert_eq!(a_json, b_json);
     }
 }
