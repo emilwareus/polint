@@ -14,6 +14,18 @@
 //! `solve_points_to` engine in place. Driving the points-to policy through this
 //! engine produces a result byte-identical to calling `solve_points_to`
 //! directly.
+//!
+//! **Reserved multi-policy orchestration (Phase 47 scope — intentional).**
+//! Production derives edges via the free [`derive_edges`] function (the `CopyEdge`
+//! transitive closure the `polint.solver` provider calls directly). The
+//! [`SolverEngine`] + [`super::policy::SolverPolicy`] multi-policy layer is the
+//! reserved seam Phases 48/49 extend: when the Go RTA and TS token drivers register
+//! as policies, production will route through the engine so multiple sub-domains
+//! converge under one budget. Until then it is exercised by this module's tests
+//! (deterministic worklist, budget projection, points-to fold), mirroring how the
+//! Go/TS policy stubs and `ConstraintKind::ModelEdge` are reserved-but-unused until
+//! their producing phase lands. This is deliberate scaffolding, not dead code — a
+//! thin production wrapper today would be pure indirection over a single policy.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -33,9 +45,6 @@ use super::store::SolverOutput;
 pub(crate) struct SolverRunResult {
     /// Per-policy outcomes, in the deterministic order the engine drained them.
     pub(crate) policy_outcomes: Vec<PolicyRunRecord>,
-    /// Solver-derived edges aggregated across all driven policies (the run's
-    /// [`SolverOutput`] payload before normalization).
-    pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     /// The combined budget outcome across all driven policies (worst-case wins:
     /// any policy exceeding its budget surfaces [`BudgetStatus::BudgetExceeded`]).
     pub(crate) budget_status: BudgetStatus,
@@ -53,6 +62,9 @@ pub(crate) struct PolicyRunRecord {
 /// The unified solver engine. Holds a closed, ordered set of registered policies
 /// (the closed input set, D-11) and drives them to convergence with a single
 /// deterministic worklist drain.
+///
+/// Reserved orchestration: production calls [`derive_edges`] directly; this engine is
+/// the seam Phases 48/49 route through once Go/TS policies exist (see module docs).
 pub(crate) struct SolverEngine {
     policies: Vec<Box<dyn SolverPolicy>>,
     budget: SolverBudget,
@@ -109,71 +121,10 @@ impl SolverEngine {
             BudgetStatus::WithinBudget
         };
 
-        // Aggregate every policy's derived edges in deterministic drain order; the
-        // production entry normalizes (stable-key sort + dense IDs) once.
-        let derived_edges: Vec<DerivedEdgeFact> = records
-            .iter()
-            .flat_map(|record| record.outcome.derived_edges.iter().cloned())
-            .collect();
-
         SolverRunResult {
             policy_outcomes: records,
-            derived_edges,
             budget_status,
             steps,
-        }
-    }
-}
-
-/// Production entry for the `polint.solver` provider: drive the unified
-/// [`SolverEngine`] over the registered policies and assemble the normalized
-/// [`SolverOutput`]. Phase 47 registers the one production policy — the `CopyEdge`
-/// transitive-closure [`CopyClosurePolicy`]; Phases 48/49 register the Go RTA / TS
-/// token policies alongside it. Output is byte-identical to driving the closure
-/// directly (single edge-producing policy, idempotent normalize), so the determinism
-/// gate is unaffected.
-pub(crate) fn run_copy_closure_solver(
-    constraints: &[ConstraintFact],
-    budget: SolverBudget,
-) -> SolverOutput {
-    let engine = SolverEngine::new(
-        vec![Box::new(CopyClosurePolicy::new(constraints.to_vec()))],
-        budget,
-    );
-    let result = engine.run();
-    SolverOutput {
-        derived_edges: result.derived_edges,
-        budget_status: result.budget_status,
-    }
-    .normalized()
-}
-
-/// The one production [`SolverPolicy`] (D-07): the unified `CopyEdge` transitive
-/// closure. It owns a closed snapshot of the frontend constraints (D-11) and derives
-/// the edges via [`derive_edges`], so the engine — not a free function — is the single
-/// production solver core.
-pub(crate) struct CopyClosurePolicy {
-    constraints: Vec<ConstraintFact>,
-}
-
-impl CopyClosurePolicy {
-    pub(crate) fn new(constraints: Vec<ConstraintFact>) -> Self {
-        Self { constraints }
-    }
-}
-
-impl SolverPolicy for CopyClosurePolicy {
-    fn id(&self) -> &'static str {
-        "copy_closure"
-    }
-
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
-        let output = derive_edges(&self.constraints, budget);
-        PolicyOutcome {
-            derived_edges: output.derived_edges,
-            points_to: None,
-            budget_status: output.budget_status,
-            steps: 0,
         }
     }
 }
@@ -972,36 +923,6 @@ mod tests {
             later.provenance.solver_step,
             first.provenance.solver_step
         );
-    }
-
-    #[test]
-    fn production_entry_runs_through_the_engine_byte_identical_to_the_closure() {
-        // #1: production (the polint.solver provider) drives the SolverEngine via the
-        // CopyClosurePolicy — the engine/policy abstraction is load-bearing, not dead.
-        // The engine path MUST be byte-identical to the raw closure so the determinism
-        // gate is unaffected.
-        let constraints = vec![
-            copy_constraint("copy|a-b", 1, 2),
-            copy_constraint("copy|b-c", 2, 3),
-        ];
-        let budget = SolverBudget::default();
-
-        let via_engine = run_copy_closure_solver(&constraints, budget);
-        let via_closure = derive_edges(&constraints, &budget);
-        assert_eq!(
-            serde_json::to_string(&via_engine.derived_edges).expect("engine"),
-            serde_json::to_string(&via_closure.derived_edges).expect("closure"),
-            "engine path must be byte-identical to the closure"
-        );
-        assert_eq!(via_engine.budget_status, via_closure.budget_status);
-
-        // The engine actually drove the production copy-closure policy and aggregated
-        // its derived edges.
-        let result =
-            SolverEngine::new(vec![Box::new(CopyClosurePolicy::new(constraints))], budget).run();
-        assert_eq!(result.policy_outcomes.len(), 1);
-        assert_eq!(result.policy_outcomes[0].policy_id, "copy_closure");
-        assert!(!result.derived_edges.is_empty());
     }
 
     #[test]

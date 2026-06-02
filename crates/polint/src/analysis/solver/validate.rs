@@ -530,4 +530,85 @@ mod tests {
         assert_eq!(implicated, 0);
         assert!(diagnostics.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Tarjan SCC coverage: lock the cases the prior 4 tests didn't exercise, so a
+    // future regression in lowlink propagation / SCC-vs-self-loop union is caught.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn three_node_cycle_implicates_its_summary_member() {
+        // A >2-node cycle 1 -> 2 -> 3 -> 1 (SCC size 3). The summary node 3 is a member,
+        // so it is implicated; a non-member summary would not be.
+        let constraints = vec![
+            copy(1, 2, "copy|1-2"),
+            copy(2, 3, "copy|2-3"),
+            copy(3, 1, "copy|3-1"),
+            call_constraint(3, "call|3"),
+        ];
+        let mut diagnostics = Vec::new();
+        let implicated = detect_solver_summary_cycle(&constraints, &mut diagnostics);
+        assert_eq!(implicated, 1, "summary node in the 3-cycle is implicated");
+    }
+
+    #[test]
+    fn self_loop_inside_a_larger_scc_is_implicated() {
+        // Node 2 has BOTH a self-loop and membership in the 1<->2 SCC; it must be
+        // implicated exactly once (the SCC-size and self-loop signals do not double-count).
+        let constraints = vec![
+            copy(1, 2, "copy|1-2"),
+            copy(2, 1, "copy|2-1"),
+            copy(2, 2, "copy|2-2"),
+            call_constraint(2, "call|2"),
+        ];
+        let mut diagnostics = Vec::new();
+        let implicated = detect_solver_summary_cycle(&constraints, &mut diagnostics);
+        assert_eq!(implicated, 1);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "implicated summary reported exactly once"
+        );
+    }
+
+    #[test]
+    fn deep_back_edge_to_an_ancestor_is_detected() {
+        // A long chain 1->2->3->4 with a back edge 4->2 forms an SCC {2,3,4} reached
+        // only after a depth-3 descent — this exercises iterative-Tarjan lowlink
+        // propagation up the explicit work stack. Summary node 3 (mid-SCC) is implicated;
+        // node 1 (a tree-root feeding the SCC but not in it) is NOT.
+        let constraints = vec![
+            copy(1, 2, "copy|1-2"),
+            copy(2, 3, "copy|2-3"),
+            copy(3, 4, "copy|3-4"),
+            copy(4, 2, "copy|4-2"),
+            call_constraint(3, "call|3"),
+            call_constraint(1, "call|1"),
+        ];
+        let mut diagnostics = Vec::new();
+        let implicated = detect_solver_summary_cycle(&constraints, &mut diagnostics);
+        assert_eq!(
+            implicated, 1,
+            "only the in-SCC summary node 3 is implicated, not the feeder node 1"
+        );
+    }
+
+    #[test]
+    fn target_only_summary_node_is_not_implicated() {
+        // Summary node 9 is only a CopyEdge TARGET (no outgoing edge), so it cannot be
+        // on a cycle and must never be implicated — even alongside an unrelated cycle.
+        let constraints = vec![
+            copy(1, 9, "copy|1-9"),
+            copy(2, 3, "copy|2-3"),
+            copy(3, 2, "copy|3-2"),
+            call_constraint(9, "call|9"),
+        ];
+        let mut diagnostics = Vec::new();
+        let implicated = detect_solver_summary_cycle(&constraints, &mut diagnostics);
+        assert_eq!(
+            implicated, 0,
+            "a target-only summary node is never on a cycle"
+        );
+        assert!(diagnostics.is_empty());
+    }
 }
