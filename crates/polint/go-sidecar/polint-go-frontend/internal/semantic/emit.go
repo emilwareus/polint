@@ -497,21 +497,41 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 
 func ssaFunctions(pkg *ssa.Package) []*ssa.Function {
 	var functions []*ssa.Function
+	// Dedup by *ssa.Function identity so a function reachable via two roots (e.g. a
+	// method value that is also harvested as a top-level member) is walked once.
+	seen := make(map[*ssa.Function]bool)
 	for _, member := range pkg.Members {
 		switch value := member.(type) {
 		case *ssa.Function:
-			functions = append(functions, value)
+			collectWithAnon(value, seen, &functions)
 		case *ssa.Type:
 			methodSet := pkg.Prog.MethodSets.MethodSet(types.NewPointer(value.Type()))
 			for i := 0; i < methodSet.Len(); i++ {
 				if fn := pkg.Prog.MethodValue(methodSet.At(i)); fn != nil {
-					functions = append(functions, fn)
+					collectWithAnon(fn, seen, &functions)
 				}
 			}
 		}
 	}
 	sort.Slice(functions, func(i, j int) bool { return functions[i].String() < functions[j].String() })
 	return functions
+}
+
+// collectWithAnon appends fn and, transitively, its anonymous-function bodies
+// (closures, func(){...} literals, bound method-value thunks) to out. In go/ssa
+// these live in parent.AnonFuncs and are NOT among pkg.Members, so without this walk
+// a *ssa.MakeInterface, a dynamic callsite, or a function-value operand that appears
+// inside a closure body would be invisible to the RTA harvest (review WR-01). Closures
+// nest, so the walk is transitive; `seen` guards against double-visiting.
+func collectWithAnon(fn *ssa.Function, seen map[*ssa.Function]bool, out *[]*ssa.Function) {
+	if fn == nil || seen[fn] {
+		return
+	}
+	seen[fn] = true
+	*out = append(*out, fn)
+	for _, anon := range fn.AnonFuncs {
+		collectWithAnon(anon, seen, out)
+	}
 }
 
 func packageID(pkg *ssa.Package) string {

@@ -126,6 +126,44 @@ func main() {
 	assertDynamicDispatchJoinsCallsite(t, rows)
 }
 
+func TestEmitHarvestsRTASignalsInsideClosureBodies(t *testing.T) {
+	// Regression for WR-01: the concrete type Dog is converted to an interface
+	// (*ssa.MakeInterface) ONLY inside the closure passed to run(...). Its method
+	// Notify is invoked dynamically ONLY inside that same closure. The harvest must
+	// walk fn.AnonFuncs (closures live in parent.AnonFuncs, not pkg.Members), or these
+	// signals are invisible and interface dispatch misses a real target.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+type Notifier interface { Notify() }
+type Dog struct{}
+
+func (Dog) Notify() {}
+
+func run(f func()) { f() }
+
+func main() {
+	run(func() {
+		var n Notifier = Dog{}
+		n.Notify()
+	})
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	// The instantiated type Dog (converted to Notifier inside the closure) is harvested.
+	assertInstantiatedType(t, rows, "example.test/fixture.Dog")
+	// The dynamic interface invoke of Notify inside the closure is harvested, joined to
+	// its callsite (which lives in the anonymous-function body).
+	assertDynamicDispatchMethod(t, rows, "Notify")
+	assertDynamicDispatchJoinsCallsite(t, rows)
+}
+
 func TestEmitDynamicDispatchCarriesInterfaceDiscriminant(t *testing.T) {
 	root := writeFixture(t, map[string]string{
 		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
@@ -327,6 +365,26 @@ func assertCallsiteStatus(t *testing.T, rows []Row, status string) {
 		}
 	}
 	t.Fatalf("missing callsite status %q in %#v", status, rows)
+}
+
+func assertInstantiatedType(t *testing.T, rows []Row, typeName string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "instantiated_type" && row["type"] == typeName {
+			return
+		}
+	}
+	t.Fatalf("missing instantiated_type %q in %#v", typeName, rows)
+}
+
+func assertDynamicDispatchMethod(t *testing.T, rows []Row, method string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "dynamic_dispatch" && row["method"] == method {
+			return
+		}
+	}
+	t.Fatalf("missing dynamic_dispatch with method %q in %#v", method, rows)
 }
 
 func writeGoWorkspaceFixture(t *testing.T, checkedInWork bool) string {
