@@ -1371,6 +1371,68 @@ fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
     Ok(0)
 }
 
+/// Internal (NON-public) view of a derived edge's provenance, surfaced through the
+/// existing private plumbing reached from the [`explain`] command (D-10). This is
+/// deliberately NOT added to the public `ExplainReport`/`ExplainRuleRow` JSON schema
+/// — the only new public CLI surface in v1.3 is `polint inspect unknowns` (Phase 52).
+/// All fields mirror the `pub(crate)` `DerivedEdgeProvenance`; nothing here reaches
+/// `polint::sdk::prelude` (the Phase 42 leak gate stays green).
+///
+/// Today this is a `cfg(test)`-facing internal accessor: no PRODUCTION explain path
+/// consumes derived edges yet (the unified-solver provider lands in Plan 03; the
+/// unknown-taxonomy public surface is Phase 52). D-10 explicitly sanctions a
+/// test-exercised internal seam — the plumbing exists and is locked by a unit test.
+// `allow` (not `expect`): the struct is only constructed by the test-exercised
+// `explain_derived_edge_provenance` seam (Phase 47 D-10); whether dead_code fires
+// varies by build config, so an `expect` would be reported unfulfilled.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DerivedEdgeProvenanceView {
+    /// The derived edge's stable key.
+    pub(crate) edge_stable_key: String,
+    /// The contributing fact stable keys, totally ordered by stable ID (D-08).
+    pub(crate) contributing_fact_keys: Vec<String>,
+    /// The producing constraint kind (`ConstraintKind::as_str()` label).
+    pub(crate) constraint_kind: String,
+    /// The monotonic solver step at which the edge was derived.
+    pub(crate) solver_step: u64,
+}
+
+/// Private plumbing (D-10): for a derived edge identified by its `edge_stable_key`,
+/// surface its contributing facts + constraint kind + solver step from the unified
+/// [`crate::analysis::solver::store::SolverStore`]. Returns `None` if no derived edge
+/// with that stable key exists.
+///
+/// This extends the EXISTING private/explain plumbing reached from [`explain`]; it
+/// adds NO public JSON field. The view is `pub(crate)` and is exercised by a unit
+/// test, keeping the provenance types internal (leak gate green).
+//
+// `allow` (not `expect`): whether dead_code fires for this `pub(crate)` fn varies by
+// build config (it is live under `cfg(test)`), so an `expect` would be reported
+// unfulfilled in test builds. Phase 47 D-10 sanctions a test-exercised internal seam
+// until the Plan 03 provider / Phase 52 surface consumes it in production.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn explain_derived_edge_provenance(
+    store: &crate::analysis::solver::store::SolverStore,
+    edge_stable_key: &str,
+) -> Option<DerivedEdgeProvenanceView> {
+    store
+        .derived_edges()
+        .iter()
+        .find(|edge| edge.stable_key == edge_stable_key)
+        .map(|edge| DerivedEdgeProvenanceView {
+            edge_stable_key: edge.stable_key.clone(),
+            contributing_fact_keys: edge
+                .provenance
+                .contributing_facts
+                .iter()
+                .map(|fact| fact.stable_key.clone())
+                .collect(),
+            constraint_kind: edge.provenance.constraint_kind.clone(),
+            solver_step: edge.provenance.solver_step,
+        })
+}
+
 fn inspect_rule(root: &Path, args: &InspectRuleArgs) -> Result<u8> {
     let manifests = discover_local_rule_hosts(root)?;
     let mut rules = Vec::new();
@@ -2744,7 +2806,52 @@ fn sanitize_name(name: &str) -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{Cli, LocalRuleHostProfile};
+    use super::{Cli, LocalRuleHostProfile, explain_derived_edge_provenance};
+
+    #[test]
+    fn explain_private_plumbing_surfaces_derived_edge_provenance() {
+        // D-10: the private plumbing reached from `explain` surfaces, for a derived
+        // edge, its contributing facts + constraint kind + solver step — WITHOUT a
+        // new public JSON field.
+        use crate::analysis::ids::SemanticConstraintId;
+        use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+        use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+        use crate::analysis::solver::engine::derive_edges;
+        use crate::analysis::solver::store::SolverStore;
+
+        fn copy(stable_key: &str, src: u64, dst: u64) -> ConstraintFact {
+            ConstraintFact {
+                id: SemanticConstraintId(0),
+                kind: ConstraintKind::CopyEdge {
+                    dst: crate::analysis::ids::SemanticNodeId(dst),
+                    src: crate::analysis::ids::SemanticNodeId(src),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: stable_key.to_string(),
+            }
+        }
+
+        let constraints = vec![copy("copy|a-b", 1, 2), copy("copy|b-c", 2, 3)];
+        let budget = crate::analysis::solver::budget::SolverBudget::default();
+        let output = derive_edges(&constraints, &budget);
+        let store = SolverStore::from_output(output).expect("store");
+
+        // Pick the transitive edge (the one with 2 contributing facts).
+        let transitive = store
+            .derived_edges()
+            .iter()
+            .find(|e| e.provenance.contributing_facts.len() == 2)
+            .expect("transitive derived edge");
+
+        let view = explain_derived_edge_provenance(&store, &transitive.stable_key)
+            .expect("provenance surfaced via private plumbing");
+        assert_eq!(view.constraint_kind, "copy_edge");
+        assert_eq!(view.contributing_fact_keys.len(), 2);
+        assert!(view.solver_step > 0);
+        // A missing edge key yields None (no panic, no public surface).
+        assert!(explain_derived_edge_provenance(&store, "edge|does|not|exist").is_none());
+    }
 
     #[test]
     fn local_rule_host_profile_defaults_to_release() {

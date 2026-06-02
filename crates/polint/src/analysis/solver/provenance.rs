@@ -193,4 +193,86 @@ mod tests {
         let b = DerivedEdgeProvenance::new(vec![fact("b"), fact("a")], &copy_edge(), 99);
         assert_eq!(a.stable_key_fragment(), b.stable_key_fragment());
     }
+
+    // -----------------------------------------------------------------------
+    // D-09 deletion property test (GRAPH-04 acceptance).
+    // -----------------------------------------------------------------------
+
+    use crate::analysis::ids::SemanticConstraintId;
+    use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::analysis::semantic_graph::constraints::ConstraintFact;
+    use crate::analysis::solver::budget::SolverBudget;
+    use crate::analysis::solver::engine::derive_edges;
+
+    fn copy_constraint(stable_key: &str, src: u64, dst: u64) -> ConstraintFact {
+        ConstraintFact {
+            id: SemanticConstraintId(0),
+            kind: ConstraintKind::CopyEdge {
+                dst: SemanticNodeId(dst),
+                src: SemanticNodeId(src),
+            },
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::FlowInsensitive,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    /// D-09: deleting ANY single contributing fact INVALIDATES the derived edge.
+    ///
+    /// The solver derives the transitive edge `a -> c` from the chain
+    /// `a -> b` (copy|a-b) and `b -> c` (copy|b-c). Its provenance records BOTH
+    /// contributing constraints. Re-running the solver with EITHER one deleted must
+    /// NOT reproduce the `a -> c` edge — proving provenance is sound and load-bearing,
+    /// not decorative.
+    #[test]
+    fn deleting_any_contributing_fact_invalidates_the_derived_edge() {
+        let constraints = vec![
+            copy_constraint("copy|a-b", 1, 2),
+            copy_constraint("copy|b-c", 2, 3),
+        ];
+        let budget = SolverBudget::default();
+
+        // Baseline: the transitive a -> c edge is derived, with 2 contributing facts.
+        let baseline = derive_edges(&constraints, &budget);
+        let derived = baseline
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3))
+            .expect("baseline derives transitive a -> c");
+        assert_eq!(derived.provenance.contributing_len(), 2);
+
+        // For EACH contributing fact: delete it, re-run, assert a -> c is NOT
+        // reproduced (the edge depends on every contributing fact).
+        let contributing_keys: Vec<String> = derived
+            .provenance
+            .contributing_facts
+            .iter()
+            .map(|fact| fact.stable_key.clone())
+            .collect();
+        assert_eq!(contributing_keys.len(), 2);
+
+        for deleted in &contributing_keys {
+            // Re-run WITHOUT the constraint whose stable key is `deleted`.
+            let remaining: Vec<ConstraintFact> = constraints
+                .iter()
+                .filter(|c| &c.stable_key != deleted)
+                .cloned()
+                .collect();
+            assert_eq!(
+                remaining.len(),
+                1,
+                "exactly one contributing constraint removed"
+            );
+
+            let rerun = derive_edges(&remaining, &budget);
+            let reproduced = rerun
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3));
+            assert!(
+                !reproduced,
+                "deleting contributing fact `{deleted}` must invalidate the derived a -> c edge",
+            );
+        }
+    }
 }
