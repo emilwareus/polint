@@ -317,8 +317,9 @@ Current strengths:
 
 Current limits:
 
-- requires Go 1.24 or newer on `PATH` when using the default embedded source
-  sidecar, unless `POLINT_GO_SYMBOLS` points to a prebuilt sidecar binary
+- requires Go 1.25 or newer on `PATH` when using default embedded source
+  sidecars; prebuilt `POLINT_GO_SYMBOLS` or `POLINT_GO_FRONTEND` binaries can
+  avoid requiring Go for the corresponding sidecar
 - each analyzed Go file must belong to a Go module with a `go.mod`
 - package loading must succeed for the configured package patterns and build tags
 - setup failures produce `polint/capability` diagnostics and block requesting

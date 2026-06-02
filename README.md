@@ -311,8 +311,8 @@ jobs:
           args: check --format github
 ```
 
-Rules that request Go symbol/reference facts use the embedded Go sidecar by
-default, which needs Go 1.24 or newer on `PATH`. polint supports monorepos by
+Rules that request Go symbol/reference facts use embedded Go sidecars by
+default, which need Go 1.25 or newer on `PATH`. polint supports monorepos by
 inferring Go module roots from discovered files, or from
 `[languages.go].module_roots` in `.polint.toml`; no repository-root `go.mod` is
 required. In GitHub Actions, add this before `polint check` when using those
@@ -321,7 +321,7 @@ facts:
 ```yaml
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
 ```
 
 The action caches `.polint/cache` by default, including the repo-local
