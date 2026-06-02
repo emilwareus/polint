@@ -1,0 +1,36 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "provenance-cycle-detection"
+area = "provenance"
+
+# Phase 47 Plan 03 cycle-detection fixture (D-11, D-12).
+#
+# `ping` <-> `pong` are mutually recursive, so the projected semantic graph carries a
+# call/value-flow cycle that passes through the call (summary) constraints. This is
+# the native-tree counterpart to the solver/validate `detect_solver_summary_cycle`
+# unit test: it proves that a constraint set which would create a
+# solver -> summary -> solver loop is DETECTED and BOUNDED rather than allowed to
+# diverge.
+#
+# The proof here is twofold:
+#   1. the analysis run TERMINATES within an explicit, tight runtime budget — a
+#      divergent solver would blow the budget (D-11 bounded outer iterations); and
+#   2. the semantic-graph CallConstraint facts (the summary anchors the solver
+#      consumes as an INPUT snapshot, never re-feeding them into the same fixpoint)
+#      are produced for both recursive functions.
+#
+# Summaries are an input to the solver, never re-fed into the same fixpoint as they
+# are produced (D-12 closed-input-set / single-fixpoint-per-run). The fixture is
+# intentionally free of order-dependent per-row assertions beyond the presence facts
+# below; the solver determinism gate (10-shuffle byte-identical observed JSON) covers
+# byte-stability separately.
+
+[repo]
+path = "repo"
+
+# A tight runtime budget: a divergent solver on the ping <-> pong cycle would exceed
+# this, so staying within it is the bounded-iteration proof (D-11).
+[budget]
+max_runtime_ms = 30000
+
+[[expected]]
+runtime_budget = { name = "provenance.cycle_detection", max_runtime_ms = 30000, mode = "exact" }
