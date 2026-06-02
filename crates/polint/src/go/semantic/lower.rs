@@ -56,13 +56,13 @@ pub(crate) fn lower_go_semantic(
             }
             "callsite" => lowered.callsites.push(lower_callsite(row, &files)?),
             "method_set" => lowered.method_sets.push(lower_method_set(row)),
-            "address_taken" => lowered.address_taken.push(lower_address_taken(row)),
+            "address_taken" => lowered.address_taken.push(lower_address_taken(row)?),
             "instantiated_type" => {
                 lowered
                     .instantiated_types
-                    .push(lower_instantiated_type(row));
+                    .push(lower_instantiated_type(row)?);
             }
-            "dynamic_dispatch" => lowered.dynamic_dispatch.push(lower_dynamic_dispatch(row)),
+            "dynamic_dispatch" => lowered.dynamic_dispatch.push(lower_dynamic_dispatch(row)?),
             "package_error" => lowered.package_errors.push(lower_package_error(row)),
             "receiver_type" | "unsupported" | "type_fact" => {}
             _ => {}
@@ -156,30 +156,36 @@ fn lower_method_set(row: &GoSemanticRawFrame) -> GoSemanticMethodSetFact {
     }
 }
 
-fn lower_address_taken(row: &GoSemanticRawFrame) -> GoSemanticAddressTakenFact {
-    GoSemanticAddressTakenFact {
+fn lower_address_taken(
+    row: &GoSemanticRawFrame,
+) -> Result<GoSemanticAddressTakenFact, GoSemanticLowerError> {
+    Ok(GoSemanticAddressTakenFact {
         id: GoSemanticAddressTakenId(0),
-        stable_key: row_stable_key(row, "address_taken"),
+        stable_key: require_stable_key(row, "address_taken")?,
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         function: row.function.clone(),
-    }
+    })
 }
 
-fn lower_instantiated_type(row: &GoSemanticRawFrame) -> GoSemanticInstantiatedTypeFact {
-    GoSemanticInstantiatedTypeFact {
+fn lower_instantiated_type(
+    row: &GoSemanticRawFrame,
+) -> Result<GoSemanticInstantiatedTypeFact, GoSemanticLowerError> {
+    Ok(GoSemanticInstantiatedTypeFact {
         id: GoSemanticInstantiatedTypeId(0),
-        stable_key: row_stable_key(row, "instantiated_type"),
+        stable_key: require_stable_key(row, "instantiated_type")?,
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         type_name: row.type_name.clone(),
-    }
+    })
 }
 
-fn lower_dynamic_dispatch(row: &GoSemanticRawFrame) -> GoSemanticDynamicDispatchFact {
-    GoSemanticDynamicDispatchFact {
+fn lower_dynamic_dispatch(
+    row: &GoSemanticRawFrame,
+) -> Result<GoSemanticDynamicDispatchFact, GoSemanticLowerError> {
+    Ok(GoSemanticDynamicDispatchFact {
         id: GoSemanticDynamicDispatchId(0),
-        stable_key: row_stable_key(row, "dynamic_dispatch"),
+        stable_key: require_stable_key(row, "dynamic_dispatch")?,
         package_id: row.package_id.clone(),
         package_path: row.package_path.clone(),
         caller: row.caller.clone(),
@@ -187,7 +193,7 @@ fn lower_dynamic_dispatch(row: &GoSemanticRawFrame) -> GoSemanticDynamicDispatch
         interface_type: non_empty(row.interface_type.as_str()),
         method: non_empty(row.method.as_str()),
         signature: non_empty(row.signature.as_str()),
-    }
+    })
 }
 
 fn lower_package_error(row: &GoSemanticRawFrame) -> GoSemanticPackageErrorFact {
@@ -237,6 +243,26 @@ fn to_span(file: FileId, span: &GoSemanticSpan) -> Span {
         end_line: span.end_line,
         end_col: span.end_col,
     }
+}
+
+/// Require the sidecar-provided `stable_key` for an RTA-signal harvest row
+/// (`address_taken` / `instantiated_type` / `dynamic_dispatch`). These rows are
+/// machine-generated and ALWAYS carry a stable key (`emit.go` emits one for each), and
+/// their discriminating identity lives in fields (`function` / `type_name`) the
+/// `row_stable_key` fallback recipe does not include — so a missing key would collide
+/// distinct facts and the set-dedup in `store` would silently drop a real member
+/// (review WR-03). Fail closed with a lowering error rather than fabricate a colliding
+/// fallback key.
+fn require_stable_key(
+    row: &GoSemanticRawFrame,
+    kind: &str,
+) -> Result<String, GoSemanticLowerError> {
+    if row.stable_key.is_empty() {
+        return Err(GoSemanticLowerError::InvalidPath(format!(
+            "Go semantic {kind} row is missing a stable_key"
+        )));
+    }
+    Ok(row.stable_key.clone())
 }
 
 fn row_stable_key(row: &GoSemanticRawFrame, kind: &str) -> String {
@@ -303,6 +329,39 @@ mod tests {
         assert_eq!(lowered.dynamic_dispatch[0].method.as_deref(), Some("M"));
         assert_eq!(lowered.dynamic_dispatch[0].signature, None);
         assert_eq!(lowered.dynamic_dispatch[0].callsite_stable_key, "cs");
+    }
+
+    #[test]
+    fn lower_rejects_harvest_row_missing_stable_key() {
+        // WR-03: a machine-generated RTA-signal row must carry a stable_key. The
+        // fallback recipe cannot disambiguate these rows (their identity lives in
+        // function/type_name), so a missing key would collide distinct facts. Fail
+        // closed instead.
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"address_taken","package_id":"example.com/p","package_path":"example.com/p","function":"example.com/p.F"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+        )
+        .expect("valid protocol");
+        let err = lower_go_semantic(&db, &output).unwrap_err();
+        assert!(err.to_string().contains("missing a stable_key"), "{err}");
+    }
+
+    #[test]
+    fn lower_rejects_instantiated_type_missing_stable_key() {
+        // WR-03: same guard for the instantiated_type harvest row.
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"instantiated_type","package_id":"example.com/p","package_path":"example.com/p","type":"example.com/p.T"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+        )
+        .expect("valid protocol");
+        let err = lower_go_semantic(&db, &output).unwrap_err();
+        assert!(err.to_string().contains("missing a stable_key"), "{err}");
     }
 
     #[test]
