@@ -484,9 +484,9 @@ mod tests {
             Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
             |_config| {
                 let output = decode_ndjson_str(
-                    r#"{"schema":"polint-go-semantic-1","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
-{"schema":"polint-go-semantic-1","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
-{"schema":"polint-go-semantic-1","kind":"session_end"}
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
                 )
                 .expect("protocol decodes");

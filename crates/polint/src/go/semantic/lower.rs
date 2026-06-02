@@ -4,10 +4,12 @@ use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, Language, Span};
 use crate::go::semantic::facts::{
-    GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticCallsiteId, GoSemanticFunctionFact,
-    GoSemanticFunctionId, GoSemanticFunctionKind, GoSemanticMethodSetFact, GoSemanticMethodSetId,
-    GoSemanticPackageErrorFact, GoSemanticPackageErrorId, GoSemanticPackageFact,
-    GoSemanticPackageId,
+    GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
+    GoSemanticCallsiteFact, GoSemanticCallsiteId, GoSemanticDynamicDispatchFact,
+    GoSemanticDynamicDispatchId, GoSemanticFunctionFact, GoSemanticFunctionId,
+    GoSemanticFunctionKind, GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId,
+    GoSemanticMethodSetFact, GoSemanticMethodSetId, GoSemanticPackageErrorFact,
+    GoSemanticPackageErrorId, GoSemanticPackageFact, GoSemanticPackageId,
 };
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticRawFrame, GoSemanticSpan};
 use crate::go::semantic::store::GoSemanticFactsOutput;
@@ -54,6 +56,13 @@ pub(crate) fn lower_go_semantic(
             }
             "callsite" => lowered.callsites.push(lower_callsite(row, &files)?),
             "method_set" => lowered.method_sets.push(lower_method_set(row)),
+            "address_taken" => lowered.address_taken.push(lower_address_taken(row)),
+            "instantiated_type" => {
+                lowered
+                    .instantiated_types
+                    .push(lower_instantiated_type(row));
+            }
+            "dynamic_dispatch" => lowered.dynamic_dispatch.push(lower_dynamic_dispatch(row)),
             "package_error" => lowered.package_errors.push(lower_package_error(row)),
             "receiver_type" | "unsupported" | "type_fact" => {}
             _ => {}
@@ -147,6 +156,40 @@ fn lower_method_set(row: &GoSemanticRawFrame) -> GoSemanticMethodSetFact {
     }
 }
 
+fn lower_address_taken(row: &GoSemanticRawFrame) -> GoSemanticAddressTakenFact {
+    GoSemanticAddressTakenFact {
+        id: GoSemanticAddressTakenId(0),
+        stable_key: row_stable_key(row, "address_taken"),
+        package_id: row.package_id.clone(),
+        package_path: row.package_path.clone(),
+        function: row.function.clone(),
+    }
+}
+
+fn lower_instantiated_type(row: &GoSemanticRawFrame) -> GoSemanticInstantiatedTypeFact {
+    GoSemanticInstantiatedTypeFact {
+        id: GoSemanticInstantiatedTypeId(0),
+        stable_key: row_stable_key(row, "instantiated_type"),
+        package_id: row.package_id.clone(),
+        package_path: row.package_path.clone(),
+        type_name: row.type_name.clone(),
+    }
+}
+
+fn lower_dynamic_dispatch(row: &GoSemanticRawFrame) -> GoSemanticDynamicDispatchFact {
+    GoSemanticDynamicDispatchFact {
+        id: GoSemanticDynamicDispatchId(0),
+        stable_key: row_stable_key(row, "dynamic_dispatch"),
+        package_id: row.package_id.clone(),
+        package_path: row.package_path.clone(),
+        caller: row.caller.clone(),
+        callsite_stable_key: row.callsite_stable_key.clone(),
+        interface_type: non_empty(row.interface_type.as_str()),
+        method: non_empty(row.method.as_str()),
+        signature: non_empty(row.signature.as_str()),
+    }
+}
+
 fn lower_package_error(row: &GoSemanticRawFrame) -> GoSemanticPackageErrorFact {
     GoSemanticPackageErrorFact {
         id: GoSemanticPackageErrorId(0),
@@ -228,14 +271,57 @@ mod tests {
     fn lower_accepts_in_repository_path() {
         let db = db_with_go_file("main.go");
         let output = decode_ndjson_str(
-            r#"{"schema":"polint-go-semantic-1","kind":"session_begin"}
-{"schema":"polint-go-semantic-1","kind":"function","package_id":"example.com/p","package_path":"example.com/p","name":"F","qualified":"example.com/p.F","stable_key":"fn","file":"main.go","span":{"start_byte":1,"end_byte":2,"start_line":1,"start_column":1,"end_line":1,"end_column":2}}
-{"schema":"polint-go-semantic-1","kind":"session_end"}
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"function","package_id":"example.com/p","package_path":"example.com/p","name":"F","qualified":"example.com/p.F","stable_key":"fn","file":"main.go","span":{"start_byte":1,"end_byte":2,"start_line":1,"start_column":1,"end_line":1,"end_column":2}}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
         )
         .expect("valid protocol");
         let lowered = lower_go_semantic(&db, &output).expect("lowered");
         assert_eq!(lowered.functions[0].file, Some(FileId(0)));
+    }
+
+    #[test]
+    fn lower_harvests_rta_signal_rows() {
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"address_taken","package_id":"example.com/p","package_path":"example.com/p","function":"example.com/p.F","stable_key":"at"}
+{"schema":"polint-go-semantic-2","kind":"instantiated_type","package_id":"example.com/p","package_path":"example.com/p","type":"example.com/p.T","stable_key":"it"}
+{"schema":"polint-go-semantic-2","kind":"dynamic_dispatch","package_id":"example.com/p","package_path":"example.com/p","caller":"example.com/p.call","callsite_stable_key":"cs","interface_type":"example.com/p.I","method":"M","stable_key":"dd"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+        )
+        .expect("valid protocol");
+        let lowered = lower_go_semantic(&db, &output).expect("lowered");
+        assert_eq!(lowered.address_taken[0].function, "example.com/p.F");
+        assert_eq!(lowered.instantiated_types[0].type_name, "example.com/p.T");
+        assert_eq!(
+            lowered.dynamic_dispatch[0].interface_type.as_deref(),
+            Some("example.com/p.I")
+        );
+        assert_eq!(lowered.dynamic_dispatch[0].method.as_deref(), Some("M"));
+        assert_eq!(lowered.dynamic_dispatch[0].signature, None);
+        assert_eq!(lowered.dynamic_dispatch[0].callsite_stable_key, "cs");
+    }
+
+    #[test]
+    fn lower_dynamic_dispatch_func_value_carries_signature() {
+        let db = db_with_go_file("main.go");
+        let output = decode_ndjson_str(
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"dynamic_dispatch","package_id":"example.com/p","package_path":"example.com/p","caller":"example.com/p.apply","callsite_stable_key":"cs2","signature":"func()","stable_key":"dd2"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+        )
+        .expect("valid protocol");
+        let lowered = lower_go_semantic(&db, &output).expect("lowered");
+        assert_eq!(
+            lowered.dynamic_dispatch[0].signature.as_deref(),
+            Some("func()")
+        );
+        assert_eq!(lowered.dynamic_dispatch[0].interface_type, None);
+        assert_eq!(lowered.dynamic_dispatch[0].method, None);
     }
 
     #[test]
@@ -290,9 +376,9 @@ mod tests {
     fn lower_preserves_package_load_errors() {
         let db = db_with_go_file("main.go");
         let output = decode_ndjson_str(
-            r#"{"schema":"polint-go-semantic-1","kind":"session_begin"}
-{"schema":"polint-go-semantic-1","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"load failed"}
-{"schema":"polint-go-semantic-1","kind":"session_end"}
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"load failed"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
         )
         .expect("valid protocol");
@@ -304,10 +390,10 @@ mod tests {
     fn lower_package_error_fallback_stable_key_includes_message() {
         let db = db_with_go_file("main.go");
         let output = decode_ndjson_str(
-            r#"{"schema":"polint-go-semantic-1","kind":"session_begin"}
-{"schema":"polint-go-semantic-1","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"first"}
-{"schema":"polint-go-semantic-1","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"second"}
-{"schema":"polint-go-semantic-1","kind":"session_end"}
+            r#"{"schema":"polint-go-semantic-2","kind":"session_begin"}
+{"schema":"polint-go-semantic-2","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"first"}
+{"schema":"polint-go-semantic-2","kind":"package_error","package_id":"example.com/p","package_path":"example.com/p","message":"second"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
         )
         .expect("valid protocol");

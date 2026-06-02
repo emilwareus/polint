@@ -1,6 +1,7 @@
 use crate::analysis::error::AnalysisError;
 use crate::go::semantic::facts::{
-    GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticMethodSetFact,
+    GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
 use crate::go::semantic::validate::validate_go_semantic_output;
@@ -13,6 +14,9 @@ pub(crate) struct GoSemanticFactsOutput {
     pub(crate) functions: Vec<GoSemanticFunctionFact>,
     pub(crate) callsites: Vec<GoSemanticCallsiteFact>,
     pub(crate) method_sets: Vec<GoSemanticMethodSetFact>,
+    pub(crate) address_taken: Vec<GoSemanticAddressTakenFact>,
+    pub(crate) instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
+    pub(crate) dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
     pub(crate) package_errors: Vec<GoSemanticPackageErrorFact>,
 }
 
@@ -40,6 +44,24 @@ impl GoSemanticFactsOutput {
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
         for (index, fact) in self.method_sets.iter_mut().enumerate() {
             fact.id = crate::go::semantic::facts::GoSemanticMethodSetId(index as u64);
+        }
+
+        self.address_taken
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        for (index, fact) in self.address_taken.iter_mut().enumerate() {
+            fact.id = crate::go::semantic::facts::GoSemanticAddressTakenId(index as u64);
+        }
+
+        self.instantiated_types
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        for (index, fact) in self.instantiated_types.iter_mut().enumerate() {
+            fact.id = crate::go::semantic::facts::GoSemanticInstantiatedTypeId(index as u64);
+        }
+
+        self.dynamic_dispatch
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        for (index, fact) in self.dynamic_dispatch.iter_mut().enumerate() {
+            fact.id = crate::go::semantic::facts::GoSemanticDynamicDispatchId(index as u64);
         }
 
         self.package_errors
