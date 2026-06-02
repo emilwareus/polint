@@ -39,6 +39,10 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         "transitive_copy_closure_v1",
         "provenance_projection_v1",
         "precision_ceiling_v1",
+        // Go RTA fixpoint algorithm version (Phase 48, D-12): a change to the RTA
+        // reachability ⊗ instantiated-types ⊗ dispatch derivation bumps this and
+        // deterministically invalidates the solver cache.
+        "go_rta_fixpoint_v1",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
     Digest::from_parts(
@@ -68,6 +72,17 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.points_to.max_dynamic_vars={}",
             budget.points_to.max_dynamic_vars
         ),
+        // Go RTA sub-budget knobs (D-12): a Go-knob change invalidates downstream.
+        // Appended AFTER the points-to parts so the existing parts keep their order.
+        format!(
+            "budget.go.address_taken_threshold={}",
+            budget.go.address_taken_threshold
+        ),
+        format!(
+            "budget.go.max_candidates_per_callsite={}",
+            budget.go.max_candidates_per_callsite
+        ),
+        format!("budget.go.max_rta_rounds={}", budget.go.max_rta_rounds),
     ]
 }
 
@@ -100,10 +115,14 @@ mod tests {
                     "transitive_copy_closure_v1",
                     "provenance_projection_v1",
                     "precision_ceiling_v1",
+                    "go_rta_fixpoint_v1",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
                     "budget.points_to.max_objects_per_var=64",
                     "budget.points_to.max_dynamic_vars=512",
+                    "budget.go.address_taken_threshold=256",
+                    "budget.go.max_candidates_per_callsite=128",
+                    "budget.go.max_rta_rounds=32",
                 ],
             )
         );
@@ -112,7 +131,10 @@ mod tests {
     #[test]
     fn algorithm_version_bump_invalidates_the_pre_bump_digest() {
         // Bumping any frozen algorithm version must deterministically invalidate the
-        // solver cache: the live digest differs from a pre-bump parts list.
+        // solver cache: the live digest differs from a pre-bump parts list. The
+        // pre-bump list mirrors the CURRENT recipe (incl. the Go RTA parts) but with
+        // one frozen algorithm version rolled back, so this still asserts a DIFFERENCE
+        // attributable to the version bump alone.
         let budget = SolverBudget::default();
         let pre_bump = Digest::from_parts(
             DigestKind::ProviderParameters,
@@ -124,10 +146,14 @@ mod tests {
                 "transitive_copy_closure_v0",
                 "provenance_projection_v1",
                 "precision_ceiling_v1",
+                "go_rta_fixpoint_v1",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
                 "budget.points_to.max_objects_per_var=64",
                 "budget.points_to.max_dynamic_vars=512",
+                "budget.go.address_taken_threshold=256",
+                "budget.go.max_candidates_per_callsite=128",
+                "budget.go.max_rta_rounds=32",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);
@@ -162,6 +188,17 @@ mod tests {
             solver_provider_parameter_digest(&bumped_objects),
             base,
             "changing a per-sub-domain budget knob must change the parameter digest"
+        );
+
+        // D-12: a Go RTA sub-budget knob (the roadmap-named address-taken threshold)
+        // participates in the parameter digest, so a Go-knob change invalidates
+        // downstream.
+        let mut bumped_go = SolverBudget::default();
+        bumped_go.go.address_taken_threshold += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_go),
+            base,
+            "changing a Go RTA sub-budget knob must change the parameter digest"
         );
     }
 }

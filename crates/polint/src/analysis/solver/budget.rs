@@ -41,6 +41,39 @@ impl Default for PointsToSubBudget {
     }
 }
 
+/// Per-sub-domain budget knobs for the Go RTA driver (D-10/D-11).
+///
+/// Mirrors [`PointsToSubBudget`] structurally: a `Copy` bag of caps hung on
+/// [`SolverBudget`] as `go`. These bound the RTA fixpoint so runaway interface
+/// dispatch latches [`BudgetStatus::BudgetExceeded`] honestly (D-13) rather than
+/// looping unbounded:
+///
+/// - `address_taken_threshold` — the roadmap-named knob (D-10): if the accumulated
+///   address-taken function set exceeds this, the run latches exhaustion.
+/// - `max_candidates_per_callsite` — caps the candidate-callee fan-out resolved for
+///   one dynamic callsite; exceeding it is run-level exhaustion (edges resolved
+///   before the cap keep their honest status).
+/// - `max_rta_rounds` — caps the reachability ⊗ instantiated-types ⊗ dispatch
+///   fixpoint rounds; exceeding it latches exhaustion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GoRtaSubBudget {
+    pub(crate) address_taken_threshold: usize,
+    pub(crate) max_candidates_per_callsite: usize,
+    pub(crate) max_rta_rounds: usize,
+}
+
+impl Default for GoRtaSubBudget {
+    fn default() -> Self {
+        // Honest defaults sized to comfortably accommodate real Go interface-dispatch
+        // graphs while still bounding pathological fan-out / cyclic method-set graphs.
+        Self {
+            address_taken_threshold: 256,
+            max_candidates_per_callsite: 128,
+            max_rta_rounds: 32,
+        }
+    }
+}
+
 /// Unified solver budget generalizing `PointsToBudget` (D-05).
 ///
 /// Cross-domain knobs: `max_steps` (per-step worklist cap, mirrors the points-to
@@ -52,6 +85,7 @@ pub(crate) struct SolverBudget {
     pub(crate) max_steps: usize,
     pub(crate) max_outer_iterations: usize,
     pub(crate) points_to: PointsToSubBudget,
+    pub(crate) go: GoRtaSubBudget,
 }
 
 impl Default for SolverBudget {
@@ -65,6 +99,10 @@ impl Default for SolverBudget {
             // bounded rather than unbounded.
             max_outer_iterations: 64,
             points_to: PointsToSubBudget::default(),
+            // Go RTA sub-budget (D-10/D-11). Adding this field MUST NOT perturb the
+            // existing fields' values — `solver_budget_default_matches_points_to_defaults`
+            // pins 10_000 / 64 / points-to defaults byte-identically.
+            go: GoRtaSubBudget::default(),
         }
     }
 }
@@ -139,6 +177,21 @@ mod tests {
         assert_eq!(projected.max_steps, 10_000);
         assert_eq!(projected.max_objects_per_var, 64);
         assert_eq!(projected.max_dynamic_vars, 512);
+    }
+
+    #[test]
+    fn solver_budget_default_go_sub_budget_matches_go_defaults() {
+        // The `go` sub-budget defaults are the roadmap-named honest caps. Adding the
+        // field must not perturb the existing default fields (covered above).
+        let budget = SolverBudget::default();
+        assert_eq!(budget.go, GoRtaSubBudget::default());
+        assert_eq!(budget.go.address_taken_threshold, 256);
+        assert_eq!(budget.go.max_candidates_per_callsite, 128);
+        assert_eq!(budget.go.max_rta_rounds, 32);
+        // The existing cross-domain/points-to defaults are still byte-identical.
+        assert_eq!(budget.max_steps, 10_000);
+        assert_eq!(budget.max_outer_iterations, 64);
+        assert_eq!(budget.points_to, PointsToSubBudget::default());
     }
 
     #[test]
