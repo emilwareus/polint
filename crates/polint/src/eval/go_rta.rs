@@ -192,6 +192,22 @@ fn interface_dispatch_fixture_proves_instantiated_type_filter() {
         );
     }
     assert_eq!(solver_output.budget_status, BudgetStatus::WithinBudget);
+
+    // WR-05: assert the KERNEL-PERSISTED edges (the rows the `polint.solver` provider
+    // actually stored during the kernel run via SolverEngine + GoRtaPolicy + store),
+    // not only the standalone recompute above. This catches a provider-wiring
+    // regression (e.g. the provider stops threading `solver.go` config, stops
+    // registering GoRtaPolicy, or fails to persist) that the recompute would mask.
+    let persisted = output.db.solver_derived_edges();
+    assert!(
+        persisted.iter().any(|edge| edge.target == dog_speak),
+        "the kernel-PERSISTED solver edges must include the resolved (Dog).Speak edge: {persisted:#?}"
+    );
+    assert!(
+        !persisted.iter().any(|edge| edge.target == cat_speak),
+        "the kernel-PERSISTED solver edges must exclude the non-instantiated (Cat).Speak"
+    );
+
     assert_solver_output_byte_stable(&output.db, budget);
 }
 
