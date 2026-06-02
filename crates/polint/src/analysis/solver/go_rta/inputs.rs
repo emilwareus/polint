@@ -16,7 +16,7 @@ use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FunctionFact, Language};
+use crate::core::{AnalysisDb, FileId, FunctionFact, Language, Span};
 use crate::go::semantic::facts::{GoSemanticCallStatus, GoSemanticFunctionFact};
 
 /// One concrete Go method, indexed by its receiver type, for interface-invoke
@@ -260,8 +260,10 @@ fn bare_method_name(name: &str) -> String {
 }
 
 /// The `qualified` identity of the Go semantic function matching a core `FunctionId`,
-/// if any. Mirrors the file+span+name join `matching_core_function` performs, in
-/// reverse: a core function -> its Go semantic `qualified`.
+/// if any. Mirrors the file+name+span join `matching_core_function` performs, in
+/// reverse: a core function -> its Go semantic `qualified`. Uses the same exact-first /
+/// zero-width-point-containment disambiguation so a method root still maps while
+/// same-named nested declarations cannot mis-map (WR-04).
 fn qualified_for_function_id(
     db: &AnalysisDb,
     function_id: crate::core::FunctionId,
@@ -270,17 +272,33 @@ fn qualified_for_function_id(
         .functions()
         .iter()
         .find(|function| function.id == function_id)?;
+
+    let same_identity = |semantic_function: &&GoSemanticFunctionFact| {
+        semantic_function.file == Some(function.file) && semantic_function.name == function.name
+    };
+
+    // 1. Prefer a semantic function with an EXACT-equal span (unambiguous).
+    if let Some(exact) = db.go_semantic_functions().iter().find(|semantic_function| {
+        same_identity(semantic_function)
+            && semantic_function.span.as_ref().is_some_and(|span| {
+                span.start_byte == function.span.start_byte
+                    && span.end_byte == function.span.end_byte
+            })
+    }) {
+        return Some(exact.qualified.clone());
+    }
+
+    // 2. Fall back to a zero-width semantic POINT contained in the core declaration (the
+    //    SSA-method case), choosing the semantic function whose point is innermost-
+    //    consistent — here, simply the matching point (a method's `func`-token point is
+    //    unique within its own declaration, and `name` + `file` disambiguate).
     db.go_semantic_functions()
         .iter()
         .find(|semantic_function| {
-            semantic_function.file == Some(function.file)
-                && semantic_function.name == function.name
+            same_identity(semantic_function)
                 && semantic_function.span.as_ref().is_some_and(|span| {
-                    // Span containment, not equality: the SSA frontend reports a
-                    // zero-width point for methods while tree-sitter reports the full
-                    // declaration span (see `matching_core_function`). A root that is a
-                    // method must still map to its `qualified` identity.
-                    function.span.start_byte <= span.start_byte
+                    span.start_byte == span.end_byte
+                        && function.span.start_byte <= span.start_byte
                         && span.start_byte <= function.span.end_byte
                 })
         })
@@ -292,28 +310,73 @@ fn qualified_for_function_id(
 ///
 /// The Go SSA frontend and the core (tree-sitter) facts disagree on the span of a
 /// METHOD: tree-sitter reports the FULL declaration span (`func (r R) M() {...}`),
-/// while the SSA frontend reports a zero-width POINT at the `func` token. A
-/// declaration-named, file-scoped method identity (`R.M`) is unique within a file, so
-/// the match keys on `file + language + name` and accepts the semantic span when it is
-/// CONTAINED within the core declaration span (a point-span inside the declaration, or
-/// the exact-equal span regular functions already produce). This is what lets the RTA
-/// driver map a concrete method to its already-built semantic function node (whose key
-/// uses the core declaration span) — without it, interface dispatch resolves to nothing
-/// for real Go methods (Phase 48 verification surfaced this). Honest by construction:
-/// `name` + `file` disambiguate, and containment never widens beyond one declaration.
+/// while the SSA frontend reports a zero-width POINT at the `func` token. To bridge
+/// that gap WITHOUT over-matching, prefer an EXACT span match (regular functions and
+/// any frontend that already reports the declaration span) and fall back to
+/// point-in-declaration CONTAINMENT only when the semantic span is a zero-width point
+/// (the documented SSA-method case). Containment is not a unique relation — two
+/// same-named declarations whose byte ranges nest could otherwise mis-map under a
+/// first-match-wins scan (review WR-04) — so the fallback both requires a zero-width
+/// point and is the narrowest match available. Honest by construction: `name` + `file`
+/// disambiguate and the exact match is tried first.
 fn matching_core_function<'a>(
     db: &'a AnalysisDb,
     semantic_function: &GoSemanticFunctionFact,
 ) -> Option<&'a FunctionFact> {
     let file = semantic_function.file?;
     let span = semantic_function.span.as_ref()?;
-    db.functions().iter().find(|function| {
-        function.file == file
-            && function.language == Language::Go
-            && function.name == semantic_function.name
-            && function.span.start_byte <= span.start_byte
-            && span.start_byte <= function.span.end_byte
-    })
+    matching_core_function_for(db, file, &semantic_function.name, span)
+}
+
+/// Shared file+language+name+span disambiguation for mapping a Go semantic span to its
+/// core `FunctionFact` (used by both [`matching_core_function`] and
+/// [`qualified_for_function_id`] so the two directions stay in lockstep, WR-04).
+///
+/// Resolution order:
+/// 1. EXACT span equality (`start == start && end == end`) — the precise, unambiguous
+///    match for regular functions / declaration-span frontends.
+/// 2. Only when the semantic span is a zero-width POINT (`start == end`, the SSA-method
+///    case), the innermost core declaration CONTAINING that point. "Innermost" (the
+///    narrowest containing span) is chosen deterministically so nested same-named
+///    ranges resolve to the tightest enclosing declaration rather than a first-match.
+fn matching_core_function_for<'a>(
+    db: &'a AnalysisDb,
+    file: FileId,
+    name: &str,
+    span: &Span,
+) -> Option<&'a FunctionFact> {
+    let same_identity = |function: &&'a FunctionFact| {
+        function.file == file && function.language == Language::Go && function.name == name
+    };
+
+    // 1. Prefer an exact-equal span (deterministic, unambiguous).
+    if let Some(exact) = db.functions().iter().find(|function| {
+        same_identity(function)
+            && function.span.start_byte == span.start_byte
+            && function.span.end_byte == span.end_byte
+    }) {
+        return Some(exact);
+    }
+
+    // 2. Fall back to point-in-declaration ONLY for a zero-width semantic point (the
+    //    documented SSA-method case), choosing the INNERMOST containing declaration so
+    //    a nested same-named range cannot mis-map to an outer one.
+    if span.start_byte != span.end_byte {
+        return None;
+    }
+    db.functions()
+        .iter()
+        .filter(|function| {
+            same_identity(function)
+                && function.span.start_byte <= span.start_byte
+                && span.start_byte <= function.span.end_byte
+        })
+        .min_by_key(|function| {
+            function
+                .span
+                .end_byte
+                .saturating_sub(function.span.start_byte)
+        })
 }
 
 /// Reproduces `semantic_graph::build::function_node_key` so a Go function can be
@@ -623,5 +686,102 @@ mod tests {
         assert_eq!(methods.len(), 1);
         assert_eq!(methods[0].method_name, "Speak");
         assert_eq!(methods[0].node, SemanticNodeId(0));
+    }
+
+    /// WR-04: an EXACT span match must win even when a same-named core function's range
+    /// CONTAINS the semantic span. Two same-named declarations are pushed — an outer one
+    /// spanning 0..100 and an inner one spanning 40..60. A semantic span of exactly
+    /// 40..60 must map to the INNER function, never the containing outer one (which a
+    /// first-match-wins containment scan could wrongly pick).
+    #[test]
+    fn matching_core_function_prefers_exact_span_over_containing_same_name() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
+            db.push_function(FunctionFact {
+                id: FunctionId(id),
+                file,
+                name: "F".to_string(),
+                span: span(file, start, end),
+                language: Language::Go,
+                is_test: false,
+                is_exported: true,
+                cyclomatic_complexity: 1,
+                calls: Vec::new(),
+            })
+        };
+        let outer = push(&mut db, 0, 0, 100);
+        let inner = push(&mut db, 1, 40, 60);
+
+        // An exact 40..60 span resolves to the inner function, not the containing outer.
+        let matched = matching_core_function_for(&db, file, "F", &span(file, 40, 60))
+            .expect("exact span must match");
+        assert_eq!(matched.id, inner);
+        assert_ne!(matched.id, outer);
+    }
+
+    /// WR-04: a zero-width SSA point that lands inside TWO same-named containing
+    /// declarations resolves to the INNERMOST (narrowest) one, deterministically, rather
+    /// than the first scanned. Point 45 lies inside both 0..100 and 40..60; the narrower
+    /// 40..60 wins.
+    #[test]
+    fn matching_core_function_point_fallback_picks_innermost_containing() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
+            db.push_function(FunctionFact {
+                id: FunctionId(id),
+                file,
+                name: "F".to_string(),
+                span: span(file, start, end),
+                language: Language::Go,
+                is_test: false,
+                is_exported: true,
+                cyclomatic_complexity: 1,
+                calls: Vec::new(),
+            })
+        };
+        let _outer = push(&mut db, 0, 0, 100);
+        let inner = push(&mut db, 1, 40, 60);
+
+        // A zero-width point (45..45) inside both ranges resolves to the innermost.
+        let matched = matching_core_function_for(&db, file, "F", &span(file, 45, 45))
+            .expect("point inside a declaration must match");
+        assert_eq!(matched.id, inner);
+    }
+
+    /// WR-04: a non-zero-width semantic span that does NOT exactly equal any core span
+    /// must NOT fall back to containment — the fallback is reserved for zero-width SSA
+    /// points. A 45..50 span inside 0..100 (but not exactly equal) matches nothing.
+    #[test]
+    fn matching_core_function_rejects_inexact_nonpoint_span() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "F".to_string(),
+            span: span(file, 0, 100),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        // 45..50 is neither exact nor a zero-width point, so no match (no loose
+        // containment for ranged spans).
+        assert!(matching_core_function_for(&db, file, "F", &span(file, 45, 50)).is_none());
     }
 }
