@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: executing
-last_updated: "2026-06-02T06:46:49.793Z"
+status: verifying
+last_updated: "2026-06-02T07:27:56.052Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 13
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 23
-  completed_plans: 22
-  percent: 38
+  completed_plans: 23
+  percent: 46
 ---
 
 # State: polint
@@ -42,7 +42,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 Phase: 47 (Unified Solver Core & Derived-Edge Provenance) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-02
 
 ### Open repo-admin action (T-42-04-10)
@@ -185,6 +185,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 47-03]: `polint.solver` registered in the reserved slot (after `polint.semantic_graph`, before `polint.refined_calls`, D-13); cache key digests upstream output digests (semantic_graph + type_value_alias points-to families) + the `SolverBudget` (D-15); validation enforces the precision ceiling + a bounded D-12 solver↔summary cycle-detection check; determinism gate (10-shuffle byte-identical) and leak gate (`ALLOWED_PRELUDE` unchanged) stay green. Adding the provider touched 11 provider-order snapshot sites (memory floor of ~7 confirmed conservative).
 - Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
 - Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
 - Merge module graph support over the static plan support view, then symbol graph support over module support, before rules run.

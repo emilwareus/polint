@@ -119,7 +119,7 @@ May run in parallel with Phase 45 (shares no Rust modules; Go sidecar workstream
 **Plans**: 3 total
 - [x] 47-01-PLAN.md — analysis::solver core: VecDeque worklist engine + SolverBudget/BudgetStatus + SolverPolicy trait (points-to fold as first real impl + Go/TS honest stubs) (GRAPH-03)
 - [x] 47-02-PLAN.md — DerivedEdgeProvenance (contributing facts total-ordered by stable ID + constraint kind + solver step) + derived-edge fact family/store + polint explain consumption + deletion property test (GRAPH-04)
-- [ ] 47-03-PLAN.md — polint.solver provider/cache-key/validate wiring + dependency-contract doc + cycle-detection fixture + ~7 provider-order snapshot updates + determinism-gate + public-surface-leak proof (GRAPH-03, GRAPH-04)
+- [x] 47-03-PLAN.md — polint.solver provider/cache-key/validate wiring + dependency-contract doc + cycle-detection fixture + ~7 provider-order snapshot updates + determinism-gate + public-surface-leak proof (GRAPH-03, GRAPH-04)
 
 ### Phase 48: Go RTA Driver
 **Goal**: polint resolves Go interface calls and dynamic dispatch through a hand-rolled RTA driver over the unified solver, lifting Go x/tools RTA recall toward the 70-90% algorithmic ceiling while holding precision.
@@ -212,7 +212,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 44 | Semantic Graph Skeleton & Constraint Vocabulary | 3/3 | Complete    | 2026-05-30 |
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 5/5 | Complete    | 2026-05-31 |
 | 46 | Go Semantic Frontend & Sidecar | 4/4 | Complete    | 2026-06-01 |
-| 47 | Unified Solver Core & Derived-Edge Provenance | 2/3 | In Progress|  |
+| 47 | Unified Solver Core & Derived-Edge Provenance | 3/3 | Complete   | 2026-06-02 |
 | 48 | Go RTA Driver | 0/0 | Not started | - |
 | 49 | JS/TS Function-Token Propagation Driver | 0/0 | Not started | - |
 | 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 0/0 | Not started | - |
