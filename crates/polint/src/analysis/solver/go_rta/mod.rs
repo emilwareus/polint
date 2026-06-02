@@ -53,10 +53,5 @@ pub(crate) mod dispatch;
 pub(crate) mod fixpoint;
 pub(crate) mod inputs;
 
-// Consumed by `GoRtaPolicy` in Plan 02 Task 3 (the stub replacement routes production
-// through the engine). The `allow` keeps the module warning-free until that wiring
-// lands in the same plan; remove it once the policy imports these.
-#[allow(unused_imports)]
 pub(crate) use fixpoint::solve_go_rta;
-#[allow(unused_imports)]
 pub(crate) use inputs::GoRtaInputs;

@@ -127,6 +127,66 @@ impl SolverEngine {
             steps,
         }
     }
+
+    /// Drive every registered policy AND the points-to `CopyEdge` closure into ONE
+    /// merged [`SolverOutput`] under one [`SolverBudget`] (D-02, the reserved-seam
+    /// composition Phase 48 realizes).
+    ///
+    /// Composition, NOT rewrite (the acceptance bar is points-to byte-identity):
+    /// 1. the points-to transitive `CopyEdge` closure is computed via the existing
+    ///    [`derive_edges`] over `copy_edge_constraints`, UNCHANGED — so its derived
+    ///    edges and fixtures stay byte-identical (`points_to_via_engine_equals_solve_
+    ///    points_to` / `derive_edges_is_shuffle_stable` prove this);
+    /// 2. the registered policies are driven via [`Self::run`]; each policy's
+    ///    `derived_edges` are collected (the points-to policy contributes none — its
+    ///    edges are the closure in step 1; the Go RTA policy contributes its resolved
+    ///    call edges);
+    /// 3. the two edge sets are concatenated, the run-level `budget_status` is the
+    ///    worst-case across the closure and the policy run, and the result is
+    ///    `normalized()` (dense IDs only after the stable-key sort, D-02), which is
+    ///    what keeps the merged output byte-stable under input shuffle.
+    ///
+    /// The engine still owns the single-fixpoint-per-run / bounded-outer-iteration
+    /// contract (each policy runs one fixpoint; `run`'s `max_outer_iterations` bounds
+    /// the policy drain; `derive_edges` is per-source bounded by `max_steps`).
+    pub(crate) fn run_to_solver_output(
+        &self,
+        copy_edge_constraints: &[ConstraintFact],
+    ) -> SolverOutput {
+        // Step 1: the points-to CopyEdge closure, byte-identical to today's production.
+        let points_to_output = derive_edges(copy_edge_constraints, &self.budget);
+
+        // Step 2: drive the registered policies (points-to fold + Go RTA) and collect
+        // their derived edges.
+        let run = self.run();
+        let mut derived_edges = points_to_output.derived_edges;
+        for record in &run.policy_outcomes {
+            derived_edges.extend(record.outcome.derived_edges.iter().cloned());
+        }
+
+        // Step 3: worst-case budget combine + normalize (stable-key sort, dense IDs).
+        let budget_status =
+            combine_budget_status(points_to_output.budget_status, run.budget_status);
+        SolverOutput {
+            derived_edges,
+            budget_status,
+        }
+        .normalized()
+    }
+}
+
+/// Worst-case combine of two run-level budget statuses for the merged solver output:
+/// any `BudgetExceeded` wins (an exhausted sub-domain is never masked); otherwise
+/// `WithinBudget` if either ran; `NotRun` only if neither did. `NotRun` from the
+/// policy run (empty policy set) does not mask a real points-to signal.
+fn combine_budget_status(a: BudgetStatus, b: BudgetStatus) -> BudgetStatus {
+    if a == BudgetStatus::BudgetExceeded || b == BudgetStatus::BudgetExceeded {
+        BudgetStatus::BudgetExceeded
+    } else if a == BudgetStatus::WithinBudget || b == BudgetStatus::WithinBudget {
+        BudgetStatus::WithinBudget
+    } else {
+        BudgetStatus::NotRun
+    }
 }
 
 /// Derive transitive copy edges over the unified `ConstraintKind::CopyEdge`
@@ -432,6 +492,7 @@ mod tests {
         PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
     };
     use crate::analysis::points_to::solver::{PointsToBudget, solve_points_to};
+    use crate::analysis::solver::go_rta::GoRtaInputs;
     use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
 
     fn constraint(stable_key: &str, kind: PointsToConstraintKind) -> PointsToConstraintFact {
@@ -550,10 +611,16 @@ mod tests {
     }
 
     #[test]
-    fn engine_drives_stubs_to_zero_results() {
+    fn engine_drives_empty_go_rta_and_ts_stub_to_zero_results() {
+        // A Go RTA policy with an EMPTY input snapshot (no roots/callsites) and the TS
+        // stub both derive nothing — proving the engine drives them and an empty Go
+        // snapshot is honest (no fabricated edges).
         let budget = SolverBudget::default();
         let engine = SolverEngine::new(
-            vec![Box::new(GoRtaPolicy), Box::new(TsTokensPolicy)],
+            vec![
+                Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
+                Box::new(TsTokensPolicy),
+            ],
             budget,
         );
         let run = engine.run();
@@ -564,7 +631,8 @@ mod tests {
         assert!(
             run.policy_outcomes
                 .iter()
-                .all(|record| record.outcome.points_to.is_none())
+                .all(|record| record.outcome.points_to.is_none()
+                    && record.outcome.derived_edges.is_empty())
         );
         assert_eq!(run.budget_status, BudgetStatus::WithinBudget);
     }

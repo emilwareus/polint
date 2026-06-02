@@ -21,7 +21,9 @@ use std::collections::BTreeSet;
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
-use crate::analysis::solver::engine::derive_edges;
+use crate::analysis::solver::engine::SolverEngine;
+use crate::analysis::solver::go_rta::GoRtaInputs;
+use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
@@ -60,10 +62,27 @@ pub(crate) fn derive_solver_with_cache_stats(
 ) -> SolverProviderRunOutput {
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
-    // Phase 1-2: drive the solver over the closed input snapshot (the stored
-    // semantic-graph constraints). The build is read-only; derive_edges normalizes.
+    // Phase 1-2: drive the unified solver ENGINE over the closed input snapshot (D-02,
+    // the reserved seam). The points-to CopyEdge closure (`derive_edges`, byte-
+    // identical) AND the Go RTA policy's resolved call edges converge into one
+    // SolverOutput under one SolverBudget. The build is read-only; the engine
+    // normalizes the merged output.
     let constraints = db.semantic_constraints().to_vec();
-    let output = derive_edges(&constraints, &budget);
+    let go_rta_inputs = GoRtaInputs::from_db(db);
+    let engine = SolverEngine::new(
+        vec![
+            // Points-to fold (D-03): its CopyEdge closure is the byte-identical
+            // `derive_edges` output inside `run_to_solver_output`; this drives the
+            // sub-domain under the shared budget.
+            Box::new(PointsToPolicy::new(db.points_to_constraints().to_vec())),
+            // The real Go RTA policy (GO-05): contributes resolved call edges.
+            Box::new(GoRtaPolicy::new(go_rta_inputs)),
+            // The TS token policy stays an honest stub until Phase 49 (JS-04).
+            Box::new(TsTokensPolicy),
+        ],
+        budget,
+    );
+    let output = engine.run_to_solver_output(&constraints);
 
     // Phase 3: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
@@ -153,6 +172,17 @@ fn solver_output_digest(
             "budget.points_to.max_dynamic_vars={}",
             budget.points_to.max_dynamic_vars
         ),
+        // Go RTA sub-budget knobs (Phase 48, D-12): folded explicitly here in addition
+        // to riding the parameter digest, so a Go-knob change unmissably invalidates.
+        format!(
+            "budget.go.address_taken_threshold={}",
+            budget.go.address_taken_threshold
+        ),
+        format!(
+            "budget.go.max_candidates_per_callsite={}",
+            budget.go.max_candidates_per_callsite
+        ),
+        format!("budget.go.max_rta_rounds={}", budget.go.max_rta_rounds),
     ];
 
     parts.extend(output.derived_edges.iter().map(|edge| {

@@ -585,11 +585,18 @@ impl AnalysisKernel {
         // derived edges + provenance, and folds the semantic_graph + points-to source
         // (type_value_alias) output digests plus the SolverBudget into its own output
         // digest (D-15). Auto-enrolls in the Phase 43 determinism gate (D-14).
+        // Thread the [solver].go config into SolverBudget.go (D-10/D-11), mirroring how
+        // the reachability provider reaches `reachability.roots`. Cross-domain fields
+        // stay at their defaults; absent config falls back to GoRtaSubBudget::default().
+        let solver_budget = crate::analysis::solver::budget::SolverBudget {
+            go: input.loaded.config.solver.to_go_sub_budget(),
+            ..crate::analysis::solver::budget::SolverBudget::default()
+        };
         let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.solver"),
-            crate::analysis::solver::budget::SolverBudget::default(),
+            solver_budget,
             semantic_graph_dependency_output_digest,
             type_value_alias_dependency_output_digest.clone(),
         );

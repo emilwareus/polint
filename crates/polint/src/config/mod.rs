@@ -80,10 +80,6 @@ impl SolverConfig {
     /// Overlay present `[solver.go]` config values onto [`GoRtaSubBudget::default()`]
     /// (D-11). Absent knobs keep their default; this is the single mapper the kernel
     /// uses to build `SolverBudget.go` from `.polint.toml`.
-    // Consumed by the kernel solver call site in Plan 02 Task 3 (config -> budget
-    // threading). The unit tests already exercise it; the allow keeps non-test builds
-    // warning-free until the kernel wiring lands in the same plan.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn to_go_sub_budget(&self) -> GoRtaSubBudget {
         let mut budget = GoRtaSubBudget::default();
         if let Some(value) = self.go.address_taken_threshold {
