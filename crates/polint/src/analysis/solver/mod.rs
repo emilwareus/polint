@@ -53,6 +53,7 @@ pub(crate) mod budget;
 pub(crate) mod cache_key;
 pub(crate) mod engine;
 pub(crate) mod facts;
+pub(crate) mod go_rta;
 pub(crate) mod policy;
 pub(crate) mod provenance;
 pub(crate) mod provider;

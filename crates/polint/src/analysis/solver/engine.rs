@@ -374,7 +374,11 @@ impl PathMeta {
 /// Severity rank of a derivation status (#4): `Present` is the best/most-trusted (0);
 /// higher is less trusted. The total order drives both `weakest_status` and the
 /// worst-path fixpoint comparison, so it is the single source of severity ordering.
-fn status_rank(status: PointsToStatus) -> u8 {
+///
+/// `pub(crate)` so the Go RTA dispatch resolver (`go_rta::dispatch`) reuses the SAME
+/// severity ordering for its worst-trust edge status (D-09), rather than minting a
+/// parallel ranking.
+pub(crate) fn status_rank(status: PointsToStatus) -> u8 {
     match status {
         PointsToStatus::Present => 0,
         PointsToStatus::Unknown => 1,
@@ -385,8 +389,9 @@ fn status_rank(status: PointsToStatus) -> u8 {
 }
 
 /// Severity rank of a precision tier (#4): `FlowInsensitive` is the most precise a
-/// derived edge may claim (0); higher is weaker.
-fn precision_rank(precision: PointsToPrecision) -> u8 {
+/// derived edge may claim (0); higher is weaker. `pub(crate)` for the same Go RTA
+/// reuse as [`status_rank`].
+pub(crate) fn precision_rank(precision: PointsToPrecision) -> u8 {
     match precision {
         PointsToPrecision::FlowInsensitive => 0,
         PointsToPrecision::LocalFlowSensitive => 1,
@@ -398,8 +403,9 @@ fn precision_rank(precision: PointsToPrecision) -> u8 {
 }
 
 /// Worst-of-two derivation status (#4): the more severe (higher-ranked) one wins.
-/// Deterministic and independent of input order.
-fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
+/// Deterministic and independent of input order. `pub(crate)` so the Go RTA dispatch
+/// resolver inherits the WEAKEST status across its adopted derivation (D-09).
+pub(crate) fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
     if status_rank(a) >= status_rank(b) {
         a
     } else {
@@ -408,8 +414,9 @@ fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
 }
 
 /// Worst-of-two precision (#4): the weaker (higher-ranked) tier wins. Deterministic
-/// and independent of input order.
-fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
+/// and independent of input order. `pub(crate)` for the same Go RTA reuse as
+/// [`weakest_status`].
+pub(crate) fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
     if precision_rank(a) >= precision_rank(b) {
         a
     } else {
