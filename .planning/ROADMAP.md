@@ -131,7 +131,7 @@ May run in parallel with Phase 45 (shares no Rust modules; Go sidecar workstream
   3. Per-language `solver_config.go.*` knobs (e.g., address-taken threshold) exist and a polyglot Go+TS canary fixture exercises cross-language non-regression.
   4. Native fixture coverage proves RTA produces benchmark-grade edges on Go x/tools testdata and the determinism gate still passes.
 **Plans**: 3 total
-- [ ] 48-01-PLAN.md — Go-frontend RTA-signal emission: sidecar harvests *ssa.MakeInterface instantiated types + *ssa.MakeClosure/func-value address-taken + dynamic-callsite dispatch detail; new crate-private GoSemantic* facts lowered/stored/validated/cache-keyed (GO-05)
+- [x] 48-01-PLAN.md — Go-frontend RTA-signal emission: sidecar harvests *ssa.MakeInterface instantiated types + *ssa.MakeClosure/func-value address-taken + dynamic-callsite dispatch detail; new crate-private GoSemantic* facts lowered/stored/validated/cache-keyed (GO-05)
 - [ ] 48-02-PLAN.md — analysis::solver::go_rta RTA fixpoint policy (reachability ⊗ instantiated-types ⊗ dispatch) + SolverEngine production routing + PolicyOutcome derived-edge channel + GoRtaSubBudget + [solver] config table + cache-key; points-to byte-identical (GO-05)
 - [ ] 48-03-PLAN.md — verification: iteration-cap BudgetExceeded fixture + interface-dispatch/address-taken native fixtures + polyglot Go+TS canary + go_rta determinism fixture; determinism + public-surface-leak gates stay green (GO-05)
 
@@ -216,7 +216,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 5/5 | Complete    | 2026-05-31 |
 | 46 | Go Semantic Frontend & Sidecar | 4/4 | Complete    | 2026-06-01 |
 | 47 | Unified Solver Core & Derived-Edge Provenance | 3/3 | Complete    | 2026-06-02 |
-| 48 | Go RTA Driver | 0/3 | Planned | - |
+| 48 | Go RTA Driver | 1/3 | In Progress|  |
 | 49 | JS/TS Function-Token Propagation Driver | 0/0 | Not started | - |
 | 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 0/0 | Not started | - |
 | 51 | Adaptation Model Layer | 0/0 | Not started | - |

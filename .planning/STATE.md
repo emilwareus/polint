@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-02T17:56:56.841Z"
-last_activity: 2026-06-02 -- Phase 48 planning complete
+last_updated: "2026-06-02T18:27:09.854Z"
+last_activity: 2026-06-02 -- Phase 48 Plan 01 complete (Go-frontend RTA-signal emission)
 progress:
   total_phases: 13
   completed_phases: 6
   total_plans: 26
-  completed_plans: 23
+  completed_plans: 24
   percent: 46
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 48 — go rta driver
+**Current focus:** Phase 48 — go-rta-driver
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 48
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-02 -- Phase 48 planning complete
+Phase: 48 (go-rta-driver) — EXECUTING
+Plan: 2 of 3
+Status: Plan 01 complete (Go-frontend RTA-signal emission); ready to execute Plan 02 (go_rta fixpoint)
+Last activity: 2026-06-02 -- Completed 48-01-PLAN.md
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -167,6 +167,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
 | 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
+| 48 | Executing | 1/3 plans complete; Plan 01 Go-frontend RTA-signal emission done — sidecar emits instantiated_type/address_taken/dynamic_dispatch rows (SchemaVersion -> polint-go-semantic-2), three crate-private GoSemantic* facts lowered/validated/cache-keyed (go-semantic-facts-2) + AnalysisDb accessors; leak + determinism gates green; provider-order slot unchanged; requirement GO-05 (in progress) |
 
 ## Accumulated Context
 
@@ -185,6 +186,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 48-01]: Go sidecar harvests the RTA rapid-type set from `*ssa.MakeInterface` ONLY — the `*ssa.Alloc`/`MakeMap`/`MakeSlice`/`MakeChan` families are deliberately excluded because allocation alone does not make a type dynamically dispatchable under x/tools RTA (only interface conversion does), so adding them would over-approximate and flood precision. `address_taken` from `*ssa.MakeClosure`/func-value operands; `dynamic_dispatch` detail joins its callsite via `callsite_stable_key`.
+- [Phase 48-01]: Schema-pin lockstep — `decode_ndjson_str` strictly pins `GO_SEMANTIC_SCHEMA`, so the Go `SchemaVersion` bump to `polint-go-semantic-2` forced bumping the Rust constant, adding the three new `allowed_kinds`, and updating every NDJSON test fixture (protocol/lower/tests/provider/client) to `-2`. `GO_SEMANTIC_SCHEMA_LABEL` → `go-semantic-facts-2`; the provider parameter digest folds `address_taken_v1`/`instantiated_type_v1`/`dynamic_dispatch_v1` (D-12). New `GoSemantic*Id` newtypes stay in `go/semantic/facts.rs` (not `analysis/ids.rs`); `assert_small_id_contract` unperturbed; public-surface-leak + determinism gates green; `polint.solver` provider-order slot unchanged.
 - [Phase 47-03]: `polint.solver` registered in the reserved slot (after `polint.semantic_graph`, before `polint.refined_calls`, D-13); cache key digests upstream output digests (semantic_graph + type_value_alias points-to families) + the `SolverBudget` (D-15); validation enforces the precision ceiling + a bounded D-12 solver↔summary cycle-detection check; determinism gate (10-shuffle byte-identical) and leak gate (`ALLOWED_PRELUDE` unchanged) stay green. Adding the provider touched 11 provider-order snapshot sites (memory floor of ~7 confirmed conservative).
 - Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
 - Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
