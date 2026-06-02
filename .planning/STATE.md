@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-02T06:21:06.045Z"
+last_updated: "2026-06-02T06:46:49.793Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 13
   completed_phases: 5
   total_plans: 23
-  completed_plans: 21
+  completed_plans: 22
   percent: 38
 ---
 
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 47 (Unified Solver Core & Derived-Edge Provenance) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-06-02
 
@@ -443,11 +443,17 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 47-01]: BudgetStatus closed enum (WithinBudget/BudgetExceeded/NotRun) is pinned-order byte-stable with no repr(u8); budget exhaustion surfaces honestly (D-06), never a silent drop.
 - [Phase 47-01]: SolverPolicy trait ships exactly ONE real impl (points_to) + two honest stubs (GoRtaPolicy reserved for Phase 48 GO-05, TsTokensPolicy reserved for Phase 49 JS-04) that derive nothing (D-07).
 - [Phase 47-01]: SolverEngine owns a deterministic policy-index VecDeque worklist + SolverBudget enforcement + monotonic u64 step counter (for Plan 02 provenance solver-step), driving policies to a single fixpoint per run.
+- [Phase 47-02]: DerivedEdgeProvenance (D-08) carries contributing facts total-ordered by stable ID (sorted + de-duplicated in ::new), the producing ConstraintKind::as_str() label (owned String so the fact derives Deserialize), and the engine's monotonic u64 solver step; ContributingFact stores only the stable_key (the FactFamily label is folded into it via stable_key_from_parts).
+- [Phase 47-02]: FactFamily::SolverDerivedEdge + DerivedEdgeFact (serde-skip dense DerivedEdgeId, reuses PointsToStatus/PointsToPrecision); derived edges reject FactPrecision::Exact via derived_edge_precision_ceiling (no arm maps to Exact, D-06), locked by an exhaustive unit test.
+- [Phase 47-02]: SolverOutput/SolverStore mirror semantic_graph store — normalized() sorts by (stable_key, id) then assigns dense IDs (shuffle-stable), from_output validates duplicate stable keys + the precision ceiling, SOLVER_PROVIDER_ID = "polint.solver" (provider registration deferred to Plan 03).
+- [Phase 47-02]: engine::derive_edges computes the transitive CopyEdge closure over a deterministic BTree worklist, accumulating the contributing-constraint set per derived edge so provenance is genuinely load-bearing.
+- [Phase 47-02]: D-09 deletion property test proves deleting ANY single contributing fact does not reproduce the transitive derived edge; D-10 wires polint explain via a pub(crate) cfg(test)-facing seam (explain_derived_edge_provenance) with NO new public ExplainReport/ExplainRuleRow field and ALLOWED_PRELUDE unchanged.
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 47-unified-solver-core-derived-edge-provenance | 02 | 21 min | 3 | 8 |
 | 44-semantic-graph-skeleton-constraint-vocabulary | 03 | 15 min | 3 | 13 |
 | 44-semantic-graph-skeleton-constraint-vocabulary | 02 | 13 min | 3 | 5 |
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
