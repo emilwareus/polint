@@ -85,7 +85,8 @@ use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
 use crate::go::semantic::facts::{
-    GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticMethodSetFact,
+    GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
 use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore};
@@ -748,6 +749,9 @@ pub struct AnalysisDb {
     go_semantic_functions: Vec<GoSemanticFunctionFact>,
     go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
     go_semantic_method_sets: Vec<GoSemanticMethodSetFact>,
+    go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
+    go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
+    go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
     go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
@@ -1480,6 +1484,9 @@ impl AnalysisDb {
         self.go_semantic_functions = store.output().functions.clone();
         self.go_semantic_callsites = store.output().callsites.clone();
         self.go_semantic_method_sets = store.output().method_sets.clone();
+        self.go_semantic_address_taken = store.output().address_taken.clone();
+        self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
+        self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
         self.go_semantic_package_errors = store.output().package_errors.clone();
         Ok(())
     }
@@ -1502,6 +1509,30 @@ impl AnalysisDb {
     )]
     pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
         &self.go_semantic_method_sets
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Address-taken facts are stored privately for the Plan 2 go_rta dispatch-candidate set (GO-05)."
+    )]
+    pub(crate) fn go_semantic_address_taken(&self) -> &[GoSemanticAddressTakenFact] {
+        &self.go_semantic_address_taken
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Instantiated-type facts are stored privately for the Plan 2 go_rta rapid-type filter (GO-05)."
+    )]
+    pub(crate) fn go_semantic_instantiated_types(&self) -> &[GoSemanticInstantiatedTypeFact] {
+        &self.go_semantic_instantiated_types
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Dynamic-dispatch detail is stored privately for the Plan 2 go_rta method-set matching (GO-05)."
+    )]
+    pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
+        &self.go_semantic_dynamic_dispatch
     }
 
     #[allow(

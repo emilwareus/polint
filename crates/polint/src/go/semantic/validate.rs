@@ -3,7 +3,8 @@ use std::path::Path;
 
 use crate::analysis::error::AnalysisError;
 use crate::go::semantic::facts::{
-    GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticPackageFact,
+    GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact, GoSemanticFunctionFact,
+    GoSemanticPackageFact,
 };
 use crate::go::semantic::store::{GO_SEMANTIC_PROVIDER_ID, GoSemanticFactsOutput};
 
@@ -30,6 +31,27 @@ pub(crate) fn validate_go_semantic_output(
             .map(|fact| fact.stable_key.as_str()),
     )?;
     validate_unique(
+        "address_taken",
+        output
+            .address_taken
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    )?;
+    validate_unique(
+        "instantiated_type",
+        output
+            .instantiated_types
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    )?;
+    validate_unique(
+        "dynamic_dispatch",
+        output
+            .dynamic_dispatch
+            .iter()
+            .map(|fact| fact.stable_key.as_str()),
+    )?;
+    validate_unique(
         "package_error",
         output
             .package_errors
@@ -49,8 +71,41 @@ pub(crate) fn validate_go_semantic_output(
     for method_set in &output.method_sets {
         reject_empty_stable_key("method_set", &method_set.stable_key)?;
     }
+    for address_taken in &output.address_taken {
+        reject_empty_stable_key("address_taken", &address_taken.stable_key)?;
+    }
+    for instantiated_type in &output.instantiated_types {
+        reject_empty_stable_key("instantiated_type", &instantiated_type.stable_key)?;
+    }
+    for dynamic_dispatch in &output.dynamic_dispatch {
+        validate_dynamic_dispatch(dynamic_dispatch)?;
+    }
     for package_error in &output.package_errors {
         reject_empty_stable_key("package_error", &package_error.stable_key)?;
+    }
+    Ok(())
+}
+
+/// Honest-discriminant guard (D-15): a dynamic-dispatch detail row must carry a
+/// discriminant Plan 2 can match on — either an interface invoke (`interface_type` +
+/// `method`) or a func-value signature — and must join back to its callsite via a
+/// non-empty `callsite_stable_key`. A row with neither discriminant fails closed as a
+/// validation diagnostic rather than being stored as a useless/fabricated identity.
+fn validate_dynamic_dispatch(fact: &GoSemanticDynamicDispatchFact) -> Result<(), AnalysisError> {
+    reject_empty_stable_key("dynamic_dispatch", &fact.stable_key)?;
+    if fact.callsite_stable_key.is_empty() {
+        return Err(invalid_fact(format!(
+            "Go semantic dynamic_dispatch `{}` has an empty callsite_stable_key",
+            fact.stable_key
+        )));
+    }
+    let has_invoke = fact.interface_type.is_some() && fact.method.is_some();
+    let has_signature = fact.signature.is_some();
+    if !has_invoke && !has_signature {
+        return Err(invalid_fact(format!(
+            "Go semantic dynamic_dispatch `{}` carries no dispatch discriminant (need interface_type+method or signature)",
+            fact.stable_key
+        )));
     }
     Ok(())
 }
@@ -158,6 +213,65 @@ mod tests {
         };
         let err = validate_go_semantic_output(&output).unwrap_err();
         assert!(err.to_string().contains("escapes repository"));
+    }
+
+    #[test]
+    fn validate_rejects_dynamic_dispatch_without_discriminant() {
+        let output = GoSemanticFactsOutput {
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                stable_key: "dd".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                caller: "example.com/pkg.caller".to_string(),
+                callsite_stable_key: "cs".to_string(),
+                interface_type: None,
+                method: None,
+                signature: None,
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        let err = validate_go_semantic_output(&output).unwrap_err();
+        assert!(err.to_string().contains("no dispatch discriminant"));
+    }
+
+    #[test]
+    fn validate_rejects_dynamic_dispatch_with_empty_callsite_key() {
+        let output = GoSemanticFactsOutput {
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                stable_key: "dd".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                caller: "example.com/pkg.caller".to_string(),
+                callsite_stable_key: String::new(),
+                interface_type: Some("example.com/pkg.I".to_string()),
+                method: Some("M".to_string()),
+                signature: None,
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        let err = validate_go_semantic_output(&output).unwrap_err();
+        assert!(err.to_string().contains("empty callsite_stable_key"));
+    }
+
+    #[test]
+    fn validate_accepts_dynamic_dispatch_with_invoke_discriminant() {
+        let output = GoSemanticFactsOutput {
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: crate::go::semantic::facts::GoSemanticDynamicDispatchId(0),
+                stable_key: "dd".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                caller: "example.com/pkg.caller".to_string(),
+                callsite_stable_key: "cs".to_string(),
+                interface_type: Some("example.com/pkg.I".to_string()),
+                method: Some("M".to_string()),
+                signature: None,
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        assert!(validate_go_semantic_output(&output).is_ok());
     }
 
     fn function(stable_key: &str, relative_file: Option<&str>) -> GoSemanticFunctionFact {
