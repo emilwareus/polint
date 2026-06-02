@@ -18,19 +18,31 @@
 //!    per-function attribution to filter them further, and over-filtering would drop
 //!    real RTA targets. The RTA discriminant (interface invoke resolves ONLY to
 //!    callees whose receiver type is instantiated) is preserved end-to-end.
-//! 3. Each round, for every `UnresolvedDynamic` callsite whose caller is currently
-//!    reachable, resolve candidate callees via [`super::dispatch::resolve_callsite`]
-//!    (filtered by the instantiated set), record the resolved edges, and add each
-//!    newly-resolved callee to the reachable set. Iterate until the reachable set
-//!    stops growing (a fixed point).
+//! 3. Each round resolves only the `UnresolvedDynamic` callsites of the callers that
+//!    became reachable in the PRIOR round (a FRONTIER, seeded from roots), via
+//!    [`super::dispatch::resolve_callsite`] (filtered by the instantiated set),
+//!    records the resolved edges, and adds each newly-resolved callee to the reachable
+//!    set — that callee is the next round's frontier. Iterate until no new function
+//!    becomes reachable (a fixed point). A caller's callsites are resolved exactly
+//!    ONCE (when it first enters the frontier), never re-scanned every round.
 //!
 //! Budget (D-13): the loop is bounded by `budget.go.max_rta_rounds` (round cap), the
-//! cross-domain `budget.max_outer_iterations` (worklist-step cap), and
+//! Go-scaled `budget.go.max_worklist_steps` (per-callsite-resolution worklist-step
+//! cap, sized like points-to `max_steps` = 10_000, NOT the policy-count
+//! `max_outer_iterations` = 64 — review CR-01), and
 //! `budget.go.max_candidates_per_callsite` (per-callsite fan-out). The address-taken
 //! set exceeding `budget.go.address_taken_threshold` also latches exhaustion. Any
 //! cap latches the run-level [`BudgetStatus::BudgetExceeded`] — edges resolved before
 //! the cap keep their honest status (review finding #R1); the loop never runs
 //! unbounded.
+//!
+//! The frontier-only scan is what keeps the worklist-step count proportional to real
+//! work (≈ Σ reachable_callers × their_callsites) instead of growing super-linearly
+//! with the round count: a full per-round re-scan of the whole reachable set inflated
+//! the step counter so a modest multi-round graph could exceed a 64-step cap and drop
+//! real edges (review CR-01). Because the instantiated / address-taken sets are seeded
+//! once and do NOT grow during the fixpoint, resolving each caller exactly once yields
+//! the same edge set a full per-round re-scan would.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +65,15 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
             .push(index);
     }
 
+    // Reverse index `SemanticNodeId -> qualified` so a resolved callee node maps back
+    // to its identity in O(1), built once (no per-edge linear scan of the function
+    // index). Deterministic: the source map is BTree-keyed.
+    let node_to_qualified: BTreeMap<crate::analysis::ids::SemanticNodeId, &str> = inputs
+        .function_node
+        .iter()
+        .map(|(qualified, &node)| (node, qualified.as_str()))
+        .collect();
+
     // Seed the reachable set from roots (D-07). The instantiated + address-taken sets
     // are the whole reachable program's rapid-type / address-taken sets (see module
     // docs); they do not grow during the fixpoint, so the loop is bounded by reachable
@@ -60,6 +81,13 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     let mut reachable: BTreeSet<String> = inputs.roots.clone();
     let instantiated = &inputs.instantiated;
     let address_taken = &inputs.address_taken;
+
+    // The FRONTIER: callers whose callsites still need resolving THIS round. Round 1's
+    // frontier is the roots; each subsequent round's frontier is the callees newly
+    // reached in the prior round. A caller is resolved exactly once, so the step count
+    // tracks real work rather than re-scanning the whole reachable set every round
+    // (review CR-01). Deterministic (BTreeSet order).
+    let mut frontier: BTreeSet<String> = inputs.roots.clone();
 
     // Deduplicated edge accumulator keyed by stable key (the store rejects duplicate
     // stable keys; the same callee resolved in different rounds yields an identical
@@ -74,7 +102,15 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     let mut solver_step: u64 = 0;
     let mut round: usize = 0;
 
-    loop {
+    // Address-taken threshold (D-10/D-13): a pathologically large func-value surface
+    // latches exhaustion rather than exploding the candidate search. The set is seeded
+    // once and never grows during the fixpoint, so this check is loop-invariant —
+    // evaluate it once before iterating (review IN-03).
+    if address_taken.len() > budget.go.address_taken_threshold {
+        return finish(edges_by_key, true);
+    }
+
+    while !frontier.is_empty() {
         // Round cap (D-13): bound the reachability ⊗ dispatch iteration.
         if round >= budget.go.max_rta_rounds {
             budget_exceeded = true;
@@ -82,25 +118,20 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         }
         round += 1;
 
-        // Address-taken threshold (D-10/D-13): a pathologically large func-value
-        // surface latches exhaustion rather than exploding the candidate search.
-        if address_taken.len() > budget.go.address_taken_threshold {
-            budget_exceeded = true;
-            break;
-        }
-
-        // Resolve every callsite whose caller is currently reachable; collect newly
-        // reachable callees. Iterate `reachable` deterministically (BTreeSet order).
+        // Resolve only the callsites of THIS round's frontier (the callers newly
+        // reached in the prior round, or the roots in round 1). Collect callees that
+        // become newly reachable — they are the next round's frontier.
         let mut newly_reachable: BTreeSet<String> = BTreeSet::new();
-        let reachable_snapshot: Vec<String> = reachable.iter().cloned().collect();
-        for caller in &reachable_snapshot {
+        for caller in &frontier {
             let Some(callsite_indices) = callsites_by_caller.get(caller.as_str()) else {
                 continue;
             };
             for &index in callsite_indices {
-                // Worklist-step cap (D-13): one callsite resolution is one step.
+                // Worklist-step cap (D-13, CR-01): one callsite resolution is one step,
+                // bounded by the Go-scaled `max_worklist_steps` (10_000), NOT the
+                // policy-count `max_outer_iterations` (64).
                 solver_step += 1;
-                if solver_step > budget.max_outer_iterations as u64 {
+                if solver_step > budget.go.max_worklist_steps as u64 {
                     // Edges resolved before the cap keep their honest status (R1).
                     return finish(edges_by_key, true);
                 }
@@ -120,22 +151,21 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 for edge in resolution.edges {
                     // A newly-resolved callee becomes reachable, so its own callsites
                     // are resolved next round (the fixpoint). Map the target node back
-                    // to a qualified identity via the function index (reverse lookup).
-                    if let Some(callee) = qualified_for_node(inputs, edge.target)
-                        && !reachable.contains(&callee)
+                    // to a qualified identity via the prebuilt reverse index.
+                    if let Some(&callee) = node_to_qualified.get(&edge.target)
+                        && !reachable.contains(callee)
                     {
-                        newly_reachable.insert(callee);
+                        newly_reachable.insert(callee.to_string());
                     }
                     edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
                 }
             }
         }
 
-        if newly_reachable.is_empty() {
-            // Fixed point: no new function became reachable this round.
-            break;
-        }
-        reachable.extend(newly_reachable);
+        // The callees newly reached this round are the next round's frontier; fold them
+        // into the reachable set so they are never re-resolved.
+        reachable.extend(newly_reachable.iter().cloned());
+        frontier = newly_reachable;
     }
 
     finish(edges_by_key, budget_exceeded)
@@ -154,20 +184,6 @@ fn finish(edges_by_key: BTreeMap<String, DerivedEdgeFact>, budget_exceeded: bool
         budget_status,
     }
     .normalized()
-}
-
-/// Reverse-lookup a function's `qualified` identity from its semantic node, so a
-/// resolved callee can be added to the reachable set. Linear over the function index
-/// (small per run); deterministic.
-fn qualified_for_node(
-    inputs: &GoRtaInputs,
-    node: crate::analysis::ids::SemanticNodeId,
-) -> Option<String> {
-    inputs
-        .function_node
-        .iter()
-        .find(|&(_, &candidate)| candidate == node)
-        .map(|(qualified, _)| qualified.clone())
 }
 
 #[cfg(test)]
@@ -497,6 +513,206 @@ mod tests {
         let output = solve_go_rta(&inputs, &budget);
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    /// Regression for CR-01: a multi-round RTA convergence whose total dynamic
+    /// callsite-visits EXCEED the old policy-count cap (64) but which is NOT runaway
+    /// dispatch. Before the fix, the fixpoint capped its per-callsite worklist-step
+    /// counter against `max_outer_iterations` (= 64) AND re-scanned the whole reachable
+    /// set every round, so this graph spuriously latched `BudgetExceeded` and dropped
+    /// real edges. After the fix (Go-scaled `max_worklist_steps` = 10_000 + frontier-
+    /// only per-round scan) it must converge `WithinBudget` and resolve EVERY chain
+    /// edge.
+    ///
+    /// Shape: a deep reachable chain `step.0 -> step.1 -> ... -> step.N`. Each `step.i`
+    /// is a method on a distinct instantiated type `pkg.S{i}`; it has one interface
+    /// invoke of the uniquely-named method `M{i+1}`, which resolves ONLY to `step.{i+1}`
+    /// (on `pkg.S{i+1}`). Resolving the whole chain therefore needs N rounds and N
+    /// callsite-visits. With N = 80 (> 64) the old step cap would trip mid-chain.
+    #[test]
+    fn deep_multi_round_chain_exceeding_64_visits_stays_within_budget() {
+        const CHAIN: usize = 80;
+
+        let mut function_node = BTreeMap::new();
+        let mut method_sets = BTreeMap::new();
+        let mut method_set_keys = BTreeMap::new();
+        let mut methods_by_receiver = BTreeMap::new();
+        let mut instantiated = BTreeSet::new();
+        let mut instantiated_keys = BTreeMap::new();
+        let mut callsites = Vec::new();
+
+        // step.0 is the root (a plain function, the entry); step.1..=CHAIN are methods
+        // on instantiated types pkg.S1..pkg.S{CHAIN}. Node ids: step.i -> SemanticNodeId(i+1).
+        let qualified = |i: usize| -> String {
+            if i == 0 {
+                "main.main".to_string()
+            } else {
+                format!("(pkg.S{i}).M{i}")
+            }
+        };
+        for i in 0..=CHAIN {
+            function_node.insert(qualified(i), SemanticNodeId((i + 1) as u64));
+        }
+        // Each instantiated type pkg.S{i} declares its method M{i} and is in the
+        // instantiated set, so an invoke of M{i} resolves to (pkg.S{i}).M{i}.
+        for i in 1..=CHAIN {
+            let type_name = format!("pkg.S{i}");
+            let method = format!("M{i}");
+            method_sets.insert(type_name.clone(), BTreeSet::from([method.clone()]));
+            method_set_keys.insert(type_name.clone(), format!("ms|{type_name}"));
+            methods_by_receiver.insert(
+                type_name.clone(),
+                vec![GoRtaMethod {
+                    method_name: method,
+                    qualified: qualified(i),
+                    node: SemanticNodeId((i + 1) as u64),
+                }],
+            );
+            instantiated.insert(type_name.clone());
+            instantiated_keys.insert(type_name.clone(), format!("inst|{type_name}"));
+        }
+        // Caller step.i (for i in 0..CHAIN) invokes M{i+1}, reaching step.{i+1}.
+        for i in 0..CHAIN {
+            let next = i + 1;
+            callsites.push(GoRtaCallsite {
+                caller: qualified(i),
+                callsite_node: SemanticNodeId((1000 + i) as u64),
+                callsite_stable_key: format!("cs|{i}"),
+                interface_method: Some(format!("M{next}")),
+                signature: None,
+                dispatch_stable_key: format!("dd|{i}"),
+            });
+        }
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites,
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        };
+
+        // Default worklist-step cap (10_000) easily admits the 80 visits; the round cap
+        // must be raised above the chain depth so the round cap itself is not what trips
+        // (we are pinning the STEP cap's scale, the CR-01 regression). The default
+        // worklist-step cap stays untouched, proving 80 visits no longer trip 64.
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = CHAIN + 1;
+        assert!(
+            CHAIN > budget.max_outer_iterations,
+            "the chain must exceed the OLD policy-count cap ({}) to be a real regression",
+            budget.max_outer_iterations
+        );
+
+        let output = solve_go_rta(&inputs, &budget);
+
+        // The fixpoint converges honestly — NOT a spurious BudgetExceeded.
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "an {CHAIN}-visit multi-round convergence must NOT trip the worklist-step cap (CR-01)"
+        );
+        // Every chain edge step.i -> step.{i+1} is resolved (no edge silently dropped).
+        assert_eq!(
+            output.derived_edges.len(),
+            CHAIN,
+            "every chain edge must resolve; a mid-chain cap would drop the tail"
+        );
+        for i in 0..CHAIN {
+            let source = SemanticNodeId((i + 1) as u64);
+            let target = SemanticNodeId((i + 2) as u64);
+            assert!(
+                output
+                    .derived_edges
+                    .iter()
+                    .any(|edge| edge.source == source && edge.target == target),
+                "chain edge step.{i} -> step.{} must be resolved",
+                i + 1
+            );
+        }
+    }
+
+    /// CR-01 honesty floor: genuine runaway dispatch must STILL latch `BudgetExceeded`
+    /// once it exceeds the (Go-scaled) worklist-step cap. A tight `max_worklist_steps`
+    /// forces the same chain to truncate mid-resolution, proving the cap still bites
+    /// when work genuinely exceeds it (the `iteration-cap` fixture stays green for the
+    /// candidate-cap path; this pins the step-cap path).
+    #[test]
+    fn worklist_step_cap_still_latches_budget_exceeded_when_genuinely_exceeded() {
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
+        function_node.insert("(pkg.B).Step".to_string(), SemanticNodeId(5));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
+        method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.A".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.A).Step".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+        methods_by_receiver.insert(
+            "pkg.B".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.B).Step".to_string(),
+                node: SemanticNodeId(5),
+            }],
+        );
+
+        let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
+        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![
+                GoRtaCallsite {
+                    caller: "main.main".to_string(),
+                    callsite_node: SemanticNodeId(2),
+                    callsite_stable_key: "cs|main".to_string(),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: "dd|main".to_string(),
+                },
+                GoRtaCallsite {
+                    caller: "(pkg.A).Step".to_string(),
+                    callsite_node: SemanticNodeId(4),
+                    callsite_stable_key: "cs|a".to_string(),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: "dd|a".to_string(),
+                },
+            ],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        };
+
+        // A worklist-step cap of 1 admits only the first callsite resolution, so the
+        // chain truncates and the run latches BudgetExceeded honestly.
+        let mut budget = SolverBudget::default();
+        budget.go.max_worklist_steps = 1;
+        let output = solve_go_rta(&inputs, &budget);
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 }

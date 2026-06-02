@@ -183,6 +183,10 @@ fn solver_output_digest(
             budget.go.max_candidates_per_callsite
         ),
         format!("budget.go.max_rta_rounds={}", budget.go.max_rta_rounds),
+        format!(
+            "budget.go.max_worklist_steps={}",
+            budget.go.max_worklist_steps
+        ),
     ];
 
     parts.extend(output.derived_edges.iter().map(|edge| {

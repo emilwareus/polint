@@ -55,11 +55,19 @@ impl Default for PointsToSubBudget {
 ///   before the cap keep their honest status).
 /// - `max_rta_rounds` — caps the reachability ⊗ instantiated-types ⊗ dispatch
 ///   fixpoint rounds; exceeding it latches exhaustion.
+/// - `max_worklist_steps` — the Go-scaled per-callsite-resolution worklist-step cap.
+///   One step is one callsite resolution. This is sized like the points-to
+///   `max_steps` default (10_000), NOT the cross-domain `max_outer_iterations` (64,
+///   a policy-drain count): the RTA fixpoint can resolve thousands of dynamic
+///   callsite-visits across rounds on a real repo, so reusing the policy-count cap
+///   here would spuriously latch [`BudgetStatus::BudgetExceeded`] and drop real edges
+///   (Phase 48 review CR-01). Exceeding it is honest run-level exhaustion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GoRtaSubBudget {
     pub(crate) address_taken_threshold: usize,
     pub(crate) max_candidates_per_callsite: usize,
     pub(crate) max_rta_rounds: usize,
+    pub(crate) max_worklist_steps: usize,
 }
 
 impl Default for GoRtaSubBudget {
@@ -70,6 +78,9 @@ impl Default for GoRtaSubBudget {
             address_taken_threshold: 256,
             max_candidates_per_callsite: 128,
             max_rta_rounds: 32,
+            // Go-scaled worklist-step cap (CR-01): mirrors the points-to `max_steps`
+            // default (10_000), not the policy-count `max_outer_iterations` (64).
+            max_worklist_steps: 10_000,
         }
     }
 }
@@ -188,6 +199,9 @@ mod tests {
         assert_eq!(budget.go.address_taken_threshold, 256);
         assert_eq!(budget.go.max_candidates_per_callsite, 128);
         assert_eq!(budget.go.max_rta_rounds, 32);
+        // The Go-scaled worklist-step cap is sized like points-to `max_steps`
+        // (10_000), never the policy-count 64 (CR-01).
+        assert_eq!(budget.go.max_worklist_steps, 10_000);
         // The existing cross-domain/points-to defaults are still byte-identical.
         assert_eq!(budget.max_steps, 10_000);
         assert_eq!(budget.max_outer_iterations, 64);

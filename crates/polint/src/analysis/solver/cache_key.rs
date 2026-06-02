@@ -83,6 +83,10 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             budget.go.max_candidates_per_callsite
         ),
         format!("budget.go.max_rta_rounds={}", budget.go.max_rta_rounds),
+        format!(
+            "budget.go.max_worklist_steps={}",
+            budget.go.max_worklist_steps
+        ),
     ]
 }
 
@@ -123,6 +127,7 @@ mod tests {
                     "budget.go.address_taken_threshold=256",
                     "budget.go.max_candidates_per_callsite=128",
                     "budget.go.max_rta_rounds=32",
+                    "budget.go.max_worklist_steps=10000",
                 ],
             )
         );
@@ -154,6 +159,7 @@ mod tests {
                 "budget.go.address_taken_threshold=256",
                 "budget.go.max_candidates_per_callsite=128",
                 "budget.go.max_rta_rounds=32",
+                "budget.go.max_worklist_steps=10000",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);
@@ -199,6 +205,16 @@ mod tests {
             solver_provider_parameter_digest(&bumped_go),
             base,
             "changing a Go RTA sub-budget knob must change the parameter digest"
+        );
+
+        // CR-01: the Go-scaled worklist-step cap participates in the digest, so a
+        // change to it invalidates downstream.
+        let mut bumped_steps = SolverBudget::default();
+        bumped_steps.go.max_worklist_steps += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_steps),
+            base,
+            "changing the Go RTA worklist-step cap must change the parameter digest"
         );
     }
 }

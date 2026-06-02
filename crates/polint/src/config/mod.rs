@@ -74,6 +74,8 @@ pub(crate) struct SolverGoConfig {
     pub(crate) max_candidates_per_callsite: Option<usize>,
     #[serde(default)]
     pub(crate) max_rta_rounds: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_worklist_steps: Option<usize>,
 }
 
 impl SolverConfig {
@@ -90,6 +92,9 @@ impl SolverConfig {
         }
         if let Some(value) = self.go.max_rta_rounds {
             budget.max_rta_rounds = value;
+        }
+        if let Some(value) = self.go.max_worklist_steps {
+            budget.max_worklist_steps = value;
         }
         budget
     }
@@ -532,12 +537,14 @@ roots = ["pkg/path.Func", "src/x.ts#handler"]
 [solver.go]
 address_taken_threshold = 999
 max_rta_rounds = 7
+max_worklist_steps = 50000
 "#,
         )
         .unwrap();
         let budget = config.solver.to_go_sub_budget();
         assert_eq!(budget.address_taken_threshold, 999);
         assert_eq!(budget.max_rta_rounds, 7);
+        assert_eq!(budget.max_worklist_steps, 50_000);
         // The unspecified knob stays at its default.
         assert_eq!(
             budget.max_candidates_per_callsite,
