@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: executing
-last_updated: "2026-05-31T20:34:23.000Z"
-last_activity: 2026-05-31 -- Completed Phase 45 fixture and gate closure
+status: ready_to_plan
+last_updated: 2026-06-01T12:49:03.931Z
+last_activity: 2026-06-01
 progress:
   total_phases: 13
-  completed_phases: 4
-  total_plans: 16
-  completed_plans: 16
-  percent: 31
+  completed_phases: 5
+  total_plans: 20
+  completed_plans: 20
+  percent: 38
+stopped_at: Phase 46 complete (4/4) — ready to discuss Phase 47
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 46 — Go Semantic Frontend & Sidecar
+**Current focus:** Phase 47 — unified solver core & derived edge provenance
 
 ## Current Status
 
@@ -40,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 46 (Go Semantic Frontend & Sidecar) — READY
-Plan: TBD
-Status: Phase 45 complete; ready to discuss/plan Phase 46
-Last activity: 2026-05-31 -- Completed Phase 45 fixture and gate closure
+Phase: 47
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-01
 
 ### Open repo-admin action (T-42-04-10)
 

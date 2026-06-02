@@ -1,0 +1,4 @@
+[languages.go]
+module_roots = ["."]
+package_patterns = ["./..."]
+include_tests = true

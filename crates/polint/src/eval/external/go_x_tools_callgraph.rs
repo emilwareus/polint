@@ -155,11 +155,9 @@ fn go_rta_oracle_identity(
                 "go_relstring render must be non-empty for {}",
                 record.stable_key
             );
-            // NOTE: full-import-path RelString consumption in the Go RTA oracle
-            // scoring path is deferred to Phase 46 (Go semantic frontend); the
-            // oracle key intentionally stays on display_name here. Wiring the
-            // package-name-only RelString into the oracle key now would regress
-            // benchmark matching against the x/tools RTA `WANT:` bare-name oracle.
+            // The x/tools RTA `WANT:` oracle uses bare names, so benchmark matching
+            // intentionally stays on display_name even when RelString contains a
+            // full semantic package import path.
             go_x_tools_function_identity(record.display_name.as_ref())
         }
         None => go_x_tools_function_identity(fallback_name),

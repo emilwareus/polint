@@ -54,6 +54,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     go_syntax_output_digest: Digest,
     ts_syntax_output_digest: Digest,
     semantic_mir_output_digest: Digest,
+    go_semantic_output_digest: Digest,
 ) -> SemanticGraphProviderRunOutput {
     debug_assert_eq!(manifest.id, SEMANTIC_GRAPH_PROVIDER_ID);
 
@@ -67,6 +68,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // Phase 3: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
     let output_digest = semantic_graph_output_digest(
+        db,
         manifest,
         input_snapshot,
         &calls_output_digest,
@@ -81,6 +83,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &ts_syntax_output_digest,
         &semantic_mir_output_digest,
         &ts_direct_binding_output_digest,
+        &go_semantic_output_digest,
         &output,
     );
 
@@ -123,6 +126,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
 /// risks a stale graph as later phases begin consuming them.
 #[allow(clippy::too_many_arguments)]
 fn semantic_graph_output_digest(
+    db: &AnalysisDb,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_output_digest: &Digest,
@@ -137,6 +141,7 @@ fn semantic_graph_output_digest(
     ts_syntax_output_digest: &Digest,
     semantic_mir_output_digest: &Digest,
     ts_direct_binding_output_digest: &Digest,
+    go_semantic_output_digest: &Digest,
     output: &SemanticGraphOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -161,6 +166,11 @@ fn semantic_graph_output_digest(
             "ts_direct_binding_parameters={}",
             ts_direct_binding_provider_parameter_digest()
         ),
+        format!(
+            "go_semantic_output={}",
+            go_semantic_output_digest_from_db(db)
+        ),
+        format!("go_semantic_provider_output={go_semantic_output_digest}"),
     ];
     extend_component_parts(
         &mut parts,
@@ -221,6 +231,31 @@ fn semantic_graph_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "semantic_graph_output", &refs)
+}
+
+fn go_semantic_output_digest_from_db(db: &AnalysisDb) -> String {
+    let mut parts = Vec::new();
+    parts.extend(
+        db.go_semantic_packages()
+            .iter()
+            .map(|fact| format!("package={}", fact.stable_key)),
+    );
+    parts.extend(
+        db.go_semantic_functions()
+            .iter()
+            .map(|fact| format!("function={}", fact.stable_key)),
+    );
+    parts.extend(
+        db.go_semantic_callsites()
+            .iter()
+            .map(|fact| format!("callsite={}", fact.stable_key)),
+    );
+    parts.sort();
+    if parts.is_empty() {
+        return crate::cache::stable_hash(&["go_semantic_output=empty"]);
+    }
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::cache::stable_hash(&refs)
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
@@ -339,6 +374,7 @@ mod tests {
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
+            absent("polint.go.semantic"),
         )
     }
 
@@ -421,6 +457,7 @@ mod tests {
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
         let mut db_b = db_with_go_main();
@@ -439,6 +476,7 @@ mod tests {
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
         assert_ne!(with_absent, with_present);
@@ -459,8 +497,10 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]);
         let changed_module_topology =
             Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]);
+        let db = AnalysisDb::new();
 
         let base = semantic_graph_output_digest(
+            &db,
             manifest(),
             &snapshot,
             &absent("polint.calls"),
@@ -475,9 +515,11 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &base_ts_direct,
+            &absent("polint.go.semantic"),
             &output,
         );
         let changed_direct = semantic_graph_output_digest(
+            &db,
             manifest(),
             &snapshot,
             &absent("polint.calls"),
@@ -492,9 +534,11 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &changed_ts_direct,
+            &absent("polint.go.semantic"),
             &output,
         );
         let changed_topology = semantic_graph_output_digest(
+            &db,
             manifest(),
             &snapshot,
             &absent("polint.calls"),
@@ -509,6 +553,7 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &base_ts_direct,
+            &absent("polint.go.semantic"),
             &output,
         );
 

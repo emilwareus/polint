@@ -317,8 +317,9 @@ Current strengths:
 
 Current limits:
 
-- requires Go 1.24 or newer on `PATH` when using the default embedded source
-  sidecar, unless `POLINT_GO_SYMBOLS` points to a prebuilt sidecar binary
+- requires Go 1.25 or newer on `PATH` when using default embedded source
+  sidecars; prebuilt `POLINT_GO_SYMBOLS` or `POLINT_GO_FRONTEND` binaries can
+  avoid requiring Go for the corresponding sidecar
 - each analyzed Go file must belong to a Go module with a `go.mod`
 - package loading must succeed for the configured package patterns and build tags
 - setup failures produce `polint/capability` diagnostics and block requesting
@@ -329,6 +330,10 @@ Current limits:
 - no Go SSA, pointer analysis, call graph, CFG, coverage, or dataflow facts
 - no public exposure of Go object values, object addresses, package loader JSON,
   sidecar DTOs, or sidecar internals
+
+The private `polint-go-frontend` semantic sidecar used by graph analysis is
+separate from the public symbol/reference fact surface documented here. Its
+private rows are not SDK facts and should not be imported by repo-local rules.
 
 ## Cache And Determinism
 

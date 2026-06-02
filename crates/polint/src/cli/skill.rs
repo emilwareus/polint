@@ -388,8 +388,8 @@ names that could not be bound. Check `SymbolPrecision` and
 TS/JS symbol facts use Oxc for exact local lexical facts and module-linked import
 aliases where module resolution succeeds. They do not claim TypeScript
 type-checker, cross-file member/property, or declaration-file precision. Go
-symbol facts use typed package information when the sidecar can run, normally via
-Go 1.24+ on `PATH`, and analyzed Go files belong to module roots. Monorepos are
+symbol facts use typed package information when the sidecars can run, normally via
+Go 1.25+ on `PATH`, and analyzed Go files belong to module roots. Monorepos are
 configured in the single `.polint.toml` file with `[languages.go].module_roots`,
 or inferred from nearest `go.mod` files. Setup gaps are reported as
 `polint/capability` diagnostics. Symbol/reference facts are not call graph, CFG,

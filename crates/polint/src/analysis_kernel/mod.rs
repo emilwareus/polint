@@ -274,11 +274,35 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
         });
 
+        let go_semantic = crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
+            &mut db,
+            input.loaded,
+            &input_snapshot,
+            Self::provider_manifest("polint.go.semantic"),
+            go_dependency_output_digest.clone(),
+        );
+        let polint_go_semantic_cache_stats = go_semantic.cache_stats.clone();
+        let go_semantic_output_digest = go_semantic.output_digest.clone();
+        diagnostics.extend(go_semantic.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.go.semantic",
+            &db,
+            polint_go_semantic_cache_stats,
+            go_semantic_output_digest.clone(),
+        ));
+        let go_semantic_dependency_output_digest = go_semantic_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.go.semantic",
+            )
+        });
+
         let identity = crate::analysis::identity::provider::derive_identity_with_cache_stats(
             &mut db,
             &input_snapshot,
             Self::provider_manifest("polint.identity"),
             calls_dependency_output_digest.clone(),
+            go_semantic_dependency_output_digest.clone(),
         );
         let polint_identity_cache_stats = identity.cache_stats.clone();
         let identity_output_digest = identity.output_digest;
@@ -535,6 +559,7 @@ impl AnalysisKernel {
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
                 entrypoints_semantic_mir_digest.clone(),
+                go_semantic_dependency_output_digest,
             );
         let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
         let semantic_graph_output_digest = semantic_graph.output_digest.clone();
@@ -1062,6 +1087,7 @@ mod tests {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.go.semantic",
                 "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",
@@ -1979,6 +2005,7 @@ function setup() {
                 "polint.semantic_mir",
                 "polint.cfg",
                 "polint.calls",
+                "polint.go.semantic",
                 "polint.identity",
                 "polint.abstract_domains",
                 "polint.direct_summaries",

@@ -35,6 +35,7 @@ use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::values::facts::{ValueKind, ValueSubject};
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, Span};
+use crate::go::semantic::facts::{GoSemanticCallStatus, GoSemanticCallsiteFact};
 use crate::ts::binding::direct::{
     TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings_with_modules,
 };
@@ -65,6 +66,7 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
 
     builder.project_nodes(db);
     builder.project_call_edges_and_constraints(db);
+    builder.project_go_semantic(db);
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
@@ -339,6 +341,50 @@ impl GraphBuilder {
         }
     }
 
+    fn project_go_semantic(&mut self, db: &AnalysisDb) {
+        let function_node_by_qualified = db
+            .go_semantic_functions()
+            .iter()
+            .filter_map(|semantic_function| {
+                let function = matching_core_function(db, semantic_function)?;
+                let node = self.function_node(db, function)?;
+                Some((semantic_function.qualified.as_str(), node))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for callsite in db.go_semantic_callsites() {
+            let Some(core_callsite) = matching_core_callsite(db, callsite) else {
+                continue;
+            };
+            let site_key = node_key_from_identity("callsite", &core_callsite.stable_key);
+            let Some(&callsite_node) = self.node_by_key.get(&site_key) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::CallConstraint {
+                    callsite: callsite_node,
+                },
+                &callsite.stable_key,
+            );
+            if callsite.status != GoSemanticCallStatus::ResolvedStatic {
+                continue;
+            }
+            let Some(static_callee) = callsite.static_callee.as_deref() else {
+                continue;
+            };
+            let Some(&target_node) = function_node_by_qualified.get(static_callee) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::CopyEdge {
+                    dst: callsite_node,
+                    src: target_node,
+                },
+                &callsite.stable_key,
+            );
+        }
+    }
+
     // -- member-of edges ----------------------------------------------------
 
     fn project_member_of_edges(&mut self, db: &AnalysisDb) {
@@ -442,6 +488,35 @@ fn direct_binding_emits_copy_edge(kind: TsDirectBindingKind) -> bool {
             | TsDirectBindingKind::ReExportedAlias
             | TsDirectBindingKind::CommonJsRequireMember
     )
+}
+
+fn matching_core_function<'a>(
+    db: &'a AnalysisDb,
+    semantic_function: &crate::go::semantic::facts::GoSemanticFunctionFact,
+) -> Option<&'a crate::core::FunctionFact> {
+    let file = semantic_function.file?;
+    let span = semantic_function.span.as_ref()?;
+    db.functions().iter().find(|function| {
+        function.file == file
+            && function.language == crate::core::Language::Go
+            && function.name == semantic_function.name
+            && function.span.start_byte == span.start_byte
+            && function.span.end_byte == span.end_byte
+    })
+}
+
+fn matching_core_callsite<'a>(
+    db: &'a AnalysisDb,
+    semantic_callsite: &GoSemanticCallsiteFact,
+) -> Option<&'a crate::analysis::calls::facts::CallSiteFact> {
+    let file = semantic_callsite.file?;
+    let span = semantic_callsite.span.as_ref()?;
+    db.call_sites().iter().find(|callsite| {
+        callsite.file == file
+            && callsite.language == crate::core::Language::Go
+            && callsite.span.start_byte == span.start_byte
+            && callsite.span.end_byte == span.end_byte
+    })
 }
 
 struct TsDirectBindingNodeContext<'a> {
@@ -1107,6 +1182,170 @@ function run() {
                 status: TsDirectBindingStatus::Unresolved,
                 reason: Some(reason),
                 stable_key: format!("ts_direct_binding:{}", reason.as_str()),
+            }
+        }
+    }
+
+    mod go_semantic {
+        use super::*;
+        use crate::go::semantic::facts::{
+            GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticCallsiteId,
+            GoSemanticFunctionFact, GoSemanticFunctionId, GoSemanticFunctionKind,
+        };
+        use crate::go::semantic::store::GoSemanticFactsOutput;
+
+        #[test]
+        fn direct_go_call_emits_call_constraint_and_static_evidence() {
+            let mut db = go_semantic_db();
+            db.replace_go_semantic_facts(go_semantic_output(
+                GoSemanticCallStatus::ResolvedStatic,
+                Some("example.com/p.run"),
+            ))
+            .expect("go semantic facts replace");
+
+            let output = build_semantic_graph(&db);
+
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(
+                    constraint.kind,
+                    ConstraintKind::CallConstraint { .. } | ConstraintKind::CopyEdge { .. }
+                ) && constraint.stable_key.contains("go-call")
+            }));
+            SemanticGraphStore::from_output(output).expect("Go semantic graph validates");
+        }
+
+        #[test]
+        fn dynamic_go_call_emits_no_static_target_evidence() {
+            let mut db = go_semantic_db();
+            db.replace_go_semantic_facts(go_semantic_output(
+                GoSemanticCallStatus::UnresolvedDynamic,
+                None,
+            ))
+            .expect("go semantic facts replace");
+
+            let output = build_semantic_graph(&db);
+
+            let go_copy_edges = output
+                .constraints
+                .iter()
+                .filter(|constraint| {
+                    matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
+                        && constraint.stable_key.contains("go-call")
+                })
+                .count();
+            assert_eq!(go_copy_edges, 0);
+        }
+
+        fn go_semantic_db() -> AnalysisDb {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("main.go"),
+                "main.go".to_string(),
+                "package main\nfunc main(){ run() }\nfunc run(){}\n".to_string(),
+            );
+            db.push_package(PackageFact {
+                id: PackageId(0),
+                file,
+                name: "main".to_string(),
+                span: span(file),
+                language: Language::Go,
+            });
+            let caller = db.push_function(FunctionFact {
+                id: FunctionId(0),
+                file,
+                name: "main".to_string(),
+                span: span_at(file, 20, 24),
+                language: Language::Go,
+                is_test: false,
+                is_exported: false,
+                cyclomatic_complexity: 1,
+                calls: vec!["run".to_string()],
+            });
+            db.push_function(FunctionFact {
+                id: FunctionId(0),
+                file,
+                name: "run".to_string(),
+                span: span_at(file, 34, 37),
+                language: Language::Go,
+                is_test: false,
+                is_exported: false,
+                cyclomatic_complexity: 1,
+                calls: Vec::new(),
+            });
+            db.replace_call_facts(CallOutput {
+                sites: vec![CallSiteFact {
+                    id: CallSiteId(0),
+                    language: Language::Go,
+                    file,
+                    caller,
+                    owner_symbol: None,
+                    body: MirBodyId(0),
+                    operation: MirOpId(0),
+                    span: span_at(file, 28, 31),
+                    kind: CallSyntaxKind::Function,
+                    callee: CallCallee::Identifier {
+                        reference: None,
+                        name: "run".to_string(),
+                    },
+                    receiver: None,
+                    arguments: Vec::new(),
+                    result: None,
+                    status: CallTargetStatus::Resolved,
+                    precision: CallPrecision::SetupAware,
+                    stable_key: "go-core-callsite:run".to_string(),
+                }],
+                targets: Vec::new(),
+                unresolved: Vec::new(),
+            })
+            .expect("call replace");
+            db
+        }
+
+        fn go_semantic_output(
+            status: GoSemanticCallStatus,
+            static_callee: Option<&str>,
+        ) -> GoSemanticFactsOutput {
+            GoSemanticFactsOutput {
+                functions: vec![GoSemanticFunctionFact {
+                    id: GoSemanticFunctionId(0),
+                    stable_key: "go-fn-run".to_string(),
+                    package_id: "example.com/p".to_string(),
+                    package_path: "example.com/p".to_string(),
+                    name: "run".to_string(),
+                    qualified: "example.com/p.run".to_string(),
+                    signature: "()".to_string(),
+                    kind: GoSemanticFunctionKind::Function,
+                    receiver: None,
+                    relative_file: Some("main.go".to_string()),
+                    file: Some(FileId(0)),
+                    span: Some(span_at(FileId(0), 34, 37)),
+                }],
+                callsites: vec![GoSemanticCallsiteFact {
+                    id: GoSemanticCallsiteId(0),
+                    stable_key: "go-call".to_string(),
+                    package_id: "example.com/p".to_string(),
+                    package_path: "example.com/p".to_string(),
+                    caller: "example.com/p.main".to_string(),
+                    static_callee: static_callee.map(str::to_string),
+                    status,
+                    reason: None,
+                    relative_file: Some("main.go".to_string()),
+                    file: Some(FileId(0)),
+                    span: Some(span_at(FileId(0), 28, 31)),
+                }],
+                ..GoSemanticFactsOutput::default()
+            }
+        }
+
+        fn span_at(file: FileId, start: u32, end: u32) -> Span {
+            Span {
+                file,
+                start_byte: start,
+                end_byte: end,
+                start_line: 1,
+                start_col: start,
+                end_line: 1,
+                end_col: end,
             }
         }
     }

@@ -82,6 +82,11 @@ use crate::analysis_kernel::{
 use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
+use crate::go::semantic::facts::{
+    GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticMethodSetFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact,
+};
+use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -736,6 +741,11 @@ pub struct AnalysisDb {
     semantic_nodes: Vec<SemanticNodeFact>,
     semantic_edges: Vec<SemanticEdgeFact>,
     semantic_constraints: Vec<ConstraintFact>,
+    go_semantic_packages: Vec<GoSemanticPackageFact>,
+    go_semantic_functions: Vec<GoSemanticFunctionFact>,
+    go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
+    go_semantic_method_sets: Vec<GoSemanticMethodSetFact>,
+    go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
     value_facts: Vec<ValueFact>,
@@ -1431,6 +1441,47 @@ impl AnalysisDb {
 
     pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
         &self.semantic_constraints
+    }
+
+    pub(crate) fn replace_go_semantic_facts(
+        &mut self,
+        output: GoSemanticFactsOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = GoSemanticStore::from_output(output)?;
+        self.go_semantic_packages = store.output().packages.clone();
+        self.go_semantic_functions = store.output().functions.clone();
+        self.go_semantic_callsites = store.output().callsites.clone();
+        self.go_semantic_method_sets = store.output().method_sets.clone();
+        self.go_semantic_package_errors = store.output().package_errors.clone();
+        Ok(())
+    }
+
+    pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {
+        &self.go_semantic_packages
+    }
+
+    pub(crate) fn go_semantic_functions(&self) -> &[GoSemanticFunctionFact] {
+        &self.go_semantic_functions
+    }
+
+    pub(crate) fn go_semantic_callsites(&self) -> &[GoSemanticCallsiteFact] {
+        &self.go_semantic_callsites
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Method-set facts are stored privately for Phase 48 receiver/RTA expansion."
+    )]
+    pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
+        &self.go_semantic_method_sets
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Package-load errors are stored privately for capability diagnostics once the provider is kernel-wired."
+    )]
+    pub(crate) fn go_semantic_package_errors(&self) -> &[GoSemanticPackageErrorFact] {
+        &self.go_semantic_package_errors
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {

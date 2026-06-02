@@ -3,6 +3,7 @@
 
 mod adapter;
 pub(crate) mod lifecycle;
+pub(crate) mod semantic;
 #[cfg(test)]
 mod tests;
 

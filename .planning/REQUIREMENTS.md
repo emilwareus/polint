@@ -30,10 +30,10 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 
 ### Go Critical Path
 
-- [ ] **GO-01**: polint ships a `polint-go-frontend` Go sidecar binary that uses `go/packages` + `go/ssa` + `golang.org/x/tools v0.45.0` and emits NDJSON facts (functions, methods, receiver types, init, method sets, call sites, types) over stdio with a versioned schema.
-- [ ] **GO-02**: polint has `src/go/semantic/` with a sidecar client and lowering layer that maps NDJSON facts to semantic-graph constraints with stable identities and exact source spans.
-- [ ] **GO-03**: the sidecar process boundary enforces typed protocol with explicit terminators, per-request timeouts, cancellation propagation, a single long-lived sidecar per `polint check`, and orphan-process cleanup verified by a SIGTERM fixture (no surviving Go processes after 5 seconds).
-- [ ] **GO-04**: polint distinguishes `GoPackagesLoadFailed`, `GoVersionUnsupported`, and `GoSidecarTimeout` in the unsupported/unknown taxonomy and includes the sidecar binary digest + Go toolchain version in cache keys.
+- [x] **GO-01**: polint ships a `polint-go-frontend` Go sidecar binary that uses `go/packages` + `go/ssa` + `golang.org/x/tools v0.45.0` and emits NDJSON facts (functions, methods, receiver types, init, method sets, call sites, types) over stdio with a versioned schema.
+- [x] **GO-02**: polint has `src/go/semantic/` with a sidecar client and lowering layer that maps NDJSON facts to semantic-graph constraints with stable identities and exact source spans.
+- [x] **GO-03**: the sidecar process boundary enforces typed protocol with explicit terminators, per-request timeouts, cancellation propagation, a single long-lived sidecar per `polint check`, and orphan-process cleanup verified by a SIGTERM fixture (no surviving Go processes after 5 seconds).
+- [x] **GO-04**: polint distinguishes `GoPackagesLoadFailed`, `GoVersionUnsupported`, and `GoSidecarTimeout` in the unsupported/unknown taxonomy and includes the sidecar binary digest + Go toolchain version in cache keys.
 - [ ] **GO-05**: polint has a private Go RTA driver in `analysis::solver::go_rta` (reachable functions from roots, address-taken function tracking, dynamic call sites by signature, runtime types through interfaces, interface invoke by method-set, fixed-point iteration).
 
 ### JS/TS Critical Path
@@ -117,10 +117,10 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | GRAPH-03 | Phase 47 | Pending |
 | GRAPH-04 | Phase 47 | Pending |
 | GRAPH-05 | Phase 52 | Pending |
-| GO-01 | Phase 46 | Pending |
-| GO-02 | Phase 46 | Pending |
-| GO-03 | Phase 46 | Pending |
-| GO-04 | Phase 46 | Pending |
+| GO-01 | Phase 46 | Complete |
+| GO-02 | Phase 46 | Complete |
+| GO-03 | Phase 46 | Complete |
+| GO-04 | Phase 46 | Complete |
 | GO-05 | Phase 48 | Pending |
 | JS-01 | Phase 45 | Complete |
 | JS-02 | Phase 45 | Complete |
