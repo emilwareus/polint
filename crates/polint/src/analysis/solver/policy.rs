@@ -22,14 +22,22 @@ use crate::analysis::points_to::facts::PointsToConstraintFact;
 use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 
 use super::budget::{BudgetStatus, SolverBudget};
+use super::facts::DerivedEdgeFact;
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
 ///
-/// `points_to` carries the folded points-to sub-domain result (D-03) when the
-/// policy is the points-to domain; honest stubs leave it `None` and report
-/// [`BudgetStatus::WithinBudget`] over zero derivation.
+/// `derived_edges` are the solver-derived edges this policy contributes to the run's
+/// [`super::store::SolverOutput`] — the production copy-closure policy
+/// ([`super::engine::CopyClosurePolicy`]) fills this; the points-to fold and the
+/// reserved Go/TS stubs contribute none today. `points_to` carries the folded
+/// points-to sub-domain result (D-03) when the policy is the points-to domain; honest
+/// stubs leave both empty and report [`BudgetStatus::WithinBudget`] over zero
+/// derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PolicyOutcome {
+    /// Solver-derived edges this policy contributed (aggregated by the engine into
+    /// the run's [`super::store::SolverOutput`]).
+    pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     /// Folded points-to sub-domain result, if this policy is the points-to domain.
     pub(crate) points_to: Option<PointsToSolveResult>,
     /// The policy's budget outcome, projected to the unified [`BudgetStatus`].
@@ -44,6 +52,7 @@ impl PolicyOutcome {
     /// by the reserved Go/TS stubs (D-07).
     pub(crate) fn empty() -> Self {
         Self {
+            derived_edges: Vec::new(),
             points_to: None,
             budget_status: BudgetStatus::WithinBudget,
             steps: 0,
@@ -54,8 +63,10 @@ impl PolicyOutcome {
 /// The abstraction the unified solver core drives (D-07).
 ///
 /// An implementation contributes derivation over a closed snapshot and reports a
-/// budget outcome. Phase 47 ships one real impl ([`PointsToPolicy`]) and two
-/// honest stubs ([`GoRtaPolicy`], [`TsTokensPolicy`]).
+/// budget outcome. The production driver is [`super::engine::CopyClosurePolicy`] (the
+/// `CopyEdge` transitive closure); [`PointsToPolicy`] folds the points-to sub-domain
+/// in by composition (D-03); [`GoRtaPolicy`]/[`TsTokensPolicy`] are honest stubs
+/// reserved for Phases 48/49.
 pub(crate) trait SolverPolicy {
     /// Stable lowercase policy identifier (used in stable keys / diagnostics).
     fn id(&self) -> &'static str;
@@ -90,6 +101,7 @@ impl SolverPolicy for PointsToPolicy {
         let result = solve_points_to(&self.constraints, budget.points_to_budget());
         let budget_status = BudgetStatus::from_points_to(result.budget_status);
         PolicyOutcome {
+            derived_edges: Vec::new(),
             points_to: Some(result),
             budget_status,
             steps: 0,

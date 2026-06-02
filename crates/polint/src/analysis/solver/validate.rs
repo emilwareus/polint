@@ -137,14 +137,13 @@ pub(crate) fn detect_solver_summary_cycle(
         }
     }
 
-    // A summary node participates in a solver↔summary cycle iff it is reachable from
-    // itself through the value-flow graph (a directed cycle passing through it).
-    let mut implicated: BTreeSet<SemanticNodeId> = BTreeSet::new();
-    for &summary in &summary_nodes {
-        if node_reaches_itself(summary, &adjacency) {
-            implicated.insert(summary);
-        }
-    }
+    // A summary node participates in a solver↔summary cycle iff it lies on a directed
+    // cycle in the value-flow graph. Compute ALL on-cycle nodes ONCE via a single
+    // Tarjan SCC pass (O(N+E)) rather than a per-summary full traversal
+    // (O(summaries · (N+E))), then intersect with the summary anchors.
+    let on_cycle = nodes_on_cycle(&adjacency);
+    let implicated: BTreeSet<SemanticNodeId> =
+        summary_nodes.intersection(&on_cycle).copied().collect();
 
     for node in &implicated {
         push_diagnostic(
@@ -159,34 +158,111 @@ pub(crate) fn detect_solver_summary_cycle(
     implicated.len()
 }
 
-/// Deterministic reachability: does `start` reach itself through `adjacency`?
+/// All nodes lying on a directed cycle of `adjacency`, computed in one deterministic
+/// Tarjan SCC pass (iterative — no recursion, so deep graphs cannot blow the stack).
 ///
-/// A bounded BFS over `BTreeSet`-ordered successors with a visited set, so it always
-/// terminates (the visited set caps the traversal at the node count) — the same
-/// bounded-iteration discipline the engine uses (D-11). Returns `true` iff there is a
-/// directed path `start -> ... -> start` of length >= 1.
-fn node_reaches_itself(
-    start: SemanticNodeId,
+/// A node is on a cycle iff its strongly-connected component has more than one member
+/// OR it has a self-loop edge. Roots and successors are visited in
+/// `BTreeMap`/`BTreeSet` order, so the result is byte-stable. This replaces the prior
+/// per-summary reachability BFS (one full traversal per summary node) with a single
+/// whole-graph pass.
+fn nodes_on_cycle(
     adjacency: &BTreeMap<SemanticNodeId, BTreeSet<SemanticNodeId>>,
-) -> bool {
-    let mut visited: BTreeSet<SemanticNodeId> = BTreeSet::new();
-    let mut frontier: Vec<SemanticNodeId> = adjacency
-        .get(&start)
-        .map(|targets| targets.iter().copied().collect())
-        .unwrap_or_default();
+) -> BTreeSet<SemanticNodeId> {
+    /// One node's frame on the explicit DFS work stack.
+    struct Frame {
+        node: SemanticNodeId,
+        successors: Vec<SemanticNodeId>,
+        next: usize,
+    }
 
-    while let Some(node) = frontier.pop() {
-        if node == start {
-            return true;
-        }
-        if !visited.insert(node) {
+    let mut index_of: BTreeMap<SemanticNodeId, usize> = BTreeMap::new();
+    let mut lowlink: BTreeMap<SemanticNodeId, usize> = BTreeMap::new();
+    let mut on_stack: BTreeSet<SemanticNodeId> = BTreeSet::new();
+    let mut scc_stack: Vec<SemanticNodeId> = Vec::new();
+    let mut next_index: usize = 0;
+    let mut on_cycle: BTreeSet<SemanticNodeId> = BTreeSet::new();
+
+    let successors_of = |node: SemanticNodeId| -> Vec<SemanticNodeId> {
+        adjacency
+            .get(&node)
+            .map(|targets| targets.iter().copied().collect())
+            .unwrap_or_default()
+    };
+
+    for &root in adjacency.keys() {
+        if index_of.contains_key(&root) {
             continue;
         }
-        if let Some(targets) = adjacency.get(&node) {
-            frontier.extend(targets.iter().copied());
+        index_of.insert(root, next_index);
+        lowlink.insert(root, next_index);
+        next_index += 1;
+        scc_stack.push(root);
+        on_stack.insert(root);
+        let mut work: Vec<Frame> = vec![Frame {
+            node: root,
+            successors: successors_of(root),
+            next: 0,
+        }];
+
+        while let Some(frame) = work.last_mut() {
+            let node = frame.node;
+            if frame.next < frame.successors.len() {
+                let w = frame.successors[frame.next];
+                frame.next += 1;
+                if w == node {
+                    // Self-loop: the node is trivially on a cycle.
+                    on_cycle.insert(node);
+                }
+                match index_of.get(&w).copied() {
+                    // Tree edge: `w` is unvisited — assign its index and descend.
+                    None => {
+                        index_of.insert(w, next_index);
+                        lowlink.insert(w, next_index);
+                        next_index += 1;
+                        scc_stack.push(w);
+                        on_stack.insert(w);
+                        work.push(Frame {
+                            node: w,
+                            successors: successors_of(w),
+                            next: 0,
+                        });
+                    }
+                    // Back/cross edge: only an on-stack target tightens the lowlink.
+                    Some(iw) => {
+                        if on_stack.contains(&w) {
+                            let ln = lowlink[&node];
+                            lowlink.insert(node, ln.min(iw));
+                        }
+                    }
+                }
+            } else {
+                // Finished `node`: if it roots an SCC, pop the component.
+                if lowlink[&node] == index_of[&node] {
+                    let mut component: Vec<SemanticNodeId> = Vec::new();
+                    loop {
+                        let w = scc_stack.pop().expect("scc stack non-empty");
+                        on_stack.remove(&w);
+                        component.push(w);
+                        if w == node {
+                            break;
+                        }
+                    }
+                    if component.len() > 1 {
+                        on_cycle.extend(component);
+                    }
+                }
+                work.pop();
+                if let Some(parent) = work.last() {
+                    let lp = lowlink[&parent.node];
+                    let ln = lowlink[&node];
+                    lowlink.insert(parent.node, lp.min(ln));
+                }
+            }
         }
     }
-    false
+
+    on_cycle
 }
 
 fn check_duplicate_stable_keys<'a>(

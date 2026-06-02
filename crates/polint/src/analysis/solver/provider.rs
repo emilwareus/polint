@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
-use crate::analysis::solver::engine::derive_edges;
+use crate::analysis::solver::engine::run_copy_closure_solver;
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
@@ -60,10 +60,11 @@ pub(crate) fn derive_solver_with_cache_stats(
 ) -> SolverProviderRunOutput {
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
-    // Phase 1-2: drive the solver over the closed input snapshot (the stored
-    // semantic-graph constraints). The build is read-only; derive_edges normalizes.
+    // Phase 1-2: drive the unified SolverEngine over the closed input snapshot (the
+    // stored semantic-graph constraints). The engine drives the production
+    // CopyClosurePolicy and assembles the normalized output; the build is read-only.
     let constraints = db.semantic_constraints().to_vec();
-    let output = derive_edges(&constraints, &budget);
+    let output = run_copy_closure_solver(&constraints, budget);
 
     // Phase 3: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
