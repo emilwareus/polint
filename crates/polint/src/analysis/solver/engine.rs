@@ -126,33 +126,33 @@ impl SolverEngine {
 /// composition produced it, the producing `ConstraintKind` (`copy_edge`), and the
 /// `solver_step` at which it was emitted.
 ///
-/// Provenance records a DETERMINISTIC WITNESSING derivation (D-09): each derived
-/// `source -> target` edge carries the contributing primitive `CopyEdge` constraints
-/// on a single deterministic witness path (the BFS-shortest path, ties broken by the
-/// `BTreeMap`/`BTreeSet` stable-key order), plus every constraint that justifies a hop
-/// on that path (duplicate justifications for one hop are all recorded — review
-/// finding #10). The edge fact's `stable_key` embeds that witness, so deleting any
-/// witness fact means THIS edge fact (by stable key) is not reproduced. On a
-/// multi-path graph the underlying `source -> target` value-flow may persist via an
-/// alternate path under a DIFFERENT edge identity — provenance describes a witness,
-/// not a global dependency of the (source, target) pair. Dense IDs are assigned only
+/// Provenance records the edge's WORST-TRUST derivation (D-09). The per-source BFS is
+/// a worst-path fixpoint: each `source -> target` edge carries the contributing
+/// primitive `CopyEdge` constraints on the least-trusted path discovered to the
+/// target (ties broken deterministically by BFS-shortest + `BTreeMap`/`BTreeSet`
+/// stable-key order), with every constraint justifying a hop on that path recorded
+/// (duplicate justifications for one hop are all kept — review finding #10). Because
+/// `keys`, `status`, and `precision` all describe the same adopted derivation, the
+/// edge's provenance always JUSTIFIES its status. The edge fact's `stable_key` embeds
+/// that derivation, so deleting any contributing fact means THIS edge fact (by stable
+/// key) is not reproduced. On a multi-path graph the underlying value-flow may persist
+/// via a different path under a different edge identity. Dense IDs are assigned only
 /// after the stable-key sort in [`SolverOutput::normalized`], so the output is
 /// byte-stable (D-02).
 ///
-/// Honesty (D-06): the derived edge inherits the WEAKEST status/precision across
-/// EVERY discovered path to the target — not just its witness path — so an untrusted
-/// upstream hop on any derivation conservatively downgrades the edge and is never
-/// laundered into a confident one (review finding #4; `keys`/`step` stay the
-/// deterministic witness, `status`/`precision` are the conservative join). The
-/// worklist cap (`budget.max_steps`) is applied PER SOURCE; exhausting it on one
-/// source sets the run-level
+/// Honesty (D-06): status/precision are the WEAKEST across every discovered path to
+/// the target, and adopting a weaker path re-enqueues the node so the downgrade
+/// PROPAGATES transitively to descendants — an untrusted upstream hop on any
+/// derivation can never be laundered into a confident edge, even multiple hops
+/// downstream (review findings #4, #R2). The worklist cap (`budget.max_steps`) is
+/// applied PER SOURCE; exhausting it on one source sets the run-level
 /// [`crate::analysis::solver::budget::BudgetStatus::BudgetExceeded`] (surfaced as a
 /// provider diagnostic) WITHOUT silently dropping the other, independent sources
 /// (review finding #3). Edges fully derived before a source's cap was hit keep their
 /// honest status — exhaustion costs the edges never reached, not the ones already
-/// derived, so a complete edge is never spuriously downgraded (review finding #R1).
-/// `solver_step` is a GLOBAL monotonic counter, independent of the per-source budget
-/// counter (review finding #R3). Derived edges never claim exact precision (D-06).
+/// derived (review finding #R1). `solver_step` is a GLOBAL monotonic (non-decreasing)
+/// counter, independent of the per-source budget counter (review finding #R3). Derived
+/// edges never claim exact precision (D-06).
 pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget) -> SolverOutput {
     // Primitive copy adjacency `src -> {dst}`. For each hop `src -> dst` accumulate
     // (a) the UNION of contributing constraint stable keys (#10 — never drop a
@@ -198,10 +198,14 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
         // never as a silent cross-source drop.
         let mut budget_steps: u64 = 0;
         let mut source_budget_exceeded = false;
-        // reached: node -> path metadata. `keys` + `step` are fixed by the first
-        // (BFS-shortest) witness path; `status`/`precision` are CONSERVATIVELY weakened
-        // over EVERY discovered path to the node (R2), so an untrusted alternate path
-        // can never be laundered into a confident edge.
+        // reached: node -> path metadata for its WORST-trust derivation. A derivation
+        // is adopted iff it is strictly more conservative (weaker) than the one already
+        // recorded, and adoption re-enqueues the node so the downgrade PROPAGATES to
+        // descendants (a worst-path fixpoint, R2/round-3). Equal-weakness ties keep the
+        // first (BFS-shortest) path, so all-trusted graphs behave exactly like a plain
+        // shortest-path BFS (byte-identical) while mixed-trust graphs converge to the
+        // least-trusted derivation — `keys`/`step` then describe the SAME derivation as
+        // `status`/`precision`, so an edge's provenance always justifies its status.
         let mut reached: BTreeMap<SemanticNodeRef, PathMeta> = BTreeMap::new();
         let mut queue: VecDeque<SemanticNodeRef> = VecDeque::new();
         reached.insert(start, PathMeta::seed());
@@ -232,23 +236,30 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
                     next_meta.precision = weakest_precision(next_meta.precision, *precision);
                 }
                 next_meta.step = solver_step;
-                match reached.entry(next) {
-                    // First visit: the deterministic BFS-shortest witness path fixes
-                    // the contributing keys and the solver step.
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        slot.insert(next_meta);
-                        queue.push_back(next);
+                // Worst-path fixpoint (R2/round-3): adopt this derivation for `next` iff
+                // the node is unreached OR this path is STRICTLY weaker (more
+                // conservative) than the one already recorded. Adoption re-enqueues the
+                // node so the downgrade propagates transitively to descendants already
+                // derived via an earlier, more-trusted path. Ties (equal weakness) keep
+                // the first path — deterministic, and weakness increases monotonically
+                // and is bounded, so re-enqueues terminate.
+                let candidate_weakness = (
+                    status_rank(next_meta.status),
+                    precision_rank(next_meta.precision),
+                );
+                let adopt = match reached.get(&next) {
+                    None => true,
+                    Some(current) => {
+                        candidate_weakness
+                            > (
+                                status_rank(current.status),
+                                precision_rank(current.precision),
+                            )
                     }
-                    // Revisit via an alternate path (R2): KEEP the witness keys/step but
-                    // CONSERVATIVELY weaken status/precision over this path too. Do not
-                    // re-enqueue (witness is fixed); `weakest_*` is commutative, so the
-                    // converged value is order-independent (deterministic).
-                    std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        let current = slot.get_mut();
-                        current.status = weakest_status(current.status, next_meta.status);
-                        current.precision =
-                            weakest_precision(current.precision, next_meta.precision);
-                    }
+                };
+                if adopt {
+                    reached.insert(next, next_meta);
+                    queue.push_back(next);
                 }
             }
         }
@@ -317,17 +328,19 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 /// `BTreeMap`/`BTreeSet` key during closure derivation.
 type SemanticNodeRef = u64;
 
-/// Path metadata accumulated during the per-source BFS. `keys` (the union of
-/// contributing constraint stable keys) and `step` (the global monotonic derivation
-/// step) are fixed by the FIRST (BFS-shortest) witness path; `status`/`precision` are
-/// CONSERVATIVELY weakened over EVERY discovered path to the node (R2). `BTreeSet`
-/// keeps the contributing keys totally ordered (byte-stable).
+/// Path metadata for a node's adopted (WORST-trust) derivation. All four fields
+/// describe the SAME derivation: `keys` (the union of contributing constraint stable
+/// keys), `status`/`precision` (its trust), and `step` (the global monotonic step at
+/// which that derivation reached the node). A strictly-weaker derivation discovered
+/// later replaces the whole record (and re-enqueues the node); equal-weakness ties
+/// keep the first. `BTreeSet` keeps the contributing keys totally ordered (byte-stable).
 #[derive(Debug, Clone)]
 struct PathMeta {
     keys: BTreeSet<String>,
     status: PointsToStatus,
     precision: PointsToPrecision,
-    /// The global monotonic `solver_step` at which this node was first reached.
+    /// The global monotonic `solver_step` at which this node's adopted derivation
+    /// reached it.
     step: u64,
 }
 
@@ -343,36 +356,50 @@ impl PathMeta {
     }
 }
 
-/// Worst-of-two derivation status (#4): `Present` is the best/most-trusted; any
-/// non-`Present` status downgrades, and the more severe one wins. Deterministic and
-/// independent of input order.
-fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
-    fn rank(status: PointsToStatus) -> u8 {
-        match status {
-            PointsToStatus::Present => 0,
-            PointsToStatus::Unknown => 1,
-            PointsToStatus::Unsupported => 2,
-            PointsToStatus::SetupMissing => 3,
-            PointsToStatus::BudgetExceeded => 4,
-        }
+/// Severity rank of a derivation status (#4): `Present` is the best/most-trusted (0);
+/// higher is less trusted. The total order drives both `weakest_status` and the
+/// worst-path fixpoint comparison, so it is the single source of severity ordering.
+fn status_rank(status: PointsToStatus) -> u8 {
+    match status {
+        PointsToStatus::Present => 0,
+        PointsToStatus::Unknown => 1,
+        PointsToStatus::Unsupported => 2,
+        PointsToStatus::SetupMissing => 3,
+        PointsToStatus::BudgetExceeded => 4,
     }
-    if rank(a) >= rank(b) { a } else { b }
 }
 
-/// Worst-of-two precision (#4): `FlowInsensitive` is the most precise a derived edge
-/// may claim; weaker tiers win. Deterministic and independent of input order.
-fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
-    fn rank(precision: PointsToPrecision) -> u8 {
-        match precision {
-            PointsToPrecision::FlowInsensitive => 0,
-            PointsToPrecision::LocalFlowSensitive => 1,
-            PointsToPrecision::SummaryProjected => 2,
-            PointsToPrecision::Heuristic => 3,
-            PointsToPrecision::Unknown => 4,
-            PointsToPrecision::Unsupported => 5,
-        }
+/// Severity rank of a precision tier (#4): `FlowInsensitive` is the most precise a
+/// derived edge may claim (0); higher is weaker.
+fn precision_rank(precision: PointsToPrecision) -> u8 {
+    match precision {
+        PointsToPrecision::FlowInsensitive => 0,
+        PointsToPrecision::LocalFlowSensitive => 1,
+        PointsToPrecision::SummaryProjected => 2,
+        PointsToPrecision::Heuristic => 3,
+        PointsToPrecision::Unknown => 4,
+        PointsToPrecision::Unsupported => 5,
     }
-    if rank(a) >= rank(b) { a } else { b }
+}
+
+/// Worst-of-two derivation status (#4): the more severe (higher-ranked) one wins.
+/// Deterministic and independent of input order.
+fn weakest_status(a: PointsToStatus, b: PointsToStatus) -> PointsToStatus {
+    if status_rank(a) >= status_rank(b) {
+        a
+    } else {
+        b
+    }
+}
+
+/// Worst-of-two precision (#4): the weaker (higher-ranked) tier wins. Deterministic
+/// and independent of input order.
+fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> PointsToPrecision {
+    if precision_rank(a) >= precision_rank(b) {
+        a
+    } else {
+        b
+    }
 }
 
 #[cfg(test)]
@@ -797,6 +824,59 @@ mod tests {
             "an untrusted alternate path must conservatively downgrade the edge"
         );
         assert_eq!(edge.precision, PointsToPrecision::Unknown);
+        // Provenance must JUSTIFY the downgraded status: the adopted derivation is the
+        // untrusted path, so its contributing facts are recorded (not the clean witness).
+        let keys: Vec<&str> = edge
+            .provenance
+            .contributing_facts
+            .iter()
+            .map(|f| f.stable_key.as_str())
+            .collect();
+        assert!(
+            keys.contains(&"copy|a-c") && keys.contains(&"copy|c-d"),
+            "provenance must list the untrusted derivation that set the status: {keys:?}"
+        );
+    }
+
+    #[test]
+    fn untrusted_path_downgrades_edges_multiple_hops_downstream() {
+        // R2 (round-3): the conservative downgrade must PROPAGATE transitively, not just
+        // one hop. Graph: a(1) -> d(4) clean [witness, shortest]; d(4) -> e(5) clean;
+        // a(1) -> x(2) UNTRUSTED; x(2) -> y(3) clean; y(3) -> d(4) clean.
+        // The clean a -> d is reached first and expands d -> e (e = Present) BEFORE the
+        // untrusted a -> x -> y -> d path reaches d. The worst-path fixpoint must
+        // re-derive d AND e so a -> e is downgraded — never laundered two hops past the
+        // untrusted hop.
+        let mut untrusted = copy_constraint("copy|a-x", 1, 2);
+        untrusted.status = PointsToStatus::BudgetExceeded;
+        untrusted.precision = PointsToPrecision::Unknown;
+        let constraints = vec![
+            copy_constraint("copy|a-d", 1, 4),
+            copy_constraint("copy|d-e", 4, 5),
+            untrusted,
+            copy_constraint("copy|x-y", 2, 3),
+            copy_constraint("copy|y-d", 3, 4),
+        ];
+
+        let output = derive_edges(&constraints, &SolverBudget::default());
+
+        use crate::analysis::ids::SemanticNodeId;
+        let edge_ae = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(5))
+            .expect("transitive a -> e derived");
+        assert_eq!(
+            edge_ae.status,
+            PointsToStatus::BudgetExceeded,
+            "an untrusted hop must downgrade edges multiple hops downstream (transitive)"
+        );
+        let edge_ad = output
+            .derived_edges
+            .iter()
+            .find(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(4))
+            .expect("a -> d derived");
+        assert_eq!(edge_ad.status, PointsToStatus::BudgetExceeded);
     }
 
     #[test]
