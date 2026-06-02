@@ -187,6 +187,13 @@ fn solver_output_digest(
             "budget.go.max_worklist_steps={}",
             budget.go.max_worklist_steps
         ),
+        // Run-level budget status (WR-06): two runs over the same inputs that produce
+        // the same SURVIVING edge set but differ in whether the budget was exhausted
+        // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
+        // that aborted BEFORE reaching an edge leaves no per-edge trace, so the
+        // run-level status is the only carrier of the truncation signal — fold it in so
+        // a cache hit can never serve a truncated result under a complete run's digest.
+        format!("budget_status={}", output.budget_status.as_str()),
     ];
 
     parts.extend(output.derived_edges.iter().map(|edge| {
@@ -446,6 +453,49 @@ mod tests {
         .output_digest;
 
         assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn run_level_budget_status_invalidates_output_digest() {
+        // WR-06: two outputs with the SAME surviving edge set but different run-level
+        // budget_status (WithinBudget vs BudgetExceeded) must produce DIFFERENT output
+        // digests, so a cache layer keyed on the digest cannot serve a truncated
+        // (BudgetExceeded) result under a complete (WithinBudget) run's digest.
+        let db = db_with_copy_chain();
+        let snapshot = snapshot(&db);
+        let budget = SolverBudget::default();
+
+        // Identical (empty) edge sets; only the run-level status differs.
+        let within = SolverOutput {
+            derived_edges: Vec::new(),
+            budget_status: BudgetStatus::WithinBudget,
+        };
+        let exceeded = SolverOutput {
+            derived_edges: Vec::new(),
+            budget_status: BudgetStatus::BudgetExceeded,
+        };
+
+        let within_digest = solver_output_digest(
+            manifest(),
+            &snapshot,
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &within,
+        );
+        let exceeded_digest = solver_output_digest(
+            manifest(),
+            &snapshot,
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &exceeded,
+        );
+
+        assert_ne!(
+            within_digest, exceeded_digest,
+            "a budget-truncated run must not share an output digest with a complete run"
+        );
     }
 
     #[test]
