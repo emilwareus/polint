@@ -10,13 +10,12 @@ area = "go-rta"
 # also address-taken but has a mismatching signature, so it is excluded.
 #
 # The `eval::go_rta` gate asserts the indirect call's RTA edge to `handler` is
-# derived; this manifest documents the acceptance contract.
+# derived (the func_value_resolved invariant); this manifest documents the
+# acceptance contract. No `[[expected]]` row is captured because the solver-derived
+# edges are crate-private and not observable manifest facts.
 
 [repo]
 path = "repo"
 
 [budget]
 max_runtime_ms = 120000
-
-[[expected]]
-invariant = { name = "solver.go_rta.address_taken.func_value_resolved", value = "true", mode = "exact" }

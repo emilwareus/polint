@@ -15,14 +15,14 @@ area = "polyglot-canary"
 #       there is no cross-language interference through the shared solver core.
 #
 # The executable proof lives in `eval::go_rta::polyglot_go_ts_canary_*` (it reads the
-# kernel-built db's solver-derived edges + the Go/TS function-node identities); this
-# manifest documents the acceptance contract.
+# kernel-built db's solver-derived edges + the Go/TS function-node identities,
+# asserting the go_resolved_ts_unchanged invariant); this manifest documents the
+# acceptance contract. No `[[expected]]` row is captured because the solver-derived
+# edges are crate-private and not observable manifest facts (Phase 54 promotes this
+# canary to a hard gate over the observable projection).
 
 [repo]
 path = "repo"
 
 [budget]
 max_runtime_ms = 120000
-
-[[expected]]
-invariant = { name = "solver.polyglot_canary.go_resolved_ts_unchanged", value = "true", mode = "exact" }

@@ -15,16 +15,14 @@ area = "go-rta"
 #
 # The `eval::go_rta` gate (crates/polint/src/eval/go_rta.rs) drives this fixture
 # through the SAME engine the provider uses (SolverEngine::run_to_solver_output)
-# and asserts the observed SolverOutput.budget_status is BudgetExceeded. The
-# invariant row below documents the acceptance contract; the gate is the
-# executable proof (a manifest fact-match cannot read the internal budget signal,
-# which is crate-private and consumed during storage).
+# and asserts the observed SolverOutput.budget_status is BudgetExceeded — the
+# `solver.go_rta.budget_exceeded` invariant. No `[[expected]]` row is captured
+# here because the budget signal is crate-private and consumed during storage, so
+# it is not an observable manifest fact; the gate is the executable proof and this
+# manifest documents the acceptance contract.
 
 [repo]
 path = "repo"
 
 [budget]
 max_runtime_ms = 120000
-
-[[expected]]
-invariant = { name = "solver.go_rta.budget_exceeded.present", value = "true", mode = "exact" }

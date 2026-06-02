@@ -11,13 +11,13 @@ area = "go-rta"
 # >= 1 RTA-resolved derived edge to (Dog).Speak AND that NO edge targets (Cat).Speak.
 #
 # The executable proof lives in `eval::go_rta` (it reads db.solver_derived_edges()
-# and the instantiated-type node identities); this manifest documents the contract.
+# and the instantiated-type node identities, asserting the instantiated_filter
+# invariant); this manifest documents the contract. No `[[expected]]` row is
+# captured because the solver-derived edges are crate-private and not observable
+# manifest facts (Phase 52 wires them into the observable refined-call projection).
 
 [repo]
 path = "repo"
 
 [budget]
 max_runtime_ms = 120000
-
-[[expected]]
-invariant = { name = "solver.go_rta.interface_dispatch.instantiated_filter", value = "true", mode = "exact" }
