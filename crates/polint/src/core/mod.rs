@@ -62,6 +62,8 @@ use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore}
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
 use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
 use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
+use crate::analysis::solver::facts::DerivedEdgeFact;
+use crate::analysis::solver::store::{SolverOutput, SolverStore};
 use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{
     SummaryDomainKind, SummaryEventFact, SummaryFact, SummaryPrecision, SummaryStatus,
@@ -741,6 +743,7 @@ pub struct AnalysisDb {
     semantic_nodes: Vec<SemanticNodeFact>,
     semantic_edges: Vec<SemanticEdgeFact>,
     semantic_constraints: Vec<ConstraintFact>,
+    solver_derived_edges: Vec<DerivedEdgeFact>,
     go_semantic_packages: Vec<GoSemanticPackageFact>,
     go_semantic_functions: Vec<GoSemanticFunctionFact>,
     go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
@@ -1441,6 +1444,31 @@ impl AnalysisDb {
 
     pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
         &self.semantic_constraints
+    }
+
+    /// Stores the normalized solver-derived edges (GRAPH-03/GRAPH-04), mirroring
+    /// [`Self::replace_semantic_graph_facts`]. Construction runs through
+    /// [`SolverStore::from_output`], which normalizes (stable-key sort + dense ID
+    /// assignment) and referentially validates duplicate stable keys + the precision
+    /// ceiling (D-06) — a malformed row returns [`AnalysisError::InvalidFact`] so the
+    /// db is never left holding a malformed solver output.
+    pub(crate) fn replace_solver_facts(
+        &mut self,
+        output: SolverOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = SolverStore::from_output(output)?;
+        self.solver_derived_edges = store.derived_edges().to_vec();
+        Ok(())
+    }
+
+    /// The stored solver-derived edges. Consumed by the provider tests today and by
+    /// Phase 52's GRAPH-05 refined_calls rework (which projects over solver output);
+    /// no production read exists yet, so the accessor is dead-code in a non-test build
+    /// until that consumer lands (the facts are stored unconditionally so the
+    /// determinism gate observes them).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
+        &self.solver_derived_edges
     }
 
     pub(crate) fn replace_go_semantic_facts(

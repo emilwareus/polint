@@ -28,6 +28,7 @@ pub(crate) mod reachability;
 pub(crate) mod refined_calls;
 pub(crate) mod semantic_graph;
 pub(crate) mod slicing;
+pub(crate) mod solver;
 pub(crate) mod stable_key;
 pub(crate) mod store;
 pub(crate) mod summaries;

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: ready_to_plan
-last_updated: 2026-06-01T12:49:03.931Z
-last_activity: 2026-06-01
+last_updated: 2026-06-02T10:13:51.233Z
+last_activity: 2026-06-02
 progress:
   total_phases: 13
-  completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
-  percent: 38
-stopped_at: Phase 46 complete (4/4) — ready to discuss Phase 47
+  completed_phases: 6
+  total_plans: 23
+  completed_plans: 23
+  percent: 46
+stopped_at: Phase 47 complete (3/3) — ready to discuss Phase 48
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 47 — unified solver core & derived edge provenance
+**Current focus:** Phase 48 — go rta driver
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 47
+Phase: 48
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-06-01
+Last activity: 2026-06-02
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -186,6 +186,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 47-03]: `polint.solver` registered in the reserved slot (after `polint.semantic_graph`, before `polint.refined_calls`, D-13); cache key digests upstream output digests (semantic_graph + type_value_alias points-to families) + the `SolverBudget` (D-15); validation enforces the precision ceiling + a bounded D-12 solver↔summary cycle-detection check; determinism gate (10-shuffle byte-identical) and leak gate (`ALLOWED_PRELUDE` unchanged) stay green. Adding the provider touched 11 provider-order snapshot sites (memory floor of ~7 confirmed conservative).
 - Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
 - Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
 - Merge module graph support over the static plan support view, then symbol graph support over module support, before rules run.
@@ -438,11 +439,23 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 44-03]: polint.semantic_graph provider folds every consumed upstream provider output digest + schema/parameter into its output digest with an empty-output sentinel (D-17); deferred SC3 inputs (MIR/CFG/summaries/adaptation-models/solver-budgets) are self-documented and digested as zero until Phases 47/49/51/53 land producers.
 - [Phase 44-03]: semantic-graph precision ceiling rejects the exact-equivalent tier (SemanticPrecision::ResolvedStatic) since the graph precision enums carry no literal Exact variant; replace_semantic_graph_facts routes through SemanticGraphStore::from_output for normalize + referential validation.
 - [Phase 44-03]: the provider auto-enrolls into the Phase 43 determinism gate via provider_manifests() (no gate edit); a dedicated eval::semantic_graph_snapshot gate proves byte-stable Go + TS/JS constraint emission, and the Phase 42 public-surface-leak gate stays green unmodified.
+- [Phase 47-01]: New private analysis::solver module registered between slicing and stable_key; all types pub(crate); solver/mod.rs carries the D-04 naming-collision guard (unified core vs points_to sub-domain) and the D-11 dependency contract (closed input set / single fixpoint per run / bounded outer iterations).
+- [Phase 47-01]: Folded points_to::solver in BY COMPOSITION (D-03) — PointsToPolicy::solve invokes the existing solve_points_to fixpoint in place; equivalence test proves points-to-via-engine == solve_points_to; points-to snapshot/determinism fixtures byte-identical.
+- [Phase 47-01]: SolverBudget WRAPS (not aliases) the points-to budget (D-05): cross-domain max_steps + max_outer_iterations + a PointsToSubBudget channel, projected onto PointsToBudget via points_to_budget(); PointsToBudget::default (10_000/64/512) unchanged.
+- [Phase 47-01]: BudgetStatus closed enum (WithinBudget/BudgetExceeded/NotRun) is pinned-order byte-stable with no repr(u8); budget exhaustion surfaces honestly (D-06), never a silent drop.
+- [Phase 47-01]: SolverPolicy trait ships exactly ONE real impl (points_to) + two honest stubs (GoRtaPolicy reserved for Phase 48 GO-05, TsTokensPolicy reserved for Phase 49 JS-04) that derive nothing (D-07).
+- [Phase 47-01]: SolverEngine owns a deterministic policy-index VecDeque worklist + SolverBudget enforcement + monotonic u64 step counter (for Plan 02 provenance solver-step), driving policies to a single fixpoint per run.
+- [Phase 47-02]: DerivedEdgeProvenance (D-08) carries contributing facts total-ordered by stable ID (sorted + de-duplicated in ::new), the producing ConstraintKind::as_str() label (owned String so the fact derives Deserialize), and the engine's monotonic u64 solver step; ContributingFact stores only the stable_key (the FactFamily label is folded into it via stable_key_from_parts).
+- [Phase 47-02]: FactFamily::SolverDerivedEdge + DerivedEdgeFact (serde-skip dense DerivedEdgeId, reuses PointsToStatus/PointsToPrecision); derived edges reject FactPrecision::Exact via derived_edge_precision_ceiling (no arm maps to Exact, D-06), locked by an exhaustive unit test.
+- [Phase 47-02]: SolverOutput/SolverStore mirror semantic_graph store — normalized() sorts by (stable_key, id) then assigns dense IDs (shuffle-stable), from_output validates duplicate stable keys + the precision ceiling, SOLVER_PROVIDER_ID = "polint.solver" (provider registration deferred to Plan 03).
+- [Phase 47-02]: engine::derive_edges computes the transitive CopyEdge closure over a deterministic BTree worklist, accumulating the contributing-constraint set per derived edge so provenance is genuinely load-bearing.
+- [Phase 47-02]: D-09 deletion property test proves deleting ANY single contributing fact does not reproduce the transitive derived edge; D-10 wires polint explain via a pub(crate) cfg(test)-facing seam (explain_derived_edge_provenance) with NO new public ExplainReport/ExplainRuleRow field and ALLOWED_PRELUDE unchanged.
 
 ## Execution Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 47-unified-solver-core-derived-edge-provenance | 02 | 21 min | 3 | 8 |
 | 44-semantic-graph-skeleton-constraint-vocabulary | 03 | 15 min | 3 | 13 |
 | 44-semantic-graph-skeleton-constraint-vocabulary | 02 | 13 min | 3 | 5 |
 | 20-private-analysis-kernel-facade | 01 | 9 min | 2 | 5 |
@@ -517,12 +530,13 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 02 | 1h 5m | 3 | 20 |
 | 42-benchmark-identity-renderers-dedup-identity-taxonomy | 03 | 18m | 2 | 11 |
 | 43-reachability-roots-per-suite-scoring-mode | 03 | 19m | 4 | 14 |
+| 47-unified-solver-core-derived-edge-provenance | 01 | 9 min | 3 | 5 |
 
 ## Session
 
-- Last session: 2026-05-30
-- Last activity: 2026-05-30 - Completed Phase 44 Plan 02 (ConstraintKind vocabulary + ConstraintFact + SemanticConstraintId; SemanticGraphOutput/Store carries/indexes/validates constraints; build_semantic_graph projects a real-but-minimal graph from existing facts); GRAPH-02 done.
-- Stopped at: Completed 44-02-PLAN.md; Phase 44 at 2/3 plans; ready for Phase 44 Plan 03 (provider/cache/validation wiring + Go/TS snapshot fixtures).
+- Last session: 2026-06-02
+- Last activity: 2026-06-02 - Completed Phase 47 Plan 01 (private analysis::solver core: deterministic VecDeque worklist SolverEngine + unified SolverBudget/BudgetStatus generalizing the points-to budget by projection + SolverPolicy scaffold with one real points-to impl folded by composition plus honest Go/TS stubs); points-to fixtures byte-identical; GRAPH-03 core landed.
+- Stopped at: Completed 47-01-PLAN.md; Phase 47 at 1/3 plans; ready for Phase 47 Plan 02 (DerivedEdgeProvenance on derived edges + polint explain consumption + deletion property test).
 - Resume file: None
 
 ### Quick Tasks Completed

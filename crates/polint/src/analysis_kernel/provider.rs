@@ -222,6 +222,11 @@ const SEMANTIC_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     version: 1,
 }];
 
+const SOLVER_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
+    name: crate::analysis::solver::cache_key::SOLVER_SCHEMA_LABEL,
+    version: 1,
+}];
+
 const REFINED_CALLS_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
     name: crate::analysis::refined_calls::cache_key::REFINED_CALLS_SCHEMA_LABEL,
     version: 1,
@@ -686,6 +691,28 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
+        // polint.solver runs in the slot Phase 44 reserved: AFTER polint.semantic_graph
+        // and BEFORE polint.refined_calls (D-13). It consumes the unified
+        // semantic-graph constraint vocabulary (`semantic_constraints`) plus the
+        // points-to source families produced by polint.type_value_alias
+        // (`points_to_constraints` / `points_to_sets`), and emits derived edges with
+        // provenance. Its output digest folds those upstream digests + the SolverBudget
+        // (D-15). The provider auto-enrolls in the Phase 43 determinism gate (D-14).
+        id: "polint.solver",
+        kind: ProviderKind::WholeRepoDerived,
+        inputs: &[
+            "semantic_constraints",
+            "semantic_nodes",
+            "points_to_constraints",
+            "points_to_sets",
+        ],
+        outputs: &["solver_derived_edges"],
+        language_scope: LanguageScope::MultiLanguage,
+        cache_policy: CachePolicy::InMemoryDerived,
+        schema_versions: SOLVER_SCHEMA,
+        precision_ceiling: PrecisionCeiling::SetupAware,
+    },
+    ProviderManifest {
         id: "polint.refined_calls",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
@@ -846,6 +873,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -877,6 +905,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -935,6 +964,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -1361,6 +1391,18 @@ mod tests {
                         "go_semantic_callsites",
                     ],
                     outputs: vec!["semantic_nodes", "semantic_edges", "semantic_constraints"],
+                },
+                ProviderOrderRow {
+                    id: "polint.solver",
+                    kind: "whole_repo_derived",
+                    language_scope: "multi_language",
+                    inputs: vec![
+                        "semantic_constraints",
+                        "semantic_nodes",
+                        "points_to_constraints",
+                        "points_to_sets",
+                    ],
+                    outputs: vec!["solver_derived_edges"],
                 },
                 ProviderOrderRow {
                     id: "polint.refined_calls",

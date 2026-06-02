@@ -568,7 +568,39 @@ impl AnalysisKernel {
             "polint.semantic_graph",
             &db,
             polint_semantic_graph_cache_stats,
-            semantic_graph_output_digest,
+            semantic_graph_output_digest.clone(),
+        ));
+
+        let semantic_graph_dependency_output_digest =
+            semantic_graph_output_digest.unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.semantic_graph",
+                )
+            });
+
+        // polint.solver runs between polint.semantic_graph and polint.refined_calls
+        // (D-13, the slot Phase 44 reserved). It drives the unified solver engine over
+        // the closed input snapshot (the stored semantic-graph constraints), emits
+        // derived edges + provenance, and folds the semantic_graph + points-to source
+        // (type_value_alias) output digests plus the SolverBudget into its own output
+        // digest (D-15). Auto-enrolls in the Phase 43 determinism gate (D-14).
+        let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(
+            &mut db,
+            &input_snapshot,
+            Self::provider_manifest("polint.solver"),
+            crate::analysis::solver::budget::SolverBudget::default(),
+            semantic_graph_dependency_output_digest,
+            type_value_alias_dependency_output_digest.clone(),
+        );
+        let polint_solver_cache_stats = solver.cache_stats.clone();
+        let solver_output_digest = solver.output_digest.clone();
+        diagnostics.extend(solver.diagnostics);
+        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+            "polint.solver",
+            &db,
+            polint_solver_cache_stats,
+            solver_output_digest,
         ));
 
         let refined_calls =
@@ -1096,6 +1128,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
@@ -2014,6 +2047,7 @@ function setup() {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",
