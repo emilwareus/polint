@@ -55,5 +55,6 @@ pub(crate) mod engine;
 pub(crate) mod facts;
 pub(crate) mod policy;
 pub(crate) mod provenance;
+pub(crate) mod provider;
 pub(crate) mod store;
 pub(crate) mod validate;

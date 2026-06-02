@@ -60,16 +60,19 @@ invariant = { name = "provider_order.16", value = "polint.type_value_alias", mod
 invariant = { name = "provider_order.17", value = "polint.semantic_graph", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.18", value = "polint.refined_calls", mode = "exact" }
+invariant = { name = "provider_order.18", value = "polint.solver", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.19", value = "polint.data_flow", mode = "exact" }
+invariant = { name = "provider_order.19", value = "polint.refined_calls", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.20", value = "polint.evidence", mode = "exact" }
+invariant = { name = "provider_order.20", value = "polint.data_flow", mode = "exact" }
 
 [[expected]]
-invariant = { name = "provider_order.21", value = "polint.metrics", mode = "exact" }
+invariant = { name = "provider_order.21", value = "polint.evidence", mode = "exact" }
+
+[[expected]]
+invariant = { name = "provider_order.22", value = "polint.metrics", mode = "exact" }
 
 [[expected]]
 invariant = { name = "provider_output.polint.abstract_domains.schema_version", value = "abstract-domain-facts-1:1", mode = "exact" }

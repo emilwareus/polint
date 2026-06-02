@@ -205,6 +205,7 @@ mod tests {
                 "polint.extensions",
                 "polint.type_value_alias",
                 "polint.semantic_graph",
+                "polint.solver",
                 "polint.refined_calls",
                 "polint.data_flow",
                 "polint.evidence",

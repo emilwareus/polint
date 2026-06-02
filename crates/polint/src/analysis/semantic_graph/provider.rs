@@ -569,7 +569,8 @@ mod tests {
             .position(|manifest| manifest.id == "polint.type_value_alias")
             .expect("type_value_alias present");
         assert_eq!(manifests[tva + 1].id, "polint.semantic_graph");
-        assert_eq!(manifests[tva + 2].id, "polint.refined_calls");
+        assert_eq!(manifests[tva + 2].id, "polint.solver");
+        assert_eq!(manifests[tva + 3].id, "polint.refined_calls");
     }
 
     #[test]
