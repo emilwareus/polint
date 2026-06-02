@@ -117,13 +117,16 @@ impl GoRtaInputs {
             function_node.insert(semantic_function.qualified.clone(), node);
 
             // A method (receiver-bearing function) is an interface-invoke candidate
-            // callee, indexed by its normalized receiver type.
+            // callee, indexed by its normalized receiver type. The core function names
+            // a method `Receiver.Method` (e.g. "Dog.Speak"), but interface-invoke
+            // resolution matches the BARE invoked method name (the dynamic-dispatch
+            // discriminant, e.g. "Speak"), so index the bare method name here.
             if let Some(receiver) = semantic_function.receiver.as_deref() {
                 methods_by_receiver
                     .entry(normalize_type(receiver))
                     .or_default()
                     .push(GoRtaMethod {
-                        method_name: semantic_function.name.clone(),
+                        method_name: bare_method_name(&semantic_function.name),
                         qualified: semantic_function.qualified.clone(),
                         node,
                     });
@@ -246,6 +249,16 @@ pub(crate) fn normalize_type(type_name: &str) -> String {
     type_name.strip_prefix('*').unwrap_or(type_name).to_string()
 }
 
+/// The bare method identifier from a core function name. The core (tree-sitter) facts
+/// name a method `Receiver.Method` (e.g. "Dog.Speak"); interface-invoke resolution
+/// matches the BARE invoked method name (the dynamic-dispatch discriminant, e.g.
+/// "Speak"). A plain function name (no `.`) is already bare and returned unchanged.
+fn bare_method_name(name: &str) -> String {
+    name.rsplit_once('.')
+        .map_or(name, |(_, method)| method)
+        .to_string()
+}
+
 /// The `qualified` identity of the Go semantic function matching a core `FunctionId`,
 /// if any. Mirrors the file+span+name join `matching_core_function` performs, in
 /// reverse: a core function -> its Go semantic `qualified`.
@@ -263,15 +276,31 @@ fn qualified_for_function_id(
             semantic_function.file == Some(function.file)
                 && semantic_function.name == function.name
                 && semantic_function.span.as_ref().is_some_and(|span| {
-                    span.start_byte == function.span.start_byte
-                        && span.end_byte == function.span.end_byte
+                    // Span containment, not equality: the SSA frontend reports a
+                    // zero-width point for methods while tree-sitter reports the full
+                    // declaration span (see `matching_core_function`). A root that is a
+                    // method must still map to its `qualified` identity.
+                    function.span.start_byte <= span.start_byte
+                        && span.start_byte <= function.span.end_byte
                 })
         })
         .map(|semantic_function| semantic_function.qualified.clone())
 }
 
 /// The core `FunctionFact` matching a Go semantic function (file + language + name +
-/// span), mirroring `semantic_graph::build::matching_core_function`.
+/// span).
+///
+/// The Go SSA frontend and the core (tree-sitter) facts disagree on the span of a
+/// METHOD: tree-sitter reports the FULL declaration span (`func (r R) M() {...}`),
+/// while the SSA frontend reports a zero-width POINT at the `func` token. A
+/// declaration-named, file-scoped method identity (`R.M`) is unique within a file, so
+/// the match keys on `file + language + name` and accepts the semantic span when it is
+/// CONTAINED within the core declaration span (a point-span inside the declaration, or
+/// the exact-equal span regular functions already produce). This is what lets the RTA
+/// driver map a concrete method to its already-built semantic function node (whose key
+/// uses the core declaration span) — without it, interface dispatch resolves to nothing
+/// for real Go methods (Phase 48 verification surfaced this). Honest by construction:
+/// `name` + `file` disambiguate, and containment never widens beyond one declaration.
 fn matching_core_function<'a>(
     db: &'a AnalysisDb,
     semantic_function: &GoSemanticFunctionFact,
@@ -282,8 +311,8 @@ fn matching_core_function<'a>(
         function.file == file
             && function.language == Language::Go
             && function.name == semantic_function.name
-            && function.span.start_byte == span.start_byte
-            && function.span.end_byte == span.end_byte
+            && function.span.start_byte <= span.start_byte
+            && span.start_byte <= function.span.end_byte
     })
 }
 
@@ -496,5 +525,103 @@ mod tests {
         assert_eq!(normalize_type("pkg.T"), "pkg.T");
         // Only a single leading `*` is stripped (honest, idempotent on the result).
         assert_eq!(normalize_type("**pkg.T"), "*pkg.T");
+    }
+
+    #[test]
+    fn bare_method_name_strips_receiver_qualifier() {
+        // The core (tree-sitter) facts name a method `Receiver.Method`; interface-invoke
+        // resolution matches the bare invoked method name.
+        assert_eq!(bare_method_name("Dog.Speak"), "Speak");
+        // A plain function name (no `.`) is already bare.
+        assert_eq!(bare_method_name("handler"), "handler");
+        // Only the receiver qualifier is stripped (last `.` segment is the method).
+        assert_eq!(bare_method_name("Outer.Inner.Method"), "Method");
+    }
+
+    #[test]
+    fn from_db_maps_method_when_ssa_point_span_lies_within_core_declaration_span() {
+        // Regression for the Phase 48 verification finding: the SSA frontend reports a
+        // zero-width POINT span for a method (`func` token), while tree-sitter reports
+        // the FULL declaration span. `matching_core_function` must map the method by
+        // file + name + span-CONTAINMENT, or interface dispatch resolves nothing.
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        // Core method declaration spans bytes 10..40 (the full `func (D) Speak() {...}`).
+        let function_id = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "Dog.Speak".to_string(),
+            span: span(file, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let node_stable_key = function_node_key(
+            &db,
+            db.functions().iter().find(|f| f.id == function_id).unwrap(),
+        );
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![SemanticNodeFact {
+                id: SemanticNodeId(0),
+                kind: NodeKind::Function(function_id),
+                precision: SemanticPrecision::Conservative,
+                stable_key: node_stable_key,
+            }],
+            edges: Vec::new(),
+            constraints: Vec::new(),
+        })
+        .expect("semantic graph stores");
+
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![GoSemanticFunctionFact {
+                id: crate::go::semantic::facts::GoSemanticFunctionId(0),
+                stable_key: "gofn|(pkg.Dog).Speak".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                // The frontend names the method `Receiver.Method` and reports a point
+                // span (25..25) WITHIN the core declaration span (10..40).
+                name: "Dog.Speak".to_string(),
+                qualified: "(*pkg.Dog).Speak".to_string(),
+                signature: "func() string".to_string(),
+                kind: GoSemanticFunctionKind::Method,
+                receiver: Some("*pkg.Dog".to_string()),
+                relative_file: Some("pkg/file.go".to_string()),
+                file: Some(file),
+                span: Some(span(file, 25, 25)),
+            }],
+            method_sets: vec![GoSemanticMethodSetFact {
+                id: crate::go::semantic::facts::GoSemanticMethodSetId(0),
+                stable_key: "ms|pkg.Dog".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                type_name: "pkg.Dog".to_string(),
+                methods: vec!["Speak".to_string()],
+            }],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("go semantic facts store");
+
+        let inputs = GoRtaInputs::from_db(&db);
+
+        // The method maps to its semantic node despite the point-vs-declaration span gap.
+        assert_eq!(
+            inputs.function_node.get("(*pkg.Dog).Speak"),
+            Some(&SemanticNodeId(0))
+        );
+        // It is indexed by its normalized receiver with the BARE method name "Speak", so
+        // an interface invoke of "Speak" can resolve to it.
+        let methods = inputs
+            .methods_by_receiver
+            .get("pkg.Dog")
+            .expect("method indexed by normalized receiver");
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].method_name, "Speak");
+        assert_eq!(methods[0].node, SemanticNodeId(0));
     }
 }

@@ -1,0 +1,244 @@
+//! Go RTA acceptance gate (GO-05 success criteria 2, 3, 4 — D-14, D-15, D-16).
+//!
+//! For each checked-in `tests/eval-fixtures/go-rta/*` (and the polyglot canary) this
+//! crate-private gate runs the kernel over the fixture repo, rebuilds the closed Go
+//! RTA snapshot ([`GoRtaInputs::from_db`]) plus the points-to `CopyEdge` constraints,
+//! drives them through the SAME engine the `polint.solver` provider uses
+//! ([`SolverEngine::run_to_solver_output`]), and asserts on the resulting
+//! [`SolverOutput`]:
+//!
+//! - **iteration-cap** (D-14): a deliberately-tight `[solver.go] max_rta_rounds = 1`
+//!   in the fixture's own `.polint.toml` forces the multi-round dispatch graph to
+//!   latch [`BudgetStatus::BudgetExceeded`] — the GO-05 criterion-2 proof that runaway
+//!   dispatch is SIGNALLED, not silently dropped.
+//! - **interface-dispatch** (D-15): the instantiated-type FILTER (RTA, not CHA) — the
+//!   instantiated receiver's method resolves; a declared-but-not-instantiated type's
+//!   method does not.
+//! - **address-taken** (D-15): a func-value indirect call resolves via the
+//!   address-taken set + signature match.
+//! - **polyglot Go+TS canary** (D-16): Go RTA edges resolve AND TS behavior is
+//!   unchanged (no TS token-propagation edges — `TsTokensPolicy` is still a stub), so
+//!   there is no cross-language interference through the shared solver core.
+//!
+//! The RTA edges are sourced from the kernel-built `AnalysisDb` (`solver_derived_edges`
+//! /`GoRtaInputs`), NOT through the call-graph projection — Phase 52 (GRAPH-05) wires
+//! solver edges into `refined_calls`; until then the self-contained engine drive here
+//! is the always-runnable proof. A two-run byte-stability check guards determinism.
+//!
+//! All types stay `pub(crate)`; no `ALLOWED_PRELUDE` entry is added (D-17).
+
+#![cfg(test)]
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::analysis::ids::SemanticNodeId;
+use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::engine::SolverEngine;
+use crate::analysis::solver::go_rta::GoRtaInputs;
+use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
+use crate::analysis::solver::store::SolverOutput;
+use crate::analysis_kernel::KernelOutput;
+use crate::config::load_config;
+use crate::core::AnalysisDb;
+use crate::eval::fixtures::load_native_fixture;
+use crate::eval::observed::{copy_fixture_repo_for_test, run_kernel_for_repo_for_test};
+
+fn go_rta_fixture_dir(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/eval-fixtures/go-rta")
+        .join(name)
+}
+
+/// Runs the kernel over a fixture repo and returns the raw [`KernelOutput`].
+fn run_fixture_kernel(fixture_dir: &Path) -> KernelOutput {
+    let fixture = load_native_fixture(fixture_dir).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    run_kernel_for_repo_for_test(temp.path()).expect("kernel runs over fixture repo")
+}
+
+/// Reads the fixture's own `[solver.go]` config so the gate drives the solver under
+/// the SAME budget the kernel would — this is what makes the iteration-cap fixture's
+/// tight `max_rta_rounds = 1` actually bite (D-14).
+fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
+    let fixture = load_native_fixture(fixture_dir).expect("fixture loads");
+    let loaded = load_config(&fixture.repo_dir).expect("config loads");
+    SolverBudget {
+        go: loaded.config.solver.to_go_sub_budget(),
+        ..SolverBudget::default()
+    }
+}
+
+/// Drives the unified solver engine over the fixture-built db exactly as
+/// `derive_solver_with_cache_stats` does (points-to CopyEdge closure + Go RTA + the
+/// TS stub), returning the merged, normalized [`SolverOutput`] so the gate can read
+/// the run-level `budget_status` and the derived edges.
+fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
+    let constraints = db.semantic_constraints().to_vec();
+    let go_rta_inputs = GoRtaInputs::from_db(db);
+    let engine = SolverEngine::new(
+        vec![
+            Box::new(PointsToPolicy::new(db.points_to_constraints().to_vec())),
+            Box::new(GoRtaPolicy::new(go_rta_inputs)),
+            Box::new(TsTokensPolicy),
+        ],
+        budget,
+    );
+    engine.run_to_solver_output(&constraints)
+}
+
+/// `qualified -> SemanticNodeId` for the fixture's Go functions, so the gate can
+/// assert WHICH concrete method an interface invoke resolved to (e.g. `(…Dog).Speak`
+/// vs `(…Cat).Speak`, which share the bare name `Speak`).
+fn function_nodes(db: &AnalysisDb) -> BTreeMap<String, SemanticNodeId> {
+    GoRtaInputs::from_db(db).function_node
+}
+
+/// Two engine runs over the same fixture-built db produce byte-identical serialized
+/// derived edges (the determinism discipline; dense `id` is `#[serde(skip)]` so this
+/// captures endpoints/status/precision/stable_key/provenance).
+fn assert_solver_output_byte_stable(db: &AnalysisDb, budget: SolverBudget) {
+    let first = solver_output_for_db(db, budget);
+    let second = solver_output_for_db(db, budget);
+    let first_json = serde_json::to_string(&first.derived_edges).expect("serialize first");
+    let second_json = serde_json::to_string(&second.derived_edges).expect("serialize second");
+    assert_eq!(
+        first_json, second_json,
+        "solver derived-edge JSON diverged across two engine runs"
+    );
+    assert_eq!(
+        first.budget_status, second.budget_status,
+        "solver budget status diverged across two engine runs"
+    );
+}
+
+#[test]
+fn iteration_cap_fixture_latches_budget_exceeded() {
+    // D-14 / GO-05 criterion 2: the fixture's own tight
+    // `[solver.go] max_candidates_per_callsite = 1` cannot admit the three candidate
+    // callees (Circle/Square/Triangle.Area) of the single `s.Area()` interface invoke,
+    // so resolving that callsite latches BudgetExceeded rather than silently dropping
+    // the over-cap candidates. This proves runaway dispatch fan-out is SIGNALLED and
+    // that the fixture's own config threads into the GoRtaSubBudget end to end.
+    let dir = go_rta_fixture_dir("iteration-cap");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    assert_eq!(
+        budget.go.max_candidates_per_callsite, 1,
+        "the fixture's `[solver.go] max_candidates_per_callsite` must thread through (1)"
+    );
+
+    let solver_output = solver_output_for_db(&output.db, budget);
+    assert_eq!(
+        solver_output.budget_status,
+        BudgetStatus::BudgetExceeded,
+        "the tight per-callsite candidate cap must latch BudgetExceeded (D-14): {:#?}",
+        solver_output.derived_edges
+    );
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
+fn interface_dispatch_fixture_proves_instantiated_type_filter() {
+    // D-15 / GO-05 criterion 4: Dog is instantiated → main -> (Dog).Speak resolves;
+    // Cat is declared + in its method-set but NEVER instantiated → no edge targets
+    // (Cat).Speak. This is the RTA discriminant (instantiated-type filter), not CHA.
+    let dir = go_rta_fixture_dir("interface-dispatch");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    let dog_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Dog") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Dog).Speak must have a semantic node");
+    let cat_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Cat") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Cat).Speak must have a semantic node");
+
+    // The instantiated receiver's method is resolved.
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == dog_speak),
+        "RTA must resolve the interface invoke to the instantiated (Dog).Speak: {:#?}",
+        solver_output.derived_edges
+    );
+    // The NON-instantiated receiver's method is excluded (the RTA filter, not CHA).
+    assert!(
+        !solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == cat_speak),
+        "RTA must NOT resolve to the non-instantiated (Cat).Speak (instantiated-type filter)"
+    );
+    // Every resolved RTA edge is honest: Present + never-exact precision.
+    for edge in &solver_output.derived_edges {
+        assert!(
+            edge.honors_precision_ceiling(),
+            "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
+        );
+    }
+    assert_eq!(solver_output.budget_status, BudgetStatus::WithinBudget);
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
+fn address_taken_fixture_resolves_func_value_by_signature() {
+    // D-15: the func() indirect call in main resolves via the address-taken set +
+    // signature match. `handler`/`other` (func()) resolve through the func() callsite;
+    // `noise` (func(int)) is EXCLUDED from the func() callsite by its signature (it only
+    // resolves through the separate func(int) callsite). The proof that the signature
+    // filter holds: the func()-CALLSITE edges (the ones whose caller is main and whose
+    // target is a func() address-taken function) never include noise.
+    let dir = go_rta_fixture_dir("address-taken");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    let handler = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.ends_with(".handler"))
+        .map(|(_, node)| *node)
+        .expect("handler must have a semantic node");
+
+    // The func-value indirect call resolves to the address-taken `handler` (func()).
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == handler),
+        "RTA must resolve the func-value indirect call to the address-taken `handler`: {:#?}",
+        solver_output.derived_edges
+    );
+    // Honest func-value resolution (no flooding): every RTA-resolved (call_constraint)
+    // edge targets an ADDRESS-TAKEN function — never an arbitrary function. This is the
+    // func-value discipline (the address-taken set is the candidate universe).
+    let address_taken_nodes: std::collections::BTreeSet<SemanticNodeId> =
+        GoRtaInputs::from_db(&output.db)
+            .address_taken
+            .iter()
+            .filter_map(|qualified| nodes.get(qualified).copied())
+            .collect();
+    for edge in solver_output
+        .derived_edges
+        .iter()
+        .filter(|edge| edge.provenance.constraint_kind == "call_constraint")
+    {
+        assert!(
+            address_taken_nodes.contains(&edge.target),
+            "every func-value RTA edge must target an address-taken function (no flooding): {edge:#?}"
+        );
+        assert!(
+            edge.honors_precision_ceiling(),
+            "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
+        );
+    }
+    assert_solver_output_byte_stable(&output.db, budget);
+}

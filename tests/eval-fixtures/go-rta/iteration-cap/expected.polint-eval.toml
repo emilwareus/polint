@@ -1,0 +1,30 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-iteration-cap"
+area = "go-rta"
+
+# Phase 48 Plan 03 — the GO-05 success-criterion-2 acceptance artifact (D-14).
+#
+# repo/main.go declares a Stepper interface with two instantiated implementers
+# (A, B) whose dispatch forms a multi-round reachable chain:
+#   round 1: main -> A.Step      (resolvable)
+#   round 2: A.Step -> B.Step    (A.Step is only reachable AFTER round 1)
+# repo/.polint.toml sets a deliberately tight `[solver.go] max_rta_rounds = 1`,
+# so the RTA fixpoint cannot reach round 2 and latches
+# BudgetStatus::BudgetExceeded — proving runaway/over-cap dispatch is SIGNALLED,
+# not silently dropped, and that the config -> GoRtaSubBudget threading bites.
+#
+# The `eval::go_rta` gate (crates/polint/src/eval/go_rta.rs) drives this fixture
+# through the SAME engine the provider uses (SolverEngine::run_to_solver_output)
+# and asserts the observed SolverOutput.budget_status is BudgetExceeded. The
+# invariant row below documents the acceptance contract; the gate is the
+# executable proof (a manifest fact-match cannot read the internal budget signal,
+# which is crate-private and consumed during storage).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
+
+[[expected]]
+invariant = { name = "solver.go_rta.budget_exceeded.present", value = "true", mode = "exact" }

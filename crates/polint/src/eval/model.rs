@@ -113,6 +113,10 @@ pub(crate) enum FixtureArea {
     DirectSummaries,
     #[serde(rename = "framework-entrypoints")]
     FrameworkEntrypoints,
+    #[serde(rename = "go-rta")]
+    GoRta,
+    #[serde(rename = "polyglot-canary")]
+    PolyglotCanary,
     #[serde(rename = "data-flow")]
     DataFlow,
     Evidence,

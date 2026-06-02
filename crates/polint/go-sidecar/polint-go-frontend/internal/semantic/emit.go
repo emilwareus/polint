@@ -475,7 +475,13 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 		}
 		var methods []string
 		for i := 0; i < methodSet.Len(); i++ {
-			methods = append(methods, methodSet.At(i).Obj().String())
+			// The method-set carries the bare method NAME (the identifier, e.g.
+			// "Speak"), not the full signature string. RTA interface-invoke
+			// resolution intersects the INVOKED method name (the dynamic-dispatch
+			// discriminant) with this set, so a signature string would never match
+			// the invoked name and interface dispatch would resolve nothing (Phase 48
+			// verification surfaced this). `Obj().Name()` is the method identifier.
+			methods = append(methods, methodSet.At(i).Obj().Name())
 		}
 		sort.Strings(methods)
 		e.add(Row{

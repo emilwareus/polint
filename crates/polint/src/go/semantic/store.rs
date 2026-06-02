@@ -34,8 +34,23 @@ impl GoSemanticFactsOutput {
             fact.id = crate::go::semantic::facts::GoSemanticFunctionId(index as u64);
         }
 
+        // Callsites, address-taken funcs, instantiated runtime types, and dynamic-dispatch
+        // detail are whole-reachable-program harvests over the SSA program: the SAME
+        // official identity legitimately recurs (a function whose address is taken from
+        // two call sites; a type converted to an interface in two functions; compiler
+        // synthetic method-wrappers whose internal calls carry no source position). These
+        // are SET facts keyed by official identity, so an identity-duplicate row is the
+        // SAME set member, not a conflict — dedup by stable key (keep first) after the
+        // stable-key sort, mirroring the solver fixpoint's stable-key dedup. This keeps
+        // the whole-program set honest and `validate_unique` green without dropping any
+        // distinct fact (Phase 48 verification surfaced this on same-named interface
+        // methods + shared callees). Packages/functions/method-sets are keyed by unique
+        // declaration identity and are intentionally NOT deduped (a real duplicate there
+        // is a genuine conflict the validator must still reject).
         self.callsites
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.callsites
+            .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.callsites.iter_mut().enumerate() {
             fact.id = crate::go::semantic::facts::GoSemanticCallsiteId(index as u64);
         }
@@ -48,18 +63,24 @@ impl GoSemanticFactsOutput {
 
         self.address_taken
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.address_taken
+            .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.address_taken.iter_mut().enumerate() {
             fact.id = crate::go::semantic::facts::GoSemanticAddressTakenId(index as u64);
         }
 
         self.instantiated_types
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.instantiated_types
+            .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.instantiated_types.iter_mut().enumerate() {
             fact.id = crate::go::semantic::facts::GoSemanticInstantiatedTypeId(index as u64);
         }
 
         self.dynamic_dispatch
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.dynamic_dispatch
+            .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, fact) in self.dynamic_dispatch.iter_mut().enumerate() {
             fact.id = crate::go::semantic::facts::GoSemanticDynamicDispatchId(index as u64);
         }
@@ -136,5 +157,45 @@ mod tests {
         assert_eq!(store.output.functions[0].id, GoSemanticFunctionId(0));
         assert_eq!(store.output.functions[1].stable_key, "b");
         assert_eq!(store.output.functions[1].id, GoSemanticFunctionId(1));
+    }
+
+    #[test]
+    fn normalized_dedups_identity_duplicate_set_facts_keeping_first() {
+        use crate::go::semantic::facts::{GoSemanticAddressTakenFact, GoSemanticAddressTakenId};
+
+        // The whole-reachable-program harvests (address-taken / instantiated / callsite /
+        // dynamic-dispatch) legitimately produce the SAME official identity more than once
+        // (a function whose address is taken from two sites; a synthetic method wrapper
+        // call without a source position). These are SET facts keyed by official identity,
+        // so an identity-duplicate row is the SAME member and must dedup (keep first) —
+        // NOT be rejected by `validate_unique`. Phase 48 verification surfaced this.
+        let output = GoSemanticFactsOutput {
+            address_taken: vec![
+                GoSemanticAddressTakenFact {
+                    id: GoSemanticAddressTakenId(7),
+                    stable_key: "at|fmt.Println".to_string(),
+                    package_id: "pkg".to_string(),
+                    package_path: "example.com/pkg".to_string(),
+                    function: "fmt.Println".to_string(),
+                },
+                GoSemanticAddressTakenFact {
+                    id: GoSemanticAddressTakenId(9),
+                    stable_key: "at|fmt.Println".to_string(),
+                    package_id: "pkg".to_string(),
+                    package_path: "example.com/pkg".to_string(),
+                    function: "fmt.Println".to_string(),
+                },
+            ],
+            ..GoSemanticFactsOutput::default()
+        };
+
+        // Without dedup this would fail `validate_unique`; with dedup it stores one row.
+        let store = GoSemanticStore::from_output(output).expect("dedup keeps the set valid");
+        assert_eq!(store.output().address_taken.len(), 1);
+        assert_eq!(store.output().address_taken[0].function, "fmt.Println");
+        assert_eq!(
+            store.output().address_taken[0].id,
+            GoSemanticAddressTakenId(0)
+        );
     }
 }
