@@ -311,10 +311,15 @@ fn bare_method_name(name: &str) -> String {
 }
 
 /// The `qualified` identity of the Go semantic function matching a core `FunctionId`,
-/// if any. Mirrors the file+name+span join `matching_core_function` performs, in
-/// reverse: a core function -> its Go semantic `qualified`. Uses the same exact-first /
-/// zero-width-point-containment disambiguation so a method root still maps while
-/// same-named nested declarations cannot mis-map (WR-04).
+/// if any. This is the exact INVERSE of [`matching_core_function`]: it returns the
+/// semantic function `S` such that `matching_core_function(S) == function_id`, so the
+/// two directions are in genuine lockstep (WR-04 / FINDING E) rather than merely
+/// "similar". Defining the reverse via the forward is what keeps the point-containment
+/// fallback symmetric: the forward maps a zero-width SSA point to the INNERMOST
+/// containing core declaration (`min_by_key`), so the reverse must NOT map an OUTER
+/// same-named declaration to a point that actually belongs to a tighter inner one. A
+/// previous `find()` (first-match) fallback did exactly that — both the outer and inner
+/// declarations matched the same contained point, breaking symmetry.
 fn qualified_for_function_id(
     db: &AnalysisDb,
     function_id: crate::core::FunctionId,
@@ -328,7 +333,8 @@ fn qualified_for_function_id(
         semantic_function.file == Some(function.file) && semantic_function.name == function.name
     };
 
-    // 1. Prefer a semantic function with an EXACT-equal span (unambiguous).
+    // 1. Prefer a semantic function with an EXACT-equal span (unambiguous, and the forward
+    //    direction's step 1 — so this side agrees).
     if let Some(exact) = db.go_semantic_functions().iter().find(|semantic_function| {
         same_identity(semantic_function)
             && semantic_function.span.as_ref().is_some_and(|span| {
@@ -339,21 +345,30 @@ fn qualified_for_function_id(
         return Some(exact.qualified.clone());
     }
 
-    // 2. Fall back to a zero-width semantic POINT contained in the core declaration (the
-    //    SSA-method case), choosing the semantic function whose point is innermost-
-    //    consistent — here, simply the matching point (a method's `func`-token point is
-    //    unique within its own declaration, and `name` + `file` disambiguate).
+    // 2. Fall back to a zero-width semantic POINT (the SSA-method case), but ONLY when that
+    //    point maps FORWARD to exactly THIS core declaration — i.e. this function is the
+    //    INNERMOST core declaration containing the point (mirroring the forward
+    //    `min_by_key`). This is what makes the two directions symmetric: an outer same-named
+    //    declaration cannot claim a point that resolves to a tighter inner one. Deterministic
+    //    minimum by `qualified` if several semantic points legitimately resolve here.
     db.go_semantic_functions()
         .iter()
-        .find(|semantic_function| {
-            same_identity(semantic_function)
-                && semantic_function.span.as_ref().is_some_and(|span| {
-                    span.start_byte == span.end_byte
-                        && function.span.start_byte <= span.start_byte
-                        && span.start_byte <= function.span.end_byte
-                })
+        .filter(|semantic_function| {
+            if !same_identity(semantic_function) {
+                return false;
+            }
+            let Some(span) = semantic_function.span.as_ref() else {
+                return false;
+            };
+            if span.start_byte != span.end_byte {
+                return false;
+            }
+            // The forward map of this point must land on THIS core function (innermost).
+            matching_core_function_for(db, function.file, &function.name, span)
+                .is_some_and(|resolved| resolved.id == function_id)
         })
         .map(|semantic_function| semantic_function.qualified.clone())
+        .min()
 }
 
 /// The core `FunctionFact` matching a Go semantic function (file + language + name +
@@ -1022,6 +1037,77 @@ mod tests {
         assert_eq!(
             chosen2.id.0, 5,
             "must bind to caller_a's own site, never caller_b's same-span dynamic one"
+        );
+    }
+
+    /// FINDING E (WR-04 lockstep): the reverse map (`qualified_for_function_id`) must be the
+    /// exact INVERSE of the forward map's innermost (`min_by_key`) point-containment rule —
+    /// not a first-match that lets an OUTER same-named declaration claim a point belonging to
+    /// a tighter inner one. Two same-named core declarations (outer 0..100, inner 40..60) and
+    /// ONE semantic function with a zero-width point at 45 (which the forward map resolves to
+    /// the INNER declaration). The reverse must map the INNER core to that semantic
+    /// `qualified` and the OUTER core to NOTHING (the point is not "innermost" for the
+    /// outer) — proving forward/reverse symmetry.
+    #[test]
+    fn qualified_for_function_id_reverse_matches_forward_innermost_point() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        let push = |db: &mut AnalysisDb, id: u64, start: u32, end: u32| {
+            db.push_function(FunctionFact {
+                id: FunctionId(id),
+                file,
+                name: "F".to_string(),
+                span: span(file, start, end),
+                language: Language::Go,
+                is_test: false,
+                is_exported: true,
+                cyclomatic_complexity: 1,
+                calls: Vec::new(),
+            })
+        };
+        let outer = push(&mut db, 0, 0, 100);
+        let inner = push(&mut db, 1, 40, 60);
+
+        // One semantic function: a zero-width point at 45 (inside BOTH ranges). The forward
+        // map resolves 45 to the INNER declaration (innermost), so the reverse must too.
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![GoSemanticFunctionFact {
+                id: crate::go::semantic::facts::GoSemanticFunctionId(0),
+                stable_key: "gofn|(*pkg.T).F".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                name: "F".to_string(),
+                qualified: "(*pkg.T).F".to_string(),
+                signature: "func()".to_string(),
+                kind: GoSemanticFunctionKind::Method,
+                receiver: Some("*pkg.T".to_string()),
+                relative_file: Some("pkg/file.go".to_string()),
+                file: Some(file),
+                span: Some(span(file, 45, 45)),
+            }],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("go semantic facts store");
+
+        // Sanity: the FORWARD map sends point 45 to the inner declaration.
+        let forward = matching_core_function_for(&db, file, "F", &span(file, 45, 45))
+            .expect("forward point maps");
+        assert_eq!(forward.id, inner);
+
+        // The reverse map agrees: inner core -> the semantic qualified; outer core -> None.
+        assert_eq!(
+            qualified_for_function_id(&db, inner).as_deref(),
+            Some("(*pkg.T).F"),
+            "the innermost core must map back to the semantic point"
+        );
+        assert_eq!(
+            qualified_for_function_id(&db, outer),
+            None,
+            "an OUTER same-named declaration must NOT claim a point that resolves to a tighter inner one (forward/reverse lockstep)"
         );
     }
 
