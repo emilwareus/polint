@@ -388,9 +388,18 @@ func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
 // emitAddressTaken harvests the set of functions whose address is taken in the reachable
 // SSA program (D-05) — an RTA dispatch input for func-value callsites. Sources: *ssa.MakeClosure
 // over an *ssa.Function (closures and bound method values), and any *ssa.Function used as a
-// value operand of an instruction (function references passed as args, stored to globals, or
-// assigned). De-duplicated within a function by the function identity; builtins/synthetic
-// functions without stable identity are skipped rather than fabricated (Phase 46 D-15).
+// GENUINE value operand of an instruction (function references passed as args, stored to
+// globals, returned, or assigned). De-duplicated within a function by the function identity;
+// builtins/synthetic functions without stable identity are skipped rather than fabricated
+// (Phase 46 D-15).
+//
+// FINDING 2: a STATICALLY-called function is NOT address-taken. For a *ssa.Call / Go / Defer
+// the callee is the call's `common.Value` operand, and when that is the static callee it
+// appears in `instr.Operands(...)` — naively harvesting it would mark every statically-called
+// function (every `helper()`, `defer cleanup()`, `go worker()`) address-taken and flood the
+// func-value RTA candidate set. So for a call instruction we EXCLUDE the operand that equals
+// the static-callee value; a func VALUE used in a `go`/`defer`/call (no static callee) is a
+// genuine value use and is still captured by the generic operand scan.
 func (e *emitter) emitAddressTaken(pkg *ssa.Package, fn *ssa.Function) {
 	if fn == nil {
 		return
@@ -420,9 +429,21 @@ func (e *emitter) emitAddressTaken(pkg *ssa.Package, fn *ssa.Function) {
 					emit(target)
 				}
 			}
+			// The static-callee value of a call/go/defer is NOT a value use: skip it so a
+			// statically-called function is not marked address-taken (FINDING 2). A
+			// dynamic dispatch has no static callee, so this excludes nothing there.
+			var staticCallee ssa.Value
+			if call, ok := instr.(ssa.CallInstruction); ok {
+				if common := call.Common(); common != nil && common.StaticCallee() != nil {
+					staticCallee = common.Value
+				}
+			}
 			operands := instr.Operands(nil)
 			for _, operand := range operands {
 				if operand == nil || *operand == nil {
+					continue
+				}
+				if staticCallee != nil && *operand == staticCallee {
 					continue
 				}
 				if target, ok := (*operand).(*ssa.Function); ok {

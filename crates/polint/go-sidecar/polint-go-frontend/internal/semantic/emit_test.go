@@ -164,6 +164,47 @@ func main() {
 	assertDynamicDispatchJoinsCallsite(t, rows)
 }
 
+func TestEmitAddressTakenExcludesStaticCallees(t *testing.T) {
+	// FINDING 2: a statically-called function is NOT address-taken. For a *ssa.Call /
+	// Go / Defer the callee is the first operand, so the address-taken operand loop must
+	// EXCLUDE the static-callee operand — otherwise `defer cleanup()`, `go worker()`, and
+	// a plain `helper()` call would each spuriously mark their callee address-taken and
+	// flood the func-value RTA candidate set. Genuine value uses (a function assigned to a
+	// variable / stored in a slice) MUST still be captured.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+func cleanup() {}
+func worker()  {}
+func helper()  {}
+func genuine()  {}
+
+func main() {
+	defer cleanup()
+	go worker()
+	helper()
+	// genuine is used as a VALUE (assigned, then stored in a slice) — a real
+	// address-taken use that must still be harvested.
+	f := genuine
+	fns := []func(){f}
+	_ = fns
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	// The genuine value-use IS captured.
+	assertAddressTaken(t, rows, "example.test/fixture.genuine")
+	// The statically-called functions are NOT address-taken (call/go/defer of a func).
+	assertNotAddressTaken(t, rows, "example.test/fixture.cleanup")
+	assertNotAddressTaken(t, rows, "example.test/fixture.worker")
+	assertNotAddressTaken(t, rows, "example.test/fixture.helper")
+}
+
 func TestEmitDynamicDispatchCarriesInterfaceDiscriminant(t *testing.T) {
 	root := writeFixture(t, map[string]string{
 		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
@@ -365,6 +406,25 @@ func assertCallsiteStatus(t *testing.T, rows []Row, status string) {
 		}
 	}
 	t.Fatalf("missing callsite status %q in %#v", status, rows)
+}
+
+func assertAddressTaken(t *testing.T, rows []Row, function string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "address_taken" && row["function"] == function {
+			return
+		}
+	}
+	t.Fatalf("missing address_taken function %q in %#v", function, rows)
+}
+
+func assertNotAddressTaken(t *testing.T, rows []Row, function string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "address_taken" && row["function"] == function {
+			t.Fatalf("function %q must NOT be address_taken (statically called): %#v", function, row)
+		}
+	}
 }
 
 func assertInstantiatedType(t *testing.T, rows []Row, typeName string) {

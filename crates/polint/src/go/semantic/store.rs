@@ -164,26 +164,30 @@ mod tests {
         use crate::go::semantic::facts::{GoSemanticAddressTakenFact, GoSemanticAddressTakenId};
 
         // The whole-reachable-program harvests (address-taken / instantiated / callsite /
-        // dynamic-dispatch) legitimately produce the SAME official identity more than once
-        // (a function whose address is taken from two sites; a synthetic method wrapper
-        // call without a source position). These are SET facts keyed by official identity,
-        // so an identity-duplicate row is the SAME member and must dedup (keep first) —
-        // NOT be rejected by `validate_unique`. Phase 48 verification surfaced this.
+        // dynamic-dispatch) legitimately produce the SAME official identity more than once:
+        // a function whose address is GENUINELY taken as a value from two distinct sites
+        // (e.g. `f := handler` in two places, or `handler` stored into two slices) yields
+        // two address-taken rows for the same `ssa.Function.String()`. These are SET facts
+        // keyed by official identity, so an identity-duplicate row is the SAME member and
+        // must dedup (keep first) — NOT be rejected by `validate_unique`. Phase 48
+        // verification surfaced this. (We deliberately use a genuine value-use function, not
+        // a statically-called one like `fmt.Println`: FINDING 2 establishes that a
+        // statically-called function is NOT address-taken at all.)
         let output = GoSemanticFactsOutput {
             address_taken: vec![
                 GoSemanticAddressTakenFact {
                     id: GoSemanticAddressTakenId(7),
-                    stable_key: "at|fmt.Println".to_string(),
+                    stable_key: "at|example.com/pkg.handler".to_string(),
                     package_id: "pkg".to_string(),
                     package_path: "example.com/pkg".to_string(),
-                    function: "fmt.Println".to_string(),
+                    function: "example.com/pkg.handler".to_string(),
                 },
                 GoSemanticAddressTakenFact {
                     id: GoSemanticAddressTakenId(9),
-                    stable_key: "at|fmt.Println".to_string(),
+                    stable_key: "at|example.com/pkg.handler".to_string(),
                     package_id: "pkg".to_string(),
                     package_path: "example.com/pkg".to_string(),
-                    function: "fmt.Println".to_string(),
+                    function: "example.com/pkg.handler".to_string(),
                 },
             ],
             ..GoSemanticFactsOutput::default()
@@ -192,7 +196,10 @@ mod tests {
         // Without dedup this would fail `validate_unique`; with dedup it stores one row.
         let store = GoSemanticStore::from_output(output).expect("dedup keeps the set valid");
         assert_eq!(store.output().address_taken.len(), 1);
-        assert_eq!(store.output().address_taken[0].function, "fmt.Println");
+        assert_eq!(
+            store.output().address_taken[0].function,
+            "example.com/pkg.handler"
+        );
         assert_eq!(
             store.output().address_taken[0].id,
             GoSemanticAddressTakenId(0)
