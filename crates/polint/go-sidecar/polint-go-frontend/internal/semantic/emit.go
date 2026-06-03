@@ -388,7 +388,10 @@ func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
 				})
 				continue
 			}
-			concrete := mi.X.Type().String()
+			// Canonicalize through any type alias to the underlying type (FIX 3) so a
+			// value of `type AliasDog = Dog` is harvested as `...Dog` — matching the
+			// concrete method's receiver — not the alias spelling `...AliasDog`.
+			concrete := canonicalTypeString(mi.X.Type())
 			if concrete == "" || seen[concrete] {
 				continue
 			}
@@ -515,6 +518,16 @@ func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {
 
 func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 	scope := pkg.Pkg.Scope()
+	// De-duplicate by the CANONICAL (alias-resolved) identity (FIX 3). Package scope can
+	// hold both a defined type `Dog` and a type alias `type AliasDog = Dog`; both resolve
+	// through `types.Unalias` to the same underlying `...Dog`, and a method_set is keyed by
+	// unique declaration identity (the store does NOT treat method_sets as set facts — it
+	// REJECTS a duplicate stable key). Emitting the same canonical identity twice would be a
+	// hard validation conflict that zeroes the whole Go fact set, so keep the FIRST
+	// occurrence (its method-set is identical — go/types resolves both through the alias). A
+	// package with no aliases has a unique canonical identity per type, so this is a no-op
+	// and byte-identity is preserved.
+	seen := make(map[string]bool)
 	for _, name := range scope.Names() {
 		obj := scope.Lookup(name)
 		typeName, ok := obj.(*types.TypeName)
@@ -525,6 +538,12 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 		if methodSet.Len() == 0 {
 			continue
 		}
+		// Key by the underlying identity so an alias and its target collapse to one row.
+		identity := canonicalTypeString(typeName.Type())
+		if identity == "" || seen[identity] {
+			continue
+		}
+		seen[identity] = true
 		var methods []string
 		for i := 0; i < methodSet.Len(); i++ {
 			// The method-set carries the bare method NAME (the identifier, e.g.
@@ -536,13 +555,16 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 			methods = append(methods, methodSet.At(i).Obj().Name())
 		}
 		sort.Strings(methods)
+		// `identity` is the canonical (alias-resolved) type string computed above, so the
+		// method_set, the canonicalized instantiated_type, and the concrete method's
+		// receiver all share one identity and the RTA join succeeds.
 		e.add(Row{
 			"kind":         "method_set",
 			"package_id":   packageID(pkg),
 			"package_path": packagePath(pkg),
-			"type":         typeName.Type().String(),
+			"type":         identity,
 			"methods":      methods,
-			"stable_key":   stableKey(packageID(pkg), "method_set", typeName.Type().String()),
+			"stable_key":   stableKey(packageID(pkg), "method_set", identity),
 		})
 	}
 }
@@ -701,6 +723,23 @@ func signatureString(sig *types.Signature) string {
 		return ""
 	}
 	return sig.String()
+}
+
+// canonicalTypeString returns the type's `.String()` resolved THROUGH any type alias to
+// its underlying type (FIX 3). go/types reports a value of a type alias (`type AliasDog =
+// Dog`) under the alias spelling (`...AliasDog`) for both the MakeInterface operand type
+// and the alias's package-scope TypeName, but the concrete method's receiver is the
+// UNDERLYING `...Dog`. Keying the instantiated_type and method_set under the alias spelling
+// makes the Rust resolver's `methods_by_receiver["...AliasDog"]` lookup miss and the
+// interface-dispatch edge is silently dropped. `types.Unalias` collapses the alias chain to
+// the underlying type so instantiated_type, method_set key, and the method receiver all
+// share one canonical identity and the join succeeds. It is a NO-OP on a non-alias type, so
+// every non-alias identity's `.String()` is unchanged (byte-identity preserved).
+func canonicalTypeString(t types.Type) string {
+	if t == nil {
+		return ""
+	}
+	return types.Unalias(t).String()
 }
 
 func receiverTypeName(receiver string) string {

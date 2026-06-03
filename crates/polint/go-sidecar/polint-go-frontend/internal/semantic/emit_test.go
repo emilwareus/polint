@@ -248,6 +248,55 @@ func main() {
 	assertMethodWithReceiver(t, rows, "Box.Speak", "*example.test/fixture.Box[int]")
 }
 
+func TestEmitCanonicalizesTypeAliasToUnderlyingForDispatch(t *testing.T) {
+	// FIX 3: a value of a type ALIAS converted to an interface must dispatch to the
+	// underlying type's method. For `type AliasDog = Dog; var s Speaker = AliasDog{}`,
+	// go/types reports the MakeInterface operand and the alias's package-scope TypeName
+	// keyed by the alias spelling (`...AliasDog`), but the concrete method's receiver is
+	// the UNDERLYING `*...Dog`. Without canonicalization the Rust resolver looks up
+	// methods_by_receiver["...AliasDog"] (None) and the edge is silently dropped. The fix
+	// resolves both the instantiated_type AND the method_set key through `types.Unalias`,
+	// so instantiated_type, method_set key, and the method receiver all share the
+	// underlying `...Dog` identity and the join succeeds.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+import "fmt"
+
+type Speaker interface{ Speak() string }
+
+type Dog struct{}
+
+func (Dog) Speak() string { return "woof" }
+
+// AliasDog is a type ALIAS for Dog (not a distinct defined type).
+type AliasDog = Dog
+
+func main() {
+	var s Speaker = AliasDog{}
+	fmt.Println(s.Speak())
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	// The instantiated type is harvested under the UNDERLYING identity, matching the
+	// method receiver — never the alias spelling.
+	assertInstantiatedType(t, rows, "example.test/fixture.Dog")
+	assertNoInstantiatedType(t, rows, "example.test/fixture.AliasDog")
+	// A method-set keyed by the UNDERLYING identity carries the satisfying method, so the
+	// instantiated-type ⋈ method-set ⋈ receiver join resolves the dispatch.
+	assertMethodSetContains(t, rows, "example.test/fixture.Dog", "Speak")
+	assertNoMethodSetKeyedBy(t, rows, "example.test/fixture.AliasDog")
+	// The concrete method is indexed by the underlying receiver (so the resolved edge has
+	// a target node).
+	assertMethodWithReceiver(t, rows, "Dog.Speak", "*example.test/fixture.Dog")
+}
+
 func TestEmitDynamicDispatchCarriesInterfaceDiscriminant(t *testing.T) {
 	root := writeFixture(t, map[string]string{
 		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
@@ -520,6 +569,24 @@ func assertInstantiatedType(t *testing.T, rows []Row, typeName string) {
 		}
 	}
 	t.Fatalf("missing instantiated_type %q in %#v", typeName, rows)
+}
+
+func assertNoInstantiatedType(t *testing.T, rows []Row, typeName string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "instantiated_type" && row["type"] == typeName {
+			t.Fatalf("unexpected instantiated_type %q (must canonicalize to underlying): %#v", typeName, row)
+		}
+	}
+}
+
+func assertNoMethodSetKeyedBy(t *testing.T, rows []Row, typeName string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "method_set" && row["type"] == typeName {
+			t.Fatalf("unexpected method_set keyed by %q (must canonicalize to underlying): %#v", typeName, row)
+		}
+	}
 }
 
 func assertMethodSetContains(t *testing.T, rows []Row, typeName string, method string) {

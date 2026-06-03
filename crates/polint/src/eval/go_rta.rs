@@ -219,6 +219,74 @@ fn interface_dispatch_fixture_proves_instantiated_type_filter() {
 }
 
 #[test]
+fn alias_dispatch_fixture_resolves_dispatch_through_a_type_alias() {
+    // FIX 3: a value of a type ALIAS (`type AliasDog = Dog`) converted to an interface must
+    // dispatch to the UNDERLYING type's method. go/types reports the instantiated_type and
+    // AliasDog's method-set under the alias spelling (`...AliasDog`), while (Dog).Speak's
+    // receiver is the underlying `...Dog`; without the sidecar's `types.Unalias`
+    // canonicalization, the instantiated-type ⋈ method-set ⋈ receiver join misses and the
+    // `s.Speak()` edge is silently dropped. After the fix the edge resolves to (Dog).Speak.
+    // Cat (declared, never instantiated) must still be excluded — proving the alias edge is
+    // the RTA instantiated-type filter at work, not a coarse CHA fallback.
+    let dir = go_rta_fixture_dir("alias-dispatch");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    let dog_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Dog") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Dog).Speak must have a semantic node");
+    let cat_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Cat") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Cat).Speak must have a semantic node");
+
+    // The interface invoke of the alias-spelled value resolves to the underlying
+    // (Dog).Speak (the join succeeds because the sidecar canonicalized the alias).
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == dog_speak),
+        "RTA must resolve the alias-spelled interface invoke to (Dog).Speak: {:#?}",
+        solver_output.derived_edges
+    );
+    // The non-instantiated implementer is still excluded (instantiated-type filter, not CHA).
+    assert!(
+        !solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == cat_speak),
+        "RTA must NOT resolve to the non-instantiated (Cat).Speak (instantiated-type filter)"
+    );
+    for edge in &solver_output.derived_edges {
+        assert!(
+            edge.honors_precision_ceiling(),
+            "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
+        );
+    }
+    assert_eq!(solver_output.budget_status, BudgetStatus::WithinBudget);
+
+    // The KERNEL-PERSISTED edges (the rows the provider actually stored) must also carry the
+    // resolved dispatch — catches a provider-wiring regression the recompute masks.
+    let persisted = output.db.solver_derived_edges();
+    assert!(
+        persisted.iter().any(|edge| edge.target == dog_speak),
+        "the kernel-PERSISTED solver edges must include the (Dog).Speak edge: {persisted:#?}"
+    );
+    assert!(
+        !persisted.iter().any(|edge| edge.target == cat_speak),
+        "the kernel-PERSISTED solver edges must exclude the non-instantiated (Cat).Speak"
+    );
+
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
 fn generic_dispatch_fixture_resolves_method_on_instantiated_generic_type() {
     // FINDING A: an interface satisfied by a method on a GENERIC type, dispatched via the
     // interface, must resolve to the INSTANTIATED type's method. x/tools records the

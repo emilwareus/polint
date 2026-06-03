@@ -1,0 +1,28 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-alias-dispatch"
+area = "go-rta"
+
+# Phase 48 FIX 3 — native type-alias interface-dispatch RTA fixture (D-15, GO-05 criterion 4).
+#
+# repo/main.go declares a Speaker interface implemented by Dog, plus `type AliasDog = Dog`
+# (a type ALIAS). `var s Speaker = AliasDog{}` converts an alias-spelled value to the
+# interface. go/types reports the instantiated_type and AliasDog's method-set under the
+# alias spelling (`...AliasDog`), while (Dog).Speak's receiver is the UNDERLYING `...Dog` —
+# so without canonicalization the instantiated_type ⋈ method-set ⋈ receiver join misses and
+# the `s.Speak()` edge is silently dropped. The sidecar canonicalizes both the
+# instantiated_type and the method_set key through `types.Unalias`, so the edge resolves to
+# (Dog).Speak. Cat also implements Speaker but is never instantiated, so the RTA
+# instantiated-type filter must still EXCLUDE (Cat).Speak (the alias edge is not a CHA
+# fallback over every implementer).
+#
+# The executable proof lives in `eval::go_rta` (it reads db.solver_derived_edges() and the
+# function-node identities, asserting an edge resolves to (Dog).Speak and none to
+# (Cat).Speak); this manifest documents the contract. No `[[expected]]` row is captured
+# because the solver-derived edges are crate-private and not observable manifest facts
+# (Phase 52 wires them into the observable refined-call projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
