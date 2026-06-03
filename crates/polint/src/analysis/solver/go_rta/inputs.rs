@@ -108,6 +108,14 @@ impl GoRtaInputs {
             .map(|node| (node.stable_key.as_str(), node.id))
             .collect();
 
+        // Build the Go-only core-function / call-site / callsite-node indexes ONCE (FIX 1,
+        // scale). Every per-Go-function / per-dispatch-row join below is a bucket lookup
+        // into this, never a fresh `db.functions()` / `db.call_sites()` /
+        // `db.semantic_nodes()` linear scan — turning the old O(F_go · F_total) +
+        // O(rows · call_sites) joins into near-linear work, byte-identically (the buckets
+        // preserve storage order; see `GoCoreIndex`).
+        let index = GoCoreIndex::build(db);
+
         let mut function_node: BTreeMap<String, SemanticNodeId> = BTreeMap::new();
         let mut function_signature: BTreeMap<String, String> = BTreeMap::new();
         let mut methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>> = BTreeMap::new();
@@ -123,7 +131,8 @@ impl GoRtaInputs {
                 semantic_function.signature.clone(),
             );
 
-            let Some(core_function) = matching_core_function(db, semantic_function) else {
+            let Some(core_function) = matching_core_function_indexed(&index, semantic_function)
+            else {
                 continue;
             };
             caller_function_id.insert(semantic_function.qualified.clone(), core_function.id);
@@ -162,7 +171,8 @@ impl GoRtaInputs {
             if root.language != Language::Go {
                 continue;
             }
-            if let Some(qualified) = qualified_for_function_id(db, root.target_function) {
+            if let Some(qualified) = qualified_for_function_id_indexed(&index, root.target_function)
+            {
                 roots.insert(qualified);
             }
         }
@@ -223,7 +233,8 @@ impl GoRtaInputs {
             // by the caller's core `FunctionId` so a method-chain / mixed static+dynamic
             // shared span binds to the right sibling (WR-08 / FINDING 5).
             let caller = caller_function_id.get(callsite.caller.as_str()).copied();
-            let Some(callsite_node) = callsite_constraint_node(db, callsite, caller) else {
+            let Some(callsite_node) = callsite_constraint_node_indexed(&index, callsite, caller)
+            else {
                 continue;
             };
             callsites.push(GoRtaCallsite {
@@ -293,6 +304,145 @@ impl GoRtaInputs {
     }
 }
 
+/// Indexes built ONCE per [`GoRtaInputs::from_db`] so the core-function and call-site
+/// joins are bucket lookups, not full linear scans of every core fact in the repo
+/// (FIX 1, scale). Without these, `from_db` was O(F_go · F_total): each Go semantic
+/// function did a `db.functions().iter().find(...)` over EVERY core function in the
+/// whole polyglot repo (twice, counting the zero-width-point fallback), and each
+/// dynamic-dispatch row did a `db.call_sites().iter().filter(...)` over every core call
+/// site. The indexes are restricted to Go facts and bucketed by `(file, name)` /
+/// `(file, span)`, so a join touches only the handful of same-`(file, name)` candidates.
+///
+/// Determinism contract (byte-identity, NOT just "fast"): each bucket's `Vec` preserves
+/// `db.functions()` / `db.call_sites()` STORAGE ORDER. The replaced scans used `.find()`
+/// (first match in storage order for the exact-span case) and `Iterator::min_by_key`
+/// (which returns the FIRST element achieving the minimum). Preserving storage order
+/// within the bucket makes the indexed `.find()` / `.min_by_key()` pick the exact same
+/// element the full-slice scan did — the result is identical in every case, ties
+/// included.
+struct GoCoreIndex<'a> {
+    /// `(file, name)` -> the Go core `FunctionFact`s with that file+name, in
+    /// `db.functions()` storage order. Restricted to `Language::Go`. Keyed by an owned
+    /// `String` name (not a borrow of `db`) so a lookup by a shorter-lived `&str` query is
+    /// borrow-clean; the few owned-key allocations per build are O(F_go), not O(F_go²).
+    core_functions_by_file_name: BTreeMap<(FileId, String), Vec<&'a FunctionFact>>,
+    /// `FunctionId` -> its core `FunctionFact` (for the reverse `qualified_for_function_id`
+    /// lookup, replacing a `db.functions().iter().find(id == ..)` per reachability root).
+    core_function_by_id: BTreeMap<crate::core::FunctionId, &'a FunctionFact>,
+    /// `(file, name)` -> the Go semantic functions with that file+name, in
+    /// `db.go_semantic_functions()` storage order (for `qualified_for_function_id`'s
+    /// reverse scan). Only semantic functions that carry a `file` are indexed.
+    semantic_functions_by_file_name: BTreeMap<(FileId, String), Vec<&'a GoSemanticFunctionFact>>,
+    /// `(file, start_byte, end_byte)` -> the Go core call sites at that exact span, in
+    /// `db.call_sites()` storage order (for `callsite_constraint_node`). Restricted to
+    /// `Language::Go`.
+    call_sites_by_file_span:
+        BTreeMap<(FileId, u32, u32), Vec<&'a crate::analysis::calls::facts::CallSiteFact>>,
+    /// Callsite-kind semantic node stable key -> its `SemanticNodeId`, so the final
+    /// callsite-node lookup in `callsite_constraint_node` is a map hit, not a
+    /// `db.semantic_nodes().iter().find(...)` per dynamic-dispatch row. Keeps the FIRST
+    /// occurrence to mirror the replaced `.find()` (stable keys are unique in practice).
+    callsite_node_by_stable_key: BTreeMap<String, SemanticNodeId>,
+}
+
+impl<'a> GoCoreIndex<'a> {
+    /// Build all four indexes from the db in a single pass each, preserving storage order
+    /// within every bucket (the determinism contract above).
+    fn build(db: &'a AnalysisDb) -> Self {
+        let mut core_functions_by_file_name: BTreeMap<(FileId, String), Vec<&'a FunctionFact>> =
+            BTreeMap::new();
+        let mut core_function_by_id: BTreeMap<crate::core::FunctionId, &'a FunctionFact> =
+            BTreeMap::new();
+        for function in db.functions() {
+            core_function_by_id.insert(function.id, function);
+            if function.language == Language::Go {
+                core_functions_by_file_name
+                    .entry((function.file, function.name.clone()))
+                    .or_default()
+                    .push(function);
+            }
+        }
+
+        let mut semantic_functions_by_file_name: BTreeMap<
+            (FileId, String),
+            Vec<&'a GoSemanticFunctionFact>,
+        > = BTreeMap::new();
+        for semantic_function in db.go_semantic_functions() {
+            if let Some(file) = semantic_function.file {
+                semantic_functions_by_file_name
+                    .entry((file, semantic_function.name.clone()))
+                    .or_default()
+                    .push(semantic_function);
+            }
+        }
+
+        let mut call_sites_by_file_span: BTreeMap<
+            (FileId, u32, u32),
+            Vec<&'a crate::analysis::calls::facts::CallSiteFact>,
+        > = BTreeMap::new();
+        for site in db.call_sites() {
+            if site.language == Language::Go {
+                call_sites_by_file_span
+                    .entry((site.file, site.span.start_byte, site.span.end_byte))
+                    .or_default()
+                    .push(site);
+            }
+        }
+
+        let mut callsite_node_by_stable_key: BTreeMap<String, SemanticNodeId> = BTreeMap::new();
+        for node in db.semantic_nodes() {
+            if matches!(node.kind, NodeKind::Callsite(_)) {
+                // First-occurrence wins (mirrors the replaced `.find()`).
+                callsite_node_by_stable_key
+                    .entry(node.stable_key.clone())
+                    .or_insert(node.id);
+            }
+        }
+
+        Self {
+            core_functions_by_file_name,
+            core_function_by_id,
+            semantic_functions_by_file_name,
+            call_sites_by_file_span,
+            callsite_node_by_stable_key,
+        }
+    }
+
+    /// The Go core `FunctionFact`s with this `(file, name)`, in storage order (empty slice
+    /// if none). The disambiguation predicates already require `file`/`name`/`Go`, so
+    /// scanning this bucket is equivalent to scanning the full `db.functions()` slice.
+    fn core_functions(&self, file: FileId, name: &str) -> &[&'a FunctionFact] {
+        self.core_functions_by_file_name
+            .get(&(file, name.to_string()))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The Go semantic functions with this `(file, name)`, in storage order (empty slice
+    /// if none).
+    fn semantic_functions(&self, file: FileId, name: &str) -> &[&'a GoSemanticFunctionFact] {
+        self.semantic_functions_by_file_name
+            .get(&(file, name.to_string()))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The Go core call sites at this exact `(file, span)`, in storage order (empty slice
+    /// if none).
+    fn call_sites_at(
+        &self,
+        file: FileId,
+        span: &Span,
+    ) -> &[&'a crate::analysis::calls::facts::CallSiteFact] {
+        self.call_sites_by_file_span
+            .get(&(file, span.start_byte, span.end_byte))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The `SemanticNodeId` of the callsite-kind node with this stable key, if interned.
+    fn callsite_node(&self, stable_key: &str) -> Option<SemanticNodeId> {
+        self.callsite_node_by_stable_key.get(stable_key).copied()
+    }
+}
+
 /// Normalize a Go type identity for matching: strip a single leading `*` so a
 /// pointer receiver (`*pkg.T`) matches the value type-name (`pkg.T`) used by the
 /// instantiated-type / method-set facts. Idempotent and honest (no other rewriting).
@@ -311,9 +461,9 @@ fn bare_method_name(name: &str) -> String {
 }
 
 /// The `qualified` identity of the Go semantic function matching a core `FunctionId`,
-/// if any. This is the exact INVERSE of [`matching_core_function`]: it returns the
-/// semantic function `S` such that `matching_core_function(S) == function_id`, so the
-/// two directions are in genuine lockstep (WR-04 / FINDING E) rather than merely
+/// if any. This is the exact INVERSE of [`matching_core_function_indexed`]: it returns
+/// the semantic function `S` such that `matching_core_function_indexed(S) == function_id`,
+/// so the two directions are in genuine lockstep (WR-04 / FINDING E) rather than merely
 /// "similar". Defining the reverse via the forward is what keeps the point-containment
 /// fallback symmetric: the forward maps a zero-width SSA point to the INNERMOST
 /// containing core declaration (`min_by_key`), so the reverse must NOT map an OUTER
@@ -324,23 +474,29 @@ fn qualified_for_function_id(
     db: &AnalysisDb,
     function_id: crate::core::FunctionId,
 ) -> Option<String> {
-    let function = db
-        .functions()
-        .iter()
-        .find(|function| function.id == function_id)?;
+    qualified_for_function_id_indexed(&GoCoreIndex::build(db), function_id)
+}
 
-    let same_identity = |semantic_function: &&GoSemanticFunctionFact| {
-        semantic_function.file == Some(function.file) && semantic_function.name == function.name
-    };
+/// Indexed [`qualified_for_function_id`]: the hot-path variant `from_db` calls per
+/// reachability root, reusing the prebuilt [`GoCoreIndex`] (the core function is found by
+/// id, and the reverse semantic-function scan is restricted to the `(file, name)` bucket
+/// in storage order). Identical resolution order to the `db`-based version, so the
+/// forward/reverse lockstep (WR-04 / FINDING E) is preserved.
+fn qualified_for_function_id_indexed(
+    index: &GoCoreIndex<'_>,
+    function_id: crate::core::FunctionId,
+) -> Option<String> {
+    let function = *index.core_function_by_id.get(&function_id)?;
+    let bucket = index.semantic_functions(function.file, &function.name);
 
     // 1. Prefer a semantic function with an EXACT-equal span (unambiguous, and the forward
-    //    direction's step 1 — so this side agrees).
-    if let Some(exact) = db.go_semantic_functions().iter().find(|semantic_function| {
-        same_identity(semantic_function)
-            && semantic_function.span.as_ref().is_some_and(|span| {
-                span.start_byte == function.span.start_byte
-                    && span.end_byte == function.span.end_byte
-            })
+    //    direction's step 1 — so this side agrees). `.find()` over the storage-ordered
+    //    bucket mirrors the old first-match-in-storage-order semantics; the bucket already
+    //    enforces the `file == Some(function.file) && name == function.name` identity.
+    if let Some(exact) = bucket.iter().copied().find(|semantic_function| {
+        semantic_function.span.as_ref().is_some_and(|span| {
+            span.start_byte == function.span.start_byte && span.end_byte == function.span.end_byte
+        })
     }) {
         return Some(exact.qualified.clone());
     }
@@ -351,12 +507,10 @@ fn qualified_for_function_id(
     //    `min_by_key`). This is what makes the two directions symmetric: an outer same-named
     //    declaration cannot claim a point that resolves to a tighter inner one. Deterministic
     //    minimum by `qualified` if several semantic points legitimately resolve here.
-    db.go_semantic_functions()
+    bucket
         .iter()
+        .copied()
         .filter(|semantic_function| {
-            if !same_identity(semantic_function) {
-                return false;
-            }
             let Some(span) = semantic_function.span.as_ref() else {
                 return false;
             };
@@ -364,7 +518,7 @@ fn qualified_for_function_id(
                 return false;
             }
             // The forward map of this point must land on THIS core function (innermost).
-            matching_core_function_for(db, function.file, &function.name, span)
+            matching_core_function_for_indexed(index, function.file, &function.name, span)
                 .is_some_and(|resolved| resolved.id == function_id)
         })
         .map(|semantic_function| semantic_function.qualified.clone())
@@ -372,7 +526,9 @@ fn qualified_for_function_id(
 }
 
 /// The core `FunctionFact` matching a Go semantic function (file + language + name +
-/// span).
+/// span), resolved through the prebuilt [`GoCoreIndex`] (the hot-path join `from_db`
+/// runs once per Go semantic function — FIX 1 — instead of a fresh `db.functions()`
+/// scan).
 ///
 /// The Go SSA frontend and the core (tree-sitter) facts disagree on the span of a
 /// METHOD: tree-sitter reports the FULL declaration span (`func (r R) M() {...}`),
@@ -385,17 +541,17 @@ fn qualified_for_function_id(
 /// first-match-wins scan (review WR-04) — so the fallback both requires a zero-width
 /// point and is the narrowest match available. Honest by construction: `name` + `file`
 /// disambiguate and the exact match is tried first.
-fn matching_core_function<'a>(
-    db: &'a AnalysisDb,
+fn matching_core_function_indexed<'a>(
+    index: &GoCoreIndex<'a>,
     semantic_function: &GoSemanticFunctionFact,
 ) -> Option<&'a FunctionFact> {
     let file = semantic_function.file?;
     let span = semantic_function.span.as_ref()?;
-    matching_core_function_for(db, file, &semantic_function.name, span)
+    matching_core_function_for_indexed(index, file, &semantic_function.name, span)
 }
 
 /// Shared file+language+name+span disambiguation for mapping a Go semantic span to its
-/// core `FunctionFact` (used by both [`matching_core_function`] and
+/// core `FunctionFact` (used by both [`matching_core_function_indexed`] and
 /// [`qualified_for_function_id`] so the two directions stay in lockstep, WR-04).
 ///
 /// Resolution order:
@@ -411,15 +567,26 @@ fn matching_core_function_for<'a>(
     name: &str,
     span: &Span,
 ) -> Option<&'a FunctionFact> {
-    let same_identity = |function: &&'a FunctionFact| {
-        function.file == file && function.language == Language::Go && function.name == name
-    };
+    matching_core_function_for_indexed(&GoCoreIndex::build(db), file, name, span)
+}
 
-    // 1. Prefer an exact-equal span (deterministic, unambiguous).
-    if let Some(exact) = db.functions().iter().find(|function| {
-        same_identity(function)
-            && function.span.start_byte == span.start_byte
-            && function.span.end_byte == span.end_byte
+/// Indexed [`matching_core_function_for`]: identical resolution order, but scanning the
+/// `(file, name)` bucket (storage-ordered) rather than the full `db.functions()` slice.
+/// Because the bucket already restricts to same-`(file, name)` Go functions — exactly the
+/// `same_identity` predicate — and preserves storage order, the indexed `.find()` /
+/// `.min_by_key()` choose the SAME `FunctionFact` the full-slice scan did (FIX 1).
+fn matching_core_function_for_indexed<'a>(
+    index: &GoCoreIndex<'a>,
+    file: FileId,
+    name: &str,
+    span: &Span,
+) -> Option<&'a FunctionFact> {
+    let bucket = index.core_functions(file, name);
+
+    // 1. Prefer an exact-equal span (deterministic, unambiguous). `.find()` over the
+    //    storage-ordered bucket mirrors the old first-match-in-storage-order semantics.
+    if let Some(exact) = bucket.iter().copied().find(|function| {
+        function.span.start_byte == span.start_byte && function.span.end_byte == span.end_byte
     }) {
         return Some(exact);
     }
@@ -430,12 +597,11 @@ fn matching_core_function_for<'a>(
     if span.start_byte != span.end_byte {
         return None;
     }
-    db.functions()
+    bucket
         .iter()
+        .copied()
         .filter(|function| {
-            same_identity(function)
-                && function.span.start_byte <= span.start_byte
-                && span.start_byte <= function.span.end_byte
+            function.span.start_byte <= span.start_byte && span.start_byte <= function.span.end_byte
         })
         .min_by_key(|function| {
             function
@@ -465,7 +631,14 @@ fn function_node_key(db: &AnalysisDb, function: &FunctionFact) -> String {
 
 /// The unified `CallConstraint` callsite node for a Go callsite, reconstructed from
 /// the `callsite` node-key recipe `semantic_graph::build` used. Returns `None` when
-/// the callsite was not interned as a node (honest — no edge anchor).
+/// the callsite was not interned as a node (honest — no edge anchor). Resolved through
+/// the prebuilt [`GoCoreIndex`]: the span-matched candidate set comes from the
+/// `(file, span)` bucket (storage-ordered, restricted to Go) instead of a
+/// `db.call_sites().iter().filter(...)` scan, and the final callsite-node resolution is a
+/// stable-key map hit instead of a `db.semantic_nodes().iter().find(...)` scan — turning
+/// the per-dynamic-dispatch-row join from O(rows · call_sites) into near-linear work
+/// (FIX 1). `select_constraint_callsite` runs over the SAME candidate set, so the
+/// disambiguation — and the resulting node — is byte-identical to the old scan.
 ///
 /// WR-08 / FINDING 5: the core-call-site match must be DISAMBIGUATED, not first-match.
 /// Several core call sites can share one byte span — a method chain `a().b()` reports
@@ -477,29 +650,17 @@ fn function_node_key(db: &AnalysisDb, function: &FunctionFact) -> String {
 /// callsite's caller (`caller`, resolved to a core `FunctionId`) and, among those,
 /// prefers a dynamic-dispatch-status site, choosing the deterministic minimum by stable
 /// key rather than the first scanned.
-fn callsite_constraint_node(
-    db: &AnalysisDb,
+fn callsite_constraint_node_indexed(
+    index: &GoCoreIndex<'_>,
     callsite: &crate::go::semantic::facts::GoSemanticCallsiteFact,
     caller: Option<crate::core::FunctionId>,
 ) -> Option<SemanticNodeId> {
     let file = callsite.file?;
     let span = callsite.span.as_ref()?;
-    let candidates: Vec<&crate::analysis::calls::facts::CallSiteFact> = db
-        .call_sites()
-        .iter()
-        .filter(|site| {
-            site.file == file
-                && site.language == Language::Go
-                && site.span.start_byte == span.start_byte
-                && site.span.end_byte == span.end_byte
-        })
-        .collect();
-    let core_callsite = select_constraint_callsite(&candidates, caller)?;
+    let candidates = index.call_sites_at(file, span);
+    let core_callsite = select_constraint_callsite(candidates, caller)?;
     let node_key = node_key_from_identity("callsite", &core_callsite.stable_key);
-    db.semantic_nodes()
-        .iter()
-        .find(|node| node.stable_key == node_key && matches!(node.kind, NodeKind::Callsite(_)))
-        .map(|node| node.id)
+    index.callsite_node(&node_key)
 }
 
 /// Disambiguate a set of span-matched core call sites to the one that anchors a dynamic
@@ -1136,5 +1297,313 @@ mod tests {
         // 45..50 is neither exact nor a zero-width point, so no match (no loose
         // containment for ranged spans).
         assert!(matching_core_function_for(&db, file, "F", &span(file, 45, 50)).is_none());
+    }
+
+    /// FIX 1 guard: `matching_core_function_for` is keyed on `(file, name)` — two Go
+    /// functions of the SAME NAME in DIFFERENT files must each resolve to the core
+    /// function in their OWN file, never cross-matched/collapsed. This pins the
+    /// per-file disambiguation the indexed lookup must preserve (a `(file, name)` bucket
+    /// must never leak a different file's same-named function).
+    #[test]
+    fn matching_core_function_keys_on_file_so_same_name_in_other_file_is_excluded() {
+        let mut db = AnalysisDb::new();
+        let file_a = db.add_file(
+            PathBuf::from("a/file.go"),
+            "a/file.go".to_string(),
+            "package a\n".to_string(),
+        );
+        let file_b = db.add_file(
+            PathBuf::from("b/file.go"),
+            "b/file.go".to_string(),
+            "package b\n".to_string(),
+        );
+        // Same name "Handler", same byte span, but DIFFERENT files.
+        let in_a = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file: file_a,
+            name: "Handler".to_string(),
+            span: span(file_a, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let in_b = db.push_function(FunctionFact {
+            id: FunctionId(1),
+            file: file_b,
+            name: "Handler".to_string(),
+            span: span(file_b, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+
+        // Each file's span resolves to its OWN file's function — never the other file's.
+        let matched_a = matching_core_function_for(&db, file_a, "Handler", &span(file_a, 10, 40))
+            .expect("file_a's Handler must match");
+        assert_eq!(matched_a.id, in_a);
+        assert_eq!(matched_a.file, file_a);
+        let matched_b = matching_core_function_for(&db, file_b, "Handler", &span(file_b, 10, 40))
+            .expect("file_b's Handler must match");
+        assert_eq!(matched_b.id, in_b);
+        assert_eq!(matched_b.file, file_b);
+    }
+
+    /// FIX 1 guard (end to end): TWO Go semantic functions of the SAME NAME in DIFFERENT
+    /// files, each mapping to its own semantic node, must each resolve to the node in its
+    /// OWN file — the `(file, name)` join must not collapse them. Asserts `function_node`
+    /// carries both distinct `qualified` identities mapped to their own nodes.
+    #[test]
+    fn from_db_resolves_same_name_functions_in_different_files_to_their_own_nodes() {
+        let mut db = AnalysisDb::new();
+        let file_a = db.add_file(
+            PathBuf::from("a/file.go"),
+            "a/file.go".to_string(),
+            "package a\n".to_string(),
+        );
+        let file_b = db.add_file(
+            PathBuf::from("b/file.go"),
+            "b/file.go".to_string(),
+            "package b\n".to_string(),
+        );
+        let fn_a = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file: file_a,
+            name: "Run".to_string(),
+            span: span(file_a, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let fn_b = db.push_function(FunctionFact {
+            id: FunctionId(1),
+            file: file_b,
+            name: "Run".to_string(),
+            span: span(file_b, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let key_a = function_node_key(&db, db.functions().iter().find(|f| f.id == fn_a).unwrap());
+        let key_b = function_node_key(&db, db.functions().iter().find(|f| f.id == fn_b).unwrap());
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                SemanticNodeFact {
+                    id: SemanticNodeId(0),
+                    kind: NodeKind::Function(fn_a),
+                    precision: SemanticPrecision::Conservative,
+                    stable_key: key_a.clone(),
+                },
+                SemanticNodeFact {
+                    id: SemanticNodeId(1),
+                    kind: NodeKind::Function(fn_b),
+                    precision: SemanticPrecision::Conservative,
+                    stable_key: key_b.clone(),
+                },
+            ],
+            edges: Vec::new(),
+            constraints: Vec::new(),
+        })
+        .expect("semantic graph stores");
+        let node_a = db
+            .semantic_nodes()
+            .iter()
+            .find(|n| n.stable_key == key_a)
+            .unwrap()
+            .id;
+        let node_b = db
+            .semantic_nodes()
+            .iter()
+            .find(|n| n.stable_key == key_b)
+            .unwrap()
+            .id;
+
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![
+                GoSemanticFunctionFact {
+                    id: crate::go::semantic::facts::GoSemanticFunctionId(0),
+                    stable_key: "gofn|a.Run".to_string(),
+                    package_id: "a".to_string(),
+                    package_path: "a".to_string(),
+                    name: "Run".to_string(),
+                    qualified: "a.Run".to_string(),
+                    signature: "func()".to_string(),
+                    kind: GoSemanticFunctionKind::Function,
+                    receiver: None,
+                    relative_file: Some("a/file.go".to_string()),
+                    file: Some(file_a),
+                    span: Some(span(file_a, 10, 40)),
+                },
+                GoSemanticFunctionFact {
+                    id: crate::go::semantic::facts::GoSemanticFunctionId(1),
+                    stable_key: "gofn|b.Run".to_string(),
+                    package_id: "b".to_string(),
+                    package_path: "b".to_string(),
+                    name: "Run".to_string(),
+                    qualified: "b.Run".to_string(),
+                    signature: "func()".to_string(),
+                    kind: GoSemanticFunctionKind::Function,
+                    receiver: None,
+                    relative_file: Some("b/file.go".to_string()),
+                    file: Some(file_b),
+                    span: Some(span(file_b, 10, 40)),
+                },
+            ],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("go semantic facts store");
+
+        let inputs = GoRtaInputs::from_db(&db);
+        // Each same-named function maps to the node in its OWN file (not collapsed).
+        assert_eq!(inputs.function_node.get("a.Run"), Some(&node_a));
+        assert_eq!(inputs.function_node.get("b.Run"), Some(&node_b));
+        assert_ne!(node_a, node_b);
+    }
+
+    /// FIX 1 guard: a METHOD and a free FUNCTION sharing the BARE name `Speak` (the method
+    /// is `Dog.Speak`, the free function is `Speak`) must each resolve to their own core
+    /// function/node, and only the method is indexed by receiver. Pins that the
+    /// name-keyed join distinguishes `Dog.Speak` from `Speak` (the core `name` field
+    /// differs, so the `(file, name)` buckets are distinct).
+    #[test]
+    fn from_db_distinguishes_method_and_free_function_sharing_a_bare_name() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("pkg/file.go"),
+            "pkg/file.go".to_string(),
+            "package pkg\n".to_string(),
+        );
+        // Core method `Dog.Speak` (10..40) and core free function `Speak` (50..80).
+        let method_id = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "Dog.Speak".to_string(),
+            span: span(file, 10, 40),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let free_id = db.push_function(FunctionFact {
+            id: FunctionId(1),
+            file,
+            name: "Speak".to_string(),
+            span: span(file, 50, 80),
+            language: Language::Go,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let method_key = function_node_key(
+            &db,
+            db.functions().iter().find(|f| f.id == method_id).unwrap(),
+        );
+        let free_key = function_node_key(
+            &db,
+            db.functions().iter().find(|f| f.id == free_id).unwrap(),
+        );
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                SemanticNodeFact {
+                    id: SemanticNodeId(0),
+                    kind: NodeKind::Function(method_id),
+                    precision: SemanticPrecision::Conservative,
+                    stable_key: method_key.clone(),
+                },
+                SemanticNodeFact {
+                    id: SemanticNodeId(1),
+                    kind: NodeKind::Function(free_id),
+                    precision: SemanticPrecision::Conservative,
+                    stable_key: free_key.clone(),
+                },
+            ],
+            edges: Vec::new(),
+            constraints: Vec::new(),
+        })
+        .expect("semantic graph stores");
+        let method_node = db
+            .semantic_nodes()
+            .iter()
+            .find(|n| n.stable_key == method_key)
+            .unwrap()
+            .id;
+        let free_node = db
+            .semantic_nodes()
+            .iter()
+            .find(|n| n.stable_key == free_key)
+            .unwrap()
+            .id;
+
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![
+                GoSemanticFunctionFact {
+                    id: crate::go::semantic::facts::GoSemanticFunctionId(0),
+                    stable_key: "gofn|(pkg.Dog).Speak".to_string(),
+                    package_id: "pkg".to_string(),
+                    package_path: "pkg".to_string(),
+                    name: "Dog.Speak".to_string(),
+                    qualified: "(pkg.Dog).Speak".to_string(),
+                    signature: "func() string".to_string(),
+                    kind: GoSemanticFunctionKind::Method,
+                    receiver: Some("*pkg.Dog".to_string()),
+                    relative_file: Some("pkg/file.go".to_string()),
+                    file: Some(file),
+                    span: Some(span(file, 10, 40)),
+                },
+                GoSemanticFunctionFact {
+                    id: crate::go::semantic::facts::GoSemanticFunctionId(1),
+                    stable_key: "gofn|pkg.Speak".to_string(),
+                    package_id: "pkg".to_string(),
+                    package_path: "pkg".to_string(),
+                    name: "Speak".to_string(),
+                    qualified: "pkg.Speak".to_string(),
+                    signature: "func()".to_string(),
+                    kind: GoSemanticFunctionKind::Function,
+                    receiver: None,
+                    relative_file: Some("pkg/file.go".to_string()),
+                    file: Some(file),
+                    span: Some(span(file, 50, 80)),
+                },
+            ],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("go semantic facts store");
+
+        let inputs = GoRtaInputs::from_db(&db);
+        // The method and the free function each map to their OWN node (the name-keyed
+        // join distinguishes `Dog.Speak` from `Speak`).
+        assert_eq!(
+            inputs.function_node.get("(pkg.Dog).Speak"),
+            Some(&method_node)
+        );
+        assert_eq!(inputs.function_node.get("pkg.Speak"), Some(&free_node));
+        assert_ne!(method_node, free_node);
+        // Only the METHOD is indexed by receiver (the free function has no receiver), and
+        // it carries the bare method name `Speak`.
+        let methods = inputs
+            .methods_by_receiver
+            .get("pkg.Dog")
+            .expect("the method is indexed by its receiver");
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].method_name, "Speak");
+        assert_eq!(methods[0].node, method_node);
+        // The free function is NOT a receiver-indexed method.
+        assert!(
+            inputs
+                .methods_by_receiver
+                .values()
+                .flatten()
+                .all(|m| m.qualified != "pkg.Speak"),
+            "the free function must not be indexed as a receiver method"
+        );
     }
 }
