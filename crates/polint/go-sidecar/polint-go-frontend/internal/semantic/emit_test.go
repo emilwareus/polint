@@ -205,6 +205,49 @@ func main() {
 	assertNotAddressTaken(t, rows, "example.test/fixture.helper")
 }
 
+func TestEmitMethodSetKeyedByInstantiatedGenericType(t *testing.T) {
+	// FINDING A: a method on a GENERIC type satisfying an interface, dispatched via the
+	// interface, must resolve to the INSTANTIATED type's method. x/tools records the
+	// instantiated named type Box[int] in the SSA runtime-type set with a real method
+	// value (Box[int]).Speak, while the syntactic declaration is Box[T any]. emitMethodSets
+	// keyed the set by the GENERIC name (Box[T any]) only, so the Rust resolver's
+	// method_sets.get("Box[int]") missed and the interface invoke lost its edge. The fix
+	// emits the method-set AND the concrete method keyed by the INSTANTIATED identity.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+import "fmt"
+
+type Speaker interface{ Speak() string }
+
+type Box[T any] struct{ v T }
+
+func (b Box[T]) Speak() string { return fmt.Sprint(b.v) }
+
+func main() {
+	var s Speaker = Box[int]{v: 1}
+	fmt.Println(s.Speak())
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	// The instantiated type Box[int] is in the rapid-type set.
+	assertInstantiatedType(t, rows, "example.test/fixture.Box[int]")
+	// A method-set is emitted keyed by the INSTANTIATED identity Box[int] (not only the
+	// generic Box[T any]), and it carries the satisfying method Speak.
+	assertMethodSetContains(t, rows, "example.test/fixture.Box[int]", "Speak")
+	// The concrete instantiated method is harvested with the bare method name and the
+	// instantiated receiver (the pointer method set is used, so the receiver is
+	// `*...Box[int]`; the Rust `normalize_type` strips the leading `*` so the join indexes
+	// methods_by_receiver["...Box[int]"] with "Speak" and a target node).
+	assertMethodWithReceiver(t, rows, "Box.Speak", "*example.test/fixture.Box[int]")
+}
+
 func TestEmitDynamicDispatchCarriesInterfaceDiscriminant(t *testing.T) {
 	root := writeFixture(t, map[string]string{
 		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
@@ -477,6 +520,36 @@ func assertInstantiatedType(t *testing.T, rows []Row, typeName string) {
 		}
 	}
 	t.Fatalf("missing instantiated_type %q in %#v", typeName, rows)
+}
+
+func assertMethodSetContains(t *testing.T, rows []Row, typeName string, method string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] != "method_set" || row["type"] != typeName {
+			continue
+		}
+		methods, ok := row["methods"].([]string)
+		if !ok {
+			t.Fatalf("method_set %q has non-[]string methods: %#v", typeName, row["methods"])
+		}
+		for _, m := range methods {
+			if m == method {
+				return
+			}
+		}
+		t.Fatalf("method_set %q missing method %q: %#v", typeName, method, methods)
+	}
+	t.Fatalf("missing method_set keyed by instantiated type %q in %#v", typeName, rows)
+}
+
+func assertMethodWithReceiver(t *testing.T, rows []Row, name string, receiver string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "method" && row["name"] == name && row["receiver"] == receiver {
+			return
+		}
+	}
+	t.Fatalf("missing method name=%q receiver=%q in %#v", name, receiver, rows)
 }
 
 func assertDynamicDispatchMethod(t *testing.T, rows []Row, method string) {

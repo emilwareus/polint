@@ -1,0 +1,25 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-generic-dispatch"
+area = "go-rta"
+
+# Phase 48 FINDING A — dispatch through a GENERIC type must resolve (D-15).
+#
+# repo/main.go declares a Speaker interface satisfied by a method on a GENERIC type
+# Box[T], instantiated as Box[int] and converted to Speaker in main. x/tools records
+# the INSTANTIATED named type Box[int] in the SSA runtime-type set with a real method
+# value (Box[int]).Speak, while the syntactic declaration is Box[T any]. The frontend's
+# method-set harvest previously keyed the set by the GENERIC name (Box[T any]) only, so
+# the Rust dispatch resolver's `method_sets.get("Box[int]")` missed and the interface
+# invoke lost its edge. The fix emits the method-set AND the concrete method keyed by the
+# INSTANTIATED identity Box[int].
+#
+# The executable proof lives in `eval::go_rta` (it asserts >= 1 RTA-resolved derived
+# edge to (Box[int]).Speak); this manifest documents the contract. No `[[expected]]`
+# row is captured because the solver-derived edges are crate-private and not observable
+# manifest facts (Phase 52 wires them into the observable refined-call projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

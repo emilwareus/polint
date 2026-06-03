@@ -178,6 +178,7 @@ func (e *emitter) emitSSAPackage(pkg *ssa.Package) {
 		e.emitAddressTaken(pkg, fn)
 	}
 	e.emitMethodSets(pkg)
+	e.emitInstantiatedMethodSets(pkg)
 }
 
 func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
@@ -206,8 +207,16 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 	if isInit {
 		name = "init"
 	} else if isMethod && fn.Signature != nil && fn.Signature.Recv() != nil {
+		// For a method on an INSTANTIATED generic type, the SSA method value's `Name()`
+		// can carry a type-argument suffix (a pointer-receiver instantiation wrapper is
+		// named `Inc[int]`, while a value-receiver promotion is named `Inc`). The core
+		// (tree-sitter) facts name the method by its bare identifier with the generics
+		// stripped from the receiver (`Box.Inc`), so strip the type-arg suffix here too
+		// or the SSA↔core join (`matching_core_function`, file+name+span) would miss the
+		// instantiated method's node and the generic-dispatch edge would be lost
+		// (FINDING A). A non-generic method name has no `[...]` suffix and is unchanged.
 		if receiver := receiverTypeName(fn.Signature.Recv().Type().String()); receiver != "" {
-			name = receiver + "." + fn.Name()
+			name = receiver + "." + stripMethodTypeArgs(fn.Name())
 		}
 	}
 	row := Row{
@@ -536,6 +545,105 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 			"stable_key":   stableKey(packageID(pkg), "method_set", typeName.Type().String()),
 		})
 	}
+}
+
+// emitInstantiatedMethodSets harvests method-sets AND concrete method values keyed by the
+// INSTANTIATED `*types.Named` identity of each generic type instantiation reachable in the
+// program (FINDING A). x/tools RTA records the instantiated named type (e.g. `Box[int]`) in
+// the program's runtime-type set — `*ssa.MakeInterface` of a `Box[int]` value adds exactly
+// `Box[int]` to the rapid-type set, and `emitInstantiatedTypes` emits that identity — but
+// `emitMethodSets` walks package-scope `*types.TypeName`s, which for a generic type is the
+// GENERIC declaration (`Box[T any]`), whose `*ssa.Type` member has a nil method VALUE. So
+// the method-set the Rust dispatch resolver looks up by the instantiated identity
+// (`method_sets.get("Box[int]")`) was absent and the interface invoke lost its edge.
+//
+// For each instantiated named type declared in THIS package, this emits (a) a `method_set`
+// row keyed by the instantiated type's `.String()` (`Box[int]`) carrying its method names,
+// and (b) the concrete method VALUES as `method` rows (via `emitFunction`) so the resolved
+// edge has a target node. Both use the POINTER method set (mirroring `emitMethodSets`), so
+// each method appears exactly once (no value/pointer-wrapper duplication). Methods without a
+// stable source identity are skipped rather than fabricated (Phase 46 D-15). De-duplicated
+// by the instantiated type identity so a type instantiated in two functions is harvested
+// once.
+func (e *emitter) emitInstantiatedMethodSets(pkg *ssa.Package) {
+	prog := pkg.Prog
+	if prog == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	// RuntimeTypes() order is not specified; sort the harvested identities so the emitted
+	// rows are deterministic regardless of x/tools' internal iteration order.
+	type instantiation struct {
+		key   string
+		named *types.Named
+	}
+	var instantiations []instantiation
+	for _, runtimeType := range prog.RuntimeTypes() {
+		named, ok := runtimeType.(*types.Named)
+		if !ok {
+			continue
+		}
+		// Only generic INSTANTIATIONS (type args present), declared in THIS package, are
+		// harvested here. A non-generic named type is already covered by emitMethodSets.
+		if named.TypeArgs() == nil || named.TypeArgs().Len() == 0 {
+			continue
+		}
+		if named.Obj() == nil || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != pkg.Pkg.Path() {
+			continue
+		}
+		key := named.String()
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		instantiations = append(instantiations, instantiation{key: key, named: named})
+	}
+	sort.Slice(instantiations, func(i, j int) bool { return instantiations[i].key < instantiations[j].key })
+
+	for _, inst := range instantiations {
+		methodSet := prog.MethodSets.MethodSet(types.NewPointer(inst.named))
+		if methodSet.Len() == 0 {
+			continue
+		}
+		var methods []string
+		for i := 0; i < methodSet.Len(); i++ {
+			// The bare method identifier (`sel.Obj().Name()` is always the clean name,
+			// e.g. "Speak", never an instantiation-suffixed "Speak[int]"). RTA
+			// interface-invoke resolution intersects the invoked method name with this
+			// set (see emitMethodSets), so the bare name is required.
+			methods = append(methods, methodSet.At(i).Obj().Name())
+			// Emit the concrete method VALUE so the resolved edge has a target node. A
+			// promotion/instantiation wrapper has a valid source position pointing back
+			// at the generic declaration, so emitFunction can join it to the core node.
+			if fn := prog.MethodValue(methodSet.At(i)); fn != nil {
+				e.emitFunction(pkg, fn)
+			}
+		}
+		sort.Strings(methods)
+		e.add(Row{
+			"kind":         "method_set",
+			"package_id":   packageID(pkg),
+			"package_path": packagePath(pkg),
+			"type":         inst.named.String(),
+			"methods":      methods,
+			"stable_key":   stableKey(packageID(pkg), "method_set", inst.named.String()),
+		})
+	}
+}
+
+// stripMethodTypeArgs removes a trailing type-argument suffix (`[...]`) from an SSA method
+// identifier so an instantiated generic method's bare name matches the core (tree-sitter)
+// identity (FINDING A). The SSA value `Name()` of a pointer-receiver instantiation wrapper
+// is `Inc[int]`; the bare identifier is `Inc`. A Go method identifier cannot otherwise
+// contain `[`, so a name with no trailing `[...]` is returned unchanged.
+func stripMethodTypeArgs(name string) string {
+	if !strings.HasSuffix(name, "]") {
+		return name
+	}
+	if index := strings.IndexByte(name, '['); index >= 0 {
+		return name[:index]
+	}
+	return name
 }
 
 func ssaFunctions(pkg *ssa.Package) []*ssa.Function {

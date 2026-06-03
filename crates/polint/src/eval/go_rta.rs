@@ -214,6 +214,58 @@ fn interface_dispatch_fixture_proves_instantiated_type_filter() {
 }
 
 #[test]
+fn generic_dispatch_fixture_resolves_method_on_instantiated_generic_type() {
+    // FINDING A: an interface satisfied by a method on a GENERIC type, dispatched via the
+    // interface, must resolve to the INSTANTIATED type's method. x/tools records the
+    // instantiated named type `Box[int]` in the SSA runtime-type set with a real method
+    // value `(Box[int]).Speak`, while the syntactic declaration is `Box[T any]`. The
+    // frontend previously keyed the method-set by the GENERIC name only, so the Rust
+    // resolver's `method_sets.get("Box[int]")` missed and the edge was lost. The fix emits
+    // the method-set AND the concrete method keyed by the instantiated identity, so the
+    // invoke of `Speak` resolves to the (Box[int]).Speak node.
+    let dir = go_rta_fixture_dir("generic-dispatch");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    let box_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Box[int]") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .unwrap_or_else(|| {
+            panic!("(Box[int]).Speak must have a semantic node; got nodes {nodes:#?}")
+        });
+
+    // The interface invoke resolves to the instantiated generic type's method.
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == box_speak),
+        "RTA must resolve the interface invoke to the instantiated (Box[int]).Speak: {:#?}",
+        solver_output.derived_edges
+    );
+    for edge in &solver_output.derived_edges {
+        assert!(
+            edge.honors_precision_ceiling(),
+            "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
+        );
+    }
+    assert_eq!(solver_output.budget_status, BudgetStatus::WithinBudget);
+
+    // The KERNEL-PERSISTED edges (the rows the provider actually stored) must also carry
+    // the resolved dispatch — catches a provider-wiring regression the recompute masks.
+    let persisted = output.db.solver_derived_edges();
+    assert!(
+        persisted.iter().any(|edge| edge.target == box_speak),
+        "the kernel-PERSISTED solver edges must include the (Box[int]).Speak edge: {persisted:#?}"
+    );
+
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
 fn static_reachability_fixture_resolves_dispatch_in_statically_reached_function() {
     // FINDING 1 / standard RTA: `main` (a root) makes a DIRECT (static) call to the
     // UNEXPORTED helper `runDispatch` (NOT a root). The interface invoke `s.Speak()`
