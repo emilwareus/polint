@@ -78,6 +78,16 @@ pub(crate) struct GoRtaInputs {
     pub(crate) function_signature: BTreeMap<String, String>,
     /// `receiver type_name -> its concrete methods` (interface-invoke resolution).
     pub(crate) methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>>,
+    /// `caller qualified -> statically-called callee qualified`s — the resolved STATIC
+    /// call graph restricted to Go functions in [`Self::function_node`] (FINDING 1).
+    /// Standard RTA reachability is the fixpoint closure over BOTH static-call edges and
+    /// resolved-dynamic-dispatch edges from roots: a function reached only via a direct
+    /// (static) call that is not itself a root must still enter the worklist so dispatch
+    /// inside it is resolved. Static edges GROW reachability only — they do NOT emit
+    /// `DerivedEdgeFact`s (only dynamic-dispatch resolution emits edges). Built from the
+    /// `ResolvedStatic` callsite facts whose `static_callee` resolves to a known function
+    /// identity; an unresolvable static callee is skipped (honest, no fabrication).
+    pub(crate) static_call_targets: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl GoRtaInputs {
@@ -226,6 +236,35 @@ impl GoRtaInputs {
                 ))
         });
 
+        // Static call graph (FINDING 1): caller qualified -> statically-called callee
+        // qualified, restricted to Go functions that map to a `function_node`. The Go
+        // frontend emits `static_callee` as the callee's `ssa.Function.String()`, which
+        // is the SAME identity format as a function's `qualified` (the `function_node`
+        // key), so a `ResolvedStatic` callsite's `static_callee` is looked up directly.
+        // An unresolvable static callee (no known function identity) is skipped — honest,
+        // never fabricated. Reachability closes over these edges so dispatch in a
+        // statically-reached (non-root) function is resolved; static edges GROW
+        // reachability only and never emit a derived edge.
+        let mut static_call_targets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for callsite in db.go_semantic_callsites() {
+            if callsite.status != GoSemanticCallStatus::ResolvedStatic {
+                continue;
+            }
+            let Some(callee) = callsite.static_callee.as_deref() else {
+                continue;
+            };
+            // Both endpoints must be Go functions present in the function index, or there
+            // is no reachable-graph node to grow (honest skip, not a fabricated edge).
+            if !function_node.contains_key(callee) || !function_node.contains_key(&callsite.caller)
+            {
+                continue;
+            }
+            static_call_targets
+                .entry(callsite.caller.clone())
+                .or_default()
+                .insert(callee.to_string());
+        }
+
         Self {
             roots,
             callsites,
@@ -238,6 +277,7 @@ impl GoRtaInputs {
             function_node,
             function_signature,
             methods_by_receiver,
+            static_call_targets,
         }
     }
 }

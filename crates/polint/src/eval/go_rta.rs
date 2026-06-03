@@ -212,6 +212,62 @@ fn interface_dispatch_fixture_proves_instantiated_type_filter() {
 }
 
 #[test]
+fn static_reachability_fixture_resolves_dispatch_in_statically_reached_function() {
+    // FINDING 1 / standard RTA: `main` (a root) makes a DIRECT (static) call to the
+    // UNEXPORTED helper `runDispatch` (NOT a root). The interface invoke `s.Speak()`
+    // lives inside runDispatch. RTA reachability must be the fixpoint closure over BOTH
+    // static-call edges AND resolved-dynamic-dispatch edges from roots: the static
+    // main -> runDispatch edge must bring runDispatch into the worklist so its dispatch
+    // resolves to (Dog).Speak. If reachability only grew along dynamic edges, runDispatch
+    // never enters the worklist and the real `runDispatch -> (Dog).Speak` edge is
+    // silently dropped while the run still reports WithinBudget.
+    let dir = go_rta_fixture_dir("static-reachability");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    let run_dispatch = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.ends_with(".runDispatch"))
+        .map(|(_, node)| *node)
+        .expect("runDispatch must have a semantic node");
+    let dog_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Dog") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .expect("(Dog).Speak must have a semantic node");
+
+    // The dispatch inside the statically-reached helper resolves: runDispatch -> (Dog).Speak.
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.source == run_dispatch && edge.target == dog_speak),
+        "RTA must resolve the interface invoke inside the STATICALLY-reached runDispatch \
+         to (Dog).Speak (reachability must close over static-call edges): {:#?}",
+        solver_output.derived_edges
+    );
+    assert_eq!(
+        solver_output.budget_status,
+        BudgetStatus::WithinBudget,
+        "a finite static-then-dynamic chain must converge WithinBudget"
+    );
+
+    // The KERNEL-PERSISTED edges (the rows the provider actually stored) must also carry
+    // the resolved dispatch — catches a provider-wiring regression the recompute masks.
+    let persisted = output.db.solver_derived_edges();
+    assert!(
+        persisted
+            .iter()
+            .any(|edge| edge.source == run_dispatch && edge.target == dog_speak),
+        "the kernel-PERSISTED solver edges must include runDispatch -> (Dog).Speak: {persisted:#?}"
+    );
+
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
 fn address_taken_fixture_resolves_func_value_by_signature() {
     // D-15: the func() indirect call in main resolves via the address-taken set +
     // signature match. `handler`/`other` (func()) resolve through the func() callsite;

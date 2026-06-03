@@ -18,17 +18,24 @@
 //!    per-function attribution to filter them further, and over-filtering would drop
 //!    real RTA targets. The RTA discriminant (interface invoke resolves ONLY to
 //!    callees whose receiver type is instantiated) is preserved end-to-end.
-//! 3. Each round resolves only the `UnresolvedDynamic` callsites of the callers that
-//!    became reachable in the PRIOR round (a FRONTIER, seeded from roots), via
-//!    [`super::dispatch::resolve_callsite`] (filtered by the instantiated set),
-//!    records the resolved edges, and adds each newly-resolved callee to the reachable
-//!    set — that callee is the next round's frontier. Iterate until no new function
-//!    becomes reachable (a fixed point). A caller's callsites are resolved exactly
-//!    ONCE (when it first enters the frontier), never re-scanned every round.
+//! 3. Each round, for every caller that became reachable in the PRIOR round (a
+//!    FRONTIER, seeded from roots), the fixpoint (a) grows reachability over that
+//!    caller's STATIC-call edges (`inputs.static_call_targets`) — standard RTA closes
+//!    reachability over BOTH static-call AND resolved-dynamic-dispatch edges, so a
+//!    function reached only via a direct call that is not itself a root still enters
+//!    the worklist and its dispatch is resolved; static edges GROW reachability only
+//!    and do NOT emit edges — and (b) resolves that caller's `UnresolvedDynamic`
+//!    callsites via [`super::dispatch::resolve_callsite`] (filtered by the instantiated
+//!    set), records the resolved edges, and adds each newly-resolved callee to the
+//!    reachable set. The union of statically- and dynamically-newly-reached functions
+//!    is the next round's frontier. Iterate until no new function becomes reachable (a
+//!    fixed point). A caller is processed exactly ONCE (when it first enters the
+//!    frontier), never re-scanned every round.
 //!
 //! Budget (D-13): the loop is bounded by `budget.go.max_rta_rounds` (round cap), the
-//! Go-scaled `budget.go.max_worklist_steps` (per-callsite-resolution worklist-step
-//! cap, sized like points-to `max_steps` = 10_000, NOT the policy-count
+//! Go-scaled `budget.go.max_worklist_steps` (worklist-step cap — one step per callsite
+//! resolution AND one per static-call-edge expansion, so a deep static chain consumes
+//! the same budget; sized like points-to `max_steps` = 10_000, NOT the policy-count
 //! `max_outer_iterations` = 64 — review CR-01), and
 //! `budget.go.max_candidates_per_callsite` (per-callsite fan-out). The address-taken
 //! set exceeding `budget.go.address_taken_threshold` also latches exhaustion. Any
@@ -123,6 +130,25 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         // become newly reachable — they are the next round's frontier.
         let mut newly_reachable: BTreeSet<String> = BTreeSet::new();
         for caller in &frontier {
+            // Static-call edges GROW reachability (FINDING 1): a function reached only via
+            // a direct (static) call that is not itself a root must still enter the
+            // worklist so dispatch inside it is resolved (standard RTA = closure over
+            // static-call ⊗ dynamic-dispatch edges from roots). Static edges do NOT emit
+            // a DerivedEdgeFact — only dynamic-dispatch resolution does. Each static-edge
+            // expansion consumes one worklist step too (CR-01: caps must account for deep
+            // static chains), bounded by `max_worklist_steps`.
+            if let Some(static_callees) = inputs.static_call_targets.get(caller.as_str()) {
+                for callee in static_callees {
+                    solver_step += 1;
+                    if solver_step > budget.go.max_worklist_steps as u64 {
+                        return finish(edges_by_key, true);
+                    }
+                    if !reachable.contains(callee) {
+                        newly_reachable.insert(callee.clone());
+                    }
+                }
+            }
+
             let Some(callsite_indices) = callsites_by_caller.get(caller.as_str()) else {
                 continue;
             };
@@ -297,6 +323,134 @@ mod tests {
         assert_eq!(edge.provenance.constraint_kind, "call_constraint");
         // callsite + dispatch + method-set + instantiated-type facts.
         assert_eq!(edge.provenance.contributing_len(), 4);
+    }
+
+    #[test]
+    fn static_call_edge_brings_non_root_caller_into_worklist_resolving_its_dispatch() {
+        // FINDING 1: `main` (the only root) makes a DIRECT (static) call to `run`, a
+        // non-root helper. The interface invoke `s.Speak()` lives in `run`, not in main.
+        // RTA reachability must close over the static main -> run edge so run enters the
+        // worklist and its dispatch resolves to (pkg.File).Read. Without static-edge
+        // growth, run is never scanned and the edge is silently dropped.
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("main.run".to_string(), SemanticNodeId(7));
+        function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(3));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.File".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Read".to_string(),
+                qualified: "(pkg.File).Read".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+
+        let instantiated = BTreeSet::from(["pkg.File".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+
+        // The dispatch obligation belongs to `run` (NOT main); main only statically calls run.
+        let mut static_call_targets = BTreeMap::new();
+        static_call_targets.insert(
+            "main.main".to_string(),
+            BTreeSet::from(["main.run".to_string()]),
+        );
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![GoRtaCallsite {
+                caller: "main.run".to_string(),
+                callsite_node: SemanticNodeId(2),
+                callsite_stable_key: "cs|run:read".to_string(),
+                interface_method: Some("Read".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|run:read".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            function_node,
+            methods_by_receiver,
+            static_call_targets,
+            ..GoRtaInputs::default()
+        };
+
+        let output = solve_go_rta(&inputs, &SolverBudget::default());
+        assert_eq!(output.budget_status, BudgetStatus::WithinBudget);
+        // run(7) -> File.Read(3): the dispatch in the statically-reached helper resolves.
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(7) && e.target == SemanticNodeId(3)),
+            "dispatch inside a statically-reached non-root function must resolve: {:#?}",
+            output.derived_edges
+        );
+        // Static edges emit NO derived edge themselves: there is no main(1) -> run(7) edge.
+        assert!(
+            !output
+                .derived_edges
+                .iter()
+                .any(|e| e.target == SemanticNodeId(7)),
+            "static-call edges grow reachability only; they must not emit a derived edge"
+        );
+    }
+
+    #[test]
+    fn deep_static_chain_converges_within_budget() {
+        // FINDING 1 (CR-01 interaction): a deep-but-finite STATIC chain
+        // main -> s1 -> s2 -> ... -> sN must converge WithinBudget. Static-edge expansion
+        // consumes the worklist-step budget, but the default cap (10_000) comfortably
+        // admits the chain, and reachability growth is monotonic (bounded by the function
+        // set), so the run terminates honestly rather than latching exhaustion.
+        const CHAIN: usize = 100;
+        let qualified = |i: usize| -> String {
+            if i == 0 {
+                "main.main".to_string()
+            } else {
+                format!("pkg.s{i}")
+            }
+        };
+
+        let mut function_node = BTreeMap::new();
+        let mut static_call_targets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..=CHAIN {
+            function_node.insert(qualified(i), SemanticNodeId((i + 1) as u64));
+        }
+        for i in 0..CHAIN {
+            static_call_targets
+                .entry(qualified(i))
+                .or_default()
+                .insert(qualified(i + 1));
+        }
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            function_node,
+            static_call_targets,
+            ..GoRtaInputs::default()
+        };
+
+        // The chain needs CHAIN rounds (one static hop per round); raise the round cap
+        // above the depth so the STEP budget is what we pin, and assert convergence.
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = CHAIN + 1;
+        let output = solve_go_rta(&inputs, &budget);
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "a deep finite static chain must converge WithinBudget, not latch exhaustion"
+        );
+        // No dynamic callsites anywhere, so no edges are derived (static edges emit none).
+        assert!(output.derived_edges.is_empty());
     }
 
     #[test]
