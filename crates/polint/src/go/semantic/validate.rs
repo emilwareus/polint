@@ -3,7 +3,8 @@ use std::path::Path;
 
 use crate::analysis::error::AnalysisError;
 use crate::go::semantic::facts::{
-    GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact, GoSemanticFunctionFact,
+    GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageFact,
 };
 use crate::go::semantic::store::{GO_SEMANTIC_PROVIDER_ID, GoSemanticFactsOutput};
@@ -69,35 +70,24 @@ pub(crate) fn validate_go_semantic_output(
         validate_callsite_path(callsite)?;
     }
     for method_set in &output.method_sets {
-        reject_empty_stable_key("method_set", &method_set.stable_key)?;
+        if let Some(reason) = method_set_rejection(method_set) {
+            return Err(invalid_fact(reason));
+        }
     }
     for address_taken in &output.address_taken {
-        reject_empty_stable_key("address_taken", &address_taken.stable_key)?;
-        // Identity guard (WR-02): the address-taken function identity is the row's
-        // discriminating field (`inputs.rs` keys the address-taken set on it). An empty
-        // `function` would seed a bogus candidate keyed on the empty string, so reject
-        // it rather than store it — mirroring the dynamic-dispatch discriminant guard.
-        if address_taken.function.is_empty() {
-            return Err(invalid_fact(format!(
-                "Go semantic address_taken `{}` has an empty function identity",
-                address_taken.stable_key
-            )));
+        if let Some(reason) = address_taken_rejection(address_taken) {
+            return Err(invalid_fact(reason));
         }
     }
     for instantiated_type in &output.instantiated_types {
-        reject_empty_stable_key("instantiated_type", &instantiated_type.stable_key)?;
-        // Identity guard (WR-02): the instantiated `type_name` is the row's
-        // discriminating field. An empty `type_name` normalizes to "" and could
-        // spuriously intersect a method-set keyed on an empty type, so reject it.
-        if instantiated_type.type_name.is_empty() {
-            return Err(invalid_fact(format!(
-                "Go semantic instantiated_type `{}` has an empty type_name",
-                instantiated_type.stable_key
-            )));
+        if let Some(reason) = instantiated_type_rejection(instantiated_type) {
+            return Err(invalid_fact(reason));
         }
     }
     for dynamic_dispatch in &output.dynamic_dispatch {
-        validate_dynamic_dispatch(dynamic_dispatch)?;
+        if let Some(reason) = dynamic_dispatch_rejection(dynamic_dispatch) {
+            return Err(invalid_fact(reason));
+        }
     }
     for package_error in &output.package_errors {
         reject_empty_stable_key("package_error", &package_error.stable_key)?;
@@ -105,28 +95,84 @@ pub(crate) fn validate_go_semantic_output(
     Ok(())
 }
 
+/// Row-resilience boundary (FINDING B/C): the RTA-signal HARVEST families
+/// (`method_set` / `address_taken` / `instantiated_type` / `dynamic_dispatch`) are
+/// whole-reachable-program SET facts. A single malformed harvest row must NOT nuke the
+/// entire Go fact set (which would zero RTA repo-wide) — it is DROPPED at the store
+/// boundary ([`GoSemanticFactsOutput::drop_invalid_harvest_rows`]) before validation. The
+/// rejection PREDICATES below are the single source of truth shared by that drop filter
+/// and by [`validate_go_semantic_output`] (a post-drop defense-in-depth assertion): each
+/// returns `Some(reason)` for a row that must not be stored, `None` for a valid one. The
+/// structural families (packages/functions/callsites) are NOT row-resilient — a duplicate
+/// there is a genuine declaration conflict the validator must still reject.
+///
+/// A `method_set` row's discriminating identity is its `type_name`, which is ABSENT from
+/// the lowering fallback stable-key recipe — so a missing stable_key would collide distinct
+/// types and the set-dedup would silently drop a real member (WR-03). It is dropped rather
+/// than fabricated.
+pub(crate) fn method_set_rejection(fact: &GoSemanticMethodSetFact) -> Option<String> {
+    if fact.stable_key.is_empty() {
+        return Some("Go semantic method_set row is missing a stable_key".to_string());
+    }
+    None
+}
+
+/// Identity guard (WR-02): the address-taken function identity is the row's discriminating
+/// field (`inputs.rs` keys the address-taken set on it). An empty `function`, or a missing
+/// stable_key, would seed a bogus candidate keyed on the empty string — dropped.
+pub(crate) fn address_taken_rejection(fact: &GoSemanticAddressTakenFact) -> Option<String> {
+    if fact.stable_key.is_empty() {
+        return Some("Go semantic address_taken row is missing a stable_key".to_string());
+    }
+    if fact.function.is_empty() {
+        return Some(format!(
+            "Go semantic address_taken `{}` has an empty function identity",
+            fact.stable_key
+        ));
+    }
+    None
+}
+
+/// Identity guard (WR-02): the instantiated `type_name` is the row's discriminating field.
+/// An empty `type_name` normalizes to "" and could spuriously intersect a method-set keyed
+/// on an empty type; a missing stable_key collides distinct types — both dropped.
+pub(crate) fn instantiated_type_rejection(fact: &GoSemanticInstantiatedTypeFact) -> Option<String> {
+    if fact.stable_key.is_empty() {
+        return Some("Go semantic instantiated_type row is missing a stable_key".to_string());
+    }
+    if fact.type_name.is_empty() {
+        return Some(format!(
+            "Go semantic instantiated_type `{}` has an empty type_name",
+            fact.stable_key
+        ));
+    }
+    None
+}
+
 /// Honest-discriminant guard (D-15): a dynamic-dispatch detail row must carry a
 /// discriminant Plan 2 can match on — either an interface invoke (`interface_type` +
 /// `method`) or a func-value signature — and must join back to its callsite via a
-/// non-empty `callsite_stable_key`. A row with neither discriminant fails closed as a
-/// validation diagnostic rather than being stored as a useless/fabricated identity.
-fn validate_dynamic_dispatch(fact: &GoSemanticDynamicDispatchFact) -> Result<(), AnalysisError> {
-    reject_empty_stable_key("dynamic_dispatch", &fact.stable_key)?;
+/// non-empty `callsite_stable_key`. A row with neither discriminant (or a missing
+/// stable_key / callsite key) is dropped rather than stored as a useless identity.
+pub(crate) fn dynamic_dispatch_rejection(fact: &GoSemanticDynamicDispatchFact) -> Option<String> {
+    if fact.stable_key.is_empty() {
+        return Some("Go semantic dynamic_dispatch row is missing a stable_key".to_string());
+    }
     if fact.callsite_stable_key.is_empty() {
-        return Err(invalid_fact(format!(
+        return Some(format!(
             "Go semantic dynamic_dispatch `{}` has an empty callsite_stable_key",
             fact.stable_key
-        )));
+        ));
     }
     let has_invoke = fact.interface_type.is_some() && fact.method.is_some();
     let has_signature = fact.signature.is_some();
     if !has_invoke && !has_signature {
-        return Err(invalid_fact(format!(
+        return Some(format!(
             "Go semantic dynamic_dispatch `{}` carries no dispatch discriminant (need interface_type+method or signature)",
             fact.stable_key
-        )));
+        ));
     }
-    Ok(())
+    None
 }
 
 fn validate_unique<'a>(
