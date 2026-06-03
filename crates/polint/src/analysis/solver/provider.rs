@@ -27,6 +27,7 @@ use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
+use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
@@ -82,12 +83,13 @@ pub(crate) fn derive_solver_with_cache_stats(
     // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
+    let ts_token_inputs = TsTokenInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
             // The real Go RTA policy (GO-05): contributes resolved call edges.
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
-            // The TS token policy stays an honest stub until Phase 49 (JS-04).
-            Box::new(TsTokensPolicy),
+            // The TS token policy owns a closed JS/TS snapshot (JS-04).
+            Box::new(TsTokensPolicy::new(ts_token_inputs)),
         ],
         budget,
     );

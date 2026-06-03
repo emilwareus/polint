@@ -314,6 +314,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
     use crate::analysis::solver::engine::SolverEngine;
     use crate::analysis::solver::go_rta::GoRtaInputs;
     use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
+    use crate::analysis::solver::ts_tokens::TsTokenInputs;
     use crate::config::load_config;
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
@@ -353,7 +354,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         let engine = SolverEngine::new(
             vec![
                 Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
-                Box::new(TsTokensPolicy),
+                Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
             ],
             budget,
         );

@@ -24,6 +24,7 @@ use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
+use super::ts_tokens::TsTokenInputs;
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
 ///
@@ -150,12 +151,17 @@ impl SolverPolicy for GoRtaPolicy {
     }
 }
 
-/// Reserved JS/TS token-propagation policy. No driver exists until **Phase 49
-/// (JS-04)**; [`SolverPolicy::solve`] derives ZERO results (honest emptiness,
-/// D-07), mirroring the `ConstraintKind::ModelEdge` reserved-but-stubbed
-/// precedent. This is NOT a fake driver — the emptiness is intentional until
-/// Phase 49 lands token propagation through copy/call/return constraints.
-pub(crate) struct TsTokensPolicy;
+/// JS/TS function-token policy (Phase 49, JS-04). It owns a closed token snapshot;
+/// the fixpoint/dispatch implementation lands in the following Plan 02 tasks.
+pub(crate) struct TsTokensPolicy {
+    inputs: TsTokenInputs,
+}
+
+impl TsTokensPolicy {
+    pub(crate) fn new(inputs: TsTokenInputs) -> Self {
+        Self { inputs }
+    }
+}
 
 impl SolverPolicy for TsTokensPolicy {
     fn id(&self) -> &'static str {
@@ -163,6 +169,7 @@ impl SolverPolicy for TsTokensPolicy {
     }
 
     fn solve(&self, _budget: &SolverBudget) -> PolicyOutcome {
+        let _ = &self.inputs;
         PolicyOutcome::empty()
     }
 }
@@ -176,11 +183,11 @@ mod tests {
     use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
 
     #[test]
-    fn ts_stub_derives_nothing() {
-        // The TS token policy stays an honest stub until Phase 49 (JS-04): it derives
-        // nothing and returns the semantically-empty outcome.
+    fn ts_policy_id_is_stable_while_driver_lands() {
+        // Task 1 wires a closed snapshot into the policy; later Plan 02 tasks replace
+        // the temporary empty outcome with the real token fixpoint.
         let budget = SolverBudget::default();
-        let ts = TsTokensPolicy;
+        let ts = TsTokensPolicy::new(TsTokenInputs::default());
         let ts_outcome = ts.solve(&budget);
         assert_eq!(ts.id(), "ts_tokens");
         assert_eq!(ts_outcome, PolicyOutcome::empty());

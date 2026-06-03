@@ -21,9 +21,8 @@
 //! - **polyglot Go+TS canary** (D-16): Go RTA edges resolve AND there is no
 //!   cross-language interference. The TS half genuinely feeds the shared solver core a
 //!   CopyEdge constraint (an aliased local call); the language-agnostic points-to closure
-//!   propagates it INTRA-TS, but NO derived edge crosses the Go<->TS boundary and the
-//!   TS-specific `TsTokensPolicy` (still a stub) contributes no `call_constraint` edge —
-//!   so the two halves never reach across the language boundary through the shared core.
+//!   propagates it INTRA-TS, but NO derived edge crosses the Go<->TS boundary, so the
+//!   two halves never reach across the language boundary through the shared core.
 //!
 //! The RTA edges are sourced from the kernel-built `AnalysisDb` (`solver_derived_edges`
 //! /`GoRtaInputs`), NOT through the call-graph projection — Phase 52 (GRAPH-05) wires
@@ -44,6 +43,7 @@ use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::SolverOutput;
+use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis_kernel::KernelOutput;
 use crate::config::load_config;
 use crate::core::AnalysisDb;
@@ -92,10 +92,11 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
 fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
+    let ts_token_inputs = TsTokenInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
-            Box::new(TsTokensPolicy),
+            Box::new(TsTokensPolicy::new(ts_token_inputs)),
         ],
         budget,
     );
