@@ -50,13 +50,16 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
 }
 
 #[test]
-fn alias_parameter_return_fixture_proves_represented_token_edges() {
+fn alias_parameter_return_fixture_proves_source_flow_token_edges() {
     let output = run_fixture_kernel(&fixture_dir("alias-parameter-return"));
     let nodes = ts_function_nodes_by_name(&output.db);
     let edges = output.db.solver_derived_edges();
 
     assert_token_edge(edges, &nodes, "entry", "aliasTarget");
     assert_token_edge(edges, &nodes, "entry", "assignedTarget");
+    assert_token_edge(edges, &nodes, "invokeCallback", "parameterTarget");
+    assert_token_edge(edges, &nodes, "entry", "returnTarget");
+    assert_token_edge(edges, &nodes, "entry", "closureTarget");
 
     let direct_bindings = collect_ts_direct_bindings(&output.db);
     assert!(

@@ -223,10 +223,6 @@ fn solver_output_digest(
             "budget.js.max_token_worklist_steps={}",
             budget.js.max_token_worklist_steps
         ),
-        format!(
-            "budget.js.max_closure_depth={}",
-            budget.js.max_closure_depth
-        ),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
         // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint

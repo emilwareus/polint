@@ -48,7 +48,7 @@ Phase 49 Plan 01 prepared the JS/TS function-token driver substrate without impl
 
 ## Accomplishments
 
-- Added `JsTokensSubBudget { max_tokens_per_var, max_candidates_per_callsite, max_token_worklist_steps, max_closure_depth }` with finite strictly-positive defaults; existing cross-domain, points-to, and Go defaults remain pinned.
+- Added `JsTokensSubBudget { max_tokens_per_var, max_candidates_per_callsite, max_token_worklist_steps }` with finite strictly-positive defaults; existing cross-domain, points-to, and Go defaults remain pinned. The unused `max_closure_depth` planning candidate was removed during post-review fixes before merge.
 - Added `[solver.js]` config via `SolverJsConfig` and `SolverConfig::to_js_sub_budget()`, threaded through the kernel and eval budget builders so fixture config can drive Plan 02.
 - Added `ts_tokens_fixpoint_v1` and every `budget.js.*` field to solver provider parameter digests and output digests; tests prove JS token budget changes invalidate both.
 - Added `TsDirectBindingReason::is_function_token_handoff()` and tests proving only `TokenFlowRequired` is eligible; `PropertyFlowRequired`, `PrototypeModelRequired`, and `ThisModelRequired` remain unchanged and unresolved.

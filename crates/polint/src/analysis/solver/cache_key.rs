@@ -105,10 +105,6 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.js.max_token_worklist_steps={}",
             budget.js.max_token_worklist_steps
         ),
-        format!(
-            "budget.js.max_closure_depth={}",
-            budget.js.max_closure_depth
-        ),
     ]
 }
 
@@ -154,7 +150,6 @@ mod tests {
                     "budget.js.max_tokens_per_var=128",
                     "budget.js.max_candidates_per_callsite=256",
                     "budget.js.max_token_worklist_steps=10000",
-                    "budget.js.max_closure_depth=8",
                 ],
             )
         );
@@ -191,7 +186,6 @@ mod tests {
                 "budget.js.max_tokens_per_var=128",
                 "budget.js.max_candidates_per_callsite=256",
                 "budget.js.max_token_worklist_steps=10000",
-                "budget.js.max_closure_depth=8",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);

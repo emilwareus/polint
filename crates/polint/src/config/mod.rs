@@ -92,8 +92,6 @@ pub(crate) struct SolverJsConfig {
     pub(crate) max_candidates_per_callsite: Option<usize>,
     #[serde(default)]
     pub(crate) max_token_worklist_steps: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_closure_depth: Option<usize>,
 }
 
 impl SolverConfig {
@@ -137,7 +135,6 @@ impl SolverConfig {
             &mut budget.max_token_worklist_steps,
             self.js.max_token_worklist_steps,
         );
-        overlay_positive_cap(&mut budget.max_closure_depth, self.js.max_closure_depth);
         budget
     }
 }
@@ -694,10 +691,6 @@ max_token_worklist_steps = 50000
             budget.max_candidates_per_callsite,
             JsTokensSubBudget::default().max_candidates_per_callsite
         );
-        assert_eq!(
-            budget.max_closure_depth,
-            JsTokensSubBudget::default().max_closure_depth
-        );
     }
 
     #[test]
@@ -711,7 +704,6 @@ max_token_worklist_steps = 50000
 max_tokens_per_var = 0
 max_candidates_per_callsite = 0
 max_token_worklist_steps = 0
-max_closure_depth = 0
 "#,
         )
         .unwrap();

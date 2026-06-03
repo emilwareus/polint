@@ -98,7 +98,6 @@ pub(crate) struct JsTokensSubBudget {
     pub(crate) max_tokens_per_var: usize,
     pub(crate) max_candidates_per_callsite: usize,
     pub(crate) max_token_worklist_steps: usize,
-    pub(crate) max_closure_depth: usize,
 }
 
 impl Default for JsTokensSubBudget {
@@ -110,7 +109,6 @@ impl Default for JsTokensSubBudget {
             max_tokens_per_var: 128,
             max_candidates_per_callsite: 256,
             max_token_worklist_steps: 10_000,
-            max_closure_depth: 8,
         }
     }
 }
@@ -251,7 +249,6 @@ mod tests {
         assert_eq!(budget.js.max_tokens_per_var, 128);
         assert_eq!(budget.js.max_candidates_per_callsite, 256);
         assert_eq!(budget.js.max_token_worklist_steps, 10_000);
-        assert_eq!(budget.js.max_closure_depth, 8);
         assert_eq!(budget.max_steps, 10_000);
         assert_eq!(budget.max_outer_iterations, 64);
         assert_eq!(budget.points_to, PointsToSubBudget::default());

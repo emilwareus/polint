@@ -5,10 +5,9 @@ area = "facts"
 # Phase 49 Plan 03 TS token fixture.
 #
 # The executable gate in `eval::ts_tokens` reads the private solver-derived rows.
-# Current semantic-graph producers emit TS token CopyEdges for direct function aliases.
-# Parameter, return, and closure cases are present as source coverage and unresolved
-# handoff/boundary evidence; the Plan 02 fixpoint unit tests cover those flows once a
-# frontend emits their CopyEdge inputs.
+# Semantic-graph producers emit TS token CopyEdges for direct aliases plus simple
+# parameter callback, returned-function, and returned-closure source flows.
+# Property/prototype/this cases remain outside the function-token driver boundary.
 
 [repo]
 path = "repo"
