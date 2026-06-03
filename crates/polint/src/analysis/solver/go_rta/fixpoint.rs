@@ -112,12 +112,17 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     let mut solver_step: u64 = 0;
     let mut round: usize = 0;
 
-    // Address-taken threshold (D-10/D-13): a pathologically large func-value surface
-    // latches exhaustion rather than exploding the candidate search. The set is seeded
-    // once and never grows during the fixpoint, so this check is loop-invariant —
-    // evaluate it once before iterating (review IN-03).
-    if address_taken.len() > budget.go.address_taken_threshold {
-        return finish(edges_by_key, true);
+    // Address-taken threshold (D-10/D-13, FINDING 7): a pathologically large func-value
+    // surface disables FUNC-VALUE (signature) resolution rather than exploding the
+    // candidate search — but it is SCOPED to func-value resolution only. Pure interface
+    // dispatch never consults the address-taken set, so it must STILL proceed; aborting
+    // the whole fixpoint here would drop real interface-invoke edges that have nothing to
+    // do with the func-value surface. The set is seeded once and never grows, so this is
+    // loop-invariant (review IN-03): evaluate once. When disabled, latch BudgetExceeded
+    // honestly (func-value callsites were not fully resolved).
+    let resolve_func_values = address_taken.len() <= budget.go.address_taken_threshold;
+    if !resolve_func_values {
+        budget_exceeded = true;
     }
 
     // A frontier member carries PENDING WORK only if it has a static-call target or a
@@ -188,6 +193,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                     instantiated,
                     address_taken,
                     budget.go.max_candidates_per_callsite,
+                    resolve_func_values,
                     solver_step,
                 );
                 if resolution.candidate_cap_exceeded {
@@ -686,6 +692,110 @@ mod tests {
         let output = solve_go_rta(&inputs, &budget);
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn address_taken_threshold_suppresses_only_func_value_not_interface_dispatch() {
+        // FINDING 7: a pathologically large address-taken (func-value) surface must
+        // disable only FUNC-VALUE (signature) resolution; pure INTERFACE dispatch (which
+        // does not consult the address-taken set) must still resolve. `main` has an
+        // interface invoke of `Read` (resolves to the instantiated (pkg.File).Read) AND a
+        // func-value call of `func()` (would resolve to the address-taken handlers). With
+        // address_taken_threshold = 1 and TWO address-taken handlers, func-value resolution
+        // is suppressed but the interface edge must still be derived; the run latches
+        // BudgetExceeded honestly (the func-value surface was too large to resolve).
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(3));
+        function_node.insert("pkg.h1".to_string(), SemanticNodeId(5));
+        function_node.insert("pkg.h2".to_string(), SemanticNodeId(6));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.File".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Read".to_string(),
+                qualified: "(pkg.File).Read".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+
+        let instantiated = BTreeSet::from(["pkg.File".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+
+        // Two address-taken func() handlers; threshold = 1, so the func-value surface is
+        // "too large" and func-value resolution is suppressed.
+        let address_taken = BTreeSet::from(["pkg.h1".to_string(), "pkg.h2".to_string()]);
+        let mut address_taken_keys = BTreeMap::new();
+        address_taken_keys.insert("pkg.h1".to_string(), "at|h1".to_string());
+        address_taken_keys.insert("pkg.h2".to_string(), "at|h2".to_string());
+        let mut function_signature = BTreeMap::new();
+        function_signature.insert("pkg.h1".to_string(), "func()".to_string());
+        function_signature.insert("pkg.h2".to_string(), "func()".to_string());
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![
+                // Interface invoke of Read (must still resolve).
+                GoRtaCallsite {
+                    caller: "main.main".to_string(),
+                    callsite_node: SemanticNodeId(2),
+                    callsite_stable_key: "cs|main:read".to_string(),
+                    interface_method: Some("Read".to_string()),
+                    signature: None,
+                    dispatch_stable_key: "dd|main:read".to_string(),
+                },
+                // Func-value call of func() (must be suppressed under the threshold).
+                GoRtaCallsite {
+                    caller: "main.main".to_string(),
+                    callsite_node: SemanticNodeId(4),
+                    callsite_stable_key: "cs|main:fv".to_string(),
+                    interface_method: None,
+                    signature: Some("func()".to_string()),
+                    dispatch_stable_key: "dd|main:fv".to_string(),
+                },
+            ],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            address_taken,
+            address_taken_keys,
+            function_node,
+            function_signature,
+            methods_by_receiver,
+            ..GoRtaInputs::default()
+        };
+
+        let mut budget = SolverBudget::default();
+        budget.go.address_taken_threshold = 1;
+        let output = solve_go_rta(&inputs, &budget);
+
+        // Interface dispatch still resolves despite the large address-taken set.
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3)),
+            "interface dispatch must resolve even when the address-taken surface exceeds the threshold: {:#?}",
+            output.derived_edges
+        );
+        // Func-value resolution is suppressed: no edge targets an address-taken handler.
+        assert!(
+            !output
+                .derived_edges
+                .iter()
+                .any(|e| e.target == SemanticNodeId(5) || e.target == SemanticNodeId(6)),
+            "func-value resolution must be suppressed under the address-taken threshold"
+        );
+        // The suppression is signalled honestly.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 

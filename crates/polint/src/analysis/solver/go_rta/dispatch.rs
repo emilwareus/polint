@@ -47,12 +47,19 @@ pub(crate) struct CallsiteResolution {
 /// candidate set would exceed `max_candidates_per_callsite`, resolution stops and
 /// `candidate_cap_exceeded` latches (edges resolved before the cap keep their honest
 /// status — review finding #R1).
+///
+/// `resolve_func_values` (FINDING 7) gates ONLY the func-value (signature) path: when the
+/// address-taken surface exceeds `address_taken_threshold` the caller disables func-value
+/// resolution, but interface-invoke resolution (which never consults the address-taken
+/// set) still proceeds — a func-value callsite then resolves to nothing (honest
+/// unresolved), an interface callsite is unaffected.
 pub(crate) fn resolve_callsite(
     callsite: &GoRtaCallsite,
     inputs: &GoRtaInputs,
     instantiated: &BTreeSet<String>,
     address_taken: &BTreeSet<String>,
     max_candidates_per_callsite: usize,
+    resolve_func_values: bool,
     solver_step: u64,
 ) -> CallsiteResolution {
     // The edge SOURCE is the caller FUNCTION node (D-04), not the callsite node; the
@@ -77,14 +84,18 @@ pub(crate) fn resolve_callsite(
             &mut candidate_cap_exceeded,
         );
     } else if let Some(signature) = callsite.signature.as_deref() {
-        collect_func_value_candidates(
-            signature,
-            inputs,
-            address_taken,
-            max_candidates_per_callsite,
-            &mut candidates,
-            &mut candidate_cap_exceeded,
-        );
+        // Func-value resolution is suppressed when the address-taken surface is too large
+        // (FINDING 7); the interface path above is never gated.
+        if resolve_func_values {
+            collect_func_value_candidates(
+                signature,
+                inputs,
+                address_taken,
+                max_candidates_per_callsite,
+                &mut candidates,
+                &mut candidate_cap_exceeded,
+            );
+        }
     }
 
     let mut edges = Vec::with_capacity(candidates.len());
@@ -305,8 +316,15 @@ mod tests {
             dispatch_stable_key: "dd|main".to_string(),
         };
 
-        let resolution =
-            resolve_callsite(&callsite, &inputs, &instantiated, &BTreeSet::new(), 1, 7);
+        let resolution = resolve_callsite(
+            &callsite,
+            &inputs,
+            &instantiated,
+            &BTreeSet::new(),
+            1,
+            true,
+            7,
+        );
         assert!(resolution.candidate_cap_exceeded, "cap of 1 must latch");
         assert_eq!(
             resolution.edges.len(),
@@ -334,9 +352,71 @@ mod tests {
             &BTreeSet::new(),
             &BTreeSet::new(),
             128,
+            true,
             1,
         );
         assert!(resolution.edges.is_empty());
         assert!(!resolution.candidate_cap_exceeded);
+    }
+
+    /// FINDING 7: with `resolve_func_values = false`, a func-value (signature) callsite
+    /// resolves to NOTHING even though a signature-matching address-taken function exists
+    /// — the func-value path is gated. An interface callsite (separate test) is unaffected.
+    #[test]
+    fn func_value_resolution_is_suppressed_when_disabled() {
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("pkg.handler".to_string(), SemanticNodeId(3));
+        let mut function_signature = BTreeMap::new();
+        function_signature.insert("pkg.handler".to_string(), "func()".to_string());
+        let address_taken = BTreeSet::from(["pkg.handler".to_string()]);
+        let mut address_taken_keys = BTreeMap::new();
+        address_taken_keys.insert("pkg.handler".to_string(), "at|handler".to_string());
+
+        let inputs = GoRtaInputs {
+            function_node,
+            function_signature,
+            address_taken: address_taken.clone(),
+            address_taken_keys,
+            ..GoRtaInputs::default()
+        };
+        let callsite = GoRtaCallsite {
+            caller: "main.main".to_string(),
+            callsite_node: SemanticNodeId(2),
+            callsite_stable_key: "cs|main:fv".to_string(),
+            interface_method: None,
+            signature: Some("func()".to_string()),
+            dispatch_stable_key: "dd|main:fv".to_string(),
+        };
+
+        // Disabled: no edge (the signature-matching handler is NOT resolved).
+        let disabled = resolve_callsite(
+            &callsite,
+            &inputs,
+            &BTreeSet::new(),
+            &address_taken,
+            128,
+            false,
+            1,
+        );
+        assert!(
+            disabled.edges.is_empty(),
+            "func-value resolution must yield nothing when disabled: {:#?}",
+            disabled.edges
+        );
+        // Enabled: the same callsite resolves to the address-taken handler (control).
+        let enabled = resolve_callsite(
+            &callsite,
+            &inputs,
+            &BTreeSet::new(),
+            &address_taken,
+            128,
+            true,
+            1,
+        );
+        assert!(
+            enabled.edges.iter().any(|e| e.target == SemanticNodeId(3)),
+            "func-value resolution must work when enabled (control)"
+        );
     }
 }
