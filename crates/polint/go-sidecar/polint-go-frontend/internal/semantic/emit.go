@@ -260,10 +260,20 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				"caller":       fn.String(),
 			}
 			dynamic := false
-			if common != nil && common.StaticCallee() != nil {
+			switch {
+			case common != nil && common.StaticCallee() != nil:
 				row["static_callee"] = common.StaticCallee().String()
 				row["status"] = "resolved_static"
-			} else {
+			case common != nil && isBuiltinCall(common):
+				// FINDING 4: a builtin call (`len`, `append`, `recover`, ...) has a nil
+				// StaticCallee() because its callee is a *ssa.Builtin, not an
+				// *ssa.Function. It is NOT a func-value dynamic dispatch — treat it as
+				// unsupported (no ssa.Function identity to resolve to) and emit NO
+				// dynamic_dispatch row, so the RTA driver never sees a bogus func-value
+				// obligation for a builtin.
+				row["status"] = "unsupported"
+				row["reason"] = "builtin call (no ssa.Function callee)"
+			default:
 				row["status"] = "unresolved_dynamic"
 				row["reason"] = "interface or func-value dynamic dispatch"
 				dynamic = true
@@ -452,6 +462,18 @@ func (e *emitter) emitAddressTaken(pkg *ssa.Package, fn *ssa.Function) {
 			}
 		}
 	}
+}
+
+// isBuiltinCall reports whether a call's callee is a Go builtin (`len`, `append`,
+// `recover`, `make`, ...). In go/ssa a builtin call has a non-interface CallCommon whose
+// Value is a *ssa.Builtin and whose StaticCallee() is nil (a builtin has no
+// *ssa.Function). It is NOT a func-value dynamic dispatch (FINDING 4).
+func isBuiltinCall(common *ssa.CallCommon) bool {
+	if common == nil || common.IsInvoke() {
+		return false
+	}
+	_, ok := common.Value.(*ssa.Builtin)
+	return ok
 }
 
 func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {

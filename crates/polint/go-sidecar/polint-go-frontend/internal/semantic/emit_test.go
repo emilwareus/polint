@@ -240,6 +240,48 @@ func main() {
 	}
 }
 
+func TestEmitBuiltinCallsEmitNoDynamicDispatch(t *testing.T) {
+	// FINDING 4: a builtin call (`append`, `len`, `recover`, ...) has a nil
+	// StaticCallee() because its callee is a *ssa.Builtin, not an *ssa.Function. It must
+	// NOT be classified unresolved_dynamic and must NOT emit a func-value dynamic_dispatch
+	// row — a builtin is not a func value, and a fabricated func_value dispatch on it would
+	// feed the RTA driver a bogus unresolved obligation. The package below has ONLY builtin
+	// calls (no interface invoke, no func-value call), so NO dynamic_dispatch row may exist.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+func grow(s []int) []int {
+	return append(s, len(s))
+}
+
+func guard() {
+	defer func() {
+		_ = recover()
+	}()
+}
+
+func main() {
+	_ = grow(nil)
+	guard()
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+	// The builtin calls produce callsite rows but NO dynamic_dispatch rows.
+	assertKind(t, rows, "callsite")
+	assertNoKind(t, rows, "dynamic_dispatch")
+	// No callsite is classified unresolved_dynamic (the builtins are not func values).
+	for _, row := range rows {
+		if row["kind"] == "callsite" && row["status"] == "unresolved_dynamic" {
+			t.Fatalf("a builtin call must NOT be unresolved_dynamic: %#v", row)
+		}
+	}
+}
+
 func TestEmitHonorsCheckedInGoWorkForMultipleModuleRoots(t *testing.T) {
 	root := writeGoWorkspaceFixture(t, true)
 	rows, err := Emit(Config{
