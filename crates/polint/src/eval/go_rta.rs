@@ -77,6 +77,7 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
     let loaded = load_config(&fixture.repo_dir).expect("config loads");
     SolverBudget {
         go: loaded.config.solver.to_go_sub_budget(),
+        js: loaded.config.solver.to_js_sub_budget(),
         ..SolverBudget::default()
     }
 }

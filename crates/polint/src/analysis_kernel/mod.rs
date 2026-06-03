@@ -590,12 +590,13 @@ impl AnalysisKernel {
         // edit touching ONLY those families changes the RTA-resolved edges and must
         // invalidate the solver cache (FIX 4 — without this the provider docstring's "any
         // upstream change invalidates the solver cache" was false). Auto-enrolls in the
-        // Phase 43 determinism gate (D-14). Thread the [solver].go config into
-        // SolverBudget.go (D-10/D-11), mirroring how the reachability provider reaches
+        // Phase 43 determinism gate (D-14). Thread the per-language solver config into
+        // SolverBudget (D-10/D-11), mirroring how the reachability provider reaches
         // `reachability.roots`. Cross-domain fields stay at their defaults; absent config
-        // falls back to GoRtaSubBudget::default().
+        // falls back to each sub-budget default.
         let solver_budget = crate::analysis::solver::budget::SolverBudget {
             go: input.loaded.config.solver.to_go_sub_budget(),
+            js: input.loaded.config.solver.to_js_sub_budget(),
             ..crate::analysis::solver::budget::SolverBudget::default()
         };
         let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(

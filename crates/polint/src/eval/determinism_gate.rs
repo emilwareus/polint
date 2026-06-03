@@ -320,12 +320,10 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
     let fixture = load_native_fixture(&fixture_dir("go_rta")).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
     let mut output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
+    let loaded = load_config(&fixture.repo_dir).expect("config loads");
     let budget = SolverBudget {
-        go: load_config(&fixture.repo_dir)
-            .expect("config loads")
-            .config
-            .solver
-            .to_go_sub_budget(),
+        go: loaded.config.solver.to_go_sub_budget(),
+        js: loaded.config.solver.to_js_sub_budget(),
         ..SolverBudget::default()
     };
 
