@@ -1,0 +1,15 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "determinism-ts-tokens"
+area = "facts"
+
+# Phase 49 Plan 03 determinism fixture for JS/TS token inputs.
+#
+# The observed projection is normalized through the generic determinism gate. A
+# solver-specific test in `eval::determinism_gate` also permutes the closed
+# TsTokenInputs rows and asserts byte-identical private solver output.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

@@ -1,0 +1,12 @@
+[workspace]
+include = ["src/**"]
+exclude = ["**/node_modules/**"]
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"
+
+[solver.js]
+max_tokens_per_var = 1
+max_candidates_per_callsite = 1
+max_token_worklist_steps = 128

@@ -29,6 +29,8 @@ pub(crate) mod runner;
 pub(crate) mod semantic_graph_snapshot;
 pub(crate) mod suite;
 pub(crate) mod tiers;
+#[cfg(test)]
+pub(crate) mod ts_tokens;
 
 #[cfg(test)]
 mod direct_call_rows {

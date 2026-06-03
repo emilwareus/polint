@@ -146,7 +146,10 @@ May run in parallel with Phase 49 (drivers share the solver but their iteration 
   2. When the cap is exceeded, the solver collapses to a `"too-many-tokens"` sentinel and emits `BudgetExceeded` consumed by the unknown taxonomy rather than silently dropping precision.
   3. Memory-ceiling fixture proves RSS stays bounded on token-explosion inputs (uses `BitSet`/`roaring::RoaringBitmap` indexed by stable function ID).
   4. Per-language `solver_config.js.*` knobs (e.g., function-expression inclusion) exist; aggregate metrics on Jelly fixtures show recall improvement without precision regression beyond the Phase 54 floor.
-**Plans**: TBD
+**Plans**:
+- [x] 49-01-PLAN.md — JS token budget/config/cache substrate and `TokenFlowRequired` handoff classifier.
+- [x] 49-02-PLAN.md — private `analysis::solver::ts_tokens` closed inputs, deterministic token fixpoint, `"too-many-tokens"` sentinel, token-derived `DerivedEdgeFact` dispatch, and real `TsTokensPolicy`.
+- [ ] 49-03-PLAN.md — native TS token fixtures, token-explosion budget proof, polyglot/determinism/Jelly evidence, leak gate, and full-suite sweep.
 
 May run in parallel with Phase 48 (drivers share the solver core but their iteration logic is independent).
 
