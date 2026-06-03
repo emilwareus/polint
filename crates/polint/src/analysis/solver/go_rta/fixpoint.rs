@@ -139,10 +139,16 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     // dispatch never consults the address-taken set, so it must STILL proceed; aborting
     // the whole fixpoint here would drop real interface-invoke edges that have nothing to
     // do with the func-value surface. The set is seeded once and never grows, so this is
-    // loop-invariant (review IN-03): evaluate once. When disabled, latch BudgetExceeded
-    // honestly (func-value callsites were not fully resolved).
+    // loop-invariant (review IN-03): evaluate once.
     let resolve_func_values = address_taken.len() <= budget.go.address_taken_threshold;
-    if !resolve_func_values {
+    // Latch BudgetExceeded for the disabled func-value resolution ONLY when func-value
+    // resolution is actually NEEDED — i.e. at least one reachable callsite is a func-value
+    // (signature-bearing) callsite (FIX 2). If there are no func-value callsites, disabling
+    // func-value resolution costs nothing (interface dispatch still resolves every real
+    // obligation), so a large address-taken surface alone must NOT produce a false
+    // exhaustion signal on a codebase with many address-taken functions but no indirect
+    // func-value calls.
+    if !resolve_func_values && inputs.callsites.iter().any(|c| c.signature.is_some()) {
         budget_exceeded = true;
     }
 
@@ -933,6 +939,56 @@ mod tests {
         );
         // The suppression is signalled honestly.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn large_address_taken_with_no_func_value_callsite_stays_within_budget() {
+        // FIX 2 (MEDIUM): an oversized address-taken (func-value) surface must latch
+        // BudgetExceeded ONLY when func-value resolution is actually NEEDED — i.e. at
+        // least one reachable callsite is a func-value (signature-bearing) callsite.
+        // Here the only callsite is an INTERFACE invoke (no signature), so disabling
+        // func-value resolution costs nothing: interface dispatch still resolves and the
+        // run must stay WithinBudget. Before the fix, the threshold latched BudgetExceeded
+        // unconditionally, producing a FALSE exhaustion signal (folded into
+        // solver_output_digest / WR-06) on a codebase that has many address-taken
+        // functions but no indirect func-value calls.
+        let mut inputs = interface_scenario(&["pkg.File"]);
+        // A large address-taken surface (3 funcs) with threshold 1: func-value resolution
+        // is "disabled", but there is NO func-value callsite to resolve. The scenario's
+        // sole callsite (main -> Read) is a pure interface invoke (signature: None).
+        inputs.address_taken = BTreeSet::from([
+            "pkg.h1".to_string(),
+            "pkg.h2".to_string(),
+            "pkg.h3".to_string(),
+        ]);
+        inputs.address_taken_keys = BTreeMap::from([
+            ("pkg.h1".to_string(), "at|h1".to_string()),
+            ("pkg.h2".to_string(), "at|h2".to_string()),
+            ("pkg.h3".to_string(), "at|h3".to_string()),
+        ]);
+        debug_assert!(inputs.callsites.iter().all(|c| c.signature.is_none()));
+
+        let mut budget = SolverBudget::default();
+        budget.go.address_taken_threshold = 1;
+        let output = solve_go_rta(&inputs, &budget);
+
+        // Interface dispatch still resolves: main(1) -> (pkg.File).Read(3).
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3)),
+            "interface dispatch must still resolve: {:#?}",
+            output.derived_edges
+        );
+        // No func-value callsite exists, so disabling func-value resolution cost nothing —
+        // the run is WithinBudget, NOT a false BudgetExceeded.
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "a large address-taken surface with NO func-value callsite must NOT latch \
+             BudgetExceeded (func-value resolution was never needed)"
+        );
     }
 
     #[test]
