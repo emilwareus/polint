@@ -32,19 +32,29 @@
 //!    fixed point). A caller is processed exactly ONCE (when it first enters the
 //!    frontier), never re-scanned every round.
 //!
-//! Budget (D-13): the loop is bounded by `budget.go.max_rta_rounds` (round cap), the
-//! Go-scaled `budget.go.max_worklist_steps` (worklist-step cap — one step per callsite
-//! resolution AND one per static-call-edge expansion, so a deep static chain consumes
-//! the same budget; sized like points-to `max_steps` = 10_000, NOT the policy-count
-//! `max_outer_iterations` = 64 — review CR-01), and
+//! Budget (D-13): the loop is bounded by `budget.go.max_rta_rounds` (the DISPATCH-round
+//! cap), the Go-scaled `budget.go.max_worklist_steps` (worklist-step cap — one step per
+//! callsite resolution AND one per static-call-edge expansion, so a deep static chain
+//! consumes the same budget; sized like points-to `max_steps` = 10_000, NOT the
+//! policy-count `max_outer_iterations` = 64 — review CR-01), and
 //! `budget.go.max_candidates_per_callsite` (per-callsite fan-out). The address-taken
-//! set exceeding `budget.go.address_taken_threshold` also latches exhaustion. A cap
-//! latches the run-level [`BudgetStatus::BudgetExceeded`] only when it actually prevents
-//! pending work — the round cap latches BudgetExceeded only if the cap-time frontier
-//! still has a static-call target or a dynamic callsite to resolve; a non-empty frontier
-//! whose members have neither is already converged, so hitting the cap there is honest
-//! convergence, not truncation (FINDING 6). Edges resolved before a cap keep their honest
-//! status (review finding #R1); the loop never runs unbounded.
+//! set exceeding `budget.go.address_taken_threshold` also latches exhaustion (but only
+//! when func-value resolution is actually NEEDED — see FIX 2). The round cap bounds only
+//! GENUINE dynamic-dispatch re-iteration: it counts a round ONLY when that round
+//! (re)resolved a dynamic callsite and could thus grow the resolved-edge set. Static
+//! reachability growth does NOT consume the round budget — it runs to completion bounded
+//! solely by `max_worklist_steps` — so a deep first-party STATIC call chain whose depth
+//! exceeds `max_rta_rounds` still converges and resolves its dispatch (FIX 1). Counting
+//! static-BFS levels instead made `round` equal the static call-graph depth, silently
+//! truncating reachability (and latching a FALSE BudgetExceeded) for any function deeper
+//! than the cap. Termination does not depend on the round cap: `reachable` is monotonic
+//! and bounded by the finite function set; `max_worklist_steps` is the real runaway guard.
+//! A cap latches the run-level [`BudgetStatus::BudgetExceeded`] only when it actually
+//! prevents pending work — the round cap latches BudgetExceeded only if the cap-time
+//! frontier still has a static-call target or a dynamic callsite to resolve; a non-empty
+//! frontier whose members have neither is already converged, so hitting the cap there is
+//! honest convergence, not truncation (FINDING 6). Edges resolved before a cap keep their
+//! honest status (review finding #R1); the loop never runs unbounded.
 //!
 //! The frontier-only scan is what keeps the worklist-step count proportional to real
 //! work (≈ Σ reachable_callers × their_callsites) instead of growing super-linearly
@@ -110,7 +120,18 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     // across the WHOLE run and is never reset, so every derived edge's `solver_step`
     // is globally monotonic.
     let mut solver_step: u64 = 0;
-    let mut round: usize = 0;
+    // DISPATCH-round counter (FIX 1): the round cap bounds GENUINE dynamic-dispatch
+    // re-iteration, NOT static-call-graph DEPTH. Only a round that actually (re)resolved
+    // a dynamic callsite — and could therefore grow the resolved-edge set — counts toward
+    // `max_rta_rounds`. Pure static-reachability growth does NOT consume the round budget;
+    // it runs to completion bounded solely by `max_worklist_steps`. Counting static-BFS
+    // levels here (the prior behavior) made `round` equal the static call-graph depth, so
+    // any first-party function whose shortest static-call path from a root exceeded the cap
+    // had its dispatch silently dropped AND the run falsely latched `BudgetExceeded`.
+    // Termination does not depend on this cap: `reachable` grows monotonically and is
+    // bounded by the finite function set, and every static-edge expansion + callsite
+    // resolution consumes one `max_worklist_steps` step (the real runaway guard).
+    let mut dispatch_rounds: usize = 0;
 
     // Address-taken threshold (D-10/D-13, FINDING 7): a pathologically large func-value
     // surface disables FUNC-VALUE (signature) resolution rather than exploding the
@@ -136,23 +157,29 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     };
 
     while !frontier.is_empty() {
-        // Round cap (D-13): bound the reachability ⊗ dispatch iteration. Latch
-        // BudgetExceeded ONLY when the cap actually prevents genuinely pending work
-        // (FINDING 6): a non-empty frontier whose members have no static target and no
-        // dynamic callsite is converged, so hitting the cap there is honest convergence,
-        // not truncation — break WithinBudget rather than a false BudgetExceeded.
-        if round >= budget.go.max_rta_rounds {
+        // Round cap (D-13, FIX 1): bound only GENUINE dynamic-dispatch re-iteration —
+        // `dispatch_rounds` counts only rounds that actually resolved a dynamic callsite,
+        // never static-BFS levels. Latch BudgetExceeded ONLY when the cap actually prevents
+        // genuinely pending work (FINDING 6): a non-empty frontier whose members have no
+        // static target and no dynamic callsite is converged, so hitting the cap there is
+        // honest convergence, not truncation — break WithinBudget rather than a false
+        // BudgetExceeded. A genuine dispatch fixpoint that re-iterates past the cap (e.g.
+        // the runaway test) still latches honestly here; a genuine work explosion latches
+        // via `max_worklist_steps`.
+        if dispatch_rounds >= budget.go.max_rta_rounds {
             if frontier_has_pending_work(&frontier) {
                 budget_exceeded = true;
             }
             break;
         }
-        round += 1;
 
         // Resolve only the callsites of THIS round's frontier (the callers newly
         // reached in the prior round, or the roots in round 1). Collect callees that
-        // become newly reachable — they are the next round's frontier.
+        // become newly reachable — they are the next round's frontier. Track whether this
+        // round resolved any dynamic callsite, so only genuine dispatch waves count toward
+        // the round cap (FIX 1).
         let mut newly_reachable: BTreeSet<String> = BTreeSet::new();
+        let mut resolved_dispatch_this_round = false;
         for caller in &frontier {
             // Static-call edges GROW reachability (FINDING 1): a function reached only via
             // a direct (static) call that is not itself a root must still enter the
@@ -176,6 +203,9 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
             let Some(callsite_indices) = callsites_by_caller.get(caller.as_str()) else {
                 continue;
             };
+            // This caller has at least one dynamic callsite: the round performs genuine
+            // dispatch resolution, so it counts toward the round cap (FIX 1).
+            resolved_dispatch_this_round = true;
             for &index in callsite_indices {
                 // Worklist-step cap (D-13, CR-01): one callsite resolution is one step,
                 // bounded by the Go-scaled `max_worklist_steps` (10_000), NOT the
@@ -211,6 +241,13 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                     edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
                 }
             }
+        }
+
+        // Only a round that genuinely resolved dynamic dispatch counts toward the round
+        // cap (FIX 1); a pure static-BFS round leaves `dispatch_rounds` untouched so deep
+        // static chains do not consume the dispatch budget.
+        if resolved_dispatch_this_round {
+            dispatch_rounds += 1;
         }
 
         // The callees newly reached this round are the next round's frontier; fold them
@@ -430,13 +467,116 @@ mod tests {
     }
 
     #[test]
-    fn deep_static_chain_converges_within_budget() {
-        // FINDING 1 (CR-01 interaction): a deep-but-finite STATIC chain
-        // main -> s1 -> s2 -> ... -> sN must converge WithinBudget. Static-edge expansion
-        // consumes the worklist-step budget, but the default cap (10_000) comfortably
-        // admits the chain, and reachability growth is monotonic (bounded by the function
-        // set), so the run terminates honestly rather than latching exhaustion.
-        const CHAIN: usize = 100;
+    fn deep_static_chain_with_bottom_dispatch_converges_at_default_budget() {
+        // FIX 1 (HIGH): the round cap must bound only GENUINE dispatch re-iteration, NOT
+        // static-call-graph DEPTH. A deep first-party STATIC chain
+        // main -> s1 -> s2 -> ... -> s200 whose BOTTOM function does a dynamic dispatch
+        // MUST converge WithinBudget AT THE DEFAULT budget (no inflated round cap) and
+        // resolve the deep dispatch edge. Static-reachability growth runs to completion
+        // bounded solely by `max_worklist_steps`; the round cap counts only the dispatch
+        // waves (here exactly one), so the 200-deep static chain never trips the default
+        // `max_rta_rounds = 32`. Before the fix, `round` incremented once per static hop,
+        // so depth 200 hit the cap at hop 32, latched a FALSE BudgetExceeded, AND silently
+        // dropped the deep dispatch — the original FINDING-1 silent-drop bug above depth 32.
+        const CHAIN: usize = 200;
+        let qualified = |i: usize| -> String {
+            if i == 0 {
+                "main.main".to_string()
+            } else {
+                format!("pkg.s{i}")
+            }
+        };
+
+        // Node ids: chain function i -> SemanticNodeId(i+1); the dispatch target gets a
+        // distinct high id so it cannot collide with a chain node.
+        const TARGET_NODE: u64 = 100_000;
+        let mut function_node = BTreeMap::new();
+        let mut static_call_targets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for i in 0..=CHAIN {
+            function_node.insert(qualified(i), SemanticNodeId((i + 1) as u64));
+        }
+        for i in 0..CHAIN {
+            static_call_targets
+                .entry(qualified(i))
+                .or_default()
+                .insert(qualified(i + 1));
+        }
+        // The bottom of the chain (s200) is a method-bearing function whose body holds a
+        // dynamic interface invoke of `Read`, resolving to the instantiated (pkg.File).Read.
+        function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(TARGET_NODE));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.File".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Read".to_string(),
+                qualified: "(pkg.File).Read".to_string(),
+                node: SemanticNodeId(TARGET_NODE),
+            }],
+        );
+
+        let instantiated = BTreeSet::from(["pkg.File".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            // The dynamic dispatch lives in the DEEPEST statically-reached function.
+            callsites: vec![GoRtaCallsite {
+                caller: qualified(CHAIN),
+                callsite_node: SemanticNodeId(900_000),
+                callsite_stable_key: "cs|deep:read".to_string(),
+                interface_method: Some("Read".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|deep:read".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            static_call_targets,
+            ..GoRtaInputs::default()
+        };
+
+        // THE DEFAULT BUDGET — no inflated `max_rta_rounds`. The default `max_rta_rounds`
+        // (32) is far below the chain depth (200); the fix is what lets this converge.
+        let output = solve_go_rta(&inputs, &SolverBudget::default());
+
+        // (a) The deep dispatch edge resolves: s200 -> (pkg.File).Read.
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId((CHAIN + 1) as u64)
+                    && e.target == SemanticNodeId(TARGET_NODE)),
+            "the dispatch at the bottom of a deep static chain must resolve at the DEFAULT \
+             budget: {:#?}",
+            output.derived_edges
+        );
+        // (b) The run converged honestly — a deep first-party static chain is NOT a runaway.
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "a deep finite static chain (depth {CHAIN} >> default max_rta_rounds) must \
+             converge WithinBudget at the DEFAULT budget, not latch exhaustion"
+        );
+    }
+
+    #[test]
+    fn pure_deep_static_chain_converges_at_default_budget() {
+        // FIX 1 companion: a deep-but-finite STATIC chain with NO dispatch anywhere must
+        // also converge WithinBudget AT THE DEFAULT budget. Static-edge expansion consumes
+        // the worklist-step budget (10_000, comfortably admitting the chain) and grows no
+        // dispatch waves, so the round cap is never approached. No dynamic callsites → no
+        // derived edges.
+        const CHAIN: usize = 200;
         let qualified = |i: usize| -> String {
             if i == 0 {
                 "main.main".to_string()
@@ -464,15 +604,11 @@ mod tests {
             ..GoRtaInputs::default()
         };
 
-        // The chain needs CHAIN rounds (one static hop per round); raise the round cap
-        // above the depth so the STEP budget is what we pin, and assert convergence.
-        let mut budget = SolverBudget::default();
-        budget.go.max_rta_rounds = CHAIN + 1;
-        let output = solve_go_rta(&inputs, &budget);
+        let output = solve_go_rta(&inputs, &SolverBudget::default());
         assert_eq!(
             output.budget_status,
             BudgetStatus::WithinBudget,
-            "a deep finite static chain must converge WithinBudget, not latch exhaustion"
+            "a deep finite static chain must converge WithinBudget at the DEFAULT budget"
         );
         // No dynamic callsites anywhere, so no edges are derived (static edges emit none).
         assert!(output.derived_edges.is_empty());

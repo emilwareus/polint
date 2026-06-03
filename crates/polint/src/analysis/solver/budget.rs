@@ -53,8 +53,11 @@ impl Default for PointsToSubBudget {
 /// - `max_candidates_per_callsite` — caps the candidate-callee fan-out resolved for
 ///   one dynamic callsite; exceeding it is run-level exhaustion (edges resolved
 ///   before the cap keep their honest status).
-/// - `max_rta_rounds` — caps the reachability ⊗ instantiated-types ⊗ dispatch
-///   fixpoint rounds; exceeding it latches exhaustion.
+/// - `max_rta_rounds` — caps GENUINE dynamic-dispatch re-iteration (the number of
+///   rounds that actually resolved a dynamic callsite, never static-call-graph depth);
+///   exceeding it latches exhaustion. Static-reachability growth is bounded by
+///   `max_worklist_steps`, not this cap, so a deep first-party static call chain whose
+///   depth exceeds this value still converges (FIX 1).
 /// - `max_worklist_steps` — the Go-scaled per-callsite-resolution worklist-step cap.
 ///   One step is one callsite resolution. This is sized like the points-to
 ///   `max_steps` default (10_000), NOT the cross-domain `max_outer_iterations` (64,
