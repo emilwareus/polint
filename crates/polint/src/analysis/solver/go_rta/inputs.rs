@@ -111,6 +111,11 @@ impl GoRtaInputs {
         let mut function_node: BTreeMap<String, SemanticNodeId> = BTreeMap::new();
         let mut function_signature: BTreeMap<String, String> = BTreeMap::new();
         let mut methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>> = BTreeMap::new();
+        // `qualified -> core FunctionId` for the caller-disambiguated callsite join
+        // (WR-08 / FINDING 5): a Go callsite's `caller` is a `qualified` identity; resolve
+        // it to the core `FunctionId` so `callsite_constraint_node` can bind the
+        // provenance to the CALLER's own same-span call site, not a sibling's.
+        let mut caller_function_id: BTreeMap<String, crate::core::FunctionId> = BTreeMap::new();
 
         for semantic_function in db.go_semantic_functions() {
             function_signature.insert(
@@ -118,10 +123,13 @@ impl GoRtaInputs {
                 semantic_function.signature.clone(),
             );
 
-            let Some(node) = matching_core_function(db, semantic_function).and_then(|function| {
-                let key = function_node_key(db, function);
-                function_node_by_stable_key.get(key.as_str()).copied()
-            }) else {
+            let Some(core_function) = matching_core_function(db, semantic_function) else {
+                continue;
+            };
+            caller_function_id.insert(semantic_function.qualified.clone(), core_function.id);
+
+            let key = function_node_key(db, core_function);
+            let Some(node) = function_node_by_stable_key.get(key.as_str()).copied() else {
                 continue;
             };
             function_node.insert(semantic_function.qualified.clone(), node);
@@ -211,8 +219,11 @@ impl GoRtaInputs {
             }
             // The callsite must map to a `CallConstraint` node the semantic graph
             // emitted; if it did not (e.g. no matching core call site), there is no
-            // edge SOURCE/anchor — skip rather than fabricate.
-            let Some(callsite_node) = callsite_constraint_node(db, callsite) else {
+            // edge SOURCE/anchor — skip rather than fabricate. The join is disambiguated
+            // by the caller's core `FunctionId` so a method-chain / mixed static+dynamic
+            // shared span binds to the right sibling (WR-08 / FINDING 5).
+            let caller = caller_function_id.get(callsite.caller.as_str()).copied();
+            let Some(callsite_node) = callsite_constraint_node(db, callsite, caller) else {
                 continue;
             };
             callsites.push(GoRtaCallsite {
@@ -440,23 +451,98 @@ fn function_node_key(db: &AnalysisDb, function: &FunctionFact) -> String {
 /// The unified `CallConstraint` callsite node for a Go callsite, reconstructed from
 /// the `callsite` node-key recipe `semantic_graph::build` used. Returns `None` when
 /// the callsite was not interned as a node (honest — no edge anchor).
+///
+/// WR-08 / FINDING 5: the core-call-site match must be DISAMBIGUATED, not first-match.
+/// Several core call sites can share one byte span — a method chain `a().b()` reports
+/// nested call expressions at the same outer span, and a single span can host both a
+/// resolved-static and a dynamic call. Matching by `(file, language, span)` alone could
+/// bind a dynamic Go callsite's provenance to the wrong sibling (e.g. the static
+/// receiver call rather than the dynamic invoke), or coalesce two dynamic sites. So the
+/// match is constrained to the call site whose `caller` maps back to the semantic
+/// callsite's caller (`caller`, resolved to a core `FunctionId`) and, among those,
+/// prefers a dynamic-dispatch-status site, choosing the deterministic minimum by stable
+/// key rather than the first scanned.
 fn callsite_constraint_node(
     db: &AnalysisDb,
     callsite: &crate::go::semantic::facts::GoSemanticCallsiteFact,
+    caller: Option<crate::core::FunctionId>,
 ) -> Option<SemanticNodeId> {
     let file = callsite.file?;
     let span = callsite.span.as_ref()?;
-    let core_callsite = db.call_sites().iter().find(|site| {
-        site.file == file
-            && site.language == Language::Go
-            && site.span.start_byte == span.start_byte
-            && site.span.end_byte == span.end_byte
-    })?;
+    let candidates: Vec<&crate::analysis::calls::facts::CallSiteFact> = db
+        .call_sites()
+        .iter()
+        .filter(|site| {
+            site.file == file
+                && site.language == Language::Go
+                && site.span.start_byte == span.start_byte
+                && site.span.end_byte == span.end_byte
+        })
+        .collect();
+    let core_callsite = select_constraint_callsite(&candidates, caller)?;
     let node_key = node_key_from_identity("callsite", &core_callsite.stable_key);
     db.semantic_nodes()
         .iter()
         .find(|node| node.stable_key == node_key && matches!(node.kind, NodeKind::Callsite(_)))
         .map(|node| node.id)
+}
+
+/// Disambiguate a set of span-matched core call sites to the one that anchors a dynamic
+/// Go callsite's provenance (WR-08 / FINDING 5). Pure (no db) so the disambiguation is
+/// unit-testable in isolation.
+///
+/// Resolution order (each step narrows; a step that would empty the set is skipped so
+/// the join degrades gracefully rather than dropping a real anchor):
+/// 1. restrict to sites whose `caller` equals the semantic callsite's caller (when that
+///    caller resolved to a core `FunctionId`) — never bind to a different function's
+///    sibling call at the same span;
+/// 2. among those, prefer DYNAMIC-dispatch-status sites (`Unresolved` / `Ambiguous`) —
+///    an `UnresolvedDynamic` Go callsite anchors on the dynamic site, not a co-located
+///    static one;
+/// 3. choose the deterministic minimum by `stable_key` (totally ordered, byte-stable),
+///    never a first-match that depends on storage order.
+fn select_constraint_callsite<'a>(
+    candidates: &[&'a crate::analysis::calls::facts::CallSiteFact],
+    caller: Option<crate::core::FunctionId>,
+) -> Option<&'a crate::analysis::calls::facts::CallSiteFact> {
+    use crate::analysis::calls::facts::CallTargetStatus;
+
+    // 1. Prefer the caller's own call sites (skip if that would drop every candidate).
+    let caller_matched: Vec<&'a crate::analysis::calls::facts::CallSiteFact> = match caller {
+        Some(caller) => candidates
+            .iter()
+            .copied()
+            .filter(|site| site.caller == caller)
+            .collect(),
+        None => Vec::new(),
+    };
+    let narrowed: &[&'a crate::analysis::calls::facts::CallSiteFact] = if caller_matched.is_empty()
+    {
+        candidates
+    } else {
+        &caller_matched
+    };
+
+    // 2. Among those, prefer dynamic-dispatch-status sites (skip if none).
+    let is_dynamic = |site: &&crate::analysis::calls::facts::CallSiteFact| {
+        matches!(
+            site.status,
+            CallTargetStatus::Unresolved | CallTargetStatus::Ambiguous
+        )
+    };
+    let dynamic: Vec<&'a crate::analysis::calls::facts::CallSiteFact> =
+        narrowed.iter().copied().filter(is_dynamic).collect();
+    let final_set: &[&'a crate::analysis::calls::facts::CallSiteFact] = if dynamic.is_empty() {
+        narrowed
+    } else {
+        &dynamic
+    };
+
+    // 3. Deterministic minimum by stable key (never first-match on storage order).
+    final_set
+        .iter()
+        .copied()
+        .min_by(|left, right| left.stable_key.cmp(&right.stable_key))
 }
 
 /// Reproduces `semantic_graph::build::node_key_from_identity` (node-kind label +
@@ -796,6 +882,147 @@ mod tests {
         let matched = matching_core_function_for(&db, file, "F", &span(file, 45, 45))
             .expect("point inside a declaration must match");
         assert_eq!(matched.id, inner);
+    }
+
+    fn call_site(
+        id: u64,
+        caller: FunctionId,
+        start: u32,
+        end: u32,
+        status: crate::analysis::calls::facts::CallTargetStatus,
+        stable_key: &str,
+    ) -> crate::analysis::calls::facts::CallSiteFact {
+        use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSyntaxKind};
+        use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
+        crate::analysis::calls::facts::CallSiteFact {
+            id: CallSiteId(id),
+            language: Language::Go,
+            file: FileId(1),
+            caller,
+            owner_symbol: None,
+            body: MirBodyId(0),
+            operation: MirOpId(0),
+            span: span(FileId(1), start, end),
+            kind: CallSyntaxKind::Method,
+            callee: CallCallee::Unknown {
+                reason: crate::analysis::calls::facts::UnresolvedCallReason::InterfaceDispatch,
+            },
+            receiver: None,
+            arguments: Vec::new(),
+            result: None,
+            status,
+            precision: CallPrecision::Conservative,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    /// WR-08 / FINDING 5: when several core call sites share one byte span, the
+    /// disambiguator binds to the site whose `caller` matches the semantic callsite's
+    /// caller AND that is a dynamic-dispatch-status site — never a sibling's call or a
+    /// co-located static call at the same span.
+    #[test]
+    fn select_constraint_callsite_disambiguates_by_caller_and_dynamic_status() {
+        use crate::analysis::calls::facts::CallTargetStatus;
+        let caller_a = FunctionId(10);
+        let caller_b = FunctionId(20);
+
+        // All four share the SAME span (a method chain at one outer span). Among caller_a's
+        // sites: one resolved-static receiver call + one dynamic invoke. caller_b also has a
+        // dynamic site at the same span (a different function's sibling call).
+        let static_a = call_site(
+            1,
+            caller_a,
+            100,
+            110,
+            CallTargetStatus::Resolved,
+            "cs|a-static",
+        );
+        let dynamic_a = call_site(
+            2,
+            caller_a,
+            100,
+            110,
+            CallTargetStatus::Unresolved,
+            "cs|a-dynamic",
+        );
+        let dynamic_b = call_site(
+            3,
+            caller_b,
+            100,
+            110,
+            CallTargetStatus::Unresolved,
+            "cs|b-dynamic",
+        );
+        let candidates = [&static_a, &dynamic_a, &dynamic_b];
+
+        // The dynamic callsite belongs to caller_a → bind to caller_a's DYNAMIC site, not
+        // its static sibling and not caller_b's same-span site.
+        let chosen = select_constraint_callsite(&candidates, Some(caller_a))
+            .expect("a caller-matched dynamic site must be selected");
+        assert_eq!(chosen.id.0, 2, "must select caller_a's dynamic site");
+        assert_eq!(chosen.stable_key, "cs|a-dynamic");
+
+        // For caller_b, only its own same-span dynamic site is eligible.
+        let chosen_b = select_constraint_callsite(&candidates, Some(caller_b))
+            .expect("caller_b's site must be selected");
+        assert_eq!(chosen_b.id.0, 3);
+    }
+
+    /// WR-08 / FINDING 5: with NO dynamic site for the matched caller, fall back to that
+    /// caller's site (a static one) rather than coalescing onto another caller's. And with
+    /// an unresolved caller (None), the disambiguator still prefers a dynamic site and is
+    /// deterministic (minimum stable key), never first-match on storage order.
+    #[test]
+    fn select_constraint_callsite_degrades_gracefully_and_is_deterministic() {
+        use crate::analysis::calls::facts::CallTargetStatus;
+        let caller_a = FunctionId(10);
+        let caller_b = FunctionId(20);
+
+        // Two dynamic sites at one span for DIFFERENT callers, plus a static one. Caller
+        // unknown: prefer dynamic, deterministic minimum by stable key ("cs|x" < "cs|y").
+        let dyn_y = call_site(3, caller_b, 100, 110, CallTargetStatus::Unresolved, "cs|y");
+        let dyn_x = call_site(2, caller_a, 100, 110, CallTargetStatus::Unresolved, "cs|x");
+        let static_z = call_site(
+            1,
+            caller_a,
+            100,
+            110,
+            CallTargetStatus::Resolved,
+            "cs|z-static",
+        );
+        let candidates = [&dyn_y, &dyn_x, &static_z];
+        let chosen = select_constraint_callsite(&candidates, None)
+            .expect("a dynamic site is selected when caller is unknown");
+        assert_eq!(
+            chosen.stable_key, "cs|x",
+            "deterministic minimum dynamic site, not first-scanned"
+        );
+
+        // Caller matches a site that has NO dynamic variant: fall back to that caller's
+        // (static) site rather than another caller's dynamic one.
+        let only_static_a = call_site(
+            5,
+            caller_a,
+            100,
+            110,
+            CallTargetStatus::Resolved,
+            "cs|a-only-static",
+        );
+        let other_dynamic = call_site(
+            6,
+            caller_b,
+            100,
+            110,
+            CallTargetStatus::Unresolved,
+            "cs|b-dyn",
+        );
+        let candidates2 = [&only_static_a, &other_dynamic];
+        let chosen2 = select_constraint_callsite(&candidates2, Some(caller_a))
+            .expect("caller_a's only site is selected");
+        assert_eq!(
+            chosen2.id.0, 5,
+            "must bind to caller_a's own site, never caller_b's same-span dynamic one"
+        );
     }
 
     /// WR-04: a non-zero-width semantic span that does NOT exactly equal any core span
